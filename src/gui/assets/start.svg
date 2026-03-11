@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 16 16"
+   width="16"
+   height="16"
+   version="1.1"
+   id="svg6"
+   sodipodi:docname="start.svg"
+   inkscape:version="1.4.3 (0d15f75042, 2025-12-25)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs6" />
+  <sodipodi:namedview
+     id="namedview6"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="117.5"
+     inkscape:cx="8"
+     inkscape:cy="8"
+     inkscape:window-width="3840"
+     inkscape:window-height="2088"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg6" />
+  <g
+     stroke="#000"
+     stroke-width="0.7"
+     stroke-linejoin="round"
+     id="g4">
+    <path
+       d="M 2 4 Q 5 2 8 4 L 8 9 Q 5 7 2 9 Z"
+       fill="#F05128"
+       id="path1" />
+    <path
+       d="M 8 4 Q 12 6 15 4 L 15 9 Q 12 11 8 9 Z"
+       fill="#80C030"
+       id="path2" />
+    <path
+       d="M 2 9 Q 5 7 8 9 L 8 14 Q 5 12 2 14 Z"
+       fill="#00A0E0"
+       id="path3" />
+    <path
+       d="M 8 9 Q 12 11 15 9 L 15 14 Q 12 16 8 14 Z"
+       fill="#FFC000"
+       id="path4" />
+  </g>
+  <!-- Flying squares -->
+</svg>

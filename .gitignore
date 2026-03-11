@@ -1,0 +1,6 @@
+Desktop/
+tools/
+zig-out/
+.claude/
+tests/
+.zig-cache/

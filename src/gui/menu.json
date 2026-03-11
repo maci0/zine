@@ -1,0 +1,183 @@
+{
+  "type": "menu",
+  "menu": [
+    {
+      "id": 38,
+      "name": "File",
+      "flags": 16,
+      "popup": [
+        {
+          "id": 40004,
+          "name": "&Open",
+          "flags": 0
+        },
+        {
+          "id": 0,
+          "name": "",
+          "flags": 0
+        },
+        {
+          "id": 40014,
+          "name": "Rese&t   F2",
+          "flags": 0
+        },
+        {
+          "id": 40010,
+          "name": "&Pause   F3",
+          "flags": 0
+        },
+        {
+          "id": 40011,
+          "name": "&Continue   F4",
+          "flags": 0
+        },
+        {
+          "id": 0,
+          "name": "",
+          "flags": 0
+        },
+        {
+          "id": 40012,
+          "name": "&Save   F5",
+          "flags": 0
+        },
+        {
+          "id": 40013,
+          "name": "&Load    F6",
+          "flags": 0
+        },
+        {
+          "id": 0,
+          "name": "",
+          "flags": 0
+        },
+        {
+          "id": 103,
+          "name": "E&xit   Esc",
+          "flags": 128
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "name": "Size",
+      "flags": 16,
+      "popup": [
+        {
+          "id": 40005,
+          "name": "&1:1 (Window)",
+          "flags": 0
+        },
+        {
+          "id": 40006,
+          "name": "&2:2 (Window)",
+          "flags": 0
+        },
+        {
+          "id": 40007,
+          "name": "&3:3 (Window)",
+          "flags": 0
+        },
+        {
+          "id": 40009,
+          "name": "320X240 : 1&6 (Full Screen)",
+          "flags": 128
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "name": "Option",
+      "flags": 16,
+      "popup": [
+        {
+          "id": 40016,
+          "name": "&Game Boy",
+          "flags": 0
+        },
+        {
+          "id": 40017,
+          "name": "&Super Game Boy",
+          "flags": 0
+        },
+        {
+          "id": 40024,
+          "name": "&Color Game Boy",
+          "flags": 0
+        },
+        {
+          "id": 40025,
+          "name": "S&uper Color Game Boy",
+          "flags": 0
+        },
+        {
+          "id": 0,
+          "name": "",
+          "flags": 0
+        },
+        {
+          "id": 40018,
+          "name": "&Auto 1",
+          "flags": 0
+        },
+        {
+          "id": 40019,
+          "name": "A&uto 2",
+          "flags": 0
+        },
+        {
+          "id": 1,
+          "name": "&0",
+          "flags": 0
+        },
+        {
+          "id": 40020,
+          "name": "&1",
+          "flags": 0
+        },
+        {
+          "id": 40021,
+          "name": "&2",
+          "flags": 0
+        },
+        {
+          "id": 40022,
+          "name": "&3",
+          "flags": 128
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "name": "Priority",
+      "flags": 16,
+      "popup": [
+        {
+          "id": 40026,
+          "name": "&Realtime",
+          "flags": 0
+        },
+        {
+          "id": 40027,
+          "name": "&High",
+          "flags": 0
+        },
+        {
+          "id": 40028,
+          "name": "&Normal",
+          "flags": 0
+        },
+        {
+          "id": 40029,
+          "name": "&Idle",
+          "flags": 128
+        }
+      ]
+    },
+    {
+      "id": 40023,
+      "name": "&About",
+      "flags": 128
+    }
+  ]
+}
