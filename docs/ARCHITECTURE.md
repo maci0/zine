@@ -57,11 +57,12 @@ The native entry point handles:
   - `--trace-api` — enable API call tracing only
   - `--trace-insn` — enable x86 instruction tracing only
   - `-i`, `--interpret` — use x86 software interpreter
+  - `--profile` — enable profiling (hot code pages, opcodes, stub calls)
   - `--argv0 <name>` — override argv[0] passed to the target
   - `-h`, `--help` — show help
   - `-V`, `--version` — show version
   - `--` — end of zine options (allows target names starting with `-`)
-  - Environment variables: `ZINE_TRACE` (API tracing), `ZINE_TRACE_INSN` (instruction tracing)
+  - Environment variables: `ZINE_TRACE` (API tracing), `ZINE_TRACE_INSN` (instruction tracing), `ZINE_PROFILE` (profiling)
 - `.bat`/`.cmd` file preprocessing via `bat.zig`
 - SIGSEGV/SIGFPE (segmentation fault / floating-point exception) signal handler for SEH (Structured Exception Handling) dispatch and AppCompat (Application Compatibility) shims
 - Environment setup (combining BAT-defined PATH, argv, envp)
@@ -127,7 +128,7 @@ The software interpreter is used on WASM (always) and optionally on native (`--i
 |--------|---------------|
 | [cpu.zig](../src/x86/cpu.zig) | CPU state: 8 GPRs (General Purpose Registers: EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI), EIP (Extended Instruction Pointer), segment registers, lazy EFLAGS (CPU status flags register), FPU (Floating Point Unit) state, and guest memory reference. Provides typed accessors for 8/16/32-bit register operations and stack push/pop. |
 | [decoder.zig](../src/x86/decoder.zig) | Instruction decoder. Reads opcode bytes, prefixes, ModR/M (addressing mode byte), SIB (Scale-Index-Base byte), displacement, and immediates from the code stream. |
-| [execute.zig](../src/x86/execute.zig) | The main interpreter loop. Fetches, decodes, and executes x86 instructions. Dispatches `INT 0xFE` to the thunk table. |
+| [execute.zig](../src/x86/execute.zig) | The main interpreter loop. Fetches, decodes, and executes x86 instructions. Dispatches `INT 0xFE` to the thunk table. Includes partial x87 FPU support (FNINIT, FNSTCW, FLDCW). |
 | [flags.zig](../src/x86/flags.zig) | Lazy EFLAGS computation. Defers CF (Carry), ZF (Zero), SF (Sign), OF (Overflow), PF (Parity) flag calculations until read, recording the operation type and operands. |
 | [fpu.zig](../src/x86/fpu.zig) | x87 FPU state (ST(0)–ST(7) floating-point register stack, control/status words). |
 | [memory.zig](../src/x86/memory.zig) | `GuestMemory` struct — translates guest virtual addresses to host buffer offsets. Provides `read8/16/32`, `write8/16/32`, and `readSlice`/`writeSlice`. Supports `native_linear` mode for direct host memory access when using `--interpret` on native targets. |
@@ -294,6 +295,7 @@ On native targets, Zine installs a `SIGSEGV`/`SIGFPE` handler that implements:
 |--------|------|---------|
 | **bat.zig** | [`src/bat.zig`](../src/bat.zig) | Parses `.bat`/`.cmd` launcher scripts, expands `%VARIABLE%` references, and extracts the final command to execute. |
 | **trace.zig** | [`src/trace.zig`](../src/trace.zig) | Conditional debug printing. Activated by `--trace`, `--trace-api`, `--trace-insn` flags or `ZINE_TRACE`/`ZINE_TRACE_INSN` environment variables. |
+| **profiler.zig** | [`src/profiler.zig`](../src/profiler.zig) | Lightweight profiling: EIP heat map (per-4KB page), opcode frequency table, and stub call counters. Activated by `--profile` flag or `ZINE_PROFILE` environment variable. |
 | **path_utils.zig** | [`src/path_utils.zig`](../src/path_utils.zig) | Converts between POSIX and Win32 paths (`drive_c/... ↔ C:\...`). |
 
 ---
@@ -381,7 +383,7 @@ The build system includes a `test` step that runs embedded unit tests in the x86
 zig build test
 ```
 
-Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `execute.zig`, `thunks.zig`, `jit/emitter.zig`, `jit/compiler.zig`.
+Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `execute.zig`, `thunks.zig`, `jit/emitter.zig`, `jit/compiler.zig`, `profiler.zig`.
 
 ---
 
@@ -414,6 +416,7 @@ zine/
 │   ├── calling_convention.zig # WINAPI calling convention abstraction
 │   ├── path_utils.zig       # POSIX ↔ Win32 path conversion
 │   ├── platform.zig         # Platform abstraction (re-export)
+│   ├── profiler.zig         # Profiling (EIP heat map, opcodes, stubs)
 │   ├── platform/
 │   │   ├── interface.zig    # Comptime backend selection
 │   │   ├── native.zig       # Linux-specific implementation

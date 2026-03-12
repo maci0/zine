@@ -20,6 +20,7 @@ const x86_execute = @import("x86/execute.zig");
 const x86_memory = @import("x86/memory.zig");
 const x86_thunks = @import("x86/thunks.zig");
 const trace = @import("trace.zig");
+const log = @import("log.zig");
 
 // Stub DLL modules
 const stubs_msvcrt = @import("stubs/msvcrt.zig");
@@ -35,6 +36,7 @@ const stubs_winmm = @import("stubs/winmm.zig");
 const stubs_ddraw = @import("stubs/ddraw.zig");
 const stubs_gdi32 = @import("stubs/gdi32.zig");
 const stubs_dinput = @import("stubs/dinput.zig");
+const stubs_dinput8 = @import("stubs/dinput8.zig");
 const stubs_dsound = @import("stubs/dsound.zig");
 const stubs_d3d8 = @import("stubs/d3d8.zig");
 const stubs_mss32 = @import("stubs/mss32.zig");
@@ -61,9 +63,9 @@ fn not_implemented() callconv(.c) void {
     const ra = @returnAddress();
     const name = x86_thunks.lookupUnresolvedName(ra);
     if (name) |func_name| {
-        std.debug.print("\n!!! Unimplemented Win32 API: {s} (called from 0x{X}) !!!\n", .{ func_name, ra });
+        log.fatal("Unimplemented Win32 API: {s} (called from 0x{X})", .{ func_name, ra });
     } else {
-        std.debug.print("\n!!! Unimplemented Win32 API called from 0x{X} !!!\n", .{ra});
+        log.fatal("Unimplemented Win32 API called from 0x{X}", .{ra});
     }
     // On WASM we can't call std.process.exit, so halt via trap
     @trap();
@@ -76,35 +78,67 @@ pub fn main() !void {
     var args = try std.process.argsWithAllocator(allocator);
     _ = args.next(); // Skip executable name (zine.wasm)
 
-    // Check for trace flags
     var target_exe_opt: ?[]const u8 = null;
+    var end_of_options = false;
     while (args.next()) |arg| {
-        if (std.mem.eql(u8, arg, "--trace") or std.mem.eql(u8, arg, "-t")) {
+        if (!end_of_options and std.mem.eql(u8, arg, "--")) {
+            end_of_options = true;
+            continue;
+        }
+        if (!end_of_options and (std.mem.eql(u8, arg, "--trace") or std.mem.eql(u8, arg, "-t"))) {
             trace.enable_tracing = true;
             trace.enable_instructions = true;
             continue;
         }
-        if (std.mem.eql(u8, arg, "--trace-api")) {
+        if (!end_of_options and std.mem.eql(u8, arg, "--trace-api")) {
             trace.enable_tracing = true;
             continue;
         }
-        if (std.mem.eql(u8, arg, "--trace-insn")) {
+        if (!end_of_options and std.mem.eql(u8, arg, "--trace-insn")) {
             trace.enable_instructions = true;
             continue;
         }
-        if (std.mem.eql(u8, arg, "--")) continue; // Skip wasmtime separator
+        if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
+            std.io.getStdErr().writeAll(
+                \\Usage: zine.wasm [options] [--] <target.exe>
+                \\
+                \\Run a Win32 PE executable in a WebAssembly environment.
+                \\
+                \\Options:
+                \\  -t, --trace         Enable all tracing output (API + instructions)
+                \\      --trace-api     Enable API tracing only
+                \\      --trace-insn    Enable x86 instruction tracing only
+                \\  -h, --help          Show this help message
+                \\  -v, --version       Show version information
+                \\  --                  Stop processing options
+                \\
+            ) catch {};
+            return;
+        }
+        if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
+            std.io.getStdErr().writeAll("zine.wasm 0.1.0\n") catch {};
+            return;
+        }
+        if (!end_of_options and target_exe_opt == null and arg.len > 1 and arg[0] == '-') {
+            log.err("Unknown option '{s}'. Try 'zine.wasm --help' for more information.", .{arg});
+            return error.InvalidArguments;
+        }
+
         if (target_exe_opt == null) {
             target_exe_opt = arg;
+        } else {
+            log.err("Unexpected argument '{s}'. Try 'zine.wasm --help' for more information.", .{arg});
+            return error.InvalidArguments;
         }
     }
 
     if (target_exe_opt == null) {
-        std.debug.print("Usage: zine.wasm [--trace|--trace-api|--trace-insn] <target.exe>\n", .{});
+        log.err("Missing required argument <target.exe>. Try 'zine.wasm --help' for more information.", .{});
         return error.InvalidArguments;
     }
     const target_exe = target_exe_opt.?;
 
-    std.log.info("wasm: loading PE from '{s}'", .{target_exe});
+    log.info("wasm: loading PE from '{s}'", .{target_exe});
 
     // --- Set up Environment and register all stub DLLs ---
     var environment = Environment.init(allocator);
@@ -154,7 +188,7 @@ pub fn main() !void {
     const main_module = try environment.registry.loadModule(exe_name);
     stubs_kernel32.main_module_handle = @intFromPtr(main_module.mapped_memory.ptr);
 
-    std.log.info("wasm: loaded PE '{s}' at 0x{X} (size={d})", .{
+    log.info("wasm: loaded PE '{s}' at 0x{X} (size={d})", .{
         exe_name,
         main_module.image_base,
         main_module.mapped_memory.len,
@@ -174,15 +208,13 @@ pub fn main() !void {
     // The PE's SizeOfImage covers all sections including imports and data.
     //
     // Combined buffer layout:
-    //   [PE image (SizeOfImage)] [stack (STACK_SIZE)] [thunks (THUNK_RESERVE)]
+    //   [PE image (SizeOfImage)] [stack (STACK_SIZE)] [thunks (THUNK_RESERVE)] [heap (HEAP_RESERVE)]
     //
     const STACK_SIZE: u32 = 64 * 1024;
     const THUNK_RESERVE: u32 = 32 * 1024;
-    const combined_size = image_size + STACK_SIZE + THUNK_RESERVE;
+    const HEAP_RESERVE: u32 = 32 * 1024 * 1024; // 32 MB guest heap
+    const combined_size = image_size + STACK_SIZE + THUNK_RESERVE + HEAP_RESERVE;
     const combined_buf = try allocator.alloc(u8, combined_size);
-
-    // Copy the PE image into the first part of the combined buffer
-    @memcpy(combined_buf[0..image_size], main_module.mapped_memory[0..image_size]);
 
     // Zero the stack area
     @memset(combined_buf[image_size .. image_size + STACK_SIZE], 0);
@@ -201,6 +233,9 @@ pub fn main() !void {
     loader.setThunkMemory(&thunk_guest_mem, thunk_base_addr);
 
     // --- Resolve imports iteratively ---
+    // IMPORTANT: This must happen BEFORE copying the PE image into combined_buf,
+    // because resolveImports patches mod.mapped_memory (IAT slots). If we copy
+    // first, the patched IAT entries would be lost.
     var resolved_count: usize = 0;
     while (true) {
         var to_resolve: std.ArrayListUnmanaged(*Module) = .{};
@@ -218,6 +253,9 @@ pub fn main() !void {
         }
         resolved_count = to_resolve.items.len;
     }
+
+    // Copy the PE image (now with patched IAT) into the combined buffer
+    @memcpy(combined_buf[0..image_size], main_module.mapped_memory[0..image_size]);
 
     // --- Initialize MSVCRT globals ---
     // Minimal argv: just the program name
@@ -248,7 +286,7 @@ pub fn main() !void {
     // --- Set up CPU and run interpreter ---
     const ep_rva: u32 = main_module.parser.getNtHeaders().OptionalHeader.AddressOfEntryPoint;
     if (ep_rva == 0) {
-        std.debug.print("Error: no entry point found in executable.\n", .{});
+        log.err("No entry point found in executable.", .{});
         return error.NoEntryPoint;
     }
 
@@ -256,8 +294,14 @@ pub fn main() !void {
     cpu.memory = x86_memory.GuestMemory{
         .base = combined_buf,
         .base_addr = preferred_base,
+        .heap_start = image_size + STACK_SIZE + THUNK_RESERVE,
+        .heap_cursor = image_size + STACK_SIZE + THUNK_RESERVE,
     };
     cpu.eip = preferred_base +% ep_rva;
+
+    // Wire up guest heap for kernel32 memory stubs (VirtualAlloc, HeapAlloc, etc.)
+    const kernel32_mem = @import("stubs/kernel32/mem.zig");
+    kernel32_mem.guest_memory = &cpu.memory;
 
     // Stack goes between the PE image end and the thunk region.
     // The combined buffer layout is: [PE image | stack space | thunks]
@@ -268,7 +312,7 @@ pub fn main() !void {
     // Point FS at the TEB for interpreter FS-relative accesses
     cpu.fs_base = @truncate(@intFromPtr(thread_env));
 
-    std.log.info("wasm: starting x86 interpreter at EIP=0x{X}, ESP=0x{X}, FS_BASE=0x{X}", .{
+    log.info("wasm: starting x86 interpreter at EIP=0x{X}, ESP=0x{X}, FS_BASE=0x{X}", .{
         cpu.eip,
         cpu.esp,
         cpu.fs_base,
@@ -276,5 +320,5 @@ pub fn main() !void {
 
     x86_execute.run(&cpu);
 
-    std.log.info("wasm: interpreter halted, EAX=0x{X}", .{cpu.eax});
+    log.info("wasm: interpreter halted, EAX=0x{X}", .{cpu.eax});
 }

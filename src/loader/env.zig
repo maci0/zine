@@ -79,11 +79,16 @@ pub const Environment = struct {
         return self.builtins.getPtr(lower_dll).?;
     }
 
+    /// Register a raw pointer as a built-in export.
+    /// This bypasses comptime type checking and thunk generation.
     pub fn addBuiltinExport(self: *Environment, dll: []const u8, name: []const u8, addr: usize) !void {
         const builtin = try self.getOrCreateModule(dll);
         try builtin.exports.put(name, .{ .addr = addr, .param_bytes = 0 });
     }
 
+    /// Register a typed Zig function as a built-in export.
+    /// On WASM, this generates an intelligent thunk handler that unwraps
+    /// guest arguments into the native function signature safely.
     pub fn addBuiltinExportComptime(self: *Environment, dll: []const u8, name: []const u8, comptime func: anytype) !void {
         const info = @typeInfo(@TypeOf(func));
         comptime var param_len: usize = 0;
@@ -256,6 +261,7 @@ pub const Environment = struct {
         }
     }
 
+    /// Retrieves the fake PE header handle for a built-in module.
     pub fn getBuiltinHandle(self: *Environment, dll_name: []const u8) ?usize {
         var search_name: []const u8 = dll_name;
         // Handle case-insensitive lookup for known DLLs
@@ -271,6 +277,7 @@ pub const Environment = struct {
         return null;
     }
 
+    /// Resolves an imported function by name from loaded PE modules or built-in stubs.
     pub fn resolveExport(self: *Environment, dll_name: []const u8, func_name: []const u8) ?BuiltinExport {
         // First, try loaded PE modules (they can export functions)
         var lower_buf: [256]u8 = undefined;

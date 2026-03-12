@@ -1,6 +1,7 @@
 const std = @import("std");
 const env = @import("../../loader/env.zig");
 const trace = @import("../../trace.zig");
+const log = @import("../../log.zig");
 const kernel32 = @import("../kernel32.zig");
 const loader = @import("../../loader/loader.zig");
 const kernel32_mem = @import("mem.zig");
@@ -20,7 +21,7 @@ pub fn stub_UnhandledExceptionFilter(ExceptionInfo: usize) callconv(w32cc.WINAPI
         const code = ptrs.ExceptionRecord.ExceptionCode;
         const addr = ptrs.ExceptionRecord.ExceptionAddress;
 
-        std.log.err("UnhandledExceptionFilter caught code 0x{X} at 0x{X}", .{ code, addr });
+        log.err("UnhandledExceptionFilter caught code 0x{X} at 0x{X}", .{ code, addr });
 
         const renderer = @import("../../gui/renderer.zig");
         var buf: [512]u8 = undefined;

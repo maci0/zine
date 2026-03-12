@@ -44,8 +44,16 @@ fn stub_ftol_x86() callconv(.naked) void {
 }
 
 fn stub_ftol_x64() callconv(.naked) void {
+    // MSVC6 _ftol: value is on the x87 FP stack (ST0), not in XMM0.
+    // Use fistpll to convert ST0 to int64 on the stack, then load into RAX.
     asm volatile (
-        \\  cvttsd2si %%xmm0, %%rax
+        \\  push %%rbp
+        \\  mov %%rsp, %%rbp
+        \\  sub $16, %%rsp
+        \\  fistpll -8(%%rbp)
+        \\  mov -8(%%rbp), %%rax
+        \\  mov %%rbp, %%rsp
+        \\  pop %%rbp
         \\  ret
     );
 }

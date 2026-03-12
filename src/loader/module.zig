@@ -1,5 +1,6 @@
 const std = @import("std");
 const pe = @import("../pe.zig");
+const log = @import("../log.zig");
 const builtin = @import("builtin");
 
 /// Open a file portably — on WASI, resolves absolute paths through preopened dirs.
@@ -49,7 +50,7 @@ pub const Module = struct {
 
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !*Module {
         const file = openFilePortable(path) catch |err| {
-            std.log.err("Module.load: failed to open '{s}': {}", .{ path, err });
+            log.err("Module.load: failed to open '{s}': {}", .{ path, err });
             return err;
         };
         defer file.close();
@@ -82,12 +83,10 @@ pub const Module = struct {
 
         const actual_base = @intFromPtr(mapped_slice.ptr);
         const delta: isize = @as(isize, @bitCast(actual_base)) -% @as(isize, @intCast(opt_header.ImageBase));
-        std.log.info("Mapped {s} at 0x{X} (preferred: 0x{X}, delta: 0x{X})", .{ std.fs.path.basename(path), actual_base, opt_header.ImageBase, delta });
+        log.info("Mapped {s} at 0x{X} (preferred: 0x{X}, delta: 0x{X})", .{ std.fs.path.basename(path), actual_base, opt_header.ImageBase, delta });
 
-        // Copy headers
         @memcpy(mapped_slice[0..opt_header.SizeOfHeaders], file_data[0..opt_header.SizeOfHeaders]);
 
-        // Copy sections
         const sections = parser.getSectionHeaders();
         for (sections) |section| {
             if (section.SizeOfRawData > 0) {
@@ -99,14 +98,12 @@ pub const Module = struct {
 
                 @memcpy(dest[0..copy_size], src);
 
-                // Clear the rest if any
                 if (copy_size < dest.len) {
                     @memset(dest[copy_size..], 0);
                 }
             }
         }
 
-        // Apply Relocations
         if (delta != 0) {
             const reloc_dir = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC];
             if (reloc_dir.Size > 0) {
@@ -186,7 +183,7 @@ pub const Module = struct {
                 // Check for forwarded exports: if func_rva points inside the export directory, it's a forwarder
                 if (func_rva >= export_dir_rva and func_rva < export_dir_rva + export_dir_size) {
                     const forwarder = std.mem.span(@as([*:0]const u8, @ptrCast(&self.mapped_memory[func_rva])));
-                    std.log.warn("Forwarded export {s} -> {s}", .{ name, forwarder });
+                    log.warn("Forwarded export {s} -> {s}", .{ name, forwarder });
                     return null; // TODO: resolve forwarder
                 }
 
@@ -206,7 +203,6 @@ pub const Module = struct {
         const pe_res = @import("../pe_resources.zig");
         const root_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva])));
         
-        // Find Type
         const num_type_entries = root_dir.NumberOfNamedEntries + root_dir.NumberOfIdEntries;
         const type_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
         
@@ -219,14 +215,12 @@ pub const Module = struct {
         }
         if (type_offset == null) return null;
 
-        // Find Name/ID (pick the first one)
         const name_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + type_offset.?])));
         const num_name_entries = name_dir.NumberOfNamedEntries + name_dir.NumberOfIdEntries;
         if (num_name_entries == 0) return null;
         const name_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + type_offset.? + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
         const name_offset = name_entries[0].OffsetToData & 0x7FFFFFFF;
 
-        // Find Language (pick the first one)
         const lang_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset])));
         if (lang_dir.NumberOfIdEntries == 0 and lang_dir.NumberOfNamedEntries == 0) return null;
         
@@ -247,7 +241,6 @@ pub const Module = struct {
         const pe_res = @import("../pe_resources.zig");
         const root_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva])));
         
-        // Find Type
         const num_type_entries = root_dir.NumberOfNamedEntries + root_dir.NumberOfIdEntries;
         const type_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
         
@@ -260,7 +253,6 @@ pub const Module = struct {
         }
         if (type_offset == null) return null;
 
-        // Find Name/ID
         const name_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + type_offset.?])));
         const num_name_entries = name_dir.NumberOfNamedEntries + name_dir.NumberOfIdEntries;
         const name_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + type_offset.? + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
@@ -274,7 +266,6 @@ pub const Module = struct {
         }
         if (name_offset == null) return null;
 
-        // Find Language (just pick the first one)
         const lang_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset.?])));
         if (lang_dir.NumberOfIdEntries == 0 and lang_dir.NumberOfNamedEntries == 0) return null;
         

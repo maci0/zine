@@ -4,6 +4,7 @@ const Module = @import("module.zig").Module;
 const Environment = @import("env.zig").Environment;
 const BuiltinExport = @import("env.zig").BuiltinExport;
 const trace = @import("../trace.zig");
+const log = @import("../log.zig");
 const x86_thunks = @import("../x86/thunks.zig");
 const x86_memory = @import("../x86/memory.zig");
 const w32cc = @import("../calling_convention.zig");
@@ -89,9 +90,8 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
 
         const dll_name = std.mem.span(@as([*:0]const u8, @ptrCast(&mod.mapped_memory[import_desc.Name])));
 
-        // Ensure the dependency is loaded into the registry if we can find it
         if (env.registry.loadModule(dll_name)) |loaded_mod| {
-            std.log.info("Loaded dependency: {s}", .{loaded_mod.name});
+            log.info("Loaded dependency: {s}", .{loaded_mod.name});
             if (!loaded_mod.imports_resolved) {
                 resolveImports(env, loaded_mod) catch |resolve_err| {
                     if (trace.enable_tracing) trace.print("loader: failed to resolve imports for {s}: {}\n", .{ dll_name, resolve_err });
@@ -125,7 +125,7 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
                         first_thunk.* = 0;
                     }
                     const ord_str = std.fmt.bufPrint(&ord_name_buf, "ordinal_{d}", .{ordinal}) catch "ordinal_?";
-                    std.log.warn("Unresolved ordinal import {s} -> {d}", .{ dll_name, ordinal });
+                    log.warn("Unresolved ordinal import {s} -> {d}", .{ dll_name, ordinal });
                     x86_thunks.registerUnresolvedImport(@intCast(@intFromPtr(first_thunk)), dll_name, ord_str);
                 }
             } else {
@@ -140,7 +140,7 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
                     } else {
                         first_thunk.* = 0;
                     }
-                    std.log.warn("Unresolved import {s} -> {s}", .{ dll_name, func_name });
+                    log.warn("Unresolved import {s} -> {s}", .{ dll_name, func_name });
                     x86_thunks.registerUnresolvedImport(@intCast(@intFromPtr(first_thunk)), dll_name, func_name);
                 }
             }

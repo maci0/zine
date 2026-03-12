@@ -2,6 +2,7 @@ const std = @import("std");
 const pe = @import("../pe.zig");
 const Module = @import("module.zig").Module;
 const builtin = @import("builtin");
+const log = @import("../log.zig");
 const is_wasi = builtin.os.tag == .wasi;
 
 /// On WASI, resolve an absolute path through preopened directories.
@@ -112,7 +113,6 @@ pub const Registry = struct {
     }
 
     pub fn loadModule(self: *Registry, name: []const u8) !*Module {
-        // Create lowercased name for map
         const lower_name = try self.allocator.alloc(u8, name.len);
         defer self.allocator.free(lower_name);
         _ = std.ascii.lowerString(lower_name, name);
@@ -123,9 +123,7 @@ pub const Registry = struct {
 
         var file_path: ?[]const u8 = null;
 
-        // If the name contains a directory separator, treat it as a direct path
         if (std.mem.indexOfScalar(u8, name, '/') != null or std.mem.indexOfScalar(u8, name, '\\') != null) {
-            // Fix path separators
             const fixed_path = try self.allocator.alloc(u8, name.len);
             defer self.allocator.free(fixed_path);
             @memcpy(fixed_path, name);
@@ -134,7 +132,6 @@ pub const Registry = struct {
             if (fileExists(fixed_path)) {
                 file_path = try self.allocator.dupe(u8, fixed_path);
             } else {
-                // Try case-insensitive scan in the directory
                 if (std.fs.path.dirname(fixed_path)) |dir| {
                     const base = std.fs.path.basename(fixed_path);
                     var d = openDirPortable(dir, .{ .iterate = true }) catch return error.ModuleNotFound;
@@ -150,10 +147,9 @@ pub const Registry = struct {
             }
         }
 
-        // Try to find the file in search paths if not a direct path
         if (file_path == null) {
             for (self.search_paths.items) |path| {
-                std.log.debug("Searching for {s} in {s}", .{ name, path });
+                log.trace("Searching for {s} in {s}", .{ name, path });
                 // Check exact match first
                 const full_path_exact = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, name });
                 defer self.allocator.free(full_path_exact);
@@ -233,7 +229,7 @@ pub const Registry = struct {
                     defer self.allocator.free(name_dll);
                     if (std.ascii.eqlIgnoreCase(entry.name, name_dll)) {
                         file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
-                        std.log.info("Found match for {s} -> {s}", .{ name, file_path.? });
+                        log.info("Found match for {s} -> {s}", .{ name, file_path.? });
                         break;
                     }
                 }

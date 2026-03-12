@@ -38,10 +38,10 @@ const IDirectDrawVtbl = extern struct {
     GetScanLine: usize,
     GetVerticalBlankStatus: usize,
     Initialize: usize,
-    RestoreDisplayMode: usize,
+    RestoreDisplayMode: *const fn (*IDirectDraw) callconv(w32cc.WINAPI) i32,
     SetCooperativeLevel: *const fn (*IDirectDraw, usize, u32) callconv(w32cc.WINAPI) i32,
     SetDisplayMode: *const fn (*IDirectDraw, u32, u32, u32) callconv(w32cc.WINAPI) i32,
-    WaitForVerticalBlank: usize,
+    WaitForVerticalBlank: *const fn (*IDirectDraw, u32, usize) callconv(w32cc.WINAPI) i32,
     // IDirectDraw7 additions (indices 23-29):
     GetAvailableVidMem: usize,
     GetSurfaceFromDC: usize,
@@ -81,10 +81,10 @@ const IDirectDrawSurfaceVtbl = extern struct {
     DeleteAttachedSurface: usize,
     EnumAttachedSurfaces: usize,
     EnumOverlayZOrders: usize,
-    Flip: usize,
-    GetAttachedSurface: usize,
+    Flip: *const fn (*IDirectDrawSurface, usize, u32) callconv(w32cc.WINAPI) i32,
+    GetAttachedSurface: *const fn (*IDirectDrawSurface, usize, *?*IDirectDrawSurface) callconv(w32cc.WINAPI) i32,
     GetBltStatus: usize,
-    GetCaps: usize,
+    GetCaps: *const fn (*IDirectDrawSurface, usize) callconv(w32cc.WINAPI) i32,
     GetClipper: usize,
     GetColorKey: usize,
     GetDC: usize,
@@ -92,9 +92,9 @@ const IDirectDrawSurfaceVtbl = extern struct {
     GetOverlayPosition: usize,
     GetPalette: usize,
     GetPixelFormat: usize,
-    GetSurfaceDesc: usize,
+    GetSurfaceDesc: *const fn (*IDirectDrawSurface, usize) callconv(w32cc.WINAPI) i32,
     Initialize: usize,
-    IsLost: usize,
+    IsLost: *const fn (*IDirectDrawSurface) callconv(w32cc.WINAPI) i32,
     Lock: *const fn (*IDirectDrawSurface, usize, usize, u32, usize) callconv(w32cc.WINAPI) i32,
     ReleaseDC: usize,
     Restore: *const fn (*IDirectDrawSurface) callconv(w32cc.WINAPI) i32,
@@ -581,10 +581,10 @@ pub fn register(environment: *env.Environment) !void {
         .GetScanLine = D2,      // this,scanline
         .GetVerticalBlankStatus = D2, // this,status
         .Initialize = D2,       // this,guid
-        .RestoreDisplayMode = @intFromPtr(&ddraw_RestoreDisplayMode),
+        .RestoreDisplayMode = @ptrCast(&ddraw_RestoreDisplayMode),
         .SetCooperativeLevel = ddraw_SetCooperativeLevel,
         .SetDisplayMode = ddraw_SetDisplayMode,
-        .WaitForVerticalBlank = @intFromPtr(&ddraw_WaitForVerticalBlank),
+        .WaitForVerticalBlank = @ptrCast(&ddraw_WaitForVerticalBlank),
         // IDirectDraw7 extras:
         .GetAvailableVidMem = D4,   // this,caps,total,free
         .GetSurfaceFromDC = D3,     // this,dc,surf
@@ -607,10 +607,10 @@ pub fn register(environment: *env.Environment) !void {
         .DeleteAttachedSurface = D3,  // this,flags,surf
         .EnumAttachedSurfaces = D3,   // this,ctx,cb
         .EnumOverlayZOrders = D4,     // this,flags,ctx,cb
-        .Flip = @intFromPtr(&surface_Flip),
-        .GetAttachedSurface = @intFromPtr(&surface_GetAttachedSurface),
+        .Flip = surface_Flip,
+        .GetAttachedSurface = surface_GetAttachedSurface,
         .GetBltStatus = D2,           // this,flags
-        .GetCaps = @intFromPtr(&surface_GetCaps),
+        .GetCaps = @ptrCast(&surface_GetCaps),
         .GetClipper = D2,             // this,clipper
         .GetColorKey = D3,            // this,flags,ck
         .GetDC = D2,                  // this,dc
@@ -618,9 +618,9 @@ pub fn register(environment: *env.Environment) !void {
         .GetOverlayPosition = D3,     // this,x,y
         .GetPalette = D2,             // this,pal
         .GetPixelFormat = D2,         // this,pf
-        .GetSurfaceDesc = @intFromPtr(&surface_GetSurfaceDesc),
+        .GetSurfaceDesc = @ptrCast(&surface_GetSurfaceDesc),
         .Initialize = D3,             // this,dd,desc
-        .IsLost = @intFromPtr(&surface_IsLost),
+        .IsLost = surface_IsLost,
         .Lock = surface_Lock,
         .ReleaseDC = D2,              // this,dc
         .Restore = surface_Restore,

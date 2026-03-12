@@ -77,10 +77,23 @@ pub fn win32ToPosix(win_path: []const u8, out: []u8) usize {
     }
 
     // No drive letter — check if root-relative or truly relative
-    if (src.len > 0 and (src[0] == '\\' or src[0] == '/')) {
-        // Root-relative path: \project\game\gfx\... → drive_c/project/game/gfx/...
-        // Strip leading separators
-        while (src.len > 0 and (src[0] == '\\' or src[0] == '/')) {
+    if (src.len > 0 and src[0] == '/') {
+        // Forward-slash path: this is a POSIX host path (e.g. from LIB env var).
+        // Pass it through unchanged — it's a real filesystem path.
+        var pos: usize = 0;
+        for (src) |c| {
+            if (pos >= out.len) break;
+            out[pos] = c;
+            pos += 1;
+        }
+        if (pos < out.len) out[pos] = 0;
+        return pos;
+    }
+
+    if (src.len > 0 and src[0] == '\\') {
+        // Backslash root-relative path: \project\game\... → drive_c/project/game/...
+        // This is a Win32 convention for paths relative to the current drive root.
+        while (src.len > 0 and src[0] == '\\') {
             src = src[1..];
         }
         var pos: usize = 0;

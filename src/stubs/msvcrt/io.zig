@@ -210,10 +210,20 @@ pub fn stub_fread(buffer: [*]u8, size: usize, count: usize, f: ?*anyopaque) call
 }
 
 pub fn stub_fwrite(buffer: [*]const u8, size: usize, count: usize, f: ?*anyopaque) callconv(.c) usize {
-    trace.print("MSVCRT_IO: fwrite (size: {d}, count: {d})\n", .{ size, count });
+    const bytes_to_write = size *% count;
+    trace.print("MSVCRT_IO: fwrite (size: {d}, count: {d}, total: {d})\n", .{ size, count, bytes_to_write });
+    // Defensive: a size > 256MB is almost certainly a sign-extension bug.
+    if (bytes_to_write > 256 * 1024 * 1024 or bytes_to_write == 0) {
+        if (bytes_to_write > 0) {
+            // Try to read up to 256 bytes from the buffer to see what was being written
+            const preview_len: usize = @min(256, @as(usize, @intFromPtr(buffer)) + 256);
+            _ = preview_len;
+            const preview = buffer[0..@min(256, bytes_to_write)];
+            trace.print("MSVCRT_IO: fwrite REJECTED (size {d}) preview: {s}\n", .{ bytes_to_write, preview });
+        }
+        return 0;
+    }
     if (getFile(f)) |file| {
-        const bytes_to_write = size * count;
-        if (bytes_to_write == 0) return 0;
         file.writeAll(buffer[0..bytes_to_write]) catch return 0;
         return count;
     }

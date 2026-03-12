@@ -537,34 +537,16 @@ pub fn openFileDialog(filters: ?[]const u8, is_save: bool) void {
             if (is_save) {
                 files_json.appendSlice(g_allocator, ",\"mode\":\"save\"") catch {};
             }
-            files_json.appendSlice(g_allocator, ",\"files\":[") catch {};
 
-            var first = true;
-            var dir = std.fs.cwd().openDir("Desktop", .{ .iterate = true }) catch blk: {
-                break :blk std.fs.cwd().openDir("../Desktop", .{ .iterate = true }) catch null;
-            };
-
-            if (dir) |*d| {
-                defer d.close();
-                var it = d.iterate();
-                while (it.next() catch null) |entry| {
-                    if (entry.kind == .file) {
-                        if (!first) files_json.appendSlice(g_allocator, ",") catch {};
-                        first = false;
-                        files_json.appendSlice(g_allocator, "\"") catch {};
-                        files_json.appendSlice(g_allocator, entry.name) catch {};
-                        files_json.appendSlice(g_allocator, "\"") catch {};
-                    }
-                }
-            }
-
-            files_json.appendSlice(g_allocator, "]") catch {};
+            // List both files and folders in the Desktop directory
+            appendDirectoryListing(&files_json, "Desktop");
 
             if (filters) |f| {
                 files_json.appendSlice(g_allocator, ",\"filters\":") catch {};
                 files_json.appendSlice(g_allocator, f) catch {};
             }
 
+            files_json.appendSlice(g_allocator, ",\"path\":\"Desktop\"") catch {};
             files_json.appendSlice(g_allocator, "}") catch {};
 
             if (active_dialog) |old| g_allocator.free(old);
@@ -573,6 +555,98 @@ pub fn openFileDialog(filters: ?[]const u8, is_save: bool) void {
         },
         .fltk => fltk_ui.openFileDialog(filters, is_save),
         .none => {},
+    }
+}
+
+/// List directory contents and send as a directory_listing message.
+/// Called by web_ui when the client sends a browse_directory request.
+pub fn listDirectory(path: []const u8) void {
+    switch (active_backend) {
+        .web_ui => {
+            var json: std.ArrayListUnmanaged(u8) = .{};
+            defer json.deinit(g_allocator);
+
+            json.appendSlice(g_allocator, "{\"type\":\"directory_listing\"") catch {};
+
+            // Include the path in the response
+            json.appendSlice(g_allocator, ",\"path\":\"") catch {};
+            json.appendSlice(g_allocator, path) catch {};
+            json.appendSlice(g_allocator, "\"") catch {};
+
+            appendDirectoryListing(&json, path);
+
+            json.appendSlice(g_allocator, "}") catch {};
+            web_ui.pushMessage(json.items);
+        },
+        .fltk => {},
+        .none => {},
+    }
+}
+
+/// Helper: append ",\"folders\":[...],\"files\":[...]" to a JSON builder
+/// by iterating the given path relative to cwd.
+fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) void {
+    var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch blk: {
+        // Try with ../ prefix (for when cwd is inside drive_c)
+        var fallback_buf: [512]u8 = undefined;
+        const fallback = std.fmt.bufPrint(&fallback_buf, "../{s}", .{path}) catch break :blk null;
+        break :blk std.fs.cwd().openDir(fallback, .{ .iterate = true }) catch null;
+    };
+
+    // Folders
+    json.appendSlice(g_allocator, ",\"folders\":[") catch {};
+    var first_folder = true;
+    if (dir) |*d| {
+        var it = d.iterate();
+        while (it.next() catch null) |entry| {
+            if (entry.kind == .directory) {
+                if (!first_folder) json.appendSlice(g_allocator, ",") catch {};
+                first_folder = false;
+                json.appendSlice(g_allocator, "\"") catch {};
+                jsonEscapeAppend(json, entry.name);
+                json.appendSlice(g_allocator, "\"") catch {};
+            }
+        }
+        d.close();
+    }
+    json.appendSlice(g_allocator, "]") catch {};
+
+    // Re-open for files (iterator is consumed)
+    var dir2 = std.fs.cwd().openDir(path, .{ .iterate = true }) catch blk: {
+        var fallback_buf2: [512]u8 = undefined;
+        const fallback2 = std.fmt.bufPrint(&fallback_buf2, "../{s}", .{path}) catch break :blk null;
+        break :blk std.fs.cwd().openDir(fallback2, .{ .iterate = true }) catch null;
+    };
+
+    // Files
+    json.appendSlice(g_allocator, ",\"files\":[") catch {};
+    var first_file = true;
+    if (dir2) |*d2| {
+        defer d2.close();
+        var it2 = d2.iterate();
+        while (it2.next() catch null) |entry| {
+            if (entry.kind == .file) {
+                if (!first_file) json.appendSlice(g_allocator, ",") catch {};
+                first_file = false;
+                json.appendSlice(g_allocator, "\"") catch {};
+                jsonEscapeAppend(json, entry.name);
+                json.appendSlice(g_allocator, "\"") catch {};
+            }
+        }
+    }
+    json.appendSlice(g_allocator, "]") catch {};
+}
+
+/// Append a string to the JSON builder, escaping special JSON characters.
+fn jsonEscapeAppend(json: *std.ArrayListUnmanaged(u8), s: []const u8) void {
+    for (s) |c| {
+        if (c == '"') {
+            json.appendSlice(g_allocator, "\\\"") catch {};
+        } else if (c == '\\') {
+            json.appendSlice(g_allocator, "\\\\") catch {};
+        } else {
+            json.append(g_allocator, c) catch {};
+        }
     }
 }
 

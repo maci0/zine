@@ -44,15 +44,16 @@ const x86_thunks = @import("x86/thunks.zig");
 const x86_memory = @import("x86/memory.zig");
 
 const trace = @import("trace.zig");
+const log = @import("log.zig");
 const profiler = @import("profiler.zig");
 
 fn not_implemented() callconv(.c) void {
     const ra = @returnAddress();
     const name = x86_thunks.lookupUnresolvedName(ra);
     if (name) |func_name| {
-        std.debug.print("\n!!! Unimplemented Win32 API: {s} (called from 0x{X}) !!!\n", .{ func_name, ra });
+        log.fatal("Unimplemented Win32 API: {s} (called from 0x{X})", .{ func_name, ra });
     } else {
-        std.debug.print("\n!!! Unimplemented Win32 API called from 0x{X} !!!\n", .{ra});
+        log.fatal("Unimplemented Win32 API called from 0x{X}", .{ra});
     }
     std.process.exit(1);
 }
@@ -91,7 +92,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
             else if (mod == 2) inst_len += 4;        // [reg+disp32]
             if (rm == 4 and mod != 3) inst_len += 1; // SIB byte
         }
-        std.debug.print("AppCompat: SIGFPE at 0x{X}, skipping {d} bytes\n", .{ ip, inst_len });
+        log.info("AppCompat: SIGFPE at 0x{X}, skipping {d} bytes", .{ ip, inst_len });
         uctx.mcontext.gregs[reg_ip] = @bitCast(ip + inst_len);
         uctx.mcontext.gregs[reg_ax] = 0;
         uctx.mcontext.gregs[reg_dx] = 0;
@@ -111,7 +112,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         const esp: usize = @bitCast(uctx.mcontext.gregs[reg_sp]);
         if (esp > 0x1000) {
             const stack = @as([*]const u32, @ptrFromInt(esp));
-            std.debug.print("AppCompat: Bad IP=0x{X} jump. Stack walk:\n", .{ip});
+            log.warn("AppCompat: Bad IP=0x{X} jump. Stack walk:", .{ip});
             var found_ret: ?u32 = null;
             var found_idx: usize = 0;
             for (0..200) |si| {
@@ -122,14 +123,14 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
                         found_idx = si;
                     }
                     if (si < 10 or found_ret != null) {
-                        std.debug.print("  stack[{d}] = 0x{X} <app>\n", .{ si, val });
+                        log.warn("  stack[{d}] = 0x{X} <app>", .{ si, val });
                     }
                 } else if (si < 10) {
-                    std.debug.print("  stack[{d}] = 0x{X}\n", .{ si, val });
+                    log.warn("  stack[{d}] = 0x{X}", .{ si, val });
                 }
             }
             if (found_ret) |ret| {
-                std.debug.print("AppCompat: Recovering from bad IP=0x{X} to 0x{X} (stack[{d}])\n", .{ ip, ret, found_idx });
+                log.info("AppCompat: Recovering from bad IP=0x{X} to 0x{X} (stack[{d}])", .{ ip, ret, found_idx });
                 uctx.mcontext.gregs[reg_ip] = ret;
                 uctx.mcontext.gregs[reg_sp] = @bitCast(esp + (found_idx + 1) * 4);
                 uctx.mcontext.gregs[reg_ax] = 0;
@@ -137,14 +138,14 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
             }
         }
         // True emulator crash — print diagnostics and exit
-        std.debug.print("\nFATAL: Segfault in emulator code at IP=0x{X}, fault_addr=0x{X}\n", .{ ip, fault_addr });
-        std.debug.print("  EAX=0x{X} ECX=0x{X} EDX=0x{X} EBX=0x{X}\n", .{
+        log.fatal("Segfault in emulator code at IP=0x{X}, fault_addr=0x{X}", .{ ip, fault_addr });
+        log.fatal("  EAX=0x{X} ECX=0x{X} EDX=0x{X} EBX=0x{X}", .{
             @as(usize, @bitCast(uctx.mcontext.gregs[reg_ax])),
             @as(usize, @bitCast(uctx.mcontext.gregs[reg_cx])),
             @as(usize, @bitCast(uctx.mcontext.gregs[reg_dx])),
             @as(usize, @bitCast(uctx.mcontext.gregs[reg_bx])),
         });
-        std.debug.print("  ESP=0x{X} EBP=0x{X} ESI=0x{X} EDI=0x{X}\n", .{
+        log.fatal("  ESP=0x{X} EBP=0x{X} ESI=0x{X} EDI=0x{X}", .{
             @as(usize, @bitCast(uctx.mcontext.gregs[reg_sp])),
             @as(usize, @bitCast(uctx.mcontext.gregs[reg_bp])),
             @as(usize, @bitCast(uctx.mcontext.gregs[reg_si])),
@@ -153,9 +154,9 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         const fatal_esp: usize = @bitCast(uctx.mcontext.gregs[reg_sp]);
         if (fatal_esp > 0x1000) {
             const stack = @as([*]const u32, @ptrFromInt(fatal_esp));
-            std.debug.print("  Stack (first 16):\n", .{});
+            log.fatal("  Stack (first 16):", .{});
             for (0..16) |si| {
-                std.debug.print("    [{d}] = 0x{X}\n", .{ si, stack[si] });
+                log.fatal("    [{d}] = 0x{X}", .{ si, stack[si] });
             }
         }
         std.process.exit(1);
@@ -168,7 +169,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
             // Walk the stack to find the first valid code address
             // App code is in 0x401000-0x6B0000, zine code is in 0x100000-0x300000
             const stack = @as([*]const u32, @ptrFromInt(esp));
-            std.debug.print("AppCompat: EIP=0 fault. Stack walk:\n", .{});
+            log.warn("AppCompat: EIP=0 fault. Stack walk:", .{});
             var found_ret: ?u32 = null;
             var found_idx: usize = 0;
             for (0..200) |si| {
@@ -179,14 +180,14 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
                         found_idx = si;
                     }
                     if (si < 10 or found_ret != null) {
-                        std.debug.print("  stack[{d}] = 0x{X} <app>\n", .{si, val});
+                        log.warn("  stack[{d}] = 0x{X} <app>", .{si, val});
                     }
                 } else if (si < 10) {
-                    std.debug.print("  stack[{d}] = 0x{X}\n", .{si, val});
+                    log.warn("  stack[{d}] = 0x{X}", .{si, val});
                 }
             }
             if (found_ret) |ret| {
-                std.debug.print("AppCompat: Recovering to app code 0x{X} (stack[{d}])\n", .{ret, found_idx});
+                log.info("AppCompat: Recovering to app code 0x{X} (stack[{d}])", .{ret, found_idx});
                 uctx.mcontext.gregs[reg_ip] = ret;
                 uctx.mcontext.gregs[reg_sp] = @bitCast(esp + (found_idx + 1) * 4);
                 uctx.mcontext.gregs[reg_ax] = 0;
@@ -201,7 +202,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
 
         // 8b 08 (mov ecx, [eax]) or 8b 10 (mov edx, [eax])
         if ((ptr[0] == 0x8B and ptr[1] == 0x08) or (ptr[0] == 0x8B and ptr[1] == 0x10)) {
-            std.log.info("AppCompat: Skipped NULL pointer deref at 0x{X} ({X} {X})", .{ip, ptr[0], ptr[1]});
+            log.info("AppCompat: Skipped NULL pointer deref at 0x{X} ({X} {X})", .{ip, ptr[0], ptr[1]});
             uctx.mcontext.gregs[reg_ip] += 2;
             uctx.mcontext.gregs[reg_cx] = 0;
             uctx.mcontext.gregs[reg_dx] = 0;
@@ -211,7 +212,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         if ((ptr[0] == 0xFF and ptr[1] == 0x51 and ptr[2] == 0x48) or
             (ptr[0] == 0xFF and ptr[1] == 0x52 and ptr[2] == 0x08) or
             (ptr[0] == 0xFF and ptr[1] == 0x51 and ptr[2] == 0x08)) {
-            std.log.info("AppCompat: Skipped NULL pointer call at 0x{X} ({X} {X} {X})", .{ip, ptr[0], ptr[1], ptr[2]});
+            log.info("AppCompat: Skipped NULL pointer call at 0x{X} ({X} {X} {X})", .{ip, ptr[0], ptr[1], ptr[2]});
             uctx.mcontext.gregs[reg_ip] += 3;
             uctx.mcontext.gregs[reg_sp] += if (native_arch == .x86) 4 else 8;
             return;
@@ -254,7 +255,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
             if (maybe_opcode == 0xC6) skip += 1;
             if (maybe_opcode == 0xC7) skip += 4;
 
-            std.log.info("AppCompat: Skipped NULL pointer write at 0x{X}", .{ip});
+            log.info("AppCompat: Skipped NULL pointer write at 0x{X}", .{ip});
             uctx.mcontext.gregs[reg_ip] += @intCast(skip);
             return;
         }
@@ -304,7 +305,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     if (ip == seh_loop.last_ip) {
         seh_loop.repeat_count += 1;
         if (seh_loop.repeat_count > 16) {
-            std.debug.print("FATAL: Infinite SEH loop at 0x{X} (fault addr: 0x{X})\n", .{ ip, fault_addr });
+            log.fatal("Infinite SEH loop at 0x{X} (fault addr: 0x{X})", .{ ip, fault_addr });
             std.process.exit(1);
         }
     } else {
@@ -349,7 +350,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
             current_node = next_ptr.*;
             continue;
         } else {
-            std.debug.print("Unhandled SEH disposition {d} from handler 0x{X}\n", .{disposition, handler_ptr.*});
+            log.err("Unhandled SEH disposition {d} from handler 0x{X}", .{disposition, handler_ptr.*});
             std.process.exit(1);
         }
     }
@@ -397,17 +398,19 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     const ebp: usize = @bitCast(uctx.mcontext.gregs[reg_bp]);
     const esi: usize = @bitCast(uctx.mcontext.gregs[reg_si]);
     const edi: usize = @bitCast(uctx.mcontext.gregs[reg_di]);
-    std.debug.print("Unhandled SIGSEGV at 0x{X} (fault addr: 0x{X})\n", .{ip, fault_addr});
-    std.debug.print("  EAX=0x{X} ECX=0x{X} EDX=0x{X} EBX=0x{X}\n", .{eax, ecx, edx, ebx});
-    std.debug.print("  ESP=0x{X} EBP=0x{X} ESI=0x{X} EDI=0x{X}\n", .{esp, ebp, esi, edi});
+    log.fatal("Unhandled SIGSEGV at 0x{X} (fault addr: 0x{X})", .{ip, fault_addr});
+    log.fatal("  EAX=0x{X} ECX=0x{X} EDX=0x{X} EBX=0x{X}", .{eax, ecx, edx, ebx});
+    log.fatal("  ESP=0x{X} EBP=0x{X} ESI=0x{X} EDI=0x{X}", .{esp, ebp, esi, edi});
     // Dump stack (return addresses)
     if (esp > 0x1000) {
         const stack = @as([*]const u32, @ptrFromInt(esp));
-        std.debug.print("  Stack: ", .{});
+        var stack_buf: [256]u8 = undefined;
+        var stack_pos: usize = 0;
         for (0..16) |si| {
-            std.debug.print("{X} ", .{stack[si]});
+            const written = std.fmt.bufPrint(stack_buf[stack_pos..], "{X} ", .{stack[si]}) catch break;
+            stack_pos += written.len;
         }
-        std.debug.print("\n", .{});
+        log.fatal("  Stack: {s}", .{stack_buf[0..stack_pos]});
     }
     std.process.exit(1);
 }
@@ -481,20 +484,20 @@ pub fn main() !void {
                 \\Run a Win32 PE executable on Linux.
                 \\
                 \\Options:
-                \\  -t, --trace       Enable all tracing output (API + instructions)
-                \\      --trace-api   Enable API tracing only
-                \\      --trace-insn  Enable x86 instruction tracing only
-                \\      --profile     Enable profiling (hot code, opcodes, stubs)
-                \\  -i, --interpret   Use x86 software interpreter instead of native execution
+                \\  -t, --trace         Enable all tracing output (API + instructions)
+                \\      --trace-api     Enable API tracing only
+                \\      --trace-insn    Enable x86 instruction tracing only
+                \\      --profile       Enable profiling (hot code, opcodes, stubs)
+                \\  -i, --interpret     Use x86 software interpreter instead of native execution
                 \\      --argv0 <name>  Override argv[0] passed to the target
-                \\  -h, --help        Show this help message
-                \\  -V, --version     Show version information
-                \\  --                End of zine options
+                \\  -h, --help          Show this help message
+                \\  -v, --version       Show version information
+                \\  --                  Stop processing options
                 \\
                 \\Environment:
-                \\  ZINE_TRACE        Set to any value to enable API tracing
-                \\  ZINE_TRACE_INSN   Set to any value to enable instruction tracing
-                \\  ZINE_PROFILE      Set to any value to enable profiling
+                \\  ZINE_TRACE          Set to any value to enable API tracing
+                \\  ZINE_TRACE_INSN     Set to any value to enable instruction tracing
+                \\  ZINE_PROFILE        Set to any value to enable profiling
                 \\
                 \\Examples:
                 \\  zine myapp.exe
@@ -505,16 +508,18 @@ pub fn main() !void {
             ) catch {};
             std.process.exit(0);
         }
-        if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-V"))) {
+        if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
             std.fs.File.stdout().writeAll("zine 0.1.0\n") catch {};
             std.process.exit(0);
         }
-        if (!end_of_options and std.mem.eql(u8, arg, "--argv0")) {
-            if (args.next()) |val| {
+        if (!end_of_options and (std.mem.eql(u8, arg, "--argv0") or std.mem.startsWith(u8, arg, "--argv0="))) {
+            if (std.mem.startsWith(u8, arg, "--argv0=")) {
+                argv0_opt = arg["--argv0=".len..];
+            } else if (args.next()) |val| {
                 argv0_opt = val;
             } else {
                 std.fs.File.stderr().writeAll("Error: --argv0 requires a value.\nTry 'zine --help' for more information.\n") catch {};
-                std.process.exit(1);
+                std.process.exit(2);
             }
             continue;
         }
@@ -522,7 +527,7 @@ pub fn main() !void {
             var err_buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&err_buf, "Error: unknown option '{s}'.\nTry 'zine --help' for more information.\n", .{arg}) catch "Error: unknown option.\n";
             std.fs.File.stderr().writeAll(msg) catch {};
-            std.process.exit(1);
+            std.process.exit(2);
         }
 
         if (target_exe_opt == null) {
@@ -546,13 +551,23 @@ pub fn main() !void {
 
             try app_args.append(allocator, win_arg);
         } else {
-            try app_args.append(allocator, try allocator.dupeZ(u8, arg));
+            // Convert args that reference our virtual filesystem to Win32 format.
+            // Only convert if the arg starts with "drive_c/" → C:\...
+            // Other args (flags like /nologo, relative names, numbers) are passed as-is.
+            const path_utils = @import("path_utils.zig");
+            if (path_utils.isInsideDriveC(arg)) {
+                var win_path_buf: [1024]u8 = undefined;
+                const win_len = path_utils.posixToWin32(arg, &win_path_buf);
+                try app_args.append(allocator, try allocator.dupeZ(u8, win_path_buf[0..win_len]));
+            } else {
+                try app_args.append(allocator, try allocator.dupeZ(u8, arg));
+            }
         }
     }
 
     if (target_exe_opt == null) {
-        std.fs.File.stderr().writeAll("Usage: zine [options] <target.exe> [args...]\nTry 'zine --help' for more information.\n") catch {};
-        std.process.exit(1);
+        std.fs.File.stderr().writeAll("Error: missing required argument <target.exe>.\nTry 'zine --help' for more information.\n") catch {};
+        std.process.exit(2);
     }
     var target_exe = target_exe_opt.?;
     var final_envp: ?[*]?[*:0]u8 = null;
@@ -638,7 +653,7 @@ pub fn main() !void {
         if (bat_path_opt == null) bat_path_opt = be.env.get("Path");
         
         if (bat_path_opt) |bat_path| {
-            if (trace.enable_tracing) std.debug.print("ZINE BAT PATH: {s}\n", .{bat_path});
+            trace.print("ZINE BAT PATH: {s}\n", .{bat_path});
             var it = std.mem.tokenizeAny(u8, bat_path, ";:");
             while (it.next()) |p| {
                 // Strip quotes
@@ -717,7 +732,7 @@ pub fn main() !void {
             if (menu_parser.parseMenuResource(allocator, menu_data)) |json_str| {
                 renderer.setMenu(json_str);
             } else |err| {
-                std.log.warn("Failed to parse RT_MENU resource: {}", .{err});
+                log.warn("Failed to parse RT_MENU resource: {}", .{err});
             }
         }
     }
@@ -774,19 +789,21 @@ pub fn main() !void {
     }
 
     // Dump arguments when tracing is active
-    if (trace.enable_tracing) trace.print("ZINE ARGS:\n", .{});
-    for (app_args.items) |arg_opt| {
-        if (arg_opt) |arg| {
-            const span = std.mem.span(arg);
-            if (trace.enable_tracing) trace.print("  {s}\n", .{span});
+    if (trace.enable_tracing) {
+        trace.print("ZINE ARGS:\n", .{});
+        for (app_args.items) |arg_opt| {
+            if (arg_opt) |arg| {
+                const span = std.mem.span(arg);
+                trace.print("  {s}\n", .{span});
 
-            if (span.len > 1 and span[0] == '@') {
-                if (std.fs.cwd().openFile(span[1..], .{})) |f| {
-                    var buf: [4096]u8 = undefined;
-                    const rb = f.readAll(&buf) catch 0;
-                    if (trace.enable_tracing) trace.print("  [RSP FILE CONTENT]:\n{s}\n", .{buf[0..rb]});
-                    f.close();
-                } else |_| {}
+                if (span.len > 1 and span[0] == '@') {
+                    if (std.fs.cwd().openFile(span[1..], .{})) |f| {
+                        var buf: [4096]u8 = undefined;
+                        const rb = f.readAll(&buf) catch 0;
+                        trace.print("  [RSP FILE CONTENT]:\n{s}\n", .{buf[0..rb]});
+                        f.close();
+                    } else |_| {}
+                }
             }
         }
     }
@@ -876,10 +893,10 @@ pub fn main() !void {
         cpu.eip = @truncate(ep);
         cpu.esp = base +% @as(u32, @truncate(main_module.mapped_memory.len)) -% 16;
         cpu.ebp = cpu.esp;
-        if (trace.enable_tracing) std.debug.print("Interpreter: EIP=0x{X} ESP=0x{X} (image base=0x{X})\n", .{ cpu.eip, cpu.esp, base });
+        trace.print("Interpreter: EIP=0x{X} ESP=0x{X} (image base=0x{X})\n", .{ cpu.eip, cpu.esp, base });
         x86_execute.run(&cpu);
         profiler.dump();
-        if (trace.enable_tracing) std.debug.print("*** Interpreter halted, EAX=0x{X} ***\n", .{cpu.eax});
+        trace.print("*** Interpreter halted, EAX=0x{X} ***\n", .{cpu.eax});
         std.process.exit(@truncate(cpu.eax));
     }
 
@@ -897,7 +914,7 @@ pub fn main() !void {
     loader.attachLoadedDlls(&environment);
 
     if (main_module.getExport("_InvokeCompilerPass@12")) |invoke_addr| {
-        if (trace.enable_tracing) std.debug.print("Executing MSVC Compiler Pass...\n", .{});
+        trace.print("Executing MSVC Compiler Pass...\n", .{});
         const invoke = @as(*const fn (i32, [*]?[*:0]u8, [*]?[*:0]u8) callconv(.winapi) i32, @ptrFromInt(invoke_addr));
         const rc = invoke(stubs_msvcrt.global_argc, stubs_msvcrt.global_argv, @as([*]?[*:0]u8, @ptrCast(@constCast(stubs_msvcrt.global_envp))));
         std.process.exit(@intCast(rc & 0xFF));
@@ -906,7 +923,7 @@ pub fn main() !void {
         const entry_point = @as(EntryPointFn, @ptrFromInt(ep));
         entry_point();
         profiler.dump();
-        if (trace.enable_tracing) std.debug.print("*** Entry point returned, exiting ***\n", .{});
+        trace.print("*** Entry point returned, exiting ***\n", .{});
         std.process.exit(0);
     } else {
         std.fs.File.stderr().writeAll("Error: no entry point found in executable.\n") catch {};

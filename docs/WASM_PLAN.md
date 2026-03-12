@@ -19,12 +19,12 @@ level, which is what CheerpX does with Linux syscalls but one layer higher.
 |-----------|--------|
 | Platform abstraction (`platform/`) | ✅ Complete |
 | WASM entry point (`wasm_main.zig`) | ✅ Complete |
-| x86 interpreter core (`x86/`) | ✅ Complete (3764 lines) |
+| x86 interpreter core (`x86/`) | ✅ Complete (3799 lines) |
 | PE loader + import thunking for WASM | ✅ Complete |
 | TEB/PEB initialization for WASM | ✅ Complete |
 | Win32 stub registration for WASM | ✅ Complete (31 DLLs) |
 | Basic block caching | ❌ Not implemented |
-| x87 FPU instructions | ❌ Not implemented |
+| x87 FPU instructions | ⚠️ Partial (FNINIT, FNSTCW, FLDCW only) |
 | SSE/SSE2 instructions | ❌ Not implemented |
 | Browser JS host frontend | ❌ Not implemented (CLI via wasmtime only) |
 | x86-to-WASM JIT (Tier 1) | ❌ Not implemented |
@@ -128,17 +128,17 @@ the IAT with `0xCC` (INT3) bytes and caused out-of-bounds crashes.
 ### Overview
 
 A software x86 CPU that decodes and executes instructions one at a time.
-Written in Zig, compiled to wasm32-wasi. Total: **3764 lines** across 7 modules.
+Written in Zig, compiled to wasm32-wasi. Total: **3799 lines** across 7 modules.
 
 ```
 src/x86/
   cpu.zig          # CPU state struct (246 lines)
   decoder.zig      # Instruction decoder (1075 lines)
-  execute.zig      # Instruction execution dispatch (1579 lines)
-  flags.zig        # Lazy EFLAGS (271 lines)
+  execute.zig      # Instruction execution dispatch (1521 lines)
+  flags.zig        # Lazy EFLAGS (292 lines)
   fpu.zig          # x87 FPU state (86 lines, stub only)
-  memory.zig       # Guest memory access (128 lines)
-  thunks.zig       # Import thunk table and dispatch (379 lines)
+  memory.zig       # Guest memory access (137 lines)
+  thunks.zig       # Import thunk table and dispatch (442 lines)
 ```
 
 ### CPU State
@@ -172,7 +172,7 @@ result, and operands. Individual flags are computed on demand only when read.
 | **Flags** | CLC, STC, CLI, STI, CLD, STD | ✅ |
 | **Misc** | NOP, INT 3, INT 0xFE (thunk trap), HLT | ✅ |
 | **IMUL 3-operand** | IMUL r32, r/m32, imm (0x69, 0x6B) | ✅ |
-| **FPU (x87)** | FLD, FST, FADD, FSUB, FMUL, FDIV, FCOM, FNSTSW, etc. | ❌ Not implemented |
+| **FPU (x87)** | FLD, FST, FADD, FSUB, FMUL, FDIV, FCOM, FNSTSW, etc. | ⚠️ Partial (FNINIT, FNSTCW, FLDCW; others decoded but not executed) |
 | **SSE/SSE2** | MOVSS, ADDSS, MULSS, CVTSI2SS, etc. | ❌ Not implemented |
 
 ### Import Thunking (INT 0xFE)
@@ -246,7 +246,7 @@ wasmtime --dir=. zig-out/bin/zine.wasm -- path/to/program.exe
 
 | Limitation | Impact | Workaround |
 |-----------|--------|------------|
-| **No x87 FPU** | Any floating-point code (`float`/`double` math) will fail. This blocks most games and scientific applications. | Implement FLD/FST/FADD/FSUB/FMUL/FDIV/FCOM/FNSTSW/FNSTCW/FLDCW — the ~15 instructions that cover 95% of MSVC6 FPU usage. |
+| **Partial x87 FPU** | Only FNINIT, FNSTCW, and FLDCW are executed; other FPU instructions are decoded (correct length skipping) but not executed. Floating-point math (`float`/`double`) will produce incorrect results. This blocks most games and scientific applications. | Implement FLD/FST/FADD/FSUB/FMUL/FDIV/FCOM/FNSTSW — the ~15 instructions that cover 95% of MSVC6 FPU usage. |
 | **No SSE/SSE2** | Modern MSVC builds using SSE intrinsics or `/arch:SSE2` will fail. Not a problem for MSVC6 targets since SSE is disabled in the build. | Implement basic SSE scalar ops: MOVSS, ADDSS, SUBSS, MULSS, DIVSS, CVTSI2SS, CVTTSS2SI. |
 | **64 KB stack** | The WASM combined buffer allocates only 64 KB for the guest stack. Deeply recursive programs or programs with large stack frames will overflow silently. | Increase `STACK_SIZE` in `wasm_main.zig` (at the cost of increased memory usage). |
 | **32 KB thunk space** | Limited to ~5461 imported functions (6 bytes per thunk). Sufficient for current stub count but could be exceeded by applications importing many DLLs. | Increase `THUNK_RESERVE` in `wasm_main.zig`. |
@@ -339,12 +339,17 @@ src/
   `decoder.zig`, `execute.zig`, `thunks.zig` (run via `zig build test`)
 - Integration testing via `test_msvc_cli.sh` running MSVC tools under wasmtime
 
-### Phase 3: x87 FPU instructions ⬚ NOT STARTED
+### Phase 3: x87 FPU instructions ⚠️ PARTIAL
 
 The `fpu.zig` module defines the FPU state struct (ST(0)–ST(7) register
-stack, control/status words) but no execution handlers are implemented yet.
+stack, control/status words). FNINIT, FNSTCW, and FLDCW are implemented;
+other FPU opcodes are decoded for correct length skipping but not executed.
 
 **Tasks:**
+- [x] Implement FNINIT (reset FPU state)
+- [x] Implement FNSTCW (store FPU control word to memory)
+- [x] Implement FLDCW (load FPU control word from memory)
+- [x] Decode x87 opcodes in `execute.zig` (D8-DF opcode group — correct length skipping)
 - [ ] Implement FLD, FST, FSTP (load/store from/to memory and ST registers)
 - [ ] Implement FADD, FSUB, FMUL, FDIV (arithmetic on ST stack)
 - [ ] Implement FCOM, FCOMP, FCOMPP (compare, set FPU status word)
@@ -391,7 +396,7 @@ stack, control/status words) but no execution handlers are implemented yet.
       consider threaded dispatch)
 - [ ] Create a demo page that compiles a .c file using CL.EXE in-browser
 
-### Phase 6: JIT compiler (optional) ⬚ NOT STARTED
+### Phase 6: JIT compiler (optional) ⚠️ IN PROGRESS
 
 A Tier 1 JIT compiler that translates hot x86 basic blocks into WASM modules
 at runtime, achieving ~5-20x native performance instead of ~50-100x.

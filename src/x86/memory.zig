@@ -18,9 +18,34 @@ pub const GuestMemory = struct {
     base_addr: u32 = 0,
     native_linear: bool = false,
 
+    /// Guest heap bump allocator (used in WASM mode).
+    /// heap_start is the buffer offset where the heap area begins.
+    /// heap_cursor is the current allocation offset (grows upward).
+    heap_start: u32 = 0,
+    heap_cursor: u32 = 0,
+
     /// Translate a virtual address to a buffer index.
     inline fn translate(self: *const GuestMemory, addr: u32) usize {
         return addr -% self.base_addr;
+    }
+
+    /// Allocate memory from the guest heap. Returns a guest virtual address
+    /// or 0 on failure. The allocated region is zeroed.
+    pub fn guestAlloc(self: *GuestMemory, size: u32) u32 {
+        if (self.heap_start == 0) return 0; // heap not configured
+
+        // Align to 16 bytes
+        const aligned_size = (size + 15) & ~@as(u32, 15);
+        const alloc_offset = self.heap_cursor;
+        const end = alloc_offset + aligned_size;
+
+        if (end > self.base.len) return 0; // out of memory
+
+        // Zero the allocated area
+        @memset(self.base[alloc_offset..end], 0);
+
+        self.heap_cursor = end;
+        return self.base_addr +% @as(u32, @intCast(alloc_offset));
     }
 
     // --- Read operations ---

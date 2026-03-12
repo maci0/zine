@@ -67,7 +67,6 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
         dlg_cy = try reader.readInt(u16, .little);
     }
     
-    // Read Menu (sz_Or_Ord)
     var c = try reader.readInt(u16, .little);
     if (c == 0xFFFF) {
         _ = try reader.readInt(u16, .little);
@@ -77,7 +76,6 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
         }
     }
     
-    // Read Window Class (sz_Or_Ord)
     c = try reader.readInt(u16, .little);
     if (c == 0xFFFF) {
         _ = try reader.readInt(u16, .little);
@@ -87,7 +85,6 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
         }
     }
     
-    // Read Title string
     var title_buf: std.ArrayListUnmanaged(u8) = .{};
     defer title_buf.deinit(allocator);
     while (true) {

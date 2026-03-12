@@ -14,6 +14,7 @@
 const std = @import("std");
 const cpu_mod = @import("cpu.zig");
 const profiler = @import("../profiler.zig");
+const log = @import("../log.zig");
 const Cpu = cpu_mod.Cpu;
 
 /// A registered thunk entry.
@@ -46,7 +47,7 @@ var thunk_count: u32 = 0;
 /// Register a thunk and return its ID.
 pub fn registerThunk(entry: ThunkEntry) u32 {
     if (thunk_count >= MAX_THUNKS) {
-        std.log.err("x86 thunks: thunk table full", .{});
+        log.err("x86 thunks: thunk table full", .{});
         return 0;
     }
     const id = thunk_count;
@@ -82,7 +83,7 @@ pub fn dispatch(cpu: *Cpu) void {
     cpu.eip +%= 4; // skip past the thunk_id
 
     if (thunk_id >= MAX_THUNKS) {
-        std.log.err("x86 thunks: invalid thunk ID {d}", .{thunk_id});
+        log.err("x86 thunks: invalid thunk ID {d}", .{thunk_id});
         cpu.halted = true;
         return;
     }
@@ -96,7 +97,7 @@ pub fn dispatch(cpu: *Cpu) void {
             cpu.esp +%= @as(u32, n) * 4;
         }
     } else {
-        std.log.err("x86 thunks: unregistered thunk ID {d}", .{thunk_id});
+        log.err("x86 thunks: unregistered thunk ID {d}", .{thunk_id});
         cpu.halted = true;
     }
 }
@@ -147,7 +148,7 @@ fn dispatchNativeThunk(cpu: *Cpu) void {
     const target_addr = entry.native_addr;
 
     if (target_addr == 0) {
-        std.log.warn("x86 thunks: null native address for thunk {d} ({s})", .{ thunk_id, entry.name });
+        log.warn("x86 thunks: null native address for thunk {d} ({s})", .{ thunk_id, entry.name });
         cpu.eax = 0;
         return;
     }
@@ -200,7 +201,7 @@ pub fn callNativeByArity(addr: usize, param_bytes: u32, args: [16]u32) u32 {
         }
     }
     // Fallback for unexpected param_bytes — call as cdecl with 16 args
-    std.log.warn("x86: native call unsupported param_bytes={d}", .{param_bytes});
+    log.warn("x86: native call unsupported param_bytes={d}", .{param_bytes});
     return callNativeCdecl(addr, args);
 }
 

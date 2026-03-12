@@ -223,6 +223,7 @@ function showDialog(title, content) {
 function closeDialog(suppressBackend = false) {
     dialogOverlay.style.display = 'none';
     document.getElementById('main-titlebar').classList.remove('inactive');
+    window._fileDialogUpdate = null; // Clean up file dialog navigation handler
     if (!suppressBackend && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'cancel_dialog' }));
     }
@@ -750,34 +751,120 @@ function connect() {
                     const dlgTitle = isSave ? 'Save As' : 'Open';
                     const dlgAction = isSave ? 'Save' : 'Open';
 
+                    // --- Navigation state ---
+                    let currentPath = msg.path || 'Desktop';
+                    let pathHistory = [];
+
                     // --- File selection logic ---
                     const filenameInput = input({type: 'text', id: 'dialog_filename', class: 'win2k-edit'});
                     const fileListEl = div({class: 'win2k-edit comdlg-file-list'});
+                    const lookInLabel = div({class: 'win2k-edit comdlg-lookin'});
+
+                    // --- Toolbar buttons (created early so we can reference them) ---
+                    const backBtn = div({class: 'comdlg-toolbar-btn', title: 'Go To Last Folder Visited',
+                        onclick: () => navigateBack()}, img({src: 'assets/back.svg'}));
+                    const upBtn = div({class: 'comdlg-toolbar-btn', title: 'Up One Level',
+                        onclick: () => navigateUp()}, img({src: 'assets/up.svg'}));
+
+                    function updateLookIn() {
+                        // Show just the last folder name, like Windows does
+                        const parts = currentPath.split('/');
+                        lookInLabel.textContent = parts[parts.length - 1] || currentPath;
+                    }
+
+                    function updateToolbarState() {
+                        backBtn.style.opacity = pathHistory.length > 0 ? '1' : '0.5';
+                        backBtn.style.pointerEvents = pathHistory.length > 0 ? 'auto' : 'none';
+                        // Disable Up when at root "Desktop"
+                        const atRoot = currentPath === 'Desktop';
+                        upBtn.style.opacity = atRoot ? '0.5' : '1';
+                        upBtn.style.pointerEvents = atRoot ? 'none' : 'auto';
+                    }
 
                     function selectFile(f) {
                         filenameInput.value = f;
                         fileListEl.querySelectorAll('.file-item').forEach(el => {
-                            el.classList.toggle('selected', el.textContent === f);
+                            el.classList.toggle('selected', el.dataset.name === f);
                         });
                     }
 
                     function openSelectedFile() {
                         const f = filenameInput.value;
                         if (f && ws && ws.readyState === WebSocket.OPEN) {
-                            ws.send(JSON.stringify({ type: 'open_file', filename: f }));
+                            ws.send(JSON.stringify({ type: 'open_file', filename: f, dir: currentPath }));
                         }
                     }
 
-                    // Build file items
-                    if (msg.files) {
-                        msg.files.forEach(f => {
-                            van.add(fileListEl, div({
-                                class: 'file-item',
-                                onclick: () => selectFile(f),
-                                ondblclick: () => openSelectedFile()
-                            }, img({src: 'assets/file.svg', width: 16, height: 16}), f));
-                        });
+                    function navigateTo(newPath) {
+                        pathHistory.push(currentPath);
+                        currentPath = newPath;
+                        updateLookIn();
+                        updateToolbarState();
+                        filenameInput.value = '';
+                        // Request directory listing from server
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({ type: 'browse_directory', path: newPath }));
+                        }
                     }
+
+                    function navigateBack() {
+                        if (pathHistory.length === 0) return;
+                        currentPath = pathHistory.pop();
+                        updateLookIn();
+                        updateToolbarState();
+                        filenameInput.value = '';
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({ type: 'browse_directory', path: currentPath }));
+                        }
+                    }
+
+                    function navigateUp() {
+                        const parts = currentPath.split('/');
+                        if (parts.length <= 1) return; // Already at root
+                        const parentPath = parts.slice(0, -1).join('/');
+                        navigateTo(parentPath);
+                    }
+
+                    function populateFileList(folders, files) {
+                        fileListEl.innerHTML = '';
+                        // Folders first
+                        if (folders) {
+                            folders.forEach(f => {
+                                const item = div({
+                                    class: 'file-item',
+                                    'data-name': f,
+                                    'data-type': 'folder',
+                                    ondblclick: () => navigateTo(currentPath + '/' + f)
+                                }, img({src: 'assets/folder.svg', width: 16, height: 16}), f);
+                                van.add(fileListEl, item);
+                            });
+                        }
+                        // Then files
+                        if (files) {
+                            files.forEach(f => {
+                                van.add(fileListEl, div({
+                                    class: 'file-item',
+                                    'data-name': f,
+                                    'data-type': 'file',
+                                    onclick: () => selectFile(f),
+                                    ondblclick: () => { selectFile(f); openSelectedFile(); }
+                                }, img({src: 'assets/file.svg', width: 16, height: 16}), f));
+                            });
+                        }
+                    }
+
+                    // Store handler on the dialog so directory_listing messages can find it
+                    window._fileDialogUpdate = function(folders, files, path) {
+                        if (path !== undefined) currentPath = path;
+                        populateFileList(folders, files);
+                        updateLookIn();
+                        updateToolbarState();
+                    };
+
+                    // Populate initial listing
+                    populateFileList(msg.folders, msg.files);
+                    updateLookIn();
+                    updateToolbarState();
 
                     // Build filter dropdown
                     const filterOptions = (msg.filters && msg.filters.length > 0)
@@ -785,16 +872,32 @@ function connect() {
                         : [option('All Files (*.*)')];
                     const ftSel = select({id: 'dialog_filetype', class: 'win2k-edit'}, ...filterOptions);
 
+                    // --- Places bar items ---
+                    function makePlace(title, iconSrc, targetPath, isActive) {
+                        return div({
+                            class: 'comdlg-place-item' + (isActive ? ' active' : ''),
+                            title: title,
+                            onclick: () => {
+                                // Highlight active place
+                                document.querySelectorAll('.comdlg-place-item').forEach(el => el.classList.remove('active'));
+                                // Find this element and mark active
+                                const items = document.querySelectorAll('.comdlg-place-item');
+                                items.forEach(el => { if (el.title === title) el.classList.add('active'); });
+                                navigateTo(targetPath);
+                            }
+                        }, img({src: iconSrc}), span(title));
+                    }
+
                     // --- Build dialog DOM ---
                     showDialog(dlgTitle,
                         div({class: 'comdlg-body'},
                             // Toolbar row
                             div({class: 'comdlg-toolbar-row'},
                                 label('Look ', u('i'), 'n:'),
-                                div({class: 'win2k-edit comdlg-lookin'}, 'My Documents'),
+                                lookInLabel,
                                 div({class: 'comdlg-toolbar-btns'},
-                                    div({class: 'comdlg-toolbar-btn', title: 'Go To Last Folder Visited'}, img({src: 'assets/back.svg'})),
-                                    div({class: 'comdlg-toolbar-btn', title: 'Up One Level'}, img({src: 'assets/up.svg'})),
+                                    backBtn,
+                                    upBtn,
                                     div({class: 'comdlg-toolbar-sep'}),
                                     div({class: 'comdlg-toolbar-btn', title: 'Create New Folder'}, img({src: 'assets/newfolder.svg'})),
                                     div({class: 'comdlg-toolbar-sep'}),
@@ -802,23 +905,38 @@ function connect() {
                             // Main area (places bar + file list)
                             div({class: 'comdlg-main'},
                                 div({class: 'comdlg-places-bar'},
-                                    div({class: 'comdlg-place-item', title: 'History'}, img({src: 'assets/history.svg'}), span('History')),
-                                    div({class: 'comdlg-place-item', title: 'Desktop'}, img({src: 'assets/desktop.svg'}), span('Desktop')),
-                                    div({class: 'comdlg-place-item active', title: 'My Documents'}, img({src: 'assets/mydocs.svg'}), span('My Documents')),
-                                    div({class: 'comdlg-place-item', title: 'My Computer'}, img({src: 'assets/mypc.svg'}), span('My Computer')),
-                                    div({class: 'comdlg-place-item', title: 'My Network Places'}, img({src: 'assets/network.svg'}), span('My Network P...'))),
+                                    makePlace('History', 'assets/history.svg', 'Desktop', false),
+                                    makePlace('Desktop', 'assets/desktop.svg', 'Desktop', currentPath === 'Desktop'),
+                                    makePlace('My Documents', 'assets/mydocs.svg', 'Desktop', false),
+                                    makePlace('My Computer', 'assets/mypc.svg', 'Desktop', false),
+                                    makePlace('My Network P...', 'assets/network.svg', 'Desktop', false)),
                                 fileListEl),
                             // Bottom rows
                             div({class: 'comdlg-bottom-row'},
                                 label('File ', u('n'), 'ame:'),
                                 filenameInput,
-                                button({class: 'win2k-button', onclick: () => openSelectedFile()}, dlgAction)),
+                                button({class: 'win2k-button', onclick: () => {
+                                    // If a folder name is typed, navigate into it
+                                    const val = filenameInput.value;
+                                    const folderItem = fileListEl.querySelector('.file-item[data-type="folder"][data-name="' + val + '"]');
+                                    if (folderItem) {
+                                        navigateTo(currentPath + '/' + val);
+                                        return;
+                                    }
+                                    openSelectedFile();
+                                }}, dlgAction)),
                             div({class: 'comdlg-bottom-row'},
                                 label(isSave ? ['Save as ', u('t'), 'ype:'] : ['Files of ', u('t'), 'ype:']),
                                 ftSel,
                                 button({class: 'win2k-button', onclick: () => closeDialog()}, 'Cancel')))
                     );
                     dialogOverlay.style.width = '475px';
+
+                } else if (msg.type === "directory_listing") {
+                    // Server response to browse_directory — update the file dialog
+                    if (window._fileDialogUpdate) {
+                        window._fileDialogUpdate(msg.folders, msg.files, msg.path);
+                    }
 
                 } else if (msg.type === "open_font_dialog") {
                     // --- Font Dialog ---

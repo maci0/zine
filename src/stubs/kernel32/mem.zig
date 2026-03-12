@@ -2,9 +2,29 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const w32 = @import("../../win32_constants.zig");
 const w32cc = @import("../../calling_convention.zig");
+const x86_memory = @import("../../x86/memory.zig");
+
+/// Set by wasm_main.zig to enable guest-side allocation.
+/// When non-null, all memory allocations go through the guest heap
+/// bump allocator so addresses stay within the GuestMemory range.
+pub var guest_memory: ?*x86_memory.GuestMemory = null;
 
 pub fn raw_alloc(size: usize) ?*anyopaque {
     const actual_size = if (size == 0) @as(usize, 64) else size;
+
+    // On WASM: use guest heap allocator to keep addresses in range
+    if (guest_memory) |gmem| {
+        const alloc_size: u32 = @intCast(@min(actual_size + 16, 0xFFFFFFFF));
+        const addr = gmem.guestAlloc(alloc_size);
+        if (addr == 0) return null;
+        // Store size header at the start (8 bytes), return pointer after header
+        gmem.write32(addr, @intCast(actual_size));
+        gmem.write32(addr +% 4, 0);
+        // Return a host pointer into the guest buffer for the header area
+        const buf_offset = addr -% gmem.base_addr;
+        return @ptrCast(gmem.base.ptr + buf_offset + 8);
+    }
+
     const ptr = std.heap.page_allocator.alloc(u8, actual_size + 8) catch return null;
     @memset(ptr, 0);
     const header = @as(*usize, @ptrCast(@alignCast(ptr.ptr)));
@@ -15,6 +35,22 @@ pub fn raw_alloc(size: usize) ?*anyopaque {
 pub fn raw_realloc(old_ptr: ?*anyopaque, new_size: usize) ?*anyopaque {
     if (new_size == 0) return null;
     if (old_ptr == null) return raw_alloc(new_size);
+
+    // On WASM with guest heap: simple alloc + copy (we don't free)
+    if (guest_memory) |_| {
+        const old_u8 = @as([*]u8, @ptrCast(old_ptr.?));
+        // Read old size from header (8 bytes before the data pointer)
+        const old_header_ptr = old_u8 - 8;
+        const old_size_32 = @as(*align(1) const u32, @ptrCast(old_header_ptr)).*;
+        const old_size: usize = old_size_32;
+
+        const new_mem = raw_alloc(new_size) orelse return null;
+        const copy_len = @min(old_size, new_size);
+        const new_u8 = @as([*]u8, @ptrCast(new_mem));
+        @memcpy(new_u8[0..copy_len], old_u8[0..copy_len]);
+        return new_mem;
+    }
+
 
     const old_u8_ptr = @as([*]u8, @ptrCast(old_ptr.?)) - 8;
     const old_header = @as(*usize, @ptrCast(@alignCast(old_u8_ptr)));
@@ -61,6 +97,14 @@ pub fn stub_VirtualAlloc(lpAddress: usize, dwSize: usize, flAllocationType: u32,
     }
 
     if (dwSize == 0) return 0;
+
+    // On WASM: use guest heap allocator
+    if (guest_memory) |gmem| {
+        const alloc_size: u32 = @intCast(@min(dwSize, 0xFFFFFFFF));
+        const addr = gmem.guestAlloc(alloc_size);
+        if (trace.enable_tracing) trace.print("KERNEL32: VirtualAlloc -> {x}\n", .{addr});
+        return addr;
+    }
 
     const platform = @import("../../platform.zig");
     const hint = get_aligned_hint(dwSize);

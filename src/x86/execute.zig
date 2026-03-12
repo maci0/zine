@@ -9,6 +9,7 @@ const decoder = @import("decoder.zig");
 const flags_mod = @import("flags.zig");
 const thunks = @import("thunks.zig");
 const trace = @import("../trace.zig");
+const log = @import("../log.zig");
 const profiler = @import("../profiler.zig");
 
 
@@ -45,7 +46,7 @@ pub fn step(cpu: *Cpu) void {
     }
 
     const code = cpu.memory.readSlice(eip, 16) orelse {
-        std.log.err("x86: EIP 0x{X} out of bounds", .{eip});
+        log.err("x86: EIP 0x{X} out of bounds", .{eip});
         cpu.halted = true;
         return;
     };
@@ -53,7 +54,7 @@ pub fn step(cpu: *Cpu) void {
     const insn = decoder.decode(code);
 
     if (insn.length == 0) {
-        std.log.err("x86: zero-length instruction at 0x{X} (byte 0x{X:0>2})", .{ eip, code[0] });
+        log.err("x86: zero-length instruction at 0x{X} (byte 0x{X:0>2})", .{ eip, code[0] });
         cpu.halted = true;
         return;
     }
@@ -84,7 +85,7 @@ fn dispatchNativeCall(cpu: *Cpu) void {
 
     // Null function pointer — unresolved or data-address import
     if (target_addr == 0) {
-        std.log.warn("x86: CALL to null function pointer", .{});
+        log.warn("x86: CALL to null function pointer", .{});
         cpu.eip = cpu.pop32(); // return address
         cpu.eax = 0;
         return;
@@ -130,14 +131,29 @@ fn dispatchNativeCall(cpu: *Cpu) void {
 
         if (iat_slot) |slot| {
             if (thunks.lookupUnresolvedName_bySlot(slot)) |name| {
-                std.debug.print("\n!!! Unimplemented Win32 API: {s} (called from guest 0x{X}) !!!\n", .{ name, ret_addr });
+                log.fatal("Unimplemented Win32 API: {s} (called from guest 0x{X})", .{ name, ret_addr });
             }
         }
     }
 
+    // Special case: _ftol reads from x87 FPU stack (ST0), but in interpreter
+    // mode the FPU state is emulated — the real x87 stack is empty.
+    const msvcrt_math = @import("../stubs/msvcrt/math.zig");
+    if (target_addr == @intFromPtr(msvcrt_math.stub_ftol)) {
+        const fval = cpu.fpu.pop();
+        const ival = safeFloatToInt(i64, fval);
+        const uval = @as(u64, @bitCast(ival));
+        cpu.eax = @truncate(uval);
+        cpu.edx = @truncate(uval >> 32);
+        cpu.eip = ret_addr;
+        if (trace.enable_tracing) {
+            trace.print("x86_execute: _ftol(ST0={d}) -> EDX:EAX={X}:{X}\n", .{ fval, cpu.edx, cpu.eax });
+        }
+        // _ftol is cdecl (no cleanup)
+        return;
+    }
+
     // Call the native function through a generic function pointer.
-    // We must use the correct calling convention because host SysV ABI (used by `.c`)
-    // and Microsoft x64 ABI (used by `.winapi`) pass arguments in different registers!
     const is_cdecl = thunks.isTargetCdecl(target_addr);
     var result: u32 = 0;
 
@@ -183,6 +199,252 @@ fn dispatchNativeCall(cpu: *Cpu) void {
     }
 }
 
+/// Execute an x87 FPU instruction.
+fn executeFpu(cpu: anytype, insn: anytype) void {
+    const modrm = insn.modrm orelse return;
+    const reg: u8 = modrm.reg;
+    const mem_addr: ?u32 = switch (insn.operands[0]) {
+        .mem => |m| computeEffectiveAddress(cpu, &m),
+        else => null,
+    };
+    const is_mem = (modrm.mod != 3);
+
+    switch (insn.opcode) {
+        0xD8 => {
+            if (is_mem) {
+                if (mem_addr) |addr| {
+                    const fval: f64 = @floatCast(@as(f32, @bitCast(cpu.memory.read32(addr))));
+                    switch (reg) {
+                        0 => cpu.fpu.setSt(0, cpu.fpu.st(0) + fval),
+                        1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * fval),
+                        2, 3 => { fpuCompare(cpu, cpu.fpu.st(0), fval); if (reg == 3) _ = cpu.fpu.pop(); },
+                        4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - fval),
+                        5 => cpu.fpu.setSt(0, fval - cpu.fpu.st(0)),
+                        6 => if (fval != 0) { cpu.fpu.setSt(0, cpu.fpu.st(0) / fval); },
+                        7 => if (cpu.fpu.st(0) != 0) { cpu.fpu.setSt(0, fval / cpu.fpu.st(0)); },
+                        else => {},
+                    }
+                }
+            } else {
+                const sti = cpu.fpu.st(@truncate(modrm.rm));
+                switch (reg) {
+                    0 => cpu.fpu.setSt(0, cpu.fpu.st(0) + sti),
+                    1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * sti),
+                    2, 3 => { fpuCompare(cpu, cpu.fpu.st(0), sti); if (reg == 3) _ = cpu.fpu.pop(); },
+                    4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - sti),
+                    5 => cpu.fpu.setSt(0, sti - cpu.fpu.st(0)),
+                    6 => if (sti != 0) { cpu.fpu.setSt(0, cpu.fpu.st(0) / sti); },
+                    7 => if (cpu.fpu.st(0) != 0) { cpu.fpu.setSt(0, sti / cpu.fpu.st(0)); },
+                    else => {},
+                }
+            }
+        },
+        0xD9 => {
+            if (is_mem) {
+                if (mem_addr) |addr| {
+                    switch (reg) {
+                        0 => cpu.fpu.push(@floatCast(@as(f32, @bitCast(cpu.memory.read32(addr))))), // FLD m32
+                        2 => cpu.memory.write32(addr, @bitCast(@as(f32, @floatCast(cpu.fpu.st(0))))), // FST m32
+                        3 => { cpu.memory.write32(addr, @bitCast(@as(f32, @floatCast(cpu.fpu.st(0))))); _ = cpu.fpu.pop(); }, // FSTP
+                        5 => cpu.fpu.control_word = cpu.memory.read16(addr), // FLDCW
+                        7 => cpu.memory.write16(addr, cpu.fpu.control_word), // FNSTCW
+                        else => {},
+                    }
+                }
+            } else {
+                const rm3: u3 = @truncate(modrm.rm);
+                switch (reg) {
+                    0 => cpu.fpu.push(cpu.fpu.st(rm3)), // FLD ST(i)
+                    1 => { const t = cpu.fpu.st(0); cpu.fpu.setSt(0, cpu.fpu.st(rm3)); cpu.fpu.setSt(rm3, t); }, // FXCH
+                    4 => switch (modrm.rm) { 0 => cpu.fpu.setSt(0, -cpu.fpu.st(0)), 1 => cpu.fpu.setSt(0, @abs(cpu.fpu.st(0))), else => {} }, // FCHS/FABS
+                    5 => switch (modrm.rm) { 6 => cpu.fpu.push(0.0), 0 => cpu.fpu.push(1.0), else => {} }, // FLDZ/FLD1
+                    else => {},
+                }
+            }
+        },
+        0xDA => {
+            if (is_mem) {
+                if (mem_addr) |addr| {
+                    const ival: f64 = @floatFromInt(@as(i32, @bitCast(cpu.memory.read32(addr))));
+                    switch (reg) {
+                        0 => cpu.fpu.setSt(0, cpu.fpu.st(0) + ival),
+                        1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * ival),
+                        2, 3 => { fpuCompare(cpu, cpu.fpu.st(0), ival); if (reg == 3) _ = cpu.fpu.pop(); },
+                        4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - ival),
+                        5 => cpu.fpu.setSt(0, ival - cpu.fpu.st(0)),
+                        6 => if (ival != 0) { cpu.fpu.setSt(0, cpu.fpu.st(0) / ival); },
+                        7 => if (cpu.fpu.st(0) != 0) { cpu.fpu.setSt(0, ival / cpu.fpu.st(0)); },
+                        else => {},
+                    }
+                }
+            }
+        },
+        0xDB => {
+            if (is_mem) {
+                if (mem_addr) |addr| {
+                    switch (reg) {
+                        0 => cpu.fpu.push(@floatFromInt(@as(i32, @bitCast(cpu.memory.read32(addr))))), // FILD m32
+                        2 => cpu.memory.write32(addr, @bitCast(safeFloatToInt(i32, cpu.fpu.st(0)))), // FIST m32
+                        3 => { cpu.memory.write32(addr, @bitCast(safeFloatToInt(i32, cpu.fpu.st(0)))); _ = cpu.fpu.pop(); }, // FISTP
+                        5 => { // FLD m80 (approx as f64)
+                            const lo = cpu.memory.read32(addr);
+                            const hi = cpu.memory.read32(addr +% 4);
+                            cpu.fpu.push(@bitCast(@as(u64, hi) << 32 | lo));
+                        },
+                        7 => { // FSTP m80
+                            const bits: u64 = @bitCast(cpu.fpu.st(0));
+                            cpu.memory.write32(addr, @truncate(bits));
+                            cpu.memory.write32(addr +% 4, @truncate(bits >> 32));
+                            cpu.memory.write16(addr +% 8, 0);
+                            _ = cpu.fpu.pop();
+                        },
+                        else => {},
+                    }
+                }
+            } else {
+                if (reg == 4 and modrm.rm == 3) cpu.fpu.init(); // FNINIT (DB E3)
+            }
+        },
+        0xDC => {
+            if (is_mem) {
+                if (mem_addr) |addr| {
+                    const lo = cpu.memory.read32(addr);
+                    const hi = cpu.memory.read32(addr +% 4);
+                    const fval: f64 = @bitCast(@as(u64, hi) << 32 | lo);
+                    switch (reg) {
+                        0 => cpu.fpu.setSt(0, cpu.fpu.st(0) + fval),
+                        1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * fval),
+                        2, 3 => { fpuCompare(cpu, cpu.fpu.st(0), fval); if (reg == 3) _ = cpu.fpu.pop(); },
+                        4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - fval),
+                        5 => cpu.fpu.setSt(0, fval - cpu.fpu.st(0)),
+                        6 => if (fval != 0) { cpu.fpu.setSt(0, cpu.fpu.st(0) / fval); },
+                        7 => if (cpu.fpu.st(0) != 0) { cpu.fpu.setSt(0, fval / cpu.fpu.st(0)); },
+                        else => {},
+                    }
+                }
+            } else {
+                const i: u3 = @truncate(modrm.rm);
+                switch (reg) {
+                    0 => cpu.fpu.setSt(i, cpu.fpu.st(i) + cpu.fpu.st(0)),
+                    1 => cpu.fpu.setSt(i, cpu.fpu.st(i) * cpu.fpu.st(0)),
+                    4 => cpu.fpu.setSt(i, cpu.fpu.st(i) - cpu.fpu.st(0)),
+                    5 => cpu.fpu.setSt(i, cpu.fpu.st(0) - cpu.fpu.st(i)),
+                    6 => { const s = cpu.fpu.st(0); if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(i) / s); },
+                    7 => { const s = cpu.fpu.st(i); if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(0) / s); },
+                    else => {},
+                }
+            }
+        },
+        0xDD => {
+            if (is_mem) {
+                if (mem_addr) |addr| {
+                    switch (reg) {
+                        0 => { const lo = cpu.memory.read32(addr); const hi = cpu.memory.read32(addr +% 4); cpu.fpu.push(@bitCast(@as(u64, hi) << 32 | lo)); }, // FLD m64
+                        2 => { const b: u64 = @bitCast(cpu.fpu.st(0)); cpu.memory.write32(addr, @truncate(b)); cpu.memory.write32(addr +% 4, @truncate(b >> 32)); }, // FST
+                        3 => { const b: u64 = @bitCast(cpu.fpu.st(0)); cpu.memory.write32(addr, @truncate(b)); cpu.memory.write32(addr +% 4, @truncate(b >> 32)); _ = cpu.fpu.pop(); }, // FSTP
+                        7 => cpu.memory.write16(addr, cpu.fpu.getStatusWord()), // FNSTSW [mem]
+                        else => {},
+                    }
+                }
+            } else {
+                const i: u3 = @truncate(modrm.rm);
+                switch (reg) {
+                    0 => cpu.fpu.setSt(i, 0), // FFREE
+                    2 => cpu.fpu.setSt(i, cpu.fpu.st(0)), // FST ST(i)
+                    3 => { cpu.fpu.setSt(i, cpu.fpu.st(0)); _ = cpu.fpu.pop(); }, // FSTP ST(i)
+                    else => {},
+                }
+            }
+        },
+        0xDE => {
+            if (is_mem) {
+                if (mem_addr) |addr| {
+                    const ival: f64 = @floatFromInt(@as(i16, @bitCast(cpu.memory.read16(addr))));
+                    switch (reg) {
+                        0 => cpu.fpu.setSt(0, cpu.fpu.st(0) + ival),
+                        1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * ival),
+                        4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - ival),
+                        5 => cpu.fpu.setSt(0, ival - cpu.fpu.st(0)),
+                        6 => if (ival != 0) { cpu.fpu.setSt(0, cpu.fpu.st(0) / ival); },
+                        7 => if (cpu.fpu.st(0) != 0) { cpu.fpu.setSt(0, ival / cpu.fpu.st(0)); },
+                        else => {},
+                    }
+                }
+            } else {
+                const i: u3 = @truncate(modrm.rm);
+                switch (reg) {
+                    0 => { cpu.fpu.setSt(i, cpu.fpu.st(i) + cpu.fpu.st(0)); _ = cpu.fpu.pop(); },
+                    1 => { cpu.fpu.setSt(i, cpu.fpu.st(i) * cpu.fpu.st(0)); _ = cpu.fpu.pop(); },
+                    4 => { cpu.fpu.setSt(i, cpu.fpu.st(i) - cpu.fpu.st(0)); _ = cpu.fpu.pop(); },
+                    5 => { cpu.fpu.setSt(i, cpu.fpu.st(0) - cpu.fpu.st(i)); _ = cpu.fpu.pop(); },
+                    6 => { const s = cpu.fpu.st(0); if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(i) / s); _ = cpu.fpu.pop(); },
+                    7 => { const s = cpu.fpu.st(i); if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(0) / s); _ = cpu.fpu.pop(); },
+                    else => {},
+                }
+            }
+        },
+        0xDF => {
+            if (is_mem) {
+                if (mem_addr) |addr| {
+                    switch (reg) {
+                        0 => cpu.fpu.push(@floatFromInt(@as(i16, @bitCast(cpu.memory.read16(addr))))), // FILD m16
+                        2 => cpu.memory.write16(addr, @bitCast(safeFloatToInt(i16, cpu.fpu.st(0)))), // FIST m16
+                        3 => { cpu.memory.write16(addr, @bitCast(safeFloatToInt(i16, cpu.fpu.st(0)))); _ = cpu.fpu.pop(); }, // FISTP
+                        5 => { // FILD m64
+                            const lo = cpu.memory.read32(addr);
+                            const hi = cpu.memory.read32(addr +% 4);
+                            cpu.fpu.push(@floatFromInt(@as(i64, @bitCast(@as(u64, hi) << 32 | lo))));
+                        },
+                        7 => { // FISTP m64
+                            const bits: u64 = @bitCast(safeFloatToInt(i64, cpu.fpu.st(0)));
+                            cpu.memory.write32(addr, @truncate(bits));
+                            cpu.memory.write32(addr +% 4, @truncate(bits >> 32));
+                            _ = cpu.fpu.pop();
+                        },
+                        else => {},
+                    }
+                }
+            } else {
+                if (reg == 4 and modrm.rm == 0) { // FNSTSW AX (DF E0)
+                    cpu.eax = (cpu.eax & 0xFFFF0000) | cpu.fpu.getStatusWord();
+                }
+            }
+        },
+        else => {},
+    }
+}
+
+/// Safe float-to-int conversion: saturates on overflow, returns 0 for NaN.
+fn safeFloatToInt(comptime T: type, val: f64) T {
+    const info = @typeInfo(T).int;
+    if (val != val) return 0; // NaN
+    if (info.signedness == .signed) {
+        const min_f: f64 = @floatFromInt(std.math.minInt(T));
+        const max_f: f64 = @floatFromInt(std.math.maxInt(T));
+        if (val <= min_f) return std.math.minInt(T);
+        if (val >= max_f) return std.math.maxInt(T);
+    } else {
+        if (val < 0) return 0;
+        const max_f: f64 = @floatFromInt(std.math.maxInt(T));
+        if (val >= max_f) return std.math.maxInt(T);
+    }
+    return @intFromFloat(val);
+}
+
+/// Helper: set x87 condition codes for comparison (C3,C0).
+fn fpuCompare(cpu: anytype, a: f64, b: f64) void {
+    cpu.fpu.status_word &= 0xB8FF; // clear C3,C2,C0
+    if (a != a or b != b) {
+        // NaN: set C3, C2, C0 (unordered)
+        cpu.fpu.status_word |= 0x4500;
+    } else if (a < b) {
+        cpu.fpu.status_word |= 0x0100; // C0
+    } else if (a == b) {
+        cpu.fpu.status_word |= 0x4000; // C3
+    }
+    // else: a > b — all clear
+}
+
 /// Apply a relative jump to EIP if the operand is .rel.
 inline fn applyRel(cpu: *Cpu, operand: Operand) void {
     switch (operand) {
@@ -209,7 +471,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 // Thunk trap — dispatch to Win32 stub
                 thunks.dispatch(cpu);
             } else {
-                std.log.warn("x86: INT 0x{X} at 0x{X}, eax={X} ebx={X} ecx={X} edx={X} esi={X} edi={X} ebp={X} esp={X}", .{ insn.imm, eip, cpu.eax, cpu.ebx, cpu.ecx, cpu.edx, cpu.esi, cpu.edi, cpu.ebp, cpu.esp });
+                log.warn("x86: INT 0x{X} at 0x{X}, eax={X} ebx={X} ecx={X} edx={X} esi={X} edi={X} ebp={X} esp={X}", .{ insn.imm, eip, cpu.eax, cpu.ebx, cpu.ecx, cpu.edx, cpu.esi, cpu.edi, cpu.ebp, cpu.esp });
             }
         },
 
@@ -734,7 +996,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         // --- BCD adjust (stub — just update flags minimally) ---
         0x27, 0x2F, 0x37, 0x3F => {
             // DAA/DAS/AAA/AAS — rarely used, stub as no-op
-            std.log.warn("x86: BCD adjust 0x{X:0>2} stubbed at 0x{X}", .{ insn.opcode, eip });
+            log.warn("x86: BCD adjust 0x{X:0>2} stubbed at 0x{X}", .{ insn.opcode, eip });
         },
 
         // PUSHAD (0x60)
@@ -766,43 +1028,15 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // INS/OUTS — I/O port opcodes, no-op in emulation
         0x6C, 0x6D, 0x6E, 0x6F => {
-            std.log.warn("x86: I/O port instruction 0x{X:0>2} stubbed at 0x{X}", .{ insn.opcode, eip });
+            log.warn("x86: I/O port instruction 0x{X:0>2} stubbed at 0x{X}", .{ insn.opcode, eip });
         },
 
         // 0x82 — alias for Group 1 byte (same as 0x80)
         0x82 => execGroup1(cpu, insn),
 
-        // --- FPU instructions (D8-DF) — stub as no-ops for now ---
+        // --- FPU instructions (D8-DF) ---
         0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF => {
-            // FPU instructions — decoded (correct length) but not executed
-            // This is safe for CRT init which does FNINIT/FNSTCW/FLDCW
-            if (insn.modrm) |modrm| {
-                // Handle FNINIT (DB E3), FNSTCW (D9 /7), FLDCW (D9 /5)
-                if (insn.opcode == 0xD9 and modrm.mod == 3 and modrm.rm == 3 and modrm.reg == 4) {
-                    // FNSTCW: would be FNINIT for 0xDB, but this is FWAIT prefix needed
-                } else if (insn.opcode == 0xDB and modrm.mod == 3 and modrm.rm == 3 and modrm.reg == 4) {
-                    // FNINIT
-                    cpu.fpu.init();
-                } else if (insn.opcode == 0xD9 and modrm.reg == 7) {
-                    // FNSTCW [mem]
-                    switch (insn.operands[0]) {
-                        .mem => |m| {
-                            const addr = computeEffectiveAddress(cpu, &m);
-                            cpu.memory.write16(addr, cpu.fpu.control_word);
-                        },
-                        else => {},
-                    }
-                } else if (insn.opcode == 0xD9 and modrm.reg == 5) {
-                    // FLDCW [mem]
-                    switch (insn.operands[0]) {
-                        .mem => |m| {
-                            const addr = computeEffectiveAddress(cpu, &m);
-                            cpu.fpu.control_word = cpu.memory.read16(addr);
-                        },
-                        else => {},
-                    }
-                }
-            }
+            executeFpu(cpu, insn);
         },
 
         // ENTER imm16, imm8 (C8)
@@ -816,12 +1050,12 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // LES/LDS (C4/C5) — rarely used, stub
         0xC4, 0xC5 => {
-            std.log.warn("x86: LES/LDS stubbed at 0x{X}", .{eip});
+            log.warn("x86: LES/LDS stubbed at 0x{X}", .{eip});
         },
 
         // IN/OUT (E4-E7, EC-EF) — I/O port, stub
         0xE4, 0xE5, 0xE6, 0xE7, 0xEC, 0xED, 0xEE, 0xEF => {
-            std.log.warn("x86: I/O port instruction 0x{X:0>2} stubbed at 0x{X}", .{ insn.opcode, eip });
+            log.warn("x86: I/O port instruction 0x{X:0>2} stubbed at 0x{X}", .{ insn.opcode, eip });
         },
 
         // CMC (F5)
@@ -839,7 +1073,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // AAM/AAD (D4/D5) — stub
         0xD4, 0xD5 => {
-            std.log.warn("x86: AAM/AAD stubbed at 0x{X}", .{eip});
+            log.warn("x86: AAM/AAD stubbed at 0x{X}", .{eip});
         },
 
         // Multi-byte NOP (0F 1F and 0F 18-1E)
@@ -900,11 +1134,11 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // LSL/LAR (0F 02/03) — stub
         0x0F02, 0x0F03 => {
-            std.log.warn("x86: LSL/LAR stubbed at 0x{X}", .{eip});
+            log.warn("x86: LSL/LAR stubbed at 0x{X}", .{eip});
         },
 
         else => {
-            std.log.err("x86: unimplemented opcode 0x{X:0>2} at 0x{X} (byte: 0x{X:0>2})", .{ insn.opcode, eip, if (insn.length > 0) cpu.memory.read8(eip) else 0 });
+            log.err("x86: unimplemented opcode 0x{X:0>2} at 0x{X} (byte: 0x{X:0>2})", .{ insn.opcode, eip, if (insn.length > 0) cpu.memory.read8(eip) else 0 });
             cpu.halted = true;
         },
     }
@@ -1203,7 +1437,7 @@ fn execGroup5(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             cpu.push32(readOperand(cpu, insn, 0));
         },
         else => {
-            std.log.err("x86: unimplemented Group 5 sub-op {d} at EIP", .{sub_op});
+            log.err("x86: unimplemented Group 5 sub-op {d} at EIP", .{sub_op});
             cpu.halted = true;
         },
     }

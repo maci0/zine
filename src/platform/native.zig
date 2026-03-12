@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const log = @import("../log.zig");
 
 // -------------------------------------------------------------------------
 // Architecture constants
@@ -90,7 +91,7 @@ pub fn mmap(
             if (fixed and (err == error.MappingAlreadyExists or err == error.OutOfMemory)) {
                 // The fixed address is occupied (by the host process). Fall back
                 // to a non-fixed mapping — the PE will need relocations applied.
-                std.log.warn("MAP_FIXED_NOREPLACE failed at 0x{X}, falling back to any address", .{@intFromPtr(hint)});
+                log.warn("MAP_FIXED_NOREPLACE failed at 0x{X}, falling back to any address", .{@intFromPtr(hint)});
                 var fallback_flags = flags;
                 fallback_flags.FIXED_NOREPLACE = false;
                 return std.posix.mmap(null, size, prot, fallback_flags, file_fd, file_offset);
@@ -167,7 +168,7 @@ pub fn getStackBounds(frame_addr: usize) StackBounds {
                     result.stack_limit = @truncate(stack_limit);
                 }
 
-                std.log.info("Detected stack: 0x{X} - 0x{X} (limit set to 0x{X})", .{ stack_limit, stack_base, result.stack_limit });
+                log.info("Detected stack: 0x{X} - 0x{X} (limit set to 0x{X})", .{ stack_limit, stack_base, result.stack_limit });
                 break;
             }
         }
@@ -201,7 +202,7 @@ pub fn setupFS(teb_ptr: *anyopaque) !void {
         );
 
         if (rc > 0xfffff000) {
-            std.log.err("set_thread_area failed: {d}", .{rc});
+            log.err("set_thread_area failed: {d}", .{rc});
             return error.SetThreadAreaFailed;
         }
 
@@ -212,7 +213,7 @@ pub fn setupFS(teb_ptr: *anyopaque) !void {
             :
             : [sel] "r" (selector),
         );
-        std.log.info("FS segment initialized with selector 0x{X}, TEB at 0x{X}", .{ selector, @intFromPtr(teb_ptr) });
+        log.info("FS segment initialized with selector 0x{X}, TEB at 0x{X}", .{ selector, @intFromPtr(teb_ptr) });
     } else if (arch == .x86_64) {
         // x86_64: use arch_prctl(ARCH_SET_FS, base) syscall
         const ARCH_SET_FS: usize = 0x1002;
@@ -226,10 +227,10 @@ pub fn setupFS(teb_ptr: *anyopaque) !void {
         );
 
         if (rc > 0xfffffffffffff000) {
-            std.log.err("arch_prctl(ARCH_SET_FS) failed: {d}", .{rc});
+            log.err("arch_prctl(ARCH_SET_FS) failed: {d}", .{rc});
             return error.SetThreadAreaFailed;
         }
-        std.log.info("FS base set via arch_prctl, TEB at 0x{X}", .{@intFromPtr(teb_ptr)});
+        log.info("FS base set via arch_prctl, TEB at 0x{X}", .{@intFromPtr(teb_ptr)});
     } else {
         return; // Unsupported architecture
     }

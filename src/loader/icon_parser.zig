@@ -1,5 +1,6 @@
 const std = @import("std");
 const Module = @import("module.zig").Module;
+const log = @import("../log.zig");
 
 pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_group_id: ?u32) !?[]const u8 {
     var group_data: ?[]const u8 = null;
@@ -37,7 +38,7 @@ pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_gro
         const icon_data = module.getResource(3, nId) orelse return null; // RT_ICON = 3
         
         if (icon_data.len != dwBytesInRes) {
-            std.log.warn("Icon data length mismatch: expected {}, got {}", .{dwBytesInRes, icon_data.len});
+            log.warn("Icon data length mismatch: expected {}, got {}", .{dwBytesInRes, icon_data.len});
             // Proceed anyway
         }
         

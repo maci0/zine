@@ -232,17 +232,29 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                         } else if (std.mem.eql(u8, type_val.?.string, "open_file")) {
                             if (root.object.get("filename")) |file_val| {
                                 if (file_val == .string) {
-                                    var found_dir: []const u8 = "Desktop";
-                                    var d = std.fs.cwd().openDir("Desktop", .{}) catch blk: {
-                                        found_dir = "../Desktop";
-                                        break :blk std.fs.cwd().openDir("../Desktop", .{}) catch null;
-                                    };
-                                    if (d) |*dir| {
-                                        dir.close();
-                                    }
-                                    const path = std.fmt.bufPrint(&selected_file_path, "{s}/{s}", .{found_dir, file_val.string}) catch null;
+                                    // Use the dir path provided by the client (defaults to Desktop)
+                                    const dir_path = if (root.object.get("dir")) |dir_val|
+                                        (if (dir_val == .string) dir_val.string else "Desktop")
+                                    else
+                                        "Desktop";
+
+                                    // Validate: reject path traversal
+                                    if (std.mem.indexOf(u8, dir_path, "..") != null) continue;
+
+                                    const path = std.fmt.bufPrint(&selected_file_path, "{s}/{s}", .{ dir_path, file_val.string }) catch null;
                                     if (path) |p| {
                                         if (renderer.on_file_uploaded) |cb| cb(p);
+                                    }
+                                }
+                            }
+                        } else if (std.mem.eql(u8, type_val.?.string, "browse_directory")) {
+                            // Client requests directory listing for navigation
+                            if (root.object.get("path")) |path_val| {
+                                if (path_val == .string) {
+                                    const req_path = path_val.string;
+                                    // Validate: reject path traversal
+                                    if (std.mem.indexOf(u8, req_path, "..") == null) {
+                                        renderer.listDirectory(req_path);
                                     }
                                 }
                             }
