@@ -29,6 +29,9 @@ pub const munmap = backend.munmap;
 
 // Threading
 pub const yield = backend.yield;
+pub const sleep = backend.sleep;
+pub const Mutex = backend.Mutex;
+pub const spawnThread = backend.spawnThread;
 
 // Process
 pub const getProcessId = backend.getProcessId;
@@ -41,6 +44,9 @@ pub const getStackBounds = backend.getStackBounds;
 
 // FS segment (TEB)
 pub const setupFS = backend.setupFS;
+
+// SEH
+pub const readExceptionList = backend.readExceptionList;
 
 // Signal handling (native only, no-ops on WASM)
 pub const installSegfaultHandler = backend.installSegfaultHandler;

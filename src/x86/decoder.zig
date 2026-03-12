@@ -1,0 +1,1075 @@
+// x86 instruction decoder for the software interpreter.
+//
+// Decodes variable-length x86 instructions from a byte stream into a
+// structured Instruction representation.  Handles prefixes, ModR/M, SIB,
+// displacement, and immediate fields for all Phase 1 instructions.
+
+const cpu_mod = @import("cpu.zig");
+const Segment = cpu_mod.Segment;
+
+/// Decoded instruction prefixes.
+pub const Prefixes = struct {
+    segment_override: ?Segment = null,
+    operand_size_override: bool = false, // 0x66: use 16-bit operands
+    address_size_override: bool = false, // 0x67: use 16-bit addressing
+    rep: bool = false, // F3
+    repne: bool = false, // F2
+    lock: bool = false, // F0
+};
+
+/// ModR/M byte fields.
+pub const ModRM = struct {
+    mod: u2,
+    reg: u3,
+    rm: u3,
+};
+
+/// SIB byte fields.
+pub const SIB = struct {
+    scale: u2,
+    index: u3,
+    base: u3,
+};
+
+/// Memory operand (computed from ModR/M + SIB + displacement).
+pub const MemOperand = struct {
+    segment: Segment = .ds,
+    base: ?u3 = null, // register index
+    index: ?u3 = null, // register index
+    scale: u2 = 0, // 0=1, 1=2, 2=4, 3=8
+    displacement: i32 = 0,
+};
+
+/// Decoded operand — either register, memory, or immediate.
+pub const Operand = union(enum) {
+    none,
+    reg: u3, // register index
+    mem: MemOperand,
+    imm: u32,
+    rel: i32, // relative offset (for JMP/Jcc/CALL)
+};
+
+/// Decoded instruction.
+pub const Instruction = struct {
+    prefixes: Prefixes = .{},
+    opcode: u16 = 0, // Extended opcodes use 0x0Fxx
+    modrm: ?ModRM = null,
+    operands: [2]Operand = .{ .none, .none },
+    imm: u32 = 0, // raw immediate value
+    length: u8 = 0, // total instruction length for EIP advancement
+    op_size: cpu_mod.OpSize = .dword, // effective operand size
+};
+
+/// Decode one x86 instruction starting at `bytes`.
+/// Returns the decoded instruction with its length.
+pub fn decode(bytes: []const u8) Instruction {
+    var insn = Instruction{};
+    var pos: usize = 0;
+
+    // --- Phase 1: Prefixes ---
+    while (pos < bytes.len) {
+        switch (bytes[pos]) {
+            0xF0 => insn.prefixes.lock = true,
+            0xF2 => insn.prefixes.repne = true,
+            0xF3 => insn.prefixes.rep = true,
+            0x26 => insn.prefixes.segment_override = .es,
+            0x2E => insn.prefixes.segment_override = .cs,
+            0x36 => insn.prefixes.segment_override = .ss,
+            0x3E => insn.prefixes.segment_override = .ds,
+            0x64 => insn.prefixes.segment_override = .fs,
+            0x65 => insn.prefixes.segment_override = .gs,
+            0x66 => insn.prefixes.operand_size_override = true,
+            0x67 => insn.prefixes.address_size_override = true,
+            else => break,
+        }
+        pos += 1;
+    }
+
+    if (pos >= bytes.len) {
+        insn.length = @intCast(pos);
+        return insn;
+    }
+
+    // Effective operand size
+    insn.op_size = if (insn.prefixes.operand_size_override) .word else .dword;
+
+    // --- Phase 2: Opcode ---
+    var opcode_byte = bytes[pos];
+    pos += 1;
+
+    if (opcode_byte == 0x0F) {
+        // Two-byte opcode
+        if (pos >= bytes.len) {
+            insn.length = @intCast(pos);
+            return insn;
+        }
+        opcode_byte = bytes[pos];
+        pos += 1;
+        insn.opcode = 0x0F00 | @as(u16, opcode_byte);
+    } else {
+        insn.opcode = opcode_byte;
+    }
+
+    // --- Phase 3: Decode based on opcode ---
+    // Many opcodes require ModR/M; decode it when needed.
+    switch (insn.opcode) {
+        // NOP
+        0x90 => {},
+
+        // INT 3
+        0xCC => {},
+
+        // INT imm8
+        0xCD => {
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
+        },
+
+        // HLT
+        0xF4 => {},
+
+        // --- MOV reg, imm (B0-B7: 8-bit, B8-BF: 32/16-bit) ---
+        0xB0...0xB7 => {
+            const reg: u3 = @truncate(insn.opcode);
+            insn.operands[0] = .{ .reg = reg };
+            insn.op_size = .byte;
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                insn.operands[1] = .{ .imm = insn.imm };
+                pos += 1;
+            }
+        },
+        0xB8...0xBF => {
+            const reg: u3 = @truncate(insn.opcode);
+            insn.operands[0] = .{ .reg = reg };
+            pos = readImmOperand(bytes, pos, insn.op_size, &insn);
+        },
+
+        // --- PUSH/POP reg (50-5F) ---
+        0x50...0x57 => {
+            insn.operands[0] = .{ .reg = @truncate(insn.opcode) };
+        },
+        0x58...0x5F => {
+            insn.operands[0] = .{ .reg = @truncate(insn.opcode) };
+        },
+
+        // PUSH imm32/16
+        0x68 => {
+            pos = readImmOperand(bytes, pos, insn.op_size, &insn);
+        },
+        // PUSH imm8 (sign-extended)
+        0x6A => {
+            if (pos < bytes.len) {
+                insn.imm = cpu_mod.signExtend8to32(bytes[pos]);
+                insn.operands[0] = .{ .imm = insn.imm };
+                pos += 1;
+            }
+        },
+
+        // --- ALU r/m, reg (8-bit) ---
+        0x00, 0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38 => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
+        // --- ALU r/m, reg (32/16-bit) ---
+        0x01, 0x09, 0x11, 0x19, 0x21, 0x29, 0x31, 0x39 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
+        // --- ALU reg, r/m (8-bit) ---
+        0x02, 0x0A, 0x12, 0x1A, 0x22, 0x2A, 0x32, 0x3A => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
+        // --- ALU reg, r/m (32/16-bit) ---
+        0x03, 0x0B, 0x13, 0x1B, 0x23, 0x2B, 0x33, 0x3B => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
+        // --- ALU AL, imm8 ---
+        0x04, 0x0C, 0x14, 0x1C, 0x24, 0x2C, 0x34, 0x3C => {
+            insn.op_size = .byte;
+            insn.operands[0] = .{ .reg = 0 }; // AL
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                insn.operands[1] = .{ .imm = insn.imm };
+                pos += 1;
+            }
+        },
+        // --- ALU EAX, imm32/16 ---
+        0x05, 0x0D, 0x15, 0x1D, 0x25, 0x2D, 0x35, 0x3D => {
+            insn.operands[0] = .{ .reg = 0 }; // EAX
+            pos = readImmOperand(bytes, pos, insn.op_size, &insn);
+        },
+
+        // --- INC/DEC reg (40-4F) ---
+        0x40...0x47 => {
+            insn.operands[0] = .{ .reg = @truncate(insn.opcode) };
+        },
+        0x48...0x4F => {
+            insn.operands[0] = .{ .reg = @truncate(insn.opcode) };
+        },
+
+        // --- Group 1: ALU r/m, imm (80-83) ---
+        0x80 => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
+        },
+        0x81 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+            pos = readImmDirect(bytes, pos, insn.op_size, &insn);
+        },
+        0x83 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+            if (pos < bytes.len) {
+                insn.imm = cpu_mod.signExtend8to32(bytes[pos]);
+                pos += 1;
+            }
+        },
+
+        // TEST r/m8, reg8
+        0x84 => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
+        // TEST r/m32, reg32
+        0x85 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
+
+        // XCHG r/m8, reg8
+        0x86 => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
+        // XCHG r/m32, reg32
+        0x87 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
+
+        // --- MOV r/m, reg (88-8B) ---
+        0x88 => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
+        0x89 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
+        0x8A => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
+        0x8B => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
+
+        // MOV r/m16, Sreg (8C) — segment register to r/m
+        0x8C => {
+            insn.op_size = .word;
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
+
+        // LEA reg, [mem]
+        0x8D => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
+
+        // MOV Sreg, r/m16 (8E) — r/m to segment register
+        0x8E => {
+            insn.op_size = .word;
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
+
+        // XCHG EAX, reg (91-97)
+        0x91...0x97 => {
+            insn.operands[0] = .{ .reg = @truncate(insn.opcode) };
+        },
+
+        // CBW/CWDE
+        0x98 => {},
+        // CDQ
+        0x99 => {},
+
+        // PUSHFD
+        0x9C => {},
+        // POPFD
+        0x9D => {},
+
+        // MOV AL, moffs8
+        0xA0 => {
+            insn.op_size = .byte;
+            insn.operands[0] = .{ .reg = 0 }; // AL
+            pos = readMoffs(bytes, pos, &insn);
+        },
+        // MOV EAX, moffs32
+        0xA1 => {
+            insn.operands[0] = .{ .reg = 0 }; // EAX
+            pos = readMoffs(bytes, pos, &insn);
+        },
+        // MOV moffs8, AL
+        0xA2 => {
+            insn.op_size = .byte;
+            pos = readMoffs(bytes, pos, &insn);
+            insn.operands[1] = insn.operands[0];
+            insn.operands[0] = .{ .reg = 0 }; // AL (source for the store)
+        },
+        // MOV moffs32, EAX
+        0xA3 => {
+            pos = readMoffs(bytes, pos, &insn);
+            insn.operands[1] = insn.operands[0];
+            insn.operands[0] = .{ .reg = 0 }; // EAX
+        },
+
+        // TEST AL, imm8
+        0xA8 => {
+            insn.op_size = .byte;
+            insn.operands[0] = .{ .reg = 0 }; // AL
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                insn.operands[1] = .{ .imm = insn.imm };
+                pos += 1;
+            }
+        },
+        // TEST EAX, imm32
+        0xA9 => {
+            insn.operands[0] = .{ .reg = 0 }; // EAX
+            pos = readImmOperand(bytes, pos, insn.op_size, &insn);
+        },
+
+        // RET
+        0xC3 => {},
+        // RET imm16
+        0xC2 => {
+            if (pos + 1 < bytes.len) {
+                insn.imm = @as(u16, bytes[pos]) | (@as(u16, bytes[pos + 1]) << 8);
+                pos += 2;
+            }
+        },
+
+        // MOV r/m8, imm8 (C6 /0)
+        0xC6 => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
+        },
+        // MOV r/m32, imm32 (C7 /0)
+        0xC7 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+            pos = readImmDirect(bytes, pos, insn.op_size, &insn);
+        },
+
+        // LEAVE
+        0xC9 => {},
+
+        // --- Shift/Rotate Group 2 (D0-D3) ---
+        // D0: r/m8, 1
+        0xD0 => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+            insn.imm = 1;
+        },
+        // D1: r/m32, 1
+        0xD1 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+            insn.imm = 1;
+        },
+        // D2: r/m8, CL
+        0xD2 => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+        },
+        // D3: r/m32, CL
+        0xD3 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+        },
+
+        // --- Shift/Rotate Group 2 (C0-C1): r/m, imm8 ---
+        0xC0 => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
+        },
+        0xC1 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
+        },
+
+        // CALL rel32/16
+        0xE8 => {
+            pos = readRelOperand(bytes, pos, insn.op_size, &insn);
+        },
+        // JMP rel32/16
+        0xE9 => {
+            pos = readRelOperand(bytes, pos, insn.op_size, &insn);
+        },
+        // JMP rel8
+        0xEB => {
+            if (pos < bytes.len) {
+                const rel: i32 = @as(i32, @as(i8, @bitCast(bytes[pos])));
+                insn.operands[0] = .{ .rel = rel };
+                pos += 1;
+            }
+        },
+
+        // Jcc short (70-7F)
+        0x70...0x7F => {
+            if (pos < bytes.len) {
+                const rel: i32 = @as(i32, @as(i8, @bitCast(bytes[pos])));
+                insn.operands[0] = .{ .rel = rel };
+                pos += 1;
+            }
+        },
+
+        // LOOP/LOOPcc/JECXZ (E0-E3)
+        0xE0...0xE3 => {
+            if (pos < bytes.len) {
+                const rel: i32 = @as(i32, @as(i8, @bitCast(bytes[pos])));
+                insn.operands[0] = .{ .rel = rel };
+                pos += 1;
+            }
+        },
+
+        // Group 3: TEST/NOT/NEG/MUL/IMUL/DIV/IDIV (F6=8bit, F7=32bit)
+        0xF6 => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+            // reg field determines the sub-operation
+            if (insn.modrm) |modrm| {
+                if (modrm.reg == 0 or modrm.reg == 1) {
+                    // TEST r/m8, imm8
+                    if (pos < bytes.len) {
+                        insn.imm = bytes[pos];
+                        pos += 1;
+                    }
+                }
+            }
+        },
+        0xF7 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+            if (insn.modrm) |modrm| {
+                if (modrm.reg == 0 or modrm.reg == 1) {
+                    // TEST r/m32, imm32
+                    pos = readImmDirect(bytes, pos, insn.op_size, &insn);
+                }
+            }
+        },
+
+        // Group 5: INC/DEC/CALL/JMP/PUSH r/m (FF)
+        0xFF => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+        },
+        // Group 4: INC/DEC r/m8 (FE)
+        0xFE => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+        },
+
+        // CLC, STC, CLI, STI, CLD, STD
+        0xF8 => {}, // CLC
+        0xF9 => {}, // STC
+        0xFA => {}, // CLI
+        0xFB => {}, // STI
+        0xFC => {}, // CLD
+        0xFD => {}, // STD
+
+        // --- Two-byte opcodes (0x0Fxx) ---
+
+        // Jcc near (0F 80 - 0F 8F)
+        0x0F80...0x0F8F => {
+            pos = readRelOperand(bytes, pos, insn.op_size, &insn);
+        },
+
+        // SETcc (0F 90 - 0F 9F)
+        0x0F90...0x0F9F => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+        },
+
+        // MOVZX r32, r/m8 (0F B6)
+        0x0FB6 => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+            insn.op_size = .byte; // source is byte
+        },
+        // MOVZX r32, r/m16 (0F B7)
+        0x0FB7 => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+            insn.op_size = .word; // source is word
+        },
+        // MOVSX r32, r/m8 (0F BE)
+        0x0FBE => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+            insn.op_size = .byte;
+        },
+        // MOVSX r32, r/m16 (0F BF)
+        0x0FBF => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+            insn.op_size = .word;
+        },
+
+        // IMUL r32, r/m32 (0F AF)
+        0x0FAF => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
+
+        // CMOVcc (0F 40 - 0F 4F)
+        0x0F40...0x0F4F => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
+
+        // PUSH FS (0F A0) / POP FS (0F A1)
+        0x0FA0 => {},
+        0x0FA1 => {},
+        // PUSH GS (0F A8) / POP GS (0F A9)
+        0x0FA8 => {},
+        0x0FA9 => {},
+
+        // BSF (0F BC), BSR (0F BD)
+        0x0FBC, 0x0FBD => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
+
+        // BT (0F A3), BTS (0F AB), BTR (0F B3), BTC (0F BB)
+        0x0FA3, 0x0FAB, 0x0FB3, 0x0FBB => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
+
+        // BSWAP (0F C8 - 0F CF)
+        0x0FC8...0x0FCF => {
+            insn.operands[0] = .{ .reg = @truncate(insn.opcode) };
+        },
+
+        // SHLD r/m32, r32, imm8 (0F A4)
+        0x0FA4 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
+        },
+        // SHLD r/m32, r32, CL (0F A5)
+        0x0FA5 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
+        // SHRD r/m32, r32, imm8 (0F AC)
+        0x0FAC => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
+        },
+        // SHRD r/m32, r32, CL (0F AD)
+        0x0FAD => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
+
+        // IMUL r32, r/m32, imm32 (69)
+        0x69 => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+            pos = readImmDirect(bytes, pos, insn.op_size, &insn);
+        },
+        // IMUL r32, r/m32, imm8 (6B)
+        0x6B => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+            if (pos < bytes.len) {
+                insn.imm = cpu_mod.signExtend8to32(bytes[pos]);
+                pos += 1;
+            }
+        },
+
+        // XCHG EAX, EAX (already 0x90 = NOP above)
+
+        // SAHF (9E) / LAHF (9F)
+        0x9E => {},
+        0x9F => {},
+
+        // REP string ops and other string instructions
+        // MOVSB/MOVSD (A4/A5), STOSB/STOSD (AA/AB), etc.
+        0xA4, 0xA5, 0xA6, 0xA7, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF => {},
+
+        // --- Legacy segment PUSH/POP (single-byte, no operands) ---
+        0x06 => {}, // PUSH ES
+        0x07 => {}, // POP ES
+        0x0E => {}, // PUSH CS
+        0x16 => {}, // PUSH SS
+        0x17 => {}, // POP SS
+        0x1E => {}, // PUSH DS
+        0x1F => {}, // POP DS
+
+        // --- BCD adjust (single-byte, no operands) ---
+        0x27 => {}, // DAA
+        0x2F => {}, // DAS
+        0x37 => {}, // AAA
+        0x3F => {}, // AAS
+
+        // --- PUSHA/POPA (single-byte) ---
+        0x60 => {}, // PUSHAD
+        0x61 => {}, // POPAD
+
+        // BOUND r32, m32&32 (has ModR/M)
+        0x62 => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
+
+        // INS/OUTS string I/O (single-byte)
+        0x6C => {}, // INSB
+        0x6D => {}, // INSD
+        0x6E => {}, // OUTSB
+        0x6F => {}, // OUTSD
+
+        // 0x82 — alias for 0x80 on x86 (ALU r/m8, imm8)
+        0x82 => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
+        },
+
+        // --- FPU instructions (D8-DF): all have ModR/M ---
+        0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+        },
+
+        // ENTER imm16, imm8 (C8)
+        0xC8 => {
+            if (pos + 2 < bytes.len) {
+                insn.imm = @as(u32, bytes[pos]) | (@as(u32, bytes[pos + 1]) << 8);
+                pos += 3; // imm16 + imm8
+            }
+        },
+
+        // LES (C4) / LDS (C5) — have ModR/M
+        0xC4 => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); },
+        0xC5 => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); },
+
+        // IN/OUT (E4-E7): imm8 port
+        0xE4 => { insn.op_size = .byte; if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; } },
+        0xE5 => { if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; } },
+        0xE6 => { insn.op_size = .byte; if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; } },
+        0xE7 => { if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; } },
+        // IN/OUT DX (EC-EF): single-byte
+        0xEC, 0xED, 0xEE, 0xEF => {},
+
+        // CMC (F5), WAIT/FWAIT (9B), INT1/ICEBP (F1)
+        0xF5 => {},
+        0x9B => {},
+        0xF1 => {},
+
+        // XLAT (D7)
+        0xD7 => {},
+
+        // AAM (D4 ib) / AAD (D5 ib)
+        0xD4, 0xD5 => {
+            if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; }
+        },
+
+        // --- Two-byte opcodes that appear in real binaries ---
+
+        // NOP r/m32 (0F 1F — multi-byte NOP, has ModR/M)
+        0x0F1F => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+        },
+        // 0F 18-1E are also hint NOPs with ModR/M
+        0x0F18, 0x0F19, 0x0F1A, 0x0F1B, 0x0F1C, 0x0F1D, 0x0F1E => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+        },
+
+        // XADD (0F C0/C1)
+        0x0FC0 => { insn.op_size = .byte; pos = decodeModRM(bytes, pos, &insn, .rm_reg); },
+        0x0FC1 => { pos = decodeModRM(bytes, pos, &insn, .rm_reg); },
+
+        // CMPXCHG (0F B0/B1)
+        0x0FB0 => { insn.op_size = .byte; pos = decodeModRM(bytes, pos, &insn, .rm_reg); },
+        0x0FB1 => { pos = decodeModRM(bytes, pos, &insn, .rm_reg); },
+
+        // BT/BTS/BTR/BTC imm8 form (0F BA /4..7)
+        0x0FBA => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
+        },
+
+        // 0F 03 (LSL), 0F 02 (LAR) — have ModR/M
+        0x0F02, 0x0F03 => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
+
+        // Catch-all for unrecognized opcodes — we still record the length
+        else => {},
+    }
+
+    insn.length = @intCast(pos);
+    return insn;
+}
+
+// -----------------------------------------------------------------------
+// Internal helpers
+// -----------------------------------------------------------------------
+
+/// Direction for ModRM decoding: which operand is reg, which is r/m.
+const ModRMDir = enum {
+    reg_rm, // operand[0]=reg, operand[1]=r/m
+    rm_reg, // operand[0]=r/m, operand[1]=reg
+    rm_only, // only operand[0]=r/m, reg field is opcode extension
+};
+
+/// Decode ModR/M (and optionally SIB + displacement) from `bytes[pos..]`.
+/// Populates insn.modrm and insn.operands.  Returns new position.
+fn decodeModRM(bytes: []const u8, start_pos: usize, insn: *Instruction, dir: ModRMDir) usize {
+    var pos = start_pos;
+    if (pos >= bytes.len) return pos;
+
+    const modrm_byte = bytes[pos];
+    pos += 1;
+
+    const modrm = ModRM{
+        .mod = @truncate(modrm_byte >> 6),
+        .reg = @truncate(modrm_byte >> 3),
+        .rm = @truncate(modrm_byte),
+    };
+    insn.modrm = modrm;
+
+    // Default segment
+    var seg = insn.prefixes.segment_override orelse .ds;
+
+    if (modrm.mod == 3) {
+        // Register-register
+        switch (dir) {
+            .reg_rm => {
+                insn.operands[0] = .{ .reg = modrm.reg };
+                insn.operands[1] = .{ .reg = modrm.rm };
+            },
+            .rm_reg => {
+                insn.operands[0] = .{ .reg = modrm.rm };
+                insn.operands[1] = .{ .reg = modrm.reg };
+            },
+            .rm_only => {
+                insn.operands[0] = .{ .reg = modrm.rm };
+            },
+        }
+        return pos;
+    }
+
+    // Memory operand
+    var mem_op = MemOperand{};
+
+    if (modrm.rm == 4) {
+        // SIB byte follows
+        if (pos >= bytes.len) return pos;
+        const sib_byte = bytes[pos];
+        pos += 1;
+
+        const sib = SIB{
+            .scale = @truncate(sib_byte >> 6),
+            .index = @truncate(sib_byte >> 3),
+            .base = @truncate(sib_byte),
+        };
+
+        if (sib.index != 4) {
+            mem_op.index = sib.index;
+            mem_op.scale = sib.scale;
+        }
+
+        if (modrm.mod == 0 and sib.base == 5) {
+            // [disp32 + index*scale]
+            pos = readDisp32(bytes, pos, &mem_op);
+        } else {
+            mem_op.base = sib.base;
+            // Use SS for ESP/EBP-based addressing
+            if (sib.base == 4 or sib.base == 5) {
+                if (insn.prefixes.segment_override == null) seg = .ss;
+            }
+        }
+    } else if (modrm.mod == 0 and modrm.rm == 5) {
+        // [disp32]
+        pos = readDisp32(bytes, pos, &mem_op);
+    } else {
+        mem_op.base = modrm.rm;
+        // Use SS for EBP/ESP-based addressing
+        if (modrm.rm == 4 or modrm.rm == 5) {
+            if (insn.prefixes.segment_override == null) seg = .ss;
+        }
+    }
+
+    // Displacement
+    if (modrm.mod == 1) {
+        // disp8 (sign-extended)
+        if (pos < bytes.len) {
+            mem_op.displacement = @as(i32, @as(i8, @bitCast(bytes[pos])));
+            pos += 1;
+        }
+    } else if (modrm.mod == 2) {
+        // disp32
+        pos = readDisp32(bytes, pos, &mem_op);
+    }
+
+    mem_op.segment = seg;
+
+    switch (dir) {
+        .reg_rm => {
+            insn.operands[0] = .{ .reg = modrm.reg };
+            insn.operands[1] = .{ .mem = mem_op };
+        },
+        .rm_reg => {
+            insn.operands[0] = .{ .mem = mem_op };
+            insn.operands[1] = .{ .reg = modrm.reg };
+        },
+        .rm_only => {
+            insn.operands[0] = .{ .mem = mem_op };
+        },
+    }
+
+    return pos;
+}
+
+/// Read a 32-bit displacement into mem_op.
+fn readDisp32(bytes: []const u8, start_pos: usize, mem_op: *MemOperand) usize {
+    var pos = start_pos;
+    if (pos + 3 < bytes.len) {
+        const d: u32 = @as(u32, bytes[pos]) |
+            (@as(u32, bytes[pos + 1]) << 8) |
+            (@as(u32, bytes[pos + 2]) << 16) |
+            (@as(u32, bytes[pos + 3]) << 24);
+        mem_op.displacement = @bitCast(d);
+        pos += 4;
+    }
+    return pos;
+}
+
+/// Read an immediate value and store in insn.imm and insn.operands[1].
+fn readImmOperand(bytes: []const u8, start_pos: usize, op_size: cpu_mod.OpSize, insn: *Instruction) usize {
+    var pos = start_pos;
+    switch (op_size) {
+        .byte => {
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                insn.operands[1] = .{ .imm = insn.imm };
+                pos += 1;
+            }
+        },
+        .word => {
+            if (pos + 1 < bytes.len) {
+                insn.imm = @as(u32, bytes[pos]) | (@as(u32, bytes[pos + 1]) << 8);
+                insn.operands[1] = .{ .imm = insn.imm };
+                pos += 2;
+            }
+        },
+        .dword => {
+            if (pos + 3 < bytes.len) {
+                insn.imm = @as(u32, bytes[pos]) |
+                    (@as(u32, bytes[pos + 1]) << 8) |
+                    (@as(u32, bytes[pos + 2]) << 16) |
+                    (@as(u32, bytes[pos + 3]) << 24);
+                insn.operands[1] = .{ .imm = insn.imm };
+                pos += 4;
+            }
+        },
+    }
+    return pos;
+}
+
+/// Read an immediate value directly (without setting operands[1]).
+fn readImmDirect(bytes: []const u8, start_pos: usize, op_size: cpu_mod.OpSize, insn: *Instruction) usize {
+    var pos = start_pos;
+    switch (op_size) {
+        .byte => {
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
+        },
+        .word => {
+            if (pos + 1 < bytes.len) {
+                insn.imm = @as(u32, bytes[pos]) | (@as(u32, bytes[pos + 1]) << 8);
+                pos += 2;
+            }
+        },
+        .dword => {
+            if (pos + 3 < bytes.len) {
+                insn.imm = @as(u32, bytes[pos]) |
+                    (@as(u32, bytes[pos + 1]) << 8) |
+                    (@as(u32, bytes[pos + 2]) << 16) |
+                    (@as(u32, bytes[pos + 3]) << 24);
+                pos += 4;
+            }
+        },
+    }
+    return pos;
+}
+
+/// Read a relative offset (for CALL/JMP).
+fn readRelOperand(bytes: []const u8, start_pos: usize, op_size: cpu_mod.OpSize, insn: *Instruction) usize {
+    var pos = start_pos;
+    switch (op_size) {
+        .byte => {
+            if (pos < bytes.len) {
+                const rel: i32 = @as(i32, @as(i8, @bitCast(bytes[pos])));
+                insn.operands[0] = .{ .rel = rel };
+                pos += 1;
+            }
+        },
+        .word => {
+            if (pos + 1 < bytes.len) {
+                const raw: u16 = @as(u16, bytes[pos]) | (@as(u16, bytes[pos + 1]) << 8);
+                const rel: i32 = @as(i32, @as(i16, @bitCast(raw)));
+                insn.operands[0] = .{ .rel = rel };
+                pos += 2;
+            }
+        },
+        .dword => {
+            if (pos + 3 < bytes.len) {
+                const raw: u32 = @as(u32, bytes[pos]) |
+                    (@as(u32, bytes[pos + 1]) << 8) |
+                    (@as(u32, bytes[pos + 2]) << 16) |
+                    (@as(u32, bytes[pos + 3]) << 24);
+                insn.operands[0] = .{ .rel = @bitCast(raw) };
+                pos += 4;
+            }
+        },
+    }
+    return pos;
+}
+
+/// Read a memory offset operand (for MOV AL/EAX, moffs).
+fn readMoffs(bytes: []const u8, start_pos: usize, insn: *Instruction) usize {
+    var pos = start_pos;
+    if (pos + 3 < bytes.len) {
+        const addr: u32 = @as(u32, bytes[pos]) |
+            (@as(u32, bytes[pos + 1]) << 8) |
+            (@as(u32, bytes[pos + 2]) << 16) |
+            (@as(u32, bytes[pos + 3]) << 24);
+        insn.operands[0] = .{ .mem = .{
+            .segment = insn.prefixes.segment_override orelse .ds,
+            .displacement = @bitCast(addr),
+        } };
+        pos += 4;
+    }
+    return pos;
+}
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
+
+const testing = @import("std").testing;
+
+test "decode: NOP (0x90)" {
+    const insn = decode(&.{0x90});
+    try testing.expectEqual(@as(u16, 0x90), insn.opcode);
+    try testing.expectEqual(@as(u8, 1), insn.length);
+}
+
+test "decode: MOV EAX, imm32 (B8 + dword)" {
+    const insn = decode(&.{ 0xB8, 0x78, 0x56, 0x34, 0x12 });
+    try testing.expectEqual(@as(u16, 0xB8), insn.opcode);
+    try testing.expectEqual(@as(u32, 0x12345678), insn.imm);
+    try testing.expectEqual(@as(u8, 5), insn.length);
+}
+
+test "decode: PUSH EBP (0x55)" {
+    const insn = decode(&.{0x55});
+    try testing.expectEqual(@as(u16, 0x55), insn.opcode);
+    try testing.expectEqual(@as(u8, 1), insn.length);
+    try testing.expectEqual(Operand{ .reg = 5 }, insn.operands[0]);
+}
+
+test "decode: MOV EBP, ESP (89 E5 = mov r/m32, reg32)" {
+    const insn = decode(&.{ 0x89, 0xE5 });
+    try testing.expectEqual(@as(u16, 0x89), insn.opcode);
+    try testing.expectEqual(@as(u8, 2), insn.length);
+    // mod=11, reg=esp(4), rm=ebp(5)
+    try testing.expectEqual(Operand{ .reg = 5 }, insn.operands[0]); // destination = EBP
+    try testing.expectEqual(Operand{ .reg = 4 }, insn.operands[1]); // source = ESP
+}
+
+test "decode: SUB ESP, 0x10 (83 EC 10)" {
+    const insn = decode(&.{ 0x83, 0xEC, 0x10 });
+    try testing.expectEqual(@as(u16, 0x83), insn.opcode);
+    try testing.expectEqual(@as(u8, 3), insn.length);
+    try testing.expectEqual(Operand{ .reg = 4 }, insn.operands[0]); // ESP
+    try testing.expectEqual(cpu_mod.signExtend8to32(0x10), insn.imm);
+}
+
+test "decode: CALL rel32 (E8 xx xx xx xx)" {
+    const insn = decode(&.{ 0xE8, 0x10, 0x00, 0x00, 0x00 });
+    try testing.expectEqual(@as(u16, 0xE8), insn.opcode);
+    try testing.expectEqual(@as(u8, 5), insn.length);
+    try testing.expectEqual(Operand{ .rel = 0x10 }, insn.operands[0]);
+}
+
+test "decode: JE rel8 (74 xx)" {
+    const insn = decode(&.{ 0x74, 0xFE }); // JE -2
+    try testing.expectEqual(@as(u16, 0x74), insn.opcode);
+    try testing.expectEqual(@as(u8, 2), insn.length);
+    try testing.expectEqual(Operand{ .rel = -2 }, insn.operands[0]);
+}
+
+test "decode: FS segment override (64 A1 xx)" {
+    const insn = decode(&.{ 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00 });
+    try testing.expectEqual(@as(u16, 0xA1), insn.opcode);
+    try testing.expectEqual(Segment.fs, insn.prefixes.segment_override.?);
+    try testing.expectEqual(@as(u8, 6), insn.length);
+}
+
+test "decode: MOV [EBP-4], EAX (89 45 FC)" {
+    const insn = decode(&.{ 0x89, 0x45, 0xFC });
+    try testing.expectEqual(@as(u16, 0x89), insn.opcode);
+    try testing.expectEqual(@as(u8, 3), insn.length);
+    // operands[0] = mem [EBP-4], operands[1] = reg EAX(0)... wait
+    // 0x89 is rm_reg: operands[0] = r/m (mem), operands[1] = reg
+    // modrm = 0x45 = mod=01, reg=000(EAX), rm=101(EBP)
+    switch (insn.operands[0]) {
+        .mem => |m| {
+            try testing.expectEqual(@as(?u3, 5), m.base); // EBP
+            try testing.expectEqual(@as(i32, -4), m.displacement);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try testing.expectEqual(Operand{ .reg = 0 }, insn.operands[1]); // EAX
+}
+
+test "decode: SIB addressing [EAX + ECX*4 + 0x10]" {
+    // MOV EAX, [EAX + ECX*4 + 0x10]  =>  8B 44 88 10
+    // 8B = MOV reg, r/m32 (reg_rm)
+    // modrm = 0x44 = mod=01, reg=000(EAX), rm=100(SIB)
+    // SIB = 0x88 = scale=10(4), index=001(ECX), base=000(EAX)
+    // disp8 = 0x10
+    const insn = decode(&.{ 0x8B, 0x44, 0x88, 0x10 });
+    try testing.expectEqual(@as(u16, 0x8B), insn.opcode);
+    try testing.expectEqual(@as(u8, 4), insn.length);
+    try testing.expectEqual(Operand{ .reg = 0 }, insn.operands[0]); // dest = EAX
+    switch (insn.operands[1]) {
+        .mem => |m| {
+            try testing.expectEqual(@as(?u3, 0), m.base); // EAX
+            try testing.expectEqual(@as(?u3, 1), m.index); // ECX
+            try testing.expectEqual(@as(u2, 2), m.scale); // *4
+            try testing.expectEqual(@as(i32, 0x10), m.displacement);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "decode: MOVZX (0F B6)" {
+    const insn = decode(&.{ 0x0F, 0xB6, 0xC1 }); // MOVZX EAX, CL
+    try testing.expectEqual(@as(u16, 0x0FB6), insn.opcode);
+    try testing.expectEqual(@as(u8, 3), insn.length);
+    try testing.expectEqual(Operand{ .reg = 0 }, insn.operands[0]); // EAX
+    try testing.expectEqual(Operand{ .reg = 1 }, insn.operands[1]); // CL (reg index)
+}

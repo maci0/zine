@@ -1,18 +1,19 @@
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
+const w32cc = @import("../calling_convention.zig");
 
 pub fn register(environment: *env.Environment) !void {
     const m = "VERSION.dll";
-    try environment.addBuiltinExport(m, "GetFileVersionInfoSizeA", @intFromPtr(&stub_GetFileVersionInfoSizeA));
-    try environment.addBuiltinExport(m, "GetFileVersionInfoA", @intFromPtr(&stub_GetFileVersionInfoA));
-    try environment.addBuiltinExport(m, "VerQueryValueA", @intFromPtr(&stub_VerQueryValueA));
-    try environment.addBuiltinExport(m, "GetFileVersionInfoSizeW", @intFromPtr(&stub_GetFileVersionInfoSizeW));
-    try environment.addBuiltinExport(m, "GetFileVersionInfoW", @intFromPtr(&stub_GetFileVersionInfoW));
-    try environment.addBuiltinExport(m, "VerQueryValueW", @intFromPtr(&stub_VerQueryValueW));
+    try environment.addBuiltinExportComptime(m, "GetFileVersionInfoSizeA", stub_GetFileVersionInfoSizeA);
+    try environment.addBuiltinExportComptime(m, "GetFileVersionInfoA", stub_GetFileVersionInfoA);
+    try environment.addBuiltinExportComptime(m, "VerQueryValueA", stub_VerQueryValueA);
+    try environment.addBuiltinExportComptime(m, "GetFileVersionInfoSizeW", stub_GetFileVersionInfoSizeW);
+    try environment.addBuiltinExportComptime(m, "GetFileVersionInfoW", stub_GetFileVersionInfoW);
+    try environment.addBuiltinExportComptime(m, "VerQueryValueW", stub_VerQueryValueW);
 }
 
-fn stub_GetFileVersionInfoSizeA(lptstrFilename: usize, lpdwHandle: usize) callconv(.winapi) u32 {
+fn stub_GetFileVersionInfoSizeA(lptstrFilename: usize, lpdwHandle: usize) callconv(w32cc.WINAPI) u32 {
     _ = lptstrFilename;
     if (lpdwHandle != 0) {
         @as(*u32, @ptrFromInt(lpdwHandle)).* = 0;
@@ -21,7 +22,7 @@ fn stub_GetFileVersionInfoSizeA(lptstrFilename: usize, lpdwHandle: usize) callco
     return 0;
 }
 
-fn stub_GetFileVersionInfoA(lptstrFilename: usize, dwHandle: u32, dwLen: u32, lpData: usize) callconv(.winapi) i32 {
+fn stub_GetFileVersionInfoA(lptstrFilename: usize, dwHandle: u32, dwLen: u32, lpData: usize) callconv(w32cc.WINAPI) i32 {
     _ = lptstrFilename;
     _ = dwHandle;
     _ = dwLen;
@@ -30,7 +31,7 @@ fn stub_GetFileVersionInfoA(lptstrFilename: usize, dwHandle: u32, dwLen: u32, lp
     return 0;
 }
 
-fn stub_VerQueryValueA(pBlock: usize, lpSubBlock: usize, lplpBuffer: usize, puLen: usize) callconv(.winapi) i32 {
+fn stub_VerQueryValueA(pBlock: usize, lpSubBlock: usize, lplpBuffer: usize, puLen: usize) callconv(w32cc.WINAPI) i32 {
     _ = pBlock;
     _ = lpSubBlock;
     _ = lplpBuffer;
@@ -41,7 +42,7 @@ fn stub_VerQueryValueA(pBlock: usize, lpSubBlock: usize, lplpBuffer: usize, puLe
     return 0;
 }
 
-fn stub_GetFileVersionInfoSizeW(lptstrFilename: usize, lpdwHandle: usize) callconv(.winapi) u32 {
+fn stub_GetFileVersionInfoSizeW(lptstrFilename: usize, lpdwHandle: usize) callconv(w32cc.WINAPI) u32 {
     _ = lptstrFilename;
     if (lpdwHandle != 0) {
         @as(*u32, @ptrFromInt(lpdwHandle)).* = 0;
@@ -50,7 +51,7 @@ fn stub_GetFileVersionInfoSizeW(lptstrFilename: usize, lpdwHandle: usize) callco
     return 0;
 }
 
-fn stub_GetFileVersionInfoW(lptstrFilename: usize, dwHandle: u32, dwLen: u32, lpData: usize) callconv(.winapi) i32 {
+fn stub_GetFileVersionInfoW(lptstrFilename: usize, dwHandle: u32, dwLen: u32, lpData: usize) callconv(w32cc.WINAPI) i32 {
     _ = lptstrFilename;
     _ = dwHandle;
     _ = dwLen;
@@ -59,7 +60,7 @@ fn stub_GetFileVersionInfoW(lptstrFilename: usize, dwHandle: u32, dwLen: u32, lp
     return 0;
 }
 
-fn stub_VerQueryValueW(pBlock: usize, lpSubBlock: usize, lplpBuffer: usize, puLen: usize) callconv(.winapi) i32 {
+fn stub_VerQueryValueW(pBlock: usize, lpSubBlock: usize, lplpBuffer: usize, puLen: usize) callconv(w32cc.WINAPI) i32 {
     _ = pBlock;
     _ = lpSubBlock;
     _ = lplpBuffer;

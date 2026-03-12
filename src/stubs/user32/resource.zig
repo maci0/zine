@@ -2,8 +2,9 @@ const trace = @import("../../trace.zig");
 const pe = @import("../../pe.zig");
 const kernel32 = @import("../kernel32.zig");
 const renderer = @import("../../gui/renderer.zig");
+const w32cc = @import("../../calling_convention.zig");
 
-pub fn stub_LoadIconA(hInstance: usize, lpIconName: usize) callconv(.winapi) usize {
+pub fn stub_LoadIconA(hInstance: usize, lpIconName: usize) callconv(w32cc.WINAPI) usize {
     var hInst = hInstance;
     if (hInst == 0) {
         hInst = kernel32.main_module_handle;
@@ -35,7 +36,7 @@ pub fn stub_LoadIconA(hInstance: usize, lpIconName: usize) callconv(.winapi) usi
     return 0x12345678; // Dummy handle
 }
 
-pub fn stub_LoadCursorA(hInstance: usize, lpCursorName: usize) callconv(.winapi) usize {
+pub fn stub_LoadCursorA(hInstance: usize, lpCursorName: usize) callconv(w32cc.WINAPI) usize {
     _ = hInstance;
     _ = lpCursorName;
     if (trace.enable_tracing) trace.print("USER32: LoadCursorA\n", .{});
@@ -124,7 +125,7 @@ fn loadStringFromPE(hInst: usize, uID: u32, out_buf: [*]u8, max_len: usize) usiz
     return copy_len;
 }
 
-pub fn stub_LoadStringA(hInstance: ?*anyopaque, uID: u32, lpBuffer_ptr: usize, nBufferMax: i32) callconv(.winapi) i32 {
+pub fn stub_LoadStringA(hInstance: ?*anyopaque, uID: u32, lpBuffer_ptr: usize, nBufferMax: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) {
         trace.print("USER32: LoadStringA(hInst={*}, uID={d}, buffer={x}, max={d})\n", .{ hInstance, uID, lpBuffer_ptr, nBufferMax });
     }
@@ -150,7 +151,7 @@ pub fn stub_LoadStringA(hInstance: ?*anyopaque, uID: u32, lpBuffer_ptr: usize, n
     return 0;
 }
 
-pub fn stub_LoadStringW(hInstance: ?*anyopaque, uID: u32, lpBuffer_ptr: usize, nBufferMax: i32) callconv(.winapi) i32 {
+pub fn stub_LoadStringW(hInstance: ?*anyopaque, uID: u32, lpBuffer_ptr: usize, nBufferMax: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) {
         trace.print("USER32: LoadStringW(hInst={*}, uID={d}, buffer={x}, max={d})\n", .{ hInstance, uID, lpBuffer_ptr, nBufferMax });
     }
@@ -237,7 +238,7 @@ fn loadStringFromPEW(hInst: usize, uID: u32, out_buf: [*]u16, max_len: usize) us
     return copy_len;
 }
 
-pub fn stub_LoadAcceleratorsA(hInstance: usize, lpTableName: usize) callconv(.winapi) usize {
+pub fn stub_LoadAcceleratorsA(hInstance: usize, lpTableName: usize) callconv(w32cc.WINAPI) usize {
     _ = hInstance;
     if (trace.enable_tracing) {
         if (lpTableName <= 0xFFFF) {
@@ -249,7 +250,7 @@ pub fn stub_LoadAcceleratorsA(hInstance: usize, lpTableName: usize) callconv(.wi
     return 0xACCE0001; // Dummy accelerator table handle
 }
 
-pub fn stub_LoadAcceleratorsW(hInstance: usize, lpTableName: usize) callconv(.winapi) usize {
+pub fn stub_LoadAcceleratorsW(hInstance: usize, lpTableName: usize) callconv(w32cc.WINAPI) usize {
     _ = hInstance;
     if (trace.enable_tracing) {
         const window = @import("window.zig");
@@ -262,7 +263,7 @@ pub fn stub_LoadAcceleratorsW(hInstance: usize, lpTableName: usize) callconv(.wi
     return 0xACCE0001; // Dummy accelerator table handle
 }
 
-pub fn stub_LoadImageA(hInstance: usize, name: usize, img_type: u32, cx: i32, cy: i32, fuLoad: u32) callconv(.winapi) usize {
+pub fn stub_LoadImageA(hInstance: usize, name: usize, img_type: u32, cx: i32, cy: i32, fuLoad: u32) callconv(w32cc.WINAPI) usize {
     _ = hInstance;
     _ = cx;
     _ = cy;
@@ -277,7 +278,7 @@ pub fn stub_LoadImageA(hInstance: usize, name: usize, img_type: u32, cx: i32, cy
     return 0x11A6E001; // Dummy image handle
 }
 
-pub fn stub_LoadImageW(hInstance: usize, name: usize, img_type: u32, cx: i32, cy: i32, fuLoad: u32) callconv(.winapi) usize {
+pub fn stub_LoadImageW(hInstance: usize, name: usize, img_type: u32, cx: i32, cy: i32, fuLoad: u32) callconv(w32cc.WINAPI) usize {
     _ = hInstance;
     _ = cx;
     _ = cy;
@@ -293,13 +294,13 @@ pub fn stub_LoadImageW(hInstance: usize, name: usize, img_type: u32, cx: i32, cy
     return 0x11A6E001; // Dummy image handle
 }
 
-pub fn stub_LoadMenuA(hInstance: usize, lpMenuName: usize) callconv(.winapi) usize {
+pub fn stub_LoadMenuA(hInstance: usize, lpMenuName: usize) callconv(w32cc.WINAPI) usize {
     _ = hInstance;
     if (trace.enable_tracing) trace.print("USER32: LoadMenuA({x})\n", .{lpMenuName});
     return 0x00000999; // Dummy menu handle
 }
 
-pub fn stub_LoadBitmapA(hInstance: usize, lpBitmapName: usize) callconv(.winapi) usize {
+pub fn stub_LoadBitmapA(hInstance: usize, lpBitmapName: usize) callconv(w32cc.WINAPI) usize {
     _ = hInstance;
     if (trace.enable_tracing) {
         if (lpBitmapName <= 0xFFFF) {
@@ -311,7 +312,7 @@ pub fn stub_LoadBitmapA(hInstance: usize, lpBitmapName: usize) callconv(.winapi)
     return 0xB17B0001; // Dummy bitmap handle
 }
 
-pub fn stub_LoadBitmapW(hInstance: usize, lpBitmapName: usize) callconv(.winapi) usize {
+pub fn stub_LoadBitmapW(hInstance: usize, lpBitmapName: usize) callconv(w32cc.WINAPI) usize {
     _ = hInstance;
     if (trace.enable_tracing) {
         if (lpBitmapName <= 0xFFFF) {

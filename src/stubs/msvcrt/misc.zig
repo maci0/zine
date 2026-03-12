@@ -360,31 +360,10 @@ pub fn get_fd_file(fd: i32) ?std.fs.File {
 pub fn stub_access(path_ptr: usize, mode: i32) callconv(.c) i32 {
     if (path_ptr == 0) return -1;
     const path = trace.c_span(path_ptr);
-    var fixed: [1024]u8 = undefined;
-    const len = @min(path.len, 1023);
-    @memcpy(fixed[0..len], path[0..len]);
-    std.mem.replaceScalar(u8, fixed[0..len], '\\', '/');
-    fixed[len] = 0;
     const posix_fs = @import("posix_fs.zig");
-    if (posix_fs.access(@as([*:0]const u8, @ptrCast(&fixed)), mode) == 0) {
-        if (trace.enable_tracing) trace.print("MSVCRT: _access('{s}', {d}) -> 0\n", .{ fixed[0..len], mode });
-        return 0;
-    } else {
-        // Fallback: try lowercasing the filename part
-        var last_slash: usize = 0;
-        for (0..len) |i| {
-            if (fixed[i] == '/') last_slash = i + 1;
-        }
-        for (last_slash..len) |i| {
-            fixed[i] = std.ascii.toLower(fixed[i]);
-        }
-        if (posix_fs.access(@as([*:0]const u8, @ptrCast(&fixed)), mode) == 0) {
-            if (trace.enable_tracing) trace.print("MSVCRT: _access('{s}', {d}) -> 0 (fallback)\n", .{ fixed[0..len], mode });
-            return 0;
-        }
-        if (trace.enable_tracing) trace.print("MSVCRT: _access('{s}', {d}) -> -1\n", .{ fixed[0..len], mode });
-        return -1;
-    }
+    const result = posix_fs.access(@as([*:0]const u8, @ptrFromInt(path_ptr)), mode);
+    if (trace.enable_tracing) trace.print("MSVCRT: _access('{s}', {d}) -> {d}\n", .{ path, mode, result });
+    return result;
 }
 
 pub fn stub_searchenv(filename_ptr: usize, varname_ptr: usize, result_ptr: usize) callconv(.c) void {
@@ -453,93 +432,35 @@ pub fn stub_sopen(path_ptr: usize, oflag: i32, shflag: i32, pmode: i32) callconv
     _ = pmode;
     if (path_ptr == 0) return -1;
     const path = trace.c_span(path_ptr);
-    var fixed: [1024]u8 = undefined;
-    const len = @min(path.len, 1023);
-    @memcpy(fixed[0..len], path[0..len]);
-    std.mem.replaceScalar(u8, fixed[0..len], '\\', '/');
-    fixed[len] = 0;
 
-    if (trace.enable_tracing) trace.print("MSVCRT: _sopen('{s}', {x})\n", .{fixed[0..len], oflag});
+    if (trace.enable_tracing) trace.print("MSVCRT: _sopen('{s}', {x})\n", .{ path, oflag });
 
-    const O_RDONLY = 0x0000;
+    // Translate Windows oflags to POSIX flags
     const O_WRONLY = 0x0001;
     const O_RDWR = 0x0002;
     const O_APPEND = 0x0008;
     const O_CREAT = 0x0100;
     const O_TRUNC = 0x0200;
-    _ = O_RDONLY;
 
-    var file: std.fs.File = undefined;
-    const posix_fs = @import("posix_fs.zig");
-    if ((oflag & O_CREAT) != 0) {
-        const actual_len = std.mem.indexOfScalar(u8, fixed[0..len], 0) orelse len;
-        fixed[actual_len] = 0;
-        var flags: u32 = 0o100; // O_CREAT
-        if ((oflag & O_RDWR) != 0) {
-            flags |= 0o2;
-        } else if ((oflag & O_WRONLY) != 0) {
-            flags |= 0o1;
-        } else {
-            flags |= 0o0;
-        }
-        if ((oflag & O_TRUNC) != 0) flags |= 0o1000;
-        if ((oflag & O_APPEND) != 0) flags |= 0o2000;
-        
-        const rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed)), flags, 0o666);
-        if (rc < 0) {
-            var last_slash: usize = 0;
-            for (0..actual_len) |i| {
-                if (fixed[i] == '/') last_slash = i + 1;
-            }
-            for (last_slash..actual_len) |i| {
-                fixed[i] = std.ascii.toLower(fixed[i]);
-            }
-            const rc_fallback = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed)), flags, 0o666);
-            if (rc_fallback < 0) {
-                if (trace.enable_tracing) trace.print("  -> failed to create\n", .{});
-                return -1;
-            }
-            file = std.fs.File{ .handle = @intCast(rc_fallback) };
-        } else {
-            file = std.fs.File{ .handle = @intCast(rc) };
-        }
-    } else {
-        const actual_len = std.mem.indexOfScalar(u8, fixed[0..len], 0) orelse len;
-        fixed[actual_len] = 0;
-        var flags: u32 = 0;
-        if ((oflag & O_RDWR) != 0) {
-            flags |= 0o2;
-        } else if ((oflag & O_WRONLY) != 0) {
-            flags |= 0o1;
-        } else {
-            flags |= 0o0;
-        }
-        if ((oflag & O_APPEND) != 0) flags |= 0o2000;
-        
-        const rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed)), flags, 0);
-        if (rc < 0) {
-            var last_slash: usize = 0;
-            for (0..actual_len) |i| {
-                if (fixed[i] == '/') last_slash = i + 1;
-            }
-            for (last_slash..actual_len) |i| {
-                fixed[i] = std.ascii.toLower(fixed[i]);
-            }
-            const rc_fallback = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed)), flags, 0);
-            if (rc_fallback < 0) {
-                if (trace.enable_tracing) trace.print("  -> failed to open\n", .{});
-                return -1;
-            }
-            file = std.fs.File{ .handle = @intCast(rc_fallback) };
-        } else {
-            file = std.fs.File{ .handle = @intCast(rc) };
-        }
+    var flags: u32 = 0;
+    if ((oflag & O_CREAT) != 0) flags |= 64; // POSIX O_CREAT
+    if ((oflag & O_RDWR) != 0) {
+        flags |= 2; // POSIX O_RDWR
+    } else if ((oflag & O_WRONLY) != 0) {
+        flags |= 1; // POSIX O_WRONLY
     }
-    if ((oflag & O_APPEND) != 0) file.seekFromEnd(0) catch {};
-    
-    const fd = @as(i32, @intCast(file.handle));
-    if (trace.enable_tracing) trace.print("  -> fd {d}\n", .{fd});
-    return fd;
+    if ((oflag & O_TRUNC) != 0) flags |= 512; // POSIX O_TRUNC
+    if ((oflag & O_APPEND) != 0) flags |= 1024; // POSIX O_APPEND
+
+    // posix_fs.open handles all path resolution via path_utils.toHostPath
+    const posix_fs = @import("posix_fs.zig");
+    const rc = posix_fs.open(@as([*:0]const u8, @ptrCast(@constCast(path.ptr))), flags, 0o666);
+    if (rc < 0) {
+        if (trace.enable_tracing) trace.print("  -> failed\n", .{});
+        return -1;
+    }
+    if (trace.enable_tracing) trace.print("  -> fd {d}\n", .{rc});
+    return rc;
 }
 
 pub fn stub_read(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
@@ -648,15 +569,10 @@ pub fn stub_filelength(fd: i32) callconv(.c) i32 {
 pub fn stub_stat(path_ptr: usize, stat_ptr: usize) callconv(.c) i32 {
     if (path_ptr < 0x10000 or stat_ptr == 0) return -1;
     const path = std.mem.span(@as([*:0]const u8, @ptrFromInt(path_ptr)));
-    
-    var fixed_buf: [1024]u8 = undefined;
-    const len = @min(path.len, 1023);
-    @memcpy(fixed_buf[0..len], path[0..len]);
-    std.mem.replaceScalar(u8, fixed_buf[0..len], '\\', '/');
-    fixed_buf[len] = 0;
-    
+
+    // posix_fs.stat handles all path resolution via path_utils.toHostPath
     const posix_fs = @import("posix_fs.zig");
-    if (posix_fs.stat(@as([*:0]const u8, @ptrCast(&fixed_buf)))) |stat_buf| {
+    if (posix_fs.stat(@as([*:0]const u8, @ptrFromInt(path_ptr)))) |stat_buf| {
         const out_buf = @as([*]u8, @ptrFromInt(stat_ptr));
         @memset(out_buf[0..36], 0);
         out_buf[4] = 0x00;
@@ -666,9 +582,10 @@ pub fn stub_stat(path_ptr: usize, stat_ptr: usize) callconv(.c) i32 {
         out_buf[21] = @intCast((size >> 8) & 0xFF);
         out_buf[22] = @intCast((size >> 16) & 0xFF);
         out_buf[23] = @intCast((size >> 24) & 0xFF);
+        if (trace.enable_tracing) trace.print("MSVCRT: _stat('{s}') -> 0 (size={d})\n", .{ path, stat_buf.size });
         return 0;
     }
-    
+    if (trace.enable_tracing) trace.print("MSVCRT: _stat('{s}') -> -1\n", .{path});
     return -1;
 }
 pub fn stub_fstat(fd: i32, stat_ptr: usize) callconv(.c) i32 {

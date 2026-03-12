@@ -24,6 +24,27 @@ pub fn yield() void {
     std.Thread.yield() catch {};
 }
 
+pub fn sleep(ns: u64) void {
+    std.Thread.sleep(ns);
+}
+
+pub const Mutex = std.Thread.Mutex;
+
+pub fn spawnThread(func: anytype, args: anytype) bool {
+    _ = std.Thread.spawn(.{}, func, args) catch return false;
+    return true;
+}
+
+/// Read the SEH exception list head. On x86 this is FS:0.
+/// On other native architectures, SEH is not supported.
+pub fn readExceptionList() u32 {
+    if (comptime is_x86) {
+        return asm volatile ("movl %%fs:0, %[out]" : [out] "=r" (-> u32));
+    } else {
+        return 0xFFFFFFFF; // No SEH on this architecture
+    }
+}
+
 // -------------------------------------------------------------------------
 // Memory Mapping
 // -------------------------------------------------------------------------
@@ -53,11 +74,29 @@ pub fn mmap(
             flags.ANONYMOUS = true;
         }
         if (fixed) {
-            flags.FIXED = true;
+            // Use MAP_FIXED_NOREPLACE to avoid silently destroying existing
+            // mappings (including the Zig host process itself).  If the
+            // requested address is already occupied, the kernel returns
+            // EEXIST and we fall back to a non-fixed mapping.
+            flags.FIXED_NOREPLACE = true;
         }
 
         const ptr_hint: ?[*]align(4096) u8 = @ptrCast(@alignCast(hint));
-        return std.posix.mmap(ptr_hint, size, prot, flags, file_fd, file_offset);
+        const result = std.posix.mmap(ptr_hint, size, prot, flags, file_fd, file_offset);
+
+        if (result) |slice| {
+            return slice;
+        } else |err| {
+            if (fixed and (err == error.MappingAlreadyExists or err == error.OutOfMemory)) {
+                // The fixed address is occupied (by the host process). Fall back
+                // to a non-fixed mapping — the PE will need relocations applied.
+                std.log.warn("MAP_FIXED_NOREPLACE failed at 0x{X}, falling back to any address", .{@intFromPtr(hint)});
+                var fallback_flags = flags;
+                fallback_flags.FIXED_NOREPLACE = false;
+                return std.posix.mmap(null, size, prot, fallback_flags, file_fd, file_offset);
+            }
+            return err;
+        }
     }
 }
 
@@ -210,6 +249,7 @@ pub fn installSegfaultHandler(
         .flags = std.posix.SA.SIGINFO,
     };
     std.posix.sigaction(std.posix.SIG.SEGV, &act, null);
+    std.posix.sigaction(std.posix.SIG.FPE, &act, null);
 }
 
 /// Map the null page for compatibility (may fail due to mmap_min_addr).

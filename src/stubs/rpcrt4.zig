@@ -1,15 +1,16 @@
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
+const w32cc = @import("../calling_convention.zig");
 
 pub fn register(environment: *env.Environment) !void {
     const builtin_module = "RPCRT4.dll";
-    try environment.addBuiltinExport(builtin_module, "UuidCreate", @intFromPtr(&stub_UuidCreate));
-    try environment.addBuiltinExport(builtin_module, "UuidToStringA", @intFromPtr(&stub_UuidToStringA));
-    try environment.addBuiltinExport(builtin_module, "RpcStringFreeA", @intFromPtr(&stub_RpcStringFreeA));
+    try environment.addBuiltinExportComptime(builtin_module, "UuidCreate", stub_UuidCreate);
+    try environment.addBuiltinExportComptime(builtin_module, "UuidToStringA", stub_UuidToStringA);
+    try environment.addBuiltinExportComptime(builtin_module, "RpcStringFreeA", stub_RpcStringFreeA);
 }
 
-fn stub_UuidCreate(uuid_ptr: usize) callconv(.winapi) i32 {
+fn stub_UuidCreate(uuid_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("RPCRT4: UuidCreate({x})\n", .{uuid_ptr});
     if (uuid_ptr != 0) {
         // Just fill with a dummy UUID for now
@@ -19,7 +20,7 @@ fn stub_UuidCreate(uuid_ptr: usize) callconv(.winapi) i32 {
     return 0; // RPC_S_OK
 }
 
-fn stub_UuidToStringA(uuid_ptr: usize, string_ptr: usize) callconv(.winapi) i32 {
+fn stub_UuidToStringA(uuid_ptr: usize, string_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("RPCRT4: UuidToStringA({x}, {x})\n", .{ uuid_ptr, string_ptr });
     if (string_ptr != 0) {
         // Allocate a string. UUID is 36 chars + null.
@@ -34,7 +35,7 @@ fn stub_UuidToStringA(uuid_ptr: usize, string_ptr: usize) callconv(.winapi) i32 
     return 0; // RPC_S_OK
 }
 
-fn stub_RpcStringFreeA(string_ptr: usize) callconv(.winapi) i32 {
+fn stub_RpcStringFreeA(string_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("RPCRT4: RpcStringFreeA({x})\n", .{string_ptr});
     // Let it leak or free it if we know the size. Page allocator can't free without size.
     // For a CLI tool, leaking a few UUID strings is fine.

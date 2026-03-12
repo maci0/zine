@@ -10,7 +10,7 @@ const resource = @import("user32/resource.zig");
 const menu = @import("user32/menu.zig");
 const input = @import("user32/input.zig");
 const misc = @import("user32/misc.zig");
-const w32 = @import("win32_constants.zig");
+const w32 = @import("../win32_constants.zig");
 
 pub fn register(environment: *env.Environment) !void {
     // Wire up renderer input callbacks
@@ -23,404 +23,404 @@ pub fn register(environment: *env.Environment) !void {
     const m = "USER32.dll";
 
     // String & Conversion (misc.zig)
-    try environment.addBuiltinExport(m, "CharNextA", @intFromPtr(&misc.stub_CharNextA));
-    try environment.addBuiltinExport(m, "CharPrevA", @intFromPtr(&misc.stub_CharPrevA));
-    try environment.addBuiltinExport(m, "CharToOemA", @intFromPtr(&misc.stub_CharToOemA));
-    try environment.addBuiltinExport(m, "OemToCharA", @intFromPtr(&misc.stub_OemToCharA));
-    try environment.addBuiltinExport(m, "wsprintfA", @intFromPtr(&misc.stub_wsprintfA));
-    try environment.addBuiltinExport(m, "ChangeDisplaySettingsA", @intFromPtr(&misc.stub_ChangeDisplaySettingsA));
-    try environment.addBuiltinExport(m, "EnumDisplaySettingsA", @intFromPtr(&misc.stub_EnumDisplaySettingsA));
-    try environment.addBuiltinExport(m, "ShowCursor", @intFromPtr(&misc.stub_ShowCursor));
+    try environment.addBuiltinExportComptime(m, "CharNextA", misc.stub_CharNextA);
+    try environment.addBuiltinExportComptime(m, "CharPrevA", misc.stub_CharPrevA);
+    try environment.addBuiltinExportComptime(m, "CharToOemA", misc.stub_CharToOemA);
+    try environment.addBuiltinExportComptime(m, "OemToCharA", misc.stub_OemToCharA);
+    try environment.addBuiltinExportComptime(m, "wsprintfA", misc.stub_wsprintfA);
+    try environment.addBuiltinExportComptime(m, "ChangeDisplaySettingsA", misc.stub_ChangeDisplaySettingsA);
+    try environment.addBuiltinExportComptime(m, "EnumDisplaySettingsA", misc.stub_EnumDisplaySettingsA);
+    try environment.addBuiltinExportComptime(m, "ShowCursor", misc.stub_ShowCursor);
 
     // Window Management (window.zig)
-    try environment.addBuiltinExport(m, "SetRect", @intFromPtr(&window.stub_SetRect));
-    try environment.addBuiltinExport(m, "AdjustWindowRectEx", @intFromPtr(&window.stub_AdjustWindowRectEx));
-    try environment.addBuiltinExport(m, "AdjustWindowRect", @intFromPtr(&window.stub_AdjustWindowRect));
-    try environment.addBuiltinExport(m, "SystemParametersInfoA", @intFromPtr(&window.stub_SystemParametersInfoA));
-    try environment.addBuiltinExport(m, "GetSystemMetrics", @intFromPtr(&window.stub_GetSystemMetrics));
-    try environment.addBuiltinExport(m, "SetWindowTextA", @intFromPtr(&window.stub_SetWindowTextA));
-    try environment.addBuiltinExport(m, "RegisterClassA", @intFromPtr(&window.stub_RegisterClassA));
-    try environment.addBuiltinExport(m, "CreateWindowExA", @intFromPtr(&window.stub_CreateWindowExA));
-    try environment.addBuiltinExport(m, "ShowWindow", @intFromPtr(&window.stub_ShowWindow));
-    try environment.addBuiltinExport(m, "DestroyWindow", @intFromPtr(&window.stub_DestroyWindow));
-    try environment.addBuiltinExport(m, "EnableWindow", @intFromPtr(&window.stub_EnableWindow));
-    try environment.addBuiltinExport(m, "IsWindow", @intFromPtr(&window.stub_IsWindow));
-    try environment.addBuiltinExport(m, "GetClientRect", @intFromPtr(&window.stub_GetClientRect));
-    try environment.addBuiltinExport(m, "GetWindowRect", @intFromPtr(&window.stub_GetWindowRect));
-    try environment.addBuiltinExport(m, "DefWindowProcA", @intFromPtr(&window.stub_DefWindowProcA));
-    try environment.addBuiltinExport(m, "GetWindowLongA", @intFromPtr(&window.stub_GetWindowLongA));
-    try environment.addBuiltinExport(m, "SetWindowLongA", @intFromPtr(&window.stub_SetWindowLongA));
-    try environment.addBuiltinExport(m, "SetWindowPos", @intFromPtr(&window.stub_SetWindowPos));
-    try environment.addBuiltinExport(m, "MoveWindow", @intFromPtr(&window.stub_MoveWindow));
-    try environment.addBuiltinExport(m, "ClientToScreen", @intFromPtr(&window.stub_ClientToScreen));
-    try environment.addBuiltinExport(m, "ScreenToClient", @intFromPtr(&window.stub_ScreenToClient));
-    try environment.addBuiltinExport(m, "GetForegroundWindow", @intFromPtr(&window.stub_GetForegroundWindow));
-    try environment.addBuiltinExport(m, "SetForegroundWindow", @intFromPtr(&window.stub_SetForegroundWindow));
-    try environment.addBuiltinExport(m, "GetActiveWindow", @intFromPtr(&window.stub_GetActiveWindow));
-    try environment.addBuiltinExport(m, "GetDesktopWindow", @intFromPtr(&window.stub_GetDesktopWindow));
-    try environment.addBuiltinExport(m, "SetFocus", @intFromPtr(&window.stub_SetFocus));
-    try environment.addBuiltinExport(m, "GetFocus", @intFromPtr(&window.stub_GetFocus));
-    try environment.addBuiltinExport(m, "IsIconic", @intFromPtr(&window.stub_IsIconic));
-    try environment.addBuiltinExport(m, "UpdateWindow", @intFromPtr(&window.stub_UpdateWindow));
-    try environment.addBuiltinExport(m, "RedrawWindow", @intFromPtr(&window.stub_RedrawWindow));
-    try environment.addBuiltinExport(m, "InvalidateRect", @intFromPtr(&window.stub_InvalidateRect));
-    try environment.addBuiltinExport(m, "MapWindowPoints", @intFromPtr(&window.stub_MapWindowPoints));
-    try environment.addBuiltinExport(m, "FillRect", @intFromPtr(&window.stub_FillRect));
-    try environment.addBuiltinExport(m, "GetDC", @intFromPtr(&window.stub_GetDC));
-    try environment.addBuiltinExport(m, "ReleaseDC", @intFromPtr(&window.stub_ReleaseDC));
-    try environment.addBuiltinExport(m, "BeginPaint", @intFromPtr(&window.stub_BeginPaint));
-    try environment.addBuiltinExport(m, "EndPaint", @intFromPtr(&window.stub_EndPaint));
+    try environment.addBuiltinExportComptime(m, "SetRect", window.stub_SetRect);
+    try environment.addBuiltinExportComptime(m, "AdjustWindowRectEx", window.stub_AdjustWindowRectEx);
+    try environment.addBuiltinExportComptime(m, "AdjustWindowRect", window.stub_AdjustWindowRect);
+    try environment.addBuiltinExportComptime(m, "SystemParametersInfoA", window.stub_SystemParametersInfoA);
+    try environment.addBuiltinExportComptime(m, "GetSystemMetrics", window.stub_GetSystemMetrics);
+    try environment.addBuiltinExportComptime(m, "SetWindowTextA", window.stub_SetWindowTextA);
+    try environment.addBuiltinExportComptime(m, "RegisterClassA", window.stub_RegisterClassA);
+    try environment.addBuiltinExportComptime(m, "CreateWindowExA", window.stub_CreateWindowExA);
+    try environment.addBuiltinExportComptime(m, "ShowWindow", window.stub_ShowWindow);
+    try environment.addBuiltinExportComptime(m, "DestroyWindow", window.stub_DestroyWindow);
+    try environment.addBuiltinExportComptime(m, "EnableWindow", window.stub_EnableWindow);
+    try environment.addBuiltinExportComptime(m, "IsWindow", window.stub_IsWindow);
+    try environment.addBuiltinExportComptime(m, "GetClientRect", window.stub_GetClientRect);
+    try environment.addBuiltinExportComptime(m, "GetWindowRect", window.stub_GetWindowRect);
+    try environment.addBuiltinExportComptime(m, "DefWindowProcA", window.stub_DefWindowProcA);
+    try environment.addBuiltinExportComptime(m, "GetWindowLongA", window.stub_GetWindowLongA);
+    try environment.addBuiltinExportComptime(m, "SetWindowLongA", window.stub_SetWindowLongA);
+    try environment.addBuiltinExportComptime(m, "SetWindowPos", window.stub_SetWindowPos);
+    try environment.addBuiltinExportComptime(m, "MoveWindow", window.stub_MoveWindow);
+    try environment.addBuiltinExportComptime(m, "ClientToScreen", window.stub_ClientToScreen);
+    try environment.addBuiltinExportComptime(m, "ScreenToClient", window.stub_ScreenToClient);
+    try environment.addBuiltinExportComptime(m, "GetForegroundWindow", window.stub_GetForegroundWindow);
+    try environment.addBuiltinExportComptime(m, "SetForegroundWindow", window.stub_SetForegroundWindow);
+    try environment.addBuiltinExportComptime(m, "GetActiveWindow", window.stub_GetActiveWindow);
+    try environment.addBuiltinExportComptime(m, "GetDesktopWindow", window.stub_GetDesktopWindow);
+    try environment.addBuiltinExportComptime(m, "SetFocus", window.stub_SetFocus);
+    try environment.addBuiltinExportComptime(m, "GetFocus", window.stub_GetFocus);
+    try environment.addBuiltinExportComptime(m, "IsIconic", window.stub_IsIconic);
+    try environment.addBuiltinExportComptime(m, "UpdateWindow", window.stub_UpdateWindow);
+    try environment.addBuiltinExportComptime(m, "RedrawWindow", window.stub_RedrawWindow);
+    try environment.addBuiltinExportComptime(m, "InvalidateRect", window.stub_InvalidateRect);
+    try environment.addBuiltinExportComptime(m, "MapWindowPoints", window.stub_MapWindowPoints);
+    try environment.addBuiltinExportComptime(m, "FillRect", window.stub_FillRect);
+    try environment.addBuiltinExportComptime(m, "GetDC", window.stub_GetDC);
+    try environment.addBuiltinExportComptime(m, "ReleaseDC", window.stub_ReleaseDC);
+    try environment.addBuiltinExportComptime(m, "BeginPaint", window.stub_BeginPaint);
+    try environment.addBuiltinExportComptime(m, "EndPaint", window.stub_EndPaint);
 
     // Messaging (message.zig)
-    try environment.addBuiltinExport(m, "PeekMessageA", @intFromPtr(&message.stub_PeekMessageA));
-    try environment.addBuiltinExport(m, "GetMessageA", @intFromPtr(&message.stub_GetMessageA));
-    try environment.addBuiltinExport(m, "TranslateMessage", @intFromPtr(&message.stub_TranslateMessage));
-    try environment.addBuiltinExport(m, "DispatchMessageA", @intFromPtr(&message.stub_DispatchMessageA));
-    try environment.addBuiltinExport(m, "PostMessageA", @intFromPtr(&message.stub_PostMessageA));
-    try environment.addBuiltinExport(m, "PostQuitMessage", @intFromPtr(&message.stub_PostQuitMessage));
-    try environment.addBuiltinExport(m, "SendMessageA", @intFromPtr(&message.stub_SendMessageA));
+    try environment.addBuiltinExportComptime(m, "PeekMessageA", message.stub_PeekMessageA);
+    try environment.addBuiltinExportComptime(m, "GetMessageA", message.stub_GetMessageA);
+    try environment.addBuiltinExportComptime(m, "TranslateMessage", message.stub_TranslateMessage);
+    try environment.addBuiltinExportComptime(m, "DispatchMessageA", message.stub_DispatchMessageA);
+    try environment.addBuiltinExportComptime(m, "PostMessageA", message.stub_PostMessageA);
+    try environment.addBuiltinExportComptime(m, "PostQuitMessage", message.stub_PostQuitMessage);
+    try environment.addBuiltinExportComptime(m, "SendMessageA", message.stub_SendMessageA);
 
     // Dialog (dialog.zig)
-    try environment.addBuiltinExport(m, "MessageBoxA", @intFromPtr(&dialog.stub_MessageBoxA));
-    try environment.addBuiltinExport(m, "DialogBoxParamA", @intFromPtr(&dialog.stub_DialogBoxParamA));
-    try environment.addBuiltinExport(m, "EndDialog", @intFromPtr(&dialog.stub_EndDialog));
-    try environment.addBuiltinExport(m, "GetDlgItem", @intFromPtr(&dialog.stub_GetDlgItem));
-    try environment.addBuiltinExport(m, "SetDlgItemTextA", @intFromPtr(&dialog.stub_SetDlgItemTextA));
-    try environment.addBuiltinExport(m, "GetDlgItemTextA", @intFromPtr(&dialog.stub_GetDlgItemTextA));
-    try environment.addBuiltinExport(m, "SendDlgItemMessageA", @intFromPtr(&dialog.stub_SendDlgItemMessageA));
+    try environment.addBuiltinExportComptime(m, "MessageBoxA", dialog.stub_MessageBoxA);
+    try environment.addBuiltinExportComptime(m, "DialogBoxParamA", dialog.stub_DialogBoxParamA);
+    try environment.addBuiltinExportComptime(m, "EndDialog", dialog.stub_EndDialog);
+    try environment.addBuiltinExportComptime(m, "GetDlgItem", dialog.stub_GetDlgItem);
+    try environment.addBuiltinExportComptime(m, "SetDlgItemTextA", dialog.stub_SetDlgItemTextA);
+    try environment.addBuiltinExportComptime(m, "GetDlgItemTextA", dialog.stub_GetDlgItemTextA);
+    try environment.addBuiltinExportComptime(m, "SendDlgItemMessageA", dialog.stub_SendDlgItemMessageA);
 
     // Resource Loading (resource.zig)
-    try environment.addBuiltinExport(m, "LoadIconA", @intFromPtr(&resource.stub_LoadIconA));
-    try environment.addBuiltinExport(m, "LoadCursorA", @intFromPtr(&resource.stub_LoadCursorA));
-    try environment.addBuiltinExport(m, "LoadStringA", @intFromPtr(&resource.stub_LoadStringA));
-    try environment.addBuiltinExport(m, "LoadMenuA", @intFromPtr(&resource.stub_LoadMenuA));
+    try environment.addBuiltinExportComptime(m, "LoadIconA", resource.stub_LoadIconA);
+    try environment.addBuiltinExportComptime(m, "LoadCursorA", resource.stub_LoadCursorA);
+    try environment.addBuiltinExportComptime(m, "LoadStringA", resource.stub_LoadStringA);
+    try environment.addBuiltinExportComptime(m, "LoadMenuA", resource.stub_LoadMenuA);
 
     // Menu (menu.zig)
-    try environment.addBuiltinExport(m, "GetMenu", @intFromPtr(&menu.stub_GetMenu));
-    try environment.addBuiltinExport(m, "DrawMenuBar", @intFromPtr(&menu.stub_DrawMenuBar));
-    try environment.addBuiltinExport(m, "SetMenu", @intFromPtr(&menu.stub_SetMenu));
-    try environment.addBuiltinExport(m, "DestroyMenu", @intFromPtr(&menu.stub_DestroyMenu));
-    try environment.addBuiltinExport(m, "GetSubMenu", @intFromPtr(&menu.stub_GetSubMenu));
-    try environment.addBuiltinExport(m, "TrackPopupMenu", @intFromPtr(&menu.stub_TrackPopupMenu));
-    try environment.addBuiltinExport(m, "AppendMenuA", @intFromPtr(&menu.stub_AppendMenuA));
-    try environment.addBuiltinExport(m, "CheckMenuItem", @intFromPtr(&menu.stub_CheckMenuItem));
+    try environment.addBuiltinExportComptime(m, "GetMenu", menu.stub_GetMenu);
+    try environment.addBuiltinExportComptime(m, "DrawMenuBar", menu.stub_DrawMenuBar);
+    try environment.addBuiltinExportComptime(m, "SetMenu", menu.stub_SetMenu);
+    try environment.addBuiltinExportComptime(m, "DestroyMenu", menu.stub_DestroyMenu);
+    try environment.addBuiltinExportComptime(m, "GetSubMenu", menu.stub_GetSubMenu);
+    try environment.addBuiltinExportComptime(m, "TrackPopupMenu", menu.stub_TrackPopupMenu);
+    try environment.addBuiltinExportComptime(m, "AppendMenuA", menu.stub_AppendMenuA);
+    try environment.addBuiltinExportComptime(m, "CheckMenuItem", menu.stub_CheckMenuItem);
 
     // Input (input.zig)
-    try environment.addBuiltinExport(m, "GetKeyboardState", @intFromPtr(&input.stub_GetKeyboardState));
-    try environment.addBuiltinExport(m, "GetKeyState", @intFromPtr(&input.stub_GetKeyState));
-    try environment.addBuiltinExport(m, "GetAsyncKeyState", @intFromPtr(&input.stub_GetKeyState));
-    try environment.addBuiltinExport(m, "SetCursor", @intFromPtr(&input.stub_SetCursor));
-    try environment.addBuiltinExport(m, "GetCursorPos", @intFromPtr(&input.stub_GetCursorPos));
-    try environment.addBuiltinExport(m, "GetCapture", @intFromPtr(&input.stub_GetCapture));
-    try environment.addBuiltinExport(m, "SetCapture", @intFromPtr(&input.stub_SetCapture));
-    try environment.addBuiltinExport(m, "ReleaseCapture", @intFromPtr(&input.stub_ReleaseCapture));
-    try environment.addBuiltinExport(m, "SetTimer", @intFromPtr(&input.stub_SetTimer));
-    try environment.addBuiltinExport(m, "KillTimer", @intFromPtr(&input.stub_KillTimer));
-    try environment.addBuiltinExport(m, "GetQueueStatus", @intFromPtr(&input.stub_GetQueueStatus));
+    try environment.addBuiltinExportComptime(m, "GetKeyboardState", input.stub_GetKeyboardState);
+    try environment.addBuiltinExportComptime(m, "GetKeyState", input.stub_GetKeyState);
+    try environment.addBuiltinExportComptime(m, "GetAsyncKeyState", input.stub_GetKeyState);
+    try environment.addBuiltinExportComptime(m, "SetCursor", input.stub_SetCursor);
+    try environment.addBuiltinExportComptime(m, "GetCursorPos", input.stub_GetCursorPos);
+    try environment.addBuiltinExportComptime(m, "GetCapture", input.stub_GetCapture);
+    try environment.addBuiltinExportComptime(m, "SetCapture", input.stub_SetCapture);
+    try environment.addBuiltinExportComptime(m, "ReleaseCapture", input.stub_ReleaseCapture);
+    try environment.addBuiltinExportComptime(m, "SetTimer", input.stub_SetTimer);
+    try environment.addBuiltinExportComptime(m, "KillTimer", input.stub_KillTimer);
+    try environment.addBuiltinExportComptime(m, "GetQueueStatus", input.stub_GetQueueStatus);
 
     // Additional misc
-    try environment.addBuiltinExport(m, "MessageBeep", @intFromPtr(&misc.stub_MessageBeep));
-    try environment.addBuiltinExport(m, "SetActiveWindow", @intFromPtr(&misc.stub_SetActiveWindow));
-    try environment.addBuiltinExport(m, "GetSysColor", @intFromPtr(&misc.stub_GetSysColor));
-    try environment.addBuiltinExport(m, "GetSysColorBrush", @intFromPtr(&misc.stub_GetSysColorBrush));
-    try environment.addBuiltinExport(m, "GetParent", @intFromPtr(&misc.stub_GetParent));
-    try environment.addBuiltinExport(m, "FindWindowA", @intFromPtr(&misc.stub_FindWindowA));
-    try environment.addBuiltinExport(m, "GetWindowTextA", @intFromPtr(&misc.stub_GetWindowTextA));
-    try environment.addBuiltinExport(m, "GetWindowTextLengthA", @intFromPtr(&misc.stub_GetWindowTextLengthA));
-    try environment.addBuiltinExport(m, "IsZoomed", @intFromPtr(&misc.stub_IsZoomed));
-    try environment.addBuiltinExport(m, "RegisterWindowMessageA", @intFromPtr(&misc.stub_RegisterWindowMessageA));
-    try environment.addBuiltinExport(m, "GetSystemMenu", @intFromPtr(&misc.stub_GetSystemMenu));
-    try environment.addBuiltinExport(m, "GetMessageTime", @intFromPtr(&misc.stub_GetMessageTime));
-    try environment.addBuiltinExport(m, "IsDialogMessageA", @intFromPtr(&misc.stub_IsDialogMessageA));
-    try environment.addBuiltinExport(m, "MsgWaitForMultipleObjects", @intFromPtr(&misc.stub_MsgWaitForMultipleObjects));
-    try environment.addBuiltinExport(m, "GetWindowPlacement", @intFromPtr(&misc.stub_GetWindowPlacement));
-    try environment.addBuiltinExport(m, "SetWindowPlacement", @intFromPtr(&misc.stub_SetWindowPlacement));
-    try environment.addBuiltinExport(m, "WinHelpA", @intFromPtr(&misc.stub_WinHelpA));
-    try environment.addBuiltinExport(m, "DrawTextA", @intFromPtr(&misc.stub_DrawTextA));
-    try environment.addBuiltinExport(m, "DrawTextW", @intFromPtr(&misc.stub_DrawTextW));
-    try environment.addBuiltinExport(m, "CharLowerA", @intFromPtr(&misc.stub_CharLowerA));
-    try environment.addBuiltinExport(m, "CharUpperW", @intFromPtr(&misc.stub_CharUpperW));
-    try environment.addBuiltinExport(m, "CharLowerW", @intFromPtr(&misc.stub_CharLowerW));
-    try environment.addBuiltinExport(m, "GetKeyboardLayout", @intFromPtr(&misc.stub_GetKeyboardLayout));
-    try environment.addBuiltinExport(m, "GetDoubleClickTime", @intFromPtr(&misc.stub_GetDoubleClickTime));
-    try environment.addBuiltinExport(m, "GetCaretBlinkTime", @intFromPtr(&misc.stub_GetCaretBlinkTime));
-    try environment.addBuiltinExport(m, "EqualRect", @intFromPtr(&misc.stub_EqualRect));
-    try environment.addBuiltinExport(m, "InflateRect", @intFromPtr(&misc.stub_InflateRect));
-    try environment.addBuiltinExport(m, "IntersectRect", @intFromPtr(&misc.stub_IntersectRect));
-    try environment.addBuiltinExport(m, "MessageBoxIndirectA", @intFromPtr(&misc.stub_MessageBoxIndirectA));
-    try environment.addBuiltinExport(m, "SetKeyboardState", @intFromPtr(&misc.stub_SetKeyboardState));
-    try environment.addBuiltinExport(m, "ToAsciiEx", @intFromPtr(&misc.stub_ToAsciiEx));
-    try environment.addBuiltinExport(m, "FlashWindow", @intFromPtr(&misc.stub_FlashWindow));
-    try environment.addBuiltinExport(m, "SetClassLongA", @intFromPtr(&misc.stub_SetClassLongA));
-    try environment.addBuiltinExport(m, "DefDlgProcA", @intFromPtr(&misc.stub_DefDlgProcA));
-    try environment.addBuiltinExport(m, "MapDialogRect", @intFromPtr(&misc.stub_MapDialogRect));
-    try environment.addBuiltinExport(m, "RegisterClipboardFormatA", @intFromPtr(&misc.stub_RegisterClipboardFormatA));
+    try environment.addBuiltinExportComptime(m, "MessageBeep", misc.stub_MessageBeep);
+    try environment.addBuiltinExportComptime(m, "SetActiveWindow", misc.stub_SetActiveWindow);
+    try environment.addBuiltinExportComptime(m, "GetSysColor", misc.stub_GetSysColor);
+    try environment.addBuiltinExportComptime(m, "GetSysColorBrush", misc.stub_GetSysColorBrush);
+    try environment.addBuiltinExportComptime(m, "GetParent", misc.stub_GetParent);
+    try environment.addBuiltinExportComptime(m, "FindWindowA", misc.stub_FindWindowA);
+    try environment.addBuiltinExportComptime(m, "GetWindowTextA", misc.stub_GetWindowTextA);
+    try environment.addBuiltinExportComptime(m, "GetWindowTextLengthA", misc.stub_GetWindowTextLengthA);
+    try environment.addBuiltinExportComptime(m, "IsZoomed", misc.stub_IsZoomed);
+    try environment.addBuiltinExportComptime(m, "RegisterWindowMessageA", misc.stub_RegisterWindowMessageA);
+    try environment.addBuiltinExportComptime(m, "GetSystemMenu", misc.stub_GetSystemMenu);
+    try environment.addBuiltinExportComptime(m, "GetMessageTime", misc.stub_GetMessageTime);
+    try environment.addBuiltinExportComptime(m, "IsDialogMessageA", misc.stub_IsDialogMessageA);
+    try environment.addBuiltinExportComptime(m, "MsgWaitForMultipleObjects", misc.stub_MsgWaitForMultipleObjects);
+    try environment.addBuiltinExportComptime(m, "GetWindowPlacement", misc.stub_GetWindowPlacement);
+    try environment.addBuiltinExportComptime(m, "SetWindowPlacement", misc.stub_SetWindowPlacement);
+    try environment.addBuiltinExportComptime(m, "WinHelpA", misc.stub_WinHelpA);
+    try environment.addBuiltinExportComptime(m, "DrawTextA", misc.stub_DrawTextA);
+    try environment.addBuiltinExportComptime(m, "DrawTextW", misc.stub_DrawTextW);
+    try environment.addBuiltinExportComptime(m, "CharLowerA", misc.stub_CharLowerA);
+    try environment.addBuiltinExportComptime(m, "CharUpperW", misc.stub_CharUpperW);
+    try environment.addBuiltinExportComptime(m, "CharLowerW", misc.stub_CharLowerW);
+    try environment.addBuiltinExportComptime(m, "GetKeyboardLayout", misc.stub_GetKeyboardLayout);
+    try environment.addBuiltinExportComptime(m, "GetDoubleClickTime", misc.stub_GetDoubleClickTime);
+    try environment.addBuiltinExportComptime(m, "GetCaretBlinkTime", misc.stub_GetCaretBlinkTime);
+    try environment.addBuiltinExportComptime(m, "EqualRect", misc.stub_EqualRect);
+    try environment.addBuiltinExportComptime(m, "InflateRect", misc.stub_InflateRect);
+    try environment.addBuiltinExportComptime(m, "IntersectRect", misc.stub_IntersectRect);
+    try environment.addBuiltinExportComptime(m, "MessageBoxIndirectA", misc.stub_MessageBoxIndirectA);
+    try environment.addBuiltinExportComptime(m, "SetKeyboardState", misc.stub_SetKeyboardState);
+    try environment.addBuiltinExportComptime(m, "ToAsciiEx", misc.stub_ToAsciiEx);
+    try environment.addBuiltinExportComptime(m, "FlashWindow", misc.stub_FlashWindow);
+    try environment.addBuiltinExportComptime(m, "SetClassLongA", misc.stub_SetClassLongA);
+    try environment.addBuiltinExportComptime(m, "DefDlgProcA", misc.stub_DefDlgProcA);
+    try environment.addBuiltinExportComptime(m, "MapDialogRect", misc.stub_MapDialogRect);
+    try environment.addBuiltinExportComptime(m, "RegisterClipboardFormatA", misc.stub_RegisterClipboardFormatA);
 
     // Additional menu
-    try environment.addBuiltinExport(m, "CreateMenu", @intFromPtr(&menu.stub_CreateMenu));
-    try environment.addBuiltinExport(m, "CreatePopupMenu", @intFromPtr(&menu.stub_CreatePopupMenu));
-    try environment.addBuiltinExport(m, "EnableMenuItem", @intFromPtr(&menu.stub_EnableMenuItem));
-    try environment.addBuiltinExport(m, "InsertMenuA", @intFromPtr(&menu.stub_InsertMenuA));
-    try environment.addBuiltinExport(m, "InsertMenuItemA", @intFromPtr(&menu.stub_InsertMenuItemA));
-    try environment.addBuiltinExport(m, "DeleteMenu", @intFromPtr(&menu.stub_DeleteMenu));
-    try environment.addBuiltinExport(m, "GetMenuItemCount", @intFromPtr(&menu.stub_GetMenuItemCount));
-    try environment.addBuiltinExport(m, "GetMenuState", @intFromPtr(&menu.stub_GetMenuState));
-    try environment.addBuiltinExport(m, "CheckMenuRadioItem", @intFromPtr(&menu.stub_CheckMenuRadioItem));
+    try environment.addBuiltinExportComptime(m, "CreateMenu", menu.stub_CreateMenu);
+    try environment.addBuiltinExportComptime(m, "CreatePopupMenu", menu.stub_CreatePopupMenu);
+    try environment.addBuiltinExportComptime(m, "EnableMenuItem", menu.stub_EnableMenuItem);
+    try environment.addBuiltinExportComptime(m, "InsertMenuA", menu.stub_InsertMenuA);
+    try environment.addBuiltinExportComptime(m, "InsertMenuItemA", menu.stub_InsertMenuItemA);
+    try environment.addBuiltinExportComptime(m, "DeleteMenu", menu.stub_DeleteMenu);
+    try environment.addBuiltinExportComptime(m, "GetMenuItemCount", menu.stub_GetMenuItemCount);
+    try environment.addBuiltinExportComptime(m, "GetMenuState", menu.stub_GetMenuState);
+    try environment.addBuiltinExportComptime(m, "CheckMenuRadioItem", menu.stub_CheckMenuRadioItem);
 
     // Additional dialog
-    try environment.addBuiltinExport(m, "CheckDlgButton", @intFromPtr(&dialog.stub_CheckDlgButton));
-    try environment.addBuiltinExport(m, "CheckRadioButton", @intFromPtr(&dialog.stub_CheckRadioButton));
-    try environment.addBuiltinExport(m, "IsDlgButtonChecked", @intFromPtr(&dialog.stub_IsDlgButtonChecked));
-    try environment.addBuiltinExport(m, "GetDlgItemInt", @intFromPtr(&dialog.stub_GetDlgItemInt));
-    try environment.addBuiltinExport(m, "SetDlgItemInt", @intFromPtr(&dialog.stub_SetDlgItemInt));
-    try environment.addBuiltinExport(m, "CreateDialogParamA", @intFromPtr(&dialog.stub_CreateDialogParamA));
-    try environment.addBuiltinExport(m, "MessageBoxW", @intFromPtr(&dialog.stub_MessageBoxW));
+    try environment.addBuiltinExportComptime(m, "CheckDlgButton", dialog.stub_CheckDlgButton);
+    try environment.addBuiltinExportComptime(m, "CheckRadioButton", dialog.stub_CheckRadioButton);
+    try environment.addBuiltinExportComptime(m, "IsDlgButtonChecked", dialog.stub_IsDlgButtonChecked);
+    try environment.addBuiltinExportComptime(m, "GetDlgItemInt", dialog.stub_GetDlgItemInt);
+    try environment.addBuiltinExportComptime(m, "SetDlgItemInt", dialog.stub_SetDlgItemInt);
+    try environment.addBuiltinExportComptime(m, "CreateDialogParamA", dialog.stub_CreateDialogParamA);
+    try environment.addBuiltinExportComptime(m, "MessageBoxW", dialog.stub_MessageBoxW);
 
     // Additional window
-    try environment.addBuiltinExport(m, "SetScrollInfo", @intFromPtr(&window.stub_SetScrollInfo));
-    try environment.addBuiltinExport(m, "GetScrollInfo", @intFromPtr(&window.stub_GetScrollInfo));
-    try environment.addBuiltinExport(m, "CopyImage", @intFromPtr(&window.stub_CopyImage));
-    try environment.addBuiltinExport(m, "DrawEdge", @intFromPtr(&window.stub_DrawEdge));
-    try environment.addBuiltinExport(m, "DrawFocusRect", @intFromPtr(&window.stub_DrawFocusRect));
-    try environment.addBuiltinExport(m, "FrameRect", @intFromPtr(&window.stub_FrameRect));
-    try environment.addBuiltinExport(m, "EnumWindows", @intFromPtr(&window.stub_EnumWindows));
-    try environment.addBuiltinExport(m, "IsChild", @intFromPtr(&window.stub_IsChild));
-    try environment.addBuiltinExport(m, "IsWindowEnabled", @intFromPtr(&window.stub_IsWindowEnabled));
-    try environment.addBuiltinExport(m, "GetIconInfo", @intFromPtr(&window.stub_GetIconInfo));
-    try environment.addBuiltinExport(m, "DestroyIcon", @intFromPtr(&window.stub_DestroyIcon));
-    try environment.addBuiltinExport(m, "DestroyCursor", @intFromPtr(&window.stub_DestroyCursor));
+    try environment.addBuiltinExportComptime(m, "SetScrollInfo", window.stub_SetScrollInfo);
+    try environment.addBuiltinExportComptime(m, "GetScrollInfo", window.stub_GetScrollInfo);
+    try environment.addBuiltinExportComptime(m, "CopyImage", window.stub_CopyImage);
+    try environment.addBuiltinExportComptime(m, "DrawEdge", window.stub_DrawEdge);
+    try environment.addBuiltinExportComptime(m, "DrawFocusRect", window.stub_DrawFocusRect);
+    try environment.addBuiltinExportComptime(m, "FrameRect", window.stub_FrameRect);
+    try environment.addBuiltinExportComptime(m, "EnumWindows", window.stub_EnumWindows);
+    try environment.addBuiltinExportComptime(m, "IsChild", window.stub_IsChild);
+    try environment.addBuiltinExportComptime(m, "IsWindowEnabled", window.stub_IsWindowEnabled);
+    try environment.addBuiltinExportComptime(m, "GetIconInfo", window.stub_GetIconInfo);
+    try environment.addBuiltinExportComptime(m, "DestroyIcon", window.stub_DestroyIcon);
+    try environment.addBuiltinExportComptime(m, "DestroyCursor", window.stub_DestroyCursor);
 
     // Clipboard
-    try environment.addBuiltinExport(m, "OpenClipboard", @intFromPtr(&window.stub_OpenClipboard));
-    try environment.addBuiltinExport(m, "CloseClipboard", @intFromPtr(&window.stub_CloseClipboard));
-    try environment.addBuiltinExport(m, "EmptyClipboard", @intFromPtr(&window.stub_EmptyClipboard));
-    try environment.addBuiltinExport(m, "GetClipboardData", @intFromPtr(&window.stub_GetClipboardData));
-    try environment.addBuiltinExport(m, "SetClipboardData", @intFromPtr(&window.stub_SetClipboardData));
-    try environment.addBuiltinExport(m, "IsClipboardFormatAvailable", @intFromPtr(&window.stub_IsClipboardFormatAvailable));
-    try environment.addBuiltinExport(m, "GetClipboardOwner", @intFromPtr(&window.stub_GetClipboardOwner));
+    try environment.addBuiltinExportComptime(m, "OpenClipboard", window.stub_OpenClipboard);
+    try environment.addBuiltinExportComptime(m, "CloseClipboard", window.stub_CloseClipboard);
+    try environment.addBuiltinExportComptime(m, "EmptyClipboard", window.stub_EmptyClipboard);
+    try environment.addBuiltinExportComptime(m, "GetClipboardData", window.stub_GetClipboardData);
+    try environment.addBuiltinExportComptime(m, "SetClipboardData", window.stub_SetClipboardData);
+    try environment.addBuiltinExportComptime(m, "IsClipboardFormatAvailable", window.stub_IsClipboardFormatAvailable);
+    try environment.addBuiltinExportComptime(m, "GetClipboardOwner", window.stub_GetClipboardOwner);
 
     // Caret
-    try environment.addBuiltinExport(m, "CreateCaret", @intFromPtr(&window.stub_CreateCaret));
-    try environment.addBuiltinExport(m, "DestroyCaret", @intFromPtr(&window.stub_DestroyCaret));
-    try environment.addBuiltinExport(m, "SetCaretPos", @intFromPtr(&window.stub_SetCaretPos));
-    try environment.addBuiltinExport(m, "ShowCaret", @intFromPtr(&window.stub_ShowCaret));
-    try environment.addBuiltinExport(m, "HideCaret", @intFromPtr(&window.stub_HideCaret));
+    try environment.addBuiltinExportComptime(m, "CreateCaret", window.stub_CreateCaret);
+    try environment.addBuiltinExportComptime(m, "DestroyCaret", window.stub_DestroyCaret);
+    try environment.addBuiltinExportComptime(m, "SetCaretPos", window.stub_SetCaretPos);
+    try environment.addBuiltinExportComptime(m, "ShowCaret", window.stub_ShowCaret);
+    try environment.addBuiltinExportComptime(m, "HideCaret", window.stub_HideCaret);
 
     // Europa 1400 compatibility
-    try environment.addBuiltinExport(m, "ValidateRect", @intFromPtr(&misc.stub_ValidateRect));
-    try environment.addBuiltinExport(m, "UnregisterClassA", @intFromPtr(&misc.stub_UnregisterClassA));
-    try environment.addBuiltinExport(m, "IsWindowVisible", @intFromPtr(&misc.stub_IsWindowVisible));
-    try environment.addBuiltinExport(m, "CallNextHookEx", @intFromPtr(&misc.stub_CallNextHookEx));
-    try environment.addBuiltinExport(m, "MapVirtualKeyA", @intFromPtr(&misc.stub_MapVirtualKeyA));
-    try environment.addBuiltinExport(m, "RegisterClassExA", @intFromPtr(&misc.stub_RegisterClassExA));
-    try environment.addBuiltinExport(m, "BringWindowToTop", @intFromPtr(&misc.stub_BringWindowToTop));
-    try environment.addBuiltinExport(m, "VkKeyScanA", @intFromPtr(&misc.stub_VkKeyScanA));
-    try environment.addBuiltinExport(m, "SetCursorPos", @intFromPtr(&misc.stub_SetCursorPos));
-    try environment.addBuiltinExport(m, "SetWindowsHookExA", @intFromPtr(&misc.stub_SetWindowsHookExA));
-    try environment.addBuiltinExport(m, "UnhookWindowsHookEx", @intFromPtr(&misc.stub_UnhookWindowsHookEx));
-    try environment.addBuiltinExport(m, "GetWindowThreadProcessId", @intFromPtr(&misc.stub_GetWindowThreadProcessId));
-    try environment.addBuiltinExport(m, "GetWindow", @intFromPtr(&misc.stub_GetWindow));
-    try environment.addBuiltinExport(m, "GetTopWindow", @intFromPtr(&misc.stub_GetTopWindow));
+    try environment.addBuiltinExportComptime(m, "ValidateRect", misc.stub_ValidateRect);
+    try environment.addBuiltinExportComptime(m, "UnregisterClassA", misc.stub_UnregisterClassA);
+    try environment.addBuiltinExportComptime(m, "IsWindowVisible", misc.stub_IsWindowVisible);
+    try environment.addBuiltinExportComptime(m, "CallNextHookEx", misc.stub_CallNextHookEx);
+    try environment.addBuiltinExportComptime(m, "MapVirtualKeyA", misc.stub_MapVirtualKeyA);
+    try environment.addBuiltinExportComptime(m, "RegisterClassExA", misc.stub_RegisterClassExA);
+    try environment.addBuiltinExportComptime(m, "BringWindowToTop", misc.stub_BringWindowToTop);
+    try environment.addBuiltinExportComptime(m, "VkKeyScanA", misc.stub_VkKeyScanA);
+    try environment.addBuiltinExportComptime(m, "SetCursorPos", misc.stub_SetCursorPos);
+    try environment.addBuiltinExportComptime(m, "SetWindowsHookExA", misc.stub_SetWindowsHookExA);
+    try environment.addBuiltinExportComptime(m, "UnhookWindowsHookEx", misc.stub_UnhookWindowsHookEx);
+    try environment.addBuiltinExportComptime(m, "GetWindowThreadProcessId", misc.stub_GetWindowThreadProcessId);
+    try environment.addBuiltinExportComptime(m, "GetWindow", misc.stub_GetWindow);
+    try environment.addBuiltinExportComptime(m, "GetTopWindow", misc.stub_GetTopWindow);
 
-    try environment.addBuiltinExport(m, "LoadAcceleratorsA", @intFromPtr(&resource.stub_LoadAcceleratorsA));
-    try environment.addBuiltinExport(m, "LoadImageA", @intFromPtr(&resource.stub_LoadImageA));
+    try environment.addBuiltinExportComptime(m, "LoadAcceleratorsA", resource.stub_LoadAcceleratorsA);
+    try environment.addBuiltinExportComptime(m, "LoadImageA", resource.stub_LoadImageA);
 
     // --- Wide (W) variants for Unicode apps ---
-    try environment.addBuiltinExport(m, "RegisterClassExW", @intFromPtr(&misc.stub_RegisterClassExW));
-    try environment.addBuiltinExport(m, "CreateWindowExW", @intFromPtr(&window.stub_CreateWindowExW));
-    try environment.addBuiltinExport(m, "DefWindowProcW", @intFromPtr(&window.stub_DefWindowProcA));
-    try environment.addBuiltinExport(m, "GetMessageW", @intFromPtr(&message.stub_GetMessageA));
-    try environment.addBuiltinExport(m, "PeekMessageW", @intFromPtr(&message.stub_PeekMessageA));
-    try environment.addBuiltinExport(m, "DispatchMessageW", @intFromPtr(&message.stub_DispatchMessageA));
-    try environment.addBuiltinExport(m, "SendMessageW", @intFromPtr(&message.stub_SendMessageA));
-    try environment.addBuiltinExport(m, "PostMessageW", @intFromPtr(&message.stub_PostMessageA));
-    try environment.addBuiltinExport(m, "TranslateAcceleratorW", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "LoadAcceleratorsW", @intFromPtr(&resource.stub_LoadAcceleratorsW));
-    try environment.addBuiltinExport(m, "LoadStringW", @intFromPtr(&resource.stub_LoadStringW));
-    try environment.addBuiltinExport(m, "LoadCursorW", @intFromPtr(&resource.stub_LoadCursorA));
-    try environment.addBuiltinExport(m, "LoadIconW", @intFromPtr(&resource.stub_LoadIconA));
-    try environment.addBuiltinExport(m, "LoadImageW", @intFromPtr(&resource.stub_LoadImageW));
-    try environment.addBuiltinExport(m, "GetWindowLongW", @intFromPtr(&window.stub_GetWindowLongA));
-    try environment.addBuiltinExport(m, "SetWindowLongW", @intFromPtr(&window.stub_SetWindowLongA));
-    try environment.addBuiltinExport(m, "SetWindowTextW", @intFromPtr(&window.stub_SetWindowTextW));
-    try environment.addBuiltinExport(m, "GetWindowTextW", @intFromPtr(&misc.stub_GetWindowTextA));
-    try environment.addBuiltinExport(m, "DialogBoxParamW", @intFromPtr(&dialog.stub_DialogBoxParamA));
-    try environment.addBuiltinExport(m, "CreateDialogParamW", @intFromPtr(&dialog.stub_CreateDialogParamA));
-    try environment.addBuiltinExport(m, "SetDlgItemTextW", @intFromPtr(&dialog.stub_SetDlgItemTextA));
-    try environment.addBuiltinExport(m, "GetDlgItemTextW", @intFromPtr(&dialog.stub_GetDlgItemTextA));
-    try environment.addBuiltinExport(m, "SendDlgItemMessageW", @intFromPtr(&dialog.stub_SendDlgItemMessageA));
-    try environment.addBuiltinExport(m, "IsDialogMessageW", @intFromPtr(&misc.stub_IsDialogMessageA));
-    try environment.addBuiltinExport(m, "SetScrollPos", @intFromPtr(&stub_ret0_4));
-    try environment.addBuiltinExport(m, "WinHelpW", @intFromPtr(&misc.stub_WinHelpA));
-    try environment.addBuiltinExport(m, "GetDlgCtrlID", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "ChildWindowFromPoint", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "CharNextW", @intFromPtr(&misc.stub_CharNextW));
-    try environment.addBuiltinExport(m, "DrawTextExW", @intFromPtr(&stub_ret0_6));
-    try environment.addBuiltinExport(m, "wsprintfW", @intFromPtr(&misc.stub_wsprintfW));
-    try environment.addBuiltinExport(m, "RegisterWindowMessageW", @intFromPtr(&misc.stub_RegisterWindowMessageW));
+    try environment.addBuiltinExportComptime(m, "RegisterClassExW", misc.stub_RegisterClassExW);
+    try environment.addBuiltinExportComptime(m, "CreateWindowExW", window.stub_CreateWindowExW);
+    try environment.addBuiltinExportComptime(m, "DefWindowProcW", window.stub_DefWindowProcA);
+    try environment.addBuiltinExportComptime(m, "GetMessageW", message.stub_GetMessageA);
+    try environment.addBuiltinExportComptime(m, "PeekMessageW", message.stub_PeekMessageA);
+    try environment.addBuiltinExportComptime(m, "DispatchMessageW", message.stub_DispatchMessageA);
+    try environment.addBuiltinExportComptime(m, "SendMessageW", message.stub_SendMessageA);
+    try environment.addBuiltinExportComptime(m, "PostMessageW", message.stub_PostMessageA);
+    try environment.addBuiltinExportComptime(m, "TranslateAcceleratorW", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "LoadAcceleratorsW", resource.stub_LoadAcceleratorsW);
+    try environment.addBuiltinExportComptime(m, "LoadStringW", resource.stub_LoadStringW);
+    try environment.addBuiltinExportComptime(m, "LoadCursorW", resource.stub_LoadCursorA);
+    try environment.addBuiltinExportComptime(m, "LoadIconW", resource.stub_LoadIconA);
+    try environment.addBuiltinExportComptime(m, "LoadImageW", resource.stub_LoadImageW);
+    try environment.addBuiltinExportComptime(m, "GetWindowLongW", window.stub_GetWindowLongA);
+    try environment.addBuiltinExportComptime(m, "SetWindowLongW", window.stub_SetWindowLongA);
+    try environment.addBuiltinExportComptime(m, "SetWindowTextW", window.stub_SetWindowTextW);
+    try environment.addBuiltinExportComptime(m, "GetWindowTextW", misc.stub_GetWindowTextA);
+    try environment.addBuiltinExportComptime(m, "DialogBoxParamW", dialog.stub_DialogBoxParamA);
+    try environment.addBuiltinExportComptime(m, "CreateDialogParamW", dialog.stub_CreateDialogParamA);
+    try environment.addBuiltinExportComptime(m, "SetDlgItemTextW", dialog.stub_SetDlgItemTextA);
+    try environment.addBuiltinExportComptime(m, "GetDlgItemTextW", dialog.stub_GetDlgItemTextA);
+    try environment.addBuiltinExportComptime(m, "SendDlgItemMessageW", dialog.stub_SendDlgItemMessageA);
+    try environment.addBuiltinExportComptime(m, "IsDialogMessageW", misc.stub_IsDialogMessageA);
+    try environment.addBuiltinExportComptime(m, "SetScrollPos", stub_ret0_4);
+    try environment.addBuiltinExportComptime(m, "WinHelpW", misc.stub_WinHelpA);
+    try environment.addBuiltinExportComptime(m, "GetDlgCtrlID", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "ChildWindowFromPoint", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "CharNextW", misc.stub_CharNextW);
+    try environment.addBuiltinExportComptime(m, "DrawTextExW", stub_ret0_6);
+    try environment.addBuiltinExportComptime(m, "wsprintfW", misc.stub_wsprintfW);
+    try environment.addBuiltinExportComptime(m, "RegisterWindowMessageW", misc.stub_RegisterWindowMessageW);
 
     // Rect utilities (win2k apps: 5-6x each)
-    try environment.addBuiltinExport(m, "CopyRect", @intFromPtr(&window.stub_CopyRect));
-    try environment.addBuiltinExport(m, "PtInRect", @intFromPtr(&window.stub_PtInRect));
-    try environment.addBuiltinExport(m, "OffsetRect", @intFromPtr(&window.stub_OffsetRect));
-    try environment.addBuiltinExport(m, "SetRectEmpty", @intFromPtr(&window.stub_SetRectEmpty));
-    try environment.addBuiltinExport(m, "IsRectEmpty", @intFromPtr(&window.stub_IsRectEmpty));
-    try environment.addBuiltinExport(m, "UnionRect", @intFromPtr(&window.stub_UnionRect));
-    try environment.addBuiltinExport(m, "SubtractRect", @intFromPtr(&window.stub_SubtractRect));
+    try environment.addBuiltinExportComptime(m, "CopyRect", window.stub_CopyRect);
+    try environment.addBuiltinExportComptime(m, "PtInRect", window.stub_PtInRect);
+    try environment.addBuiltinExportComptime(m, "OffsetRect", window.stub_OffsetRect);
+    try environment.addBuiltinExportComptime(m, "SetRectEmpty", window.stub_SetRectEmpty);
+    try environment.addBuiltinExportComptime(m, "IsRectEmpty", window.stub_IsRectEmpty);
+    try environment.addBuiltinExportComptime(m, "UnionRect", window.stub_UnionRect);
+    try environment.addBuiltinExportComptime(m, "SubtractRect", window.stub_SubtractRect);
 
     // Window/Class W variants (win2k apps: 3-6x each)
-    try environment.addBuiltinExport(m, "FindWindowW", @intFromPtr(&window.stub_FindWindowW));
-    try environment.addBuiltinExport(m, "FindWindowExW", @intFromPtr(&window.stub_FindWindowExW));
-    try environment.addBuiltinExport(m, "GetClassInfoW", @intFromPtr(&window.stub_GetClassInfoW));
-    try environment.addBuiltinExport(m, "GetClassInfoExW", @intFromPtr(&window.stub_GetClassInfoExW));
-    try environment.addBuiltinExport(m, "SystemParametersInfoW", @intFromPtr(&window.stub_SystemParametersInfoW));
-    try environment.addBuiltinExport(m, "GetUpdateRect", @intFromPtr(&window.stub_GetUpdateRect));
-    try environment.addBuiltinExport(m, "GetWindowDC", @intFromPtr(&window.stub_GetWindowDC));
+    try environment.addBuiltinExportComptime(m, "FindWindowW", window.stub_FindWindowW);
+    try environment.addBuiltinExportComptime(m, "FindWindowExW", window.stub_FindWindowExW);
+    try environment.addBuiltinExportComptime(m, "GetClassInfoW", window.stub_GetClassInfoW);
+    try environment.addBuiltinExportComptime(m, "GetClassInfoExW", window.stub_GetClassInfoExW);
+    try environment.addBuiltinExportComptime(m, "SystemParametersInfoW", window.stub_SystemParametersInfoW);
+    try environment.addBuiltinExportComptime(m, "GetUpdateRect", window.stub_GetUpdateRect);
+    try environment.addBuiltinExportComptime(m, "GetWindowDC", window.stub_GetWindowDC);
 
     // W variant aliases for resource/menu (win2k apps: 3-6x each)
-    try environment.addBuiltinExport(m, "LoadMenuW", @intFromPtr(&resource.stub_LoadMenuA));
-    try environment.addBuiltinExport(m, "RegisterClassW", @intFromPtr(&window.stub_RegisterClassA));
-    try environment.addBuiltinExport(m, "LoadBitmapW", @intFromPtr(&resource.stub_LoadBitmapW));
-    try environment.addBuiltinExport(m, "RegisterClipboardFormatW", @intFromPtr(&misc.stub_RegisterClipboardFormatA));
-    try environment.addBuiltinExport(m, "RemoveMenu", @intFromPtr(&menu.stub_DeleteMenu));
-    try environment.addBuiltinExport(m, "AppendMenuW", @intFromPtr(&menu.stub_AppendMenuA));
-    try environment.addBuiltinExport(m, "TrackPopupMenuEx", @intFromPtr(&stub_ret0_6));
-    try environment.addBuiltinExport(m, "CountClipboardFormats", @intFromPtr(&stub_ret0_0));
-    try environment.addBuiltinExport(m, "GetMessagePos", @intFromPtr(&stub_ret0_0));
-    try environment.addBuiltinExport(m, "DrawIcon", @intFromPtr(&stub_ret0_4));
-    try environment.addBuiltinExport(m, "OpenDesktopW", @intFromPtr(&stub_ret0_4));
-    try environment.addBuiltinExport(m, "CloseDesktop", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "GetThreadDesktop", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "GetProcessWindowStation", @intFromPtr(&stub_ret0_0));
-    try environment.addBuiltinExport(m, "SetThreadDesktop", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "OpenWindowStationW", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "SetProcessWindowStation", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "GetUserObjectInformationW", @intFromPtr(&stub_ret0_5));
-    try environment.addBuiltinExport(m, "GrayStringW", @intFromPtr(&stub_ret0_6));
-    try environment.addBuiltinExport(m, "TabbedTextOutW", @intFromPtr(&stub_ret0_6));
-    try environment.addBuiltinExport(m, "GetWindowTextLengthW", @intFromPtr(&misc.stub_GetWindowTextLengthA));
-    try environment.addBuiltinExport(m, "IsMenu", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "GetClassNameW", @intFromPtr(&stub_ret0_3));
+    try environment.addBuiltinExportComptime(m, "LoadMenuW", resource.stub_LoadMenuA);
+    try environment.addBuiltinExportComptime(m, "RegisterClassW", window.stub_RegisterClassA);
+    try environment.addBuiltinExportComptime(m, "LoadBitmapW", resource.stub_LoadBitmapW);
+    try environment.addBuiltinExportComptime(m, "RegisterClipboardFormatW", misc.stub_RegisterClipboardFormatA);
+    try environment.addBuiltinExportComptime(m, "RemoveMenu", menu.stub_DeleteMenu);
+    try environment.addBuiltinExportComptime(m, "AppendMenuW", menu.stub_AppendMenuA);
+    try environment.addBuiltinExportComptime(m, "TrackPopupMenuEx", stub_ret0_6);
+    try environment.addBuiltinExportComptime(m, "CountClipboardFormats", stub_ret0_0);
+    try environment.addBuiltinExportComptime(m, "GetMessagePos", stub_ret0_0);
+    try environment.addBuiltinExportComptime(m, "DrawIcon", stub_ret0_4);
+    try environment.addBuiltinExportComptime(m, "OpenDesktopW", stub_ret0_4);
+    try environment.addBuiltinExportComptime(m, "CloseDesktop", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "GetThreadDesktop", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "GetProcessWindowStation", stub_ret0_0);
+    try environment.addBuiltinExportComptime(m, "SetThreadDesktop", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "OpenWindowStationW", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "SetProcessWindowStation", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "GetUserObjectInformationW", stub_ret0_5);
+    try environment.addBuiltinExportComptime(m, "GrayStringW", stub_ret0_6);
+    try environment.addBuiltinExportComptime(m, "TabbedTextOutW", stub_ret0_6);
+    try environment.addBuiltinExportComptime(m, "GetWindowTextLengthW", misc.stub_GetWindowTextLengthA);
+    try environment.addBuiltinExportComptime(m, "IsMenu", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "GetClassNameW", stub_ret0_3);
 
     // --- Remaining USER32 stubs for 100% win2k coverage ---
-    try environment.addBuiltinExport(m, "CharToOemBuffA", @intFromPtr(&stub_CharToOemBuffA));
-    try environment.addBuiltinExport(m, "CallWindowProcW", @intFromPtr(&stub_CallWindowProcW));
-    try environment.addBuiltinExport(m, "GetMonitorInfoW", @intFromPtr(&stub_GetMonitorInfoW));
-    try environment.addBuiltinExport(m, "SendMessageTimeoutW", @intFromPtr(&stub_ret0_6));
-    try environment.addBuiltinExport(m, "DdeUninitialize", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "DdeFreeStringHandle", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "TranslateAcceleratorA", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "TranslateMDISysAccel", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "SetClipboardViewer", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "DdeGetLastError", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "DdeCreateStringHandleA", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "DdeInitializeA", @intFromPtr(&stub_ret0_4));
-    try environment.addBuiltinExport(m, "ShowScrollBar", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "DefMDIChildProcA", @intFromPtr(&stub_DefMDIChildProcA));
-    try environment.addBuiltinExport(m, "DefFrameProcA", @intFromPtr(&stub_DefFrameProcA));
-    try environment.addBuiltinExport(m, "DdeFreeDataHandle", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "DdeUnaccessData", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "DdeAccessData", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "DdeKeepStringHandle", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "GetMenuStringA", @intFromPtr(&stub_ret0_5));
-    try environment.addBuiltinExport(m, "ChangeClipboardChain", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "DdeDisconnect", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "DdeSetUserHandle", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "DdeConnect", @intFromPtr(&stub_ret0_4));
-    try environment.addBuiltinExport(m, "DdeClientTransaction", @intFromPtr(&stub_ret0_8));
-    try environment.addBuiltinExport(m, "DdeGetData", @intFromPtr(&stub_ret0_4));
-    try environment.addBuiltinExport(m, "SetScrollRange", @intFromPtr(&stub_ret0_5));
-    try environment.addBuiltinExport(m, "EnumClipboardFormats", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "ScrollWindow", @intFromPtr(&stub_ret0_5));
-    try environment.addBuiltinExport(m, "GetClipboardFormatNameA", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "GetScrollPos", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "GetScrollRange", @intFromPtr(&stub_ret0_4));
-    try environment.addBuiltinExport(m, "LoadBitmapA", @intFromPtr(&resource.stub_LoadBitmapA));
-    try environment.addBuiltinExport(m, "DdeQueryConvInfo", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "GetClipboardFormatNameW", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "SetProcessDefaultLayout", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "GetProcessDefaultLayout", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "RegisterHotKey", @intFromPtr(&stub_ret0_4));
-    try environment.addBuiltinExport(m, "UnregisterHotKey", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "OpenInputDesktop", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "WindowFromPoint", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "GetCaretPos", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "SetClassLongW", @intFromPtr(&misc.stub_SetClassLongA));
-    try environment.addBuiltinExport(m, "EnableScrollBar", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "wvsprintfW", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "RegisterDeviceNotificationW", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "SetPropW", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "RemovePropW", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "MonitorFromPoint", @intFromPtr(&stub_MonitorFromPoint));
-    try environment.addBuiltinExport(m, "CreateDialogIndirectParamW", @intFromPtr(&stub_ret0_5));
-    try environment.addBuiltinExport(m, "UnhookWindowsHook", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "SetWindowsHookW", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "DefDlgProcW", @intFromPtr(&misc.stub_DefDlgProcA));
-    try environment.addBuiltinExport(m, "GetPropW", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "UnregisterDeviceNotification", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "InvertRect", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "PostThreadMessageW", @intFromPtr(&stub_ret0_4));
-    try environment.addBuiltinExport(m, "CharLowerBuffW", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "GetGuiResources", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "SetMenuDefaultItem", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "EnumWindowStationsW", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "GetClassLongW", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "IsHungAppWindow", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "EnumDesktopsW", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "CloseWindowStation", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "InternalGetWindowText", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "EndTask", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "ShowWindowAsync", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "CascadeWindows", @intFromPtr(&stub_ret0_5));
-    try environment.addBuiltinExport(m, "TileWindows", @intFromPtr(&stub_ret0_5));
-    try environment.addBuiltinExport(m, "SwitchToThisWindow", @intFromPtr(&stub_ret0_2));
-    try environment.addBuiltinExport(m, "GetLastActivePopup", @intFromPtr(&stub_GetLastActivePopup));
-    try environment.addBuiltinExport(m, "OpenIcon", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "GetShellWindow", @intFromPtr(&stub_ret0_0));
-    try environment.addBuiltinExport(m, "BeginDeferWindowPos", @intFromPtr(&stub_BeginDeferWindowPos));
-    try environment.addBuiltinExport(m, "DeferWindowPos", @intFromPtr(&stub_DeferWindowPos));
-    try environment.addBuiltinExport(m, "EndDeferWindowPos", @intFromPtr(&stub_EndDeferWindowPos));
-    try environment.addBuiltinExport(m, "GetMenuItemInfoW", @intFromPtr(&stub_ret0_4));
-    try environment.addBuiltinExport(m, "GetDialogBaseUnits", @intFromPtr(&stub_GetDialogBaseUnits));
-    try environment.addBuiltinExport(m, "MonitorFromRect", @intFromPtr(&stub_MonitorFromRect));
-    try environment.addBuiltinExport(m, "GetUpdateRgn", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "GetDCEx", @intFromPtr(&stub_ret0_3));
-    try environment.addBuiltinExport(m, "AllowSetForegroundWindow", @intFromPtr(&stub_ret0_1));
-    try environment.addBuiltinExport(m, "GetMenuItemRect", @intFromPtr(&stub_ret0_4));
-    try environment.addBuiltinExport(m, "MonitorFromWindow", @intFromPtr(&stub_MonitorFromWindow));
-    try environment.addBuiltinExport(m, "OemToCharBuffA", @intFromPtr(&stub_OemToCharBuffA));
-    try environment.addBuiltinExport(m, "SetWindowsHookExW", @intFromPtr(&misc.stub_SetWindowsHookExA));
-    try environment.addBuiltinExport(m, "GetNextDlgTabItem", @intFromPtr(&stub_ret0_3));
+    try environment.addBuiltinExportComptime(m, "CharToOemBuffA", stub_CharToOemBuffA);
+    try environment.addBuiltinExportComptime(m, "CallWindowProcW", stub_CallWindowProcW);
+    try environment.addBuiltinExportComptime(m, "GetMonitorInfoW", stub_GetMonitorInfoW);
+    try environment.addBuiltinExportComptime(m, "SendMessageTimeoutW", stub_ret0_6);
+    try environment.addBuiltinExportComptime(m, "DdeUninitialize", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "DdeFreeStringHandle", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "TranslateAcceleratorA", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "TranslateMDISysAccel", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "SetClipboardViewer", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "DdeGetLastError", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "DdeCreateStringHandleA", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "DdeInitializeA", stub_ret0_4);
+    try environment.addBuiltinExportComptime(m, "ShowScrollBar", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "DefMDIChildProcA", stub_DefMDIChildProcA);
+    try environment.addBuiltinExportComptime(m, "DefFrameProcA", stub_DefFrameProcA);
+    try environment.addBuiltinExportComptime(m, "DdeFreeDataHandle", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "DdeUnaccessData", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "DdeAccessData", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "DdeKeepStringHandle", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "GetMenuStringA", stub_ret0_5);
+    try environment.addBuiltinExportComptime(m, "ChangeClipboardChain", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "DdeDisconnect", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "DdeSetUserHandle", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "DdeConnect", stub_ret0_4);
+    try environment.addBuiltinExportComptime(m, "DdeClientTransaction", stub_ret0_8);
+    try environment.addBuiltinExportComptime(m, "DdeGetData", stub_ret0_4);
+    try environment.addBuiltinExportComptime(m, "SetScrollRange", stub_ret0_5);
+    try environment.addBuiltinExportComptime(m, "EnumClipboardFormats", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "ScrollWindow", stub_ret0_5);
+    try environment.addBuiltinExportComptime(m, "GetClipboardFormatNameA", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "GetScrollPos", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "GetScrollRange", stub_ret0_4);
+    try environment.addBuiltinExportComptime(m, "LoadBitmapA", resource.stub_LoadBitmapA);
+    try environment.addBuiltinExportComptime(m, "DdeQueryConvInfo", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "GetClipboardFormatNameW", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "SetProcessDefaultLayout", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "GetProcessDefaultLayout", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "RegisterHotKey", stub_ret0_4);
+    try environment.addBuiltinExportComptime(m, "UnregisterHotKey", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "OpenInputDesktop", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "WindowFromPoint", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "GetCaretPos", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "SetClassLongW", misc.stub_SetClassLongA);
+    try environment.addBuiltinExportComptime(m, "EnableScrollBar", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "wvsprintfW", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "RegisterDeviceNotificationW", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "SetPropW", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "RemovePropW", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "MonitorFromPoint", stub_MonitorFromPoint);
+    try environment.addBuiltinExportComptime(m, "CreateDialogIndirectParamW", stub_ret0_5);
+    try environment.addBuiltinExportComptime(m, "UnhookWindowsHook", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "SetWindowsHookW", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "DefDlgProcW", misc.stub_DefDlgProcA);
+    try environment.addBuiltinExportComptime(m, "GetPropW", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "UnregisterDeviceNotification", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "InvertRect", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "PostThreadMessageW", stub_ret0_4);
+    try environment.addBuiltinExportComptime(m, "CharLowerBuffW", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "GetGuiResources", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "SetMenuDefaultItem", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "EnumWindowStationsW", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "GetClassLongW", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "IsHungAppWindow", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "EnumDesktopsW", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "CloseWindowStation", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "InternalGetWindowText", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "EndTask", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "ShowWindowAsync", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "CascadeWindows", stub_ret0_5);
+    try environment.addBuiltinExportComptime(m, "TileWindows", stub_ret0_5);
+    try environment.addBuiltinExportComptime(m, "SwitchToThisWindow", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "GetLastActivePopup", stub_GetLastActivePopup);
+    try environment.addBuiltinExportComptime(m, "OpenIcon", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "GetShellWindow", stub_ret0_0);
+    try environment.addBuiltinExportComptime(m, "BeginDeferWindowPos", stub_BeginDeferWindowPos);
+    try environment.addBuiltinExportComptime(m, "DeferWindowPos", stub_DeferWindowPos);
+    try environment.addBuiltinExportComptime(m, "EndDeferWindowPos", stub_EndDeferWindowPos);
+    try environment.addBuiltinExportComptime(m, "GetMenuItemInfoW", stub_ret0_4);
+    try environment.addBuiltinExportComptime(m, "GetDialogBaseUnits", stub_GetDialogBaseUnits);
+    try environment.addBuiltinExportComptime(m, "MonitorFromRect", stub_MonitorFromRect);
+    try environment.addBuiltinExportComptime(m, "GetUpdateRgn", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "GetDCEx", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "AllowSetForegroundWindow", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "GetMenuItemRect", stub_ret0_4);
+    try environment.addBuiltinExportComptime(m, "MonitorFromWindow", stub_MonitorFromWindow);
+    try environment.addBuiltinExportComptime(m, "OemToCharBuffA", stub_OemToCharBuffA);
+    try environment.addBuiltinExportComptime(m, "SetWindowsHookExW", misc.stub_SetWindowsHookExA);
+    try environment.addBuiltinExportComptime(m, "GetNextDlgTabItem", stub_ret0_3);
 }
 
 // --- Generic stubs ---
 
-fn stub_ret0_0() callconv(.winapi) usize {
+fn stub_ret0_0() callconv(w32cc.WINAPI) usize {
     return 0;
 }
-fn stub_ret0_1(a: usize) callconv(.winapi) usize {
+fn stub_ret0_1(a: usize) callconv(w32cc.WINAPI) usize {
     _ = a;
     return 0;
 }
-fn stub_ret0_2(a: usize, b: usize) callconv(.winapi) usize {
+fn stub_ret0_2(a: usize, b: usize) callconv(w32cc.WINAPI) usize {
     _ = a;
     _ = b;
     return 0;
 }
-fn stub_ret0_3(a: usize, b: usize, c: usize) callconv(.winapi) usize {
+fn stub_ret0_3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize {
     _ = a;
     _ = b;
     _ = c;
     return 0;
 }
-fn stub_ret0_4(a: usize, b: usize, c: usize, d: usize) callconv(.winapi) usize {
+fn stub_ret0_4(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize {
     _ = a;
     _ = b;
     _ = c;
     _ = d;
     return 0;
 }
-fn stub_ret0_5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(.winapi) usize {
+fn stub_ret0_5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) usize {
     _ = a;
     _ = b;
     _ = c;
@@ -428,7 +428,7 @@ fn stub_ret0_5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(.winap
     _ = e;
     return 0;
 }
-fn stub_ret0_6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(.winapi) usize {
+fn stub_ret0_6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) usize {
     _ = a;
     _ = b;
     _ = c;
@@ -437,11 +437,11 @@ fn stub_ret0_6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callc
     _ = f;
     return 0;
 }
-fn stub_ret0_7(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize) callconv(.winapi) usize {
+fn stub_ret0_7(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize) callconv(w32cc.WINAPI) usize {
     _ = a; _ = b; _ = c; _ = d; _ = e; _ = f; _ = g;
     return 0;
 }
-fn stub_ret0_8(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize) callconv(.winapi) usize {
+fn stub_ret0_8(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize) callconv(w32cc.WINAPI) usize {
     _ = a; _ = b; _ = c; _ = d; _ = e; _ = f; _ = g; _ = h;
     return 0;
 }
@@ -491,11 +491,11 @@ pub const WS_EX_STATICEDGE: u32 = 0x00020000;
 
 // --- Shared Mutable State ---
 
-pub var global_wndproc: ?*const fn (usize, u32, usize, isize) callconv(.winapi) isize = null;
+pub var global_wndproc: ?*const fn (usize, u32, usize, isize) callconv(w32cc.WINAPI) isize = null;
 pub var global_hwnd: usize = 0;
 
 // Per-hwnd WndProc lookup table (for dialogs, subclassed windows, etc.)
-const WndProcType = *const fn (usize, u32, usize, isize) callconv(.winapi) isize;
+const WndProcType = *const fn (usize, u32, usize, isize) callconv(w32cc.WINAPI) isize;
 const MAX_WINDOWS = 128;
 pub const WindowInfo = struct { 
     hwnd: usize = 0, 
@@ -550,10 +550,7 @@ pub var current_client_height: i32 = 144;
 pub var has_activated: bool = false;
 
 pub var pending_command: ?u32 = null;
-pub var pending_command_mutex: if (platform_mod.is_native) std.Thread.Mutex else struct {
-    pub fn lock(_: *@This()) void {}
-    pub fn unlock(_: *@This()) void {}
-} = .{};
+pub var pending_command_mutex: platform_mod.Mutex = .{};
 
 pub var pending_messages: [32]MSG = undefined;
 pub var pending_messages_head: usize = 0;
@@ -737,6 +734,7 @@ export fn user32_seh_handler(record: *anyopaque, frame_ptr: *SEH_Frame, context:
 
 const native_arch = @import("builtin").target.cpu.arch;
 const platform_mod = @import("../platform.zig");
+const w32cc = @import("../calling_convention.zig");
 
 comptime {
     if (native_arch == .x86) {
@@ -794,7 +792,7 @@ extern fn callWndProcSafe_extern(wndproc: usize, hwnd: usize, msg: u32, wParam: 
 fn callWndProcSafe_zig(wndproc: usize, hwnd: usize, msg: u32, wParam: usize, lParam: isize, err_out: *u32) callconv(.c) isize {
     err_out.* = 0;
     if (wndproc == 0) return 0;
-    const WndProc = *const fn (usize, u32, usize, isize) callconv(.c) isize;
+    const WndProc = *const fn (usize, u32, usize, isize) callconv(w32cc.WINAPI) isize;
     const func = @as(WndProc, @ptrFromInt(wndproc));
     return func(hwnd, msg, wParam, lParam);
 }
@@ -807,25 +805,25 @@ const FAKE_HMONITOR: usize = 0xD0000001;
 
 // --- Monitor functions ---
 // All return a valid HMONITOR since we have a single virtual monitor
-fn stub_MonitorFromWindow(hwnd: usize, dwFlags: u32) callconv(.winapi) usize {
+fn stub_MonitorFromWindow(hwnd: usize, dwFlags: u32) callconv(w32cc.WINAPI) usize {
     _ = hwnd; _ = dwFlags;
     if (trace.enable_tracing) trace.print("USER32: MonitorFromWindow -> 0x{x}\n", .{FAKE_HMONITOR});
     return FAKE_HMONITOR;
 }
 
-fn stub_MonitorFromPoint(ptX: i32, ptY: i32, dwFlags: u32) callconv(.winapi) usize {
+fn stub_MonitorFromPoint(ptX: i32, ptY: i32, dwFlags: u32) callconv(w32cc.WINAPI) usize {
     _ = ptX; _ = ptY; _ = dwFlags;
     return FAKE_HMONITOR;
 }
 
-fn stub_MonitorFromRect(lprc: usize, dwFlags: u32) callconv(.winapi) usize {
+fn stub_MonitorFromRect(lprc: usize, dwFlags: u32) callconv(w32cc.WINAPI) usize {
     _ = lprc; _ = dwFlags;
     return FAKE_HMONITOR;
 }
 
 // BOOL GetMonitorInfoW(HMONITOR hMonitor, LPMONITORINFO lpmi)
 // MONITORINFO: { cbSize(4), rcMonitor(RECT=16), rcWork(RECT=16), dwFlags(4) } = 40 bytes total
-fn stub_GetMonitorInfoW(hMonitor: usize, lpmi: usize) callconv(.winapi) i32 {
+fn stub_GetMonitorInfoW(hMonitor: usize, lpmi: usize) callconv(w32cc.WINAPI) i32 {
     _ = hMonitor;
     if (lpmi == 0) return 0;
 
@@ -844,7 +842,7 @@ fn stub_GetMonitorInfoW(hMonitor: usize, lpmi: usize) callconv(.winapi) i32 {
 // --- GetDialogBaseUnits ---
 // Returns MAKELONG(baseX, baseY) where baseX is average char width and
 // baseY is char height of the system font. Standard values: 8, 16
-fn stub_GetDialogBaseUnits() callconv(.winapi) u32 {
+fn stub_GetDialogBaseUnits() callconv(w32cc.WINAPI) u32 {
     const baseX: u32 = 8;
     const baseY: u32 = 16;
     return baseX | (baseY << 16); // MAKELONG(8, 16)
@@ -853,7 +851,7 @@ fn stub_GetDialogBaseUnits() callconv(.winapi) u32 {
 // --- CallWindowProcW ---
 // LRESULT CallWindowProcW(WNDPROC lpPrevWndFunc, HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 // Must actually call the window proc!
-fn stub_CallWindowProcW(lpPrevWndFunc: usize, hWnd: usize, msg: u32, wParam: usize, lParam: isize) callconv(.winapi) isize {
+fn stub_CallWindowProcW(lpPrevWndFunc: usize, hWnd: usize, msg: u32, wParam: usize, lParam: isize) callconv(w32cc.WINAPI) isize {
     // If the old WndProc is 0, this might be a subclassed common control where we don't
     // have a real WndProc for it. Fall back to our common control message handler.
     if (lpPrevWndFunc == 0) {
@@ -871,20 +869,20 @@ fn stub_CallWindowProcW(lpPrevWndFunc: usize, hWnd: usize, msg: u32, wParam: usi
 
 // --- DefFrameProcA / DefMDIChildProcA ---
 // Forward to DefWindowProcA for proper MDI message handling
-fn stub_DefFrameProcA(hWnd: usize, hWndMDIClient: usize, uMsg: u32, wParam: usize, lParam: isize) callconv(.winapi) isize {
+fn stub_DefFrameProcA(hWnd: usize, hWndMDIClient: usize, uMsg: u32, wParam: usize, lParam: isize) callconv(w32cc.WINAPI) isize {
     _ = hWndMDIClient;
     if (trace.enable_tracing) trace.print("USER32: DefFrameProcA(msg={d})\n", .{uMsg});
     return window.stub_DefWindowProcA(hWnd, uMsg, wParam, lParam);
 }
 
-fn stub_DefMDIChildProcA(hWnd: usize, uMsg: u32, wParam: usize, lParam: isize) callconv(.winapi) isize {
+fn stub_DefMDIChildProcA(hWnd: usize, uMsg: u32, wParam: usize, lParam: isize) callconv(w32cc.WINAPI) isize {
     if (trace.enable_tracing) trace.print("USER32: DefMDIChildProcA(msg={d})\n", .{uMsg});
     return window.stub_DefWindowProcA(hWnd, uMsg, wParam, lParam);
 }
 
 // --- CharToOemBuffA / OemToCharBuffA ---
 // For Latin-1 (Western European), these are identity copies
-fn stub_CharToOemBuffA(lpszSrc: usize, lpszDst: usize, cchDstLength: u32) callconv(.winapi) i32 {
+fn stub_CharToOemBuffA(lpszSrc: usize, lpszDst: usize, cchDstLength: u32) callconv(w32cc.WINAPI) i32 {
     if (lpszSrc != 0 and lpszDst != 0 and cchDstLength > 0) {
         const src = @as([*]const u8, @ptrFromInt(lpszSrc));
         const dst = @as([*]u8, @ptrFromInt(lpszDst));
@@ -893,7 +891,7 @@ fn stub_CharToOemBuffA(lpszSrc: usize, lpszDst: usize, cchDstLength: u32) callco
     return 1; // TRUE
 }
 
-fn stub_OemToCharBuffA(lpszSrc: usize, lpszDst: usize, cchDstLength: u32) callconv(.winapi) i32 {
+fn stub_OemToCharBuffA(lpszSrc: usize, lpszDst: usize, cchDstLength: u32) callconv(w32cc.WINAPI) i32 {
     if (lpszSrc != 0 and lpszDst != 0 and cchDstLength > 0) {
         const src = @as([*]const u8, @ptrFromInt(lpszSrc));
         const dst = @as([*]u8, @ptrFromInt(lpszDst));
@@ -905,14 +903,14 @@ fn stub_OemToCharBuffA(lpszSrc: usize, lpszDst: usize, cchDstLength: u32) callco
 // --- GetLastActivePopup ---
 // Returns the most recently active popup window owned by hWnd.
 // If hWnd has no popup, returns hWnd itself.
-fn stub_GetLastActivePopup(hWnd: usize) callconv(.winapi) usize {
+fn stub_GetLastActivePopup(hWnd: usize) callconv(w32cc.WINAPI) usize {
     return hWnd; // No popups → return hWnd itself
 }
 
 // --- DeferWindowPos API ---
 var defer_wp_counter: usize = 0xDEFE0001;
 
-fn stub_BeginDeferWindowPos(nNumWindows: i32) callconv(.winapi) usize {
+fn stub_BeginDeferWindowPos(nNumWindows: i32) callconv(w32cc.WINAPI) usize {
     _ = nNumWindows;
     const handle = defer_wp_counter;
     defer_wp_counter +%= 1;
@@ -920,12 +918,12 @@ fn stub_BeginDeferWindowPos(nNumWindows: i32) callconv(.winapi) usize {
     return handle;
 }
 
-fn stub_DeferWindowPos(hWinPosInfo: usize, hWnd: usize, hWndInsertAfter: usize, x: i32, y: i32, cx: i32, cy: i32, uFlags: u32) callconv(.winapi) usize {
+fn stub_DeferWindowPos(hWinPosInfo: usize, hWnd: usize, hWndInsertAfter: usize, x: i32, y: i32, cx: i32, cy: i32, uFlags: u32) callconv(w32cc.WINAPI) usize {
     _ = hWnd; _ = hWndInsertAfter; _ = x; _ = y; _ = cx; _ = cy; _ = uFlags;
     return hWinPosInfo; // Return same handle (success)
 }
 
-fn stub_EndDeferWindowPos(hWinPosInfo: usize) callconv(.winapi) i32 {
+fn stub_EndDeferWindowPos(hWinPosInfo: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWinPosInfo;
     return 1; // TRUE
 }

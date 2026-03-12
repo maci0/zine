@@ -1,115 +1,16 @@
 const std = @import("std");
 
-fn stripDrive(path: []const u8) []const u8 {
-    if (path.len >= 2 and path[1] == ':' and std.ascii.isAlphabetic(path[0])) {
-        return path[2..];
-    }
-    return path;
-}
+const path_utils = @import("../../path_utils.zig");
 
-fn resolvePath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
-    if (std.fs.path.isAbsolute(path)) {
-        return allocator.dupe(u8, path);
-    }
-    
-    const kernel32 = @import("../kernel32/misc.zig");
-    if (kernel32.current_directory_len > 0) {
-        // Copy cwd and ensure slashes
-        var cwd_buf: [1024]u8 = undefined;
-        const cwd_len = @min(kernel32.current_directory_len, 1023);
-        @memcpy(cwd_buf[0..cwd_len], kernel32.current_directory[0..cwd_len]);
-        std.mem.replaceScalar(u8, cwd_buf[0..cwd_len], '\\', '/');
-        const cwd_slice = cwd_buf[0..cwd_len];
-        
-        // Strip trailing slash if present
-        const clean_cwd = if (cwd_slice.len > 0 and cwd_slice[cwd_slice.len - 1] == '/')
-            cwd_slice[0 .. cwd_slice.len - 1]
-        else
-            cwd_slice;
-            
-        // If cwd is just "." or "./", maybe we don't need to join, but join handles it.
-        return std.fs.path.join(allocator, &[_][]const u8{ clean_cwd, path });
-    }
-    return allocator.dupe(u8, path);
-}
+// ============================================================================
+// POSIX filesystem primitives for Win32 stubs.
+//
+// Path resolution flow:
+//   1. path_utils.toHostPath() translates Win32→POSIX (drive letters, CWD, etc)
+//   2. Functions here try the exact path, then case-insensitive fallback
+// ============================================================================
 
-fn tryLower(path: []const u8, buf: []u8) ?[]const u8 {
-    if (path.len > buf.len) return null;
-    @memcpy(buf[0..path.len], path);
-    var last_slash: usize = 0;
-    for (0..path.len) |i| {
-        if (buf[i] == '/') last_slash = i + 1;
-    }
-    for (last_slash..path.len) |i| {
-        buf[i] = std.ascii.toLower(buf[i]);
-    }
-    return buf[0..path.len];
-}
-
-/// Try case-insensitive match: scan parent directory for a filename that matches ignoring case.
-fn tryCaseInsensitive(path: []const u8, buf: []u8) ?[]const u8 {
-    if (path.len > buf.len) return null;
-
-    // Find the last slash to split dir/filename
-    var last_slash: usize = 0;
-    var found_slash = false;
-    for (0..path.len) |i| {
-        if (path[i] == '/') {
-            last_slash = i;
-            found_slash = true;
-        }
-    }
-
-    const filename = if (found_slash) path[last_slash + 1 ..] else path;
-    if (filename.len == 0) return null;
-
-    // Open the parent directory
-    const dir: std.fs.Dir = open_dir: {
-        if (found_slash) {
-            const dir_path = path[0..last_slash];
-            if (dir_path.len == 0 or (dir_path.len == 1 and dir_path[0] == '/')) {
-                break :open_dir std.fs.openDirAbsolute("/", .{ .iterate = true }) catch return null;
-            } else if (std.fs.path.isAbsolute(dir_path)) {
-                break :open_dir std.fs.openDirAbsolute(dir_path, .{ .iterate = true }) catch {
-                    // Try recursing on parent directory too
-                    var dir_buf: [1024]u8 = undefined;
-                    const resolved = tryCaseInsensitive(dir_path, &dir_buf) orelse return null;
-                    break :open_dir if (std.fs.path.isAbsolute(resolved))
-                        std.fs.openDirAbsolute(resolved, .{ .iterate = true }) catch return null
-                    else
-                        std.fs.cwd().openDir(resolved, .{ .iterate = true }) catch return null;
-                };
-            } else {
-                break :open_dir std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return null;
-            }
-        } else {
-            break :open_dir std.fs.cwd().openDir(".", .{ .iterate = true }) catch return null;
-        }
-    };
-    defer @constCast(&dir).close();
-
-    // Scan for a case-insensitive match
-    var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
-        if (entry.name.len == filename.len) {
-            if (std.ascii.eqlIgnoreCase(entry.name, filename)) {
-                // Found a match — reconstruct the full path
-                if (found_slash) {
-                    const dir_part = path[0 .. last_slash + 1];
-                    const total = dir_part.len + entry.name.len;
-                    if (total > buf.len) return null;
-                    @memcpy(buf[0..dir_part.len], dir_part);
-                    @memcpy(buf[dir_part.len..total], entry.name);
-                    return buf[0..total];
-                } else {
-                    @memcpy(buf[0..entry.name.len], entry.name);
-                    return buf[0..entry.name.len];
-                }
-            }
-        }
-    }
-    return null;
-}
+// --- Low-level file helpers (operate on already-resolved host paths) --------
 
 fn fsStat(path: []const u8) ?std.fs.File.Stat {
     if (std.fs.path.isAbsolute(path)) {
@@ -122,40 +23,14 @@ fn fsStat(path: []const u8) ?std.fs.File.Stat {
     }
 }
 
-pub fn stat(path: [*:0]const u8) ?std.fs.File.Stat {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    
-    const span = std.mem.span(path);
-    const resolved = resolvePath(arena.allocator(), span) catch span;
-    const p = stripDrive(resolved);
-
-    if (fsStat(p)) |s| {
-        return s;
-    } else {
-        var buf: [1024]u8 = undefined;
-        if (tryLower(p, &buf)) |lower_p| {
-            if (fsStat(lower_p)) |s| {
-                return s;
-            }
-        }
-        var ci_buf: [1024]u8 = undefined;
-        if (tryCaseInsensitive(p, &ci_buf)) |ci_path| {
-            if (fsStat(ci_path)) |s| {
-                return s;
-            }
-        }
-    }
-    return null;
-}
 fn fsAccess(path: []const u8) bool {
-    if (std.fs.path.isAbsolute(path)) {
-        std.fs.accessAbsolute(path, .{}) catch return false;
-        return true;
-    } else {
-        std.fs.cwd().access(path, .{}) catch return false;
-        return true;
-    }
+    // Use openFile+close instead of access/accessAbsolute — faccessat panics on WASI.
+    const file = if (std.fs.path.isAbsolute(path))
+        std.fs.openFileAbsolute(path, .{}) catch return false
+    else
+        std.fs.cwd().openFile(path, .{}) catch return false;
+    file.close();
+    return true;
 }
 
 fn fsCreateFile(path: []const u8, flags: std.fs.File.CreateFlags) !std.fs.File {
@@ -174,131 +49,125 @@ fn fsOpenFile(path: []const u8, flags: std.fs.File.OpenFlags) !std.fs.File {
     }
 }
 
+// --- Case-insensitive helpers -----------------------------------------------
+
+/// Try lowercasing just the filename component.
+fn tryLower(path: []const u8, buf: []u8) ?[]const u8 {
+    if (path.len > buf.len) return null;
+    @memcpy(buf[0..path.len], path);
+    var last_slash: usize = 0;
+    for (0..path.len) |i| {
+        if (buf[i] == '/') last_slash = i + 1;
+    }
+    for (last_slash..path.len) |i| {
+        buf[i] = std.ascii.toLower(buf[i]);
+    }
+    return buf[0..path.len];
+}
+
+// --- Public API (accepts Win32 paths, resolves via path_utils) ---------------
+
+pub fn stat(path: [*:0]const u8) ?std.fs.File.Stat {
+    const span = std.mem.span(path);
+    var host_buf: [1024]u8 = undefined;
+    const host_len = path_utils.toHostPath(span, &host_buf);
+    if (host_len == 0) return null;
+    const p = host_buf[0..host_len];
+
+    // Try exact path
+    if (fsStat(p)) |s| return s;
+
+    // Try lowercased filename
+    var lower_buf: [1024]u8 = undefined;
+    if (tryLower(p, &lower_buf)) |lower_p| {
+        if (fsStat(lower_p)) |s| return s;
+    }
+
+    // Try case-insensitive dir scan
+    var ci_buf: [1024]u8 = undefined;
+    if (path_utils.tryCaseInsensitiveResolve(p, &ci_buf)) |ci_path| {
+        if (fsStat(ci_path)) |s| return s;
+    }
+
+    return null;
+}
+
 pub fn access(path: [*:0]const u8, mode: i32) i32 {
     _ = mode;
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    
     const span = std.mem.span(path);
-    const resolved = resolvePath(arena.allocator(), span) catch span;
-    const p = stripDrive(resolved);
-    
-    if (fsAccess(p)) {
-        return 0;
-    } else {
-        var buf: [1024]u8 = undefined;
-        if (tryLower(p, &buf)) |lower_p| {
-            if (fsAccess(lower_p)) {
-                return 0;
-            }
-        }
-        var ci_buf: [1024]u8 = undefined;
-        if (tryCaseInsensitive(p, &ci_buf)) |ci_path| {
-            if (fsAccess(ci_path)) {
-                return 0;
-            }
-        }
-        return -1;
+    var host_buf: [1024]u8 = undefined;
+    const host_len = path_utils.toHostPath(span, &host_buf);
+    if (host_len == 0) return -1;
+    const p = host_buf[0..host_len];
+
+    // Try exact path
+    if (fsAccess(p)) return 0;
+
+    // Try lowercased filename
+    var lower_buf: [1024]u8 = undefined;
+    if (tryLower(p, &lower_buf)) |lower_p| {
+        if (fsAccess(lower_p)) return 0;
     }
+
+    // Try case-insensitive dir scan
+    var ci_buf: [1024]u8 = undefined;
+    if (path_utils.tryCaseInsensitiveResolve(p, &ci_buf)) |ci_path| {
+        if (fsAccess(ci_path)) return 0;
+    }
+
+    return -1;
 }
 
 pub fn open(path: [*:0]const u8, flags: u32, mode: u32) i32 {
     _ = mode;
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    
     const span = std.mem.span(path);
-    const resolved = resolvePath(arena.allocator(), span) catch span;
-    const p = stripDrive(resolved);
-    
+    var host_buf: [1024]u8 = undefined;
+    const host_len = path_utils.toHostPath(span, &host_buf);
+    if (host_len == 0) return -1;
+
     const trace = @import("../../trace.zig");
-    if (trace.enable_tracing) trace.print("POSIX_FS OPEN: {s} (flags {d})\n", .{p, flags});
-    
-    // O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2
-    // O_CREAT = 0o100 (64)
-    // O_TRUNC = 0o1000 (512)
-    // O_APPEND = 0o2000 (1024)
+    if (trace.enable_tracing) trace.print("POSIX_FS OPEN: {s} (flags {d})\n", .{ host_buf[0..host_len], flags });
+
+    // Windows → POSIX flag translation
     const O_WRONLY = 1;
     const O_RDWR = 2;
     const O_CREAT = 64;
     const O_TRUNC = 512;
     const O_APPEND = 1024;
-    
+
     const is_write = (flags & O_WRONLY) != 0 or (flags & O_RDWR) != 0;
     const is_create = (flags & O_CREAT) != 0;
     const is_trunc = (flags & O_TRUNC) != 0;
     const is_append = (flags & O_APPEND) != 0;
-    
-    var file: std.fs.File = undefined;
-    var attempt_path = p;
-    var buf: [1024]u8 = undefined;
-    
-    var success = false;
-    
-    inline for (0..2) |attempt| {
-        if (attempt == 1) {
-            if (!success) {
-                if (tryLower(p, &buf)) |lower_p| {
-                    attempt_path = lower_p;
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-        
-        if (is_write) {
-            if (is_create) {
-                if (fsCreateFile(attempt_path, .{
-                    .read = (flags & O_RDWR) != 0,
-                    .truncate = is_trunc,
-                    .exclusive = false,
-                })) |f| {
-                    file = f;
-                    success = true;
-                } else |_| {}
-            } else {
-                if (fsOpenFile(attempt_path, .{
-                    .mode = if ((flags & O_RDWR) != 0) .read_write else .write_only,
-                })) |f| {
-                    file = f;
-                    success = true;
-                    if (is_trunc) {
-                        file.setEndPos(0) catch {};
-                        file.seekTo(0) catch {};
-                    }
-                } else |_| {}
-            }
-            if (success and is_append) {
-                file.seekFromEnd(0) catch {};
-            }
-        } else {
-            if (fsOpenFile(attempt_path, .{ .mode = .read_only })) |f| {
-                file = f;
-                success = true;
-            } else |_| {}
-        }
-    }
-    
-    if (success) {
-        return @intCast(file.handle);
-    }
 
-    // Third attempt: case-insensitive directory scan
+    // Try with the resolved path, then lowercase fallback, then case-insensitive scan
+    const paths_to_try = [_][]const u8{host_buf[0..host_len]};
+    var lower_buf: [1024]u8 = undefined;
     var ci_buf: [1024]u8 = undefined;
-    if (tryCaseInsensitive(p, &ci_buf)) |ci_path| {
+
+    // Build list of candidate paths
+    const p0 = host_buf[0..host_len];
+    const p1 = tryLower(p0, &lower_buf);
+    const p2 = path_utils.tryCaseInsensitiveResolve(p0, &ci_buf);
+    _ = paths_to_try;
+
+    const candidates = [_]?[]const u8{ p0, p1, p2 };
+
+    for (candidates) |maybe_path| {
+        const p = maybe_path orelse continue;
+
         if (is_write) {
             if (is_create) {
-                if (fsCreateFile(ci_path, .{
+                if (fsCreateFile(p, .{
                     .read = (flags & O_RDWR) != 0,
                     .truncate = is_trunc,
                     .exclusive = false,
                 })) |f| {
+                    if (is_append) f.seekFromEnd(0) catch {};
                     return @intCast(f.handle);
                 } else |_| {}
             } else {
-                if (fsOpenFile(ci_path, .{
+                if (fsOpenFile(p, .{
                     .mode = if ((flags & O_RDWR) != 0) .read_write else .write_only,
                 })) |f| {
                     if (is_trunc) {
@@ -310,10 +179,11 @@ pub fn open(path: [*:0]const u8, flags: u32, mode: u32) i32 {
                 } else |_| {}
             }
         } else {
-            if (fsOpenFile(ci_path, .{ .mode = .read_only })) |f| {
+            if (fsOpenFile(p, .{ .mode = .read_only })) |f| {
                 return @intCast(f.handle);
             } else |_| {}
         }
     }
+
     return -1;
 }

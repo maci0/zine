@@ -24,6 +24,29 @@ pub fn yield() void {
     // No threading on single-threaded WASM
 }
 
+pub fn sleep(ns: u64) void {
+    // No sleep on single-threaded WASM
+    _ = ns;
+}
+
+/// No-op mutex for single-threaded WASM.
+pub const Mutex = struct {
+    pub fn lock(_: *@This()) void {}
+    pub fn unlock(_: *@This()) void {}
+    pub fn tryLock(_: *@This()) bool { return true; }
+};
+
+pub fn spawnThread(func: anytype, args: anytype) bool {
+    // Threading not supported on WASM
+    _ = .{ func, args };
+    return false;
+}
+
+/// No SEH on WASM — the x86 interpreter handles exceptions.
+pub fn readExceptionList() u32 {
+    return 0xFFFFFFFF;
+}
+
 // -------------------------------------------------------------------------
 // Memory Mapping
 // -------------------------------------------------------------------------
@@ -46,9 +69,9 @@ pub fn mmap(
 
     // On WASM, use the page allocator for aligned allocations.
     // File-backed mappings are not supported yet (Phase 3).
-    const mem = try std.heap.page_allocator.alignedAlloc(u8, 4096, size);
+    const mem = try std.heap.page_allocator.alignedAlloc(u8, null, size);
     @memset(mem, 0);
-    return mem[0..size];
+    return @alignCast(mem[0..size]);
 }
 
 pub fn munmap(slice: []align(4096) u8) void {

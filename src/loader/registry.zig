@@ -1,6 +1,85 @@
 const std = @import("std");
 const pe = @import("../pe.zig");
 const Module = @import("module.zig").Module;
+const builtin = @import("builtin");
+const is_wasi = builtin.os.tag == .wasi;
+
+/// On WASI, resolve an absolute path through preopened directories.
+/// Returns a Dir handle for the matching preopen and the relative sub-path.
+/// Caller must close the returned Dir.
+const ResolvedPath = struct {
+    dir: std.fs.Dir,
+    rel_path: []const u8,
+};
+
+fn resolveWasiPath(abs_path: []const u8) ?ResolvedPath {
+    if (comptime !is_wasi) return null;
+    // Iterate WASI preopened fds (start at fd 3, after stdin/stdout/stderr)
+    var fd: std.os.wasi.fd_t = 3;
+    while (true) : (fd += 1) {
+        var prestat: std.os.wasi.prestat_t = undefined;
+        switch (std.os.wasi.fd_prestat_get(fd, &prestat)) {
+            .SUCCESS => {},
+            .OPNOTSUPP, .BADF => break,
+            else => break,
+        }
+        const name_len = prestat.u.dir.pr_name_len;
+        var name_buf: [4096]u8 = undefined;
+        if (name_len > name_buf.len) continue;
+        switch (std.os.wasi.fd_prestat_dir_name(fd, &name_buf, name_len)) {
+            .SUCCESS => {},
+            else => continue,
+        }
+        const preopen_path = name_buf[0..name_len];
+
+        // Check if the absolute path starts with this preopened dir path
+        if (std.mem.startsWith(u8, abs_path, preopen_path)) {
+            var rest = abs_path[preopen_path.len..];
+            // Strip leading / from relative path
+            if (rest.len > 0 and rest[0] == '/') rest = rest[1..];
+            if (rest.len == 0) rest = ".";
+            return .{
+                .dir = .{ .fd = fd },
+                .rel_path = rest,
+            };
+        }
+    }
+    return null;
+}
+
+/// Check if a file exists by trying to open it. Works on WASI (unlike Dir.access).
+fn fileExists(path: []const u8) bool {
+    // On WASI, absolute paths must be resolved through preopened dirs
+    if (comptime is_wasi) {
+        if (std.fs.path.isAbsolute(path)) {
+            if (resolveWasiPath(path)) |resolved| {
+                // Don't close resolved.dir — it's a borrowed preopened fd
+                const file = resolved.dir.openFile(resolved.rel_path, .{}) catch return false;
+                file.close();
+                return true;
+            }
+            return false;
+        }
+    }
+    const file = std.fs.cwd().openFile(path, .{}) catch return false;
+    file.close();
+    return true;
+}
+
+/// Open a directory portably — resolves through WASI preopened dirs for absolute paths.
+fn openDirPortable(path: []const u8, args: std.fs.Dir.OpenOptions) !std.fs.Dir {
+    if (comptime is_wasi) {
+        if (std.fs.path.isAbsolute(path)) {
+            if (resolveWasiPath(path)) |resolved| {
+                // Don't close resolved.dir — it's a borrowed preopened fd
+                return resolved.dir.openDir(resolved.rel_path, args);
+            }
+            return error.FileNotFound;
+        }
+    }
+    return std.fs.cwd().openDir(path, args);
+}
+
 
 pub const Registry = struct {
     allocator: std.mem.Allocator,
@@ -52,13 +131,13 @@ pub const Registry = struct {
             @memcpy(fixed_path, name);
             std.mem.replaceScalar(u8, fixed_path, '\\', '/');
 
-            if (std.fs.cwd().access(fixed_path, .{})) |_| {
+            if (fileExists(fixed_path)) {
                 file_path = try self.allocator.dupe(u8, fixed_path);
-            } else |_| {
+            } else {
                 // Try case-insensitive scan in the directory
                 if (std.fs.path.dirname(fixed_path)) |dir| {
                     const base = std.fs.path.basename(fixed_path);
-                    var d = std.fs.cwd().openDir(dir, .{ .iterate = true }) catch return error.ModuleNotFound;
+                    var d = openDirPortable(dir, .{ .iterate = true }) catch return error.ModuleNotFound;
                     defer d.close();
                     var it = d.iterate();
                     while (it.next() catch null) |entry| {
@@ -79,93 +158,86 @@ pub const Registry = struct {
                 const full_path_exact = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, name });
                 defer self.allocator.free(full_path_exact);
 
-                if (std.fs.cwd().access(full_path_exact, .{})) |_| {
+                if (fileExists(full_path_exact)) {
                     file_path = try self.allocator.dupe(u8, full_path_exact);
                     break;
-                } else |err| switch (err) {
-                    error.FileNotFound => {
-                        // Open the directory and search case-insensitively
-                        var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch {
-                            // If the path itself fails to open, it might be due to casing (e.g. BIN vs Bin)
-                            // We do a very basic parent-level check here just to be robust if needed, 
-                            // but usually the paths coming from PATH are exact on the system.
-                            // If it's a BAT mapped path it might be wrong.
-                            
-                            // Check parent directory
-                            const parent = std.fs.path.dirname(path) orelse continue;
-                            const base = std.fs.path.basename(path);
-                            var parent_dir = std.fs.cwd().openDir(parent, .{ .iterate = true }) catch continue;
-                            defer parent_dir.close();
-                            
-                            var found_real_base: ?[]const u8 = null;
-                            var p_it = parent_dir.iterate();
-                            while (p_it.next() catch null) |entry| {
-                                if (entry.kind == .directory and std.ascii.eqlIgnoreCase(entry.name, base)) {
-                                    found_real_base = try self.allocator.dupe(u8, entry.name);
-                                    break;
-                                }
-                            }
-                            
-                            if (found_real_base) |real_base| {
-                                defer self.allocator.free(real_base);
-                                const real_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{parent, real_base});
-                                defer self.allocator.free(real_path);
-                                var real_dir = std.fs.cwd().openDir(real_path, .{ .iterate = true }) catch continue;
-                                
-                                var it = real_dir.iterate();
-                                while (it.next() catch null) |entry| {
-                                    if (std.ascii.eqlIgnoreCase(entry.name, name)) {
-                                        file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
-                                        break;
-                                    }
-                                    const name_exe = std.fmt.allocPrint(self.allocator, "{s}.exe", .{name}) catch continue;
-                                    defer self.allocator.free(name_exe);
-                                    if (std.ascii.eqlIgnoreCase(entry.name, name_exe)) {
-                                        file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
-                                        break;
-                                    }
-                                    const name_dll = std.fmt.allocPrint(self.allocator, "{s}.dll", .{name}) catch continue;
-                                    defer self.allocator.free(name_dll);
-                                    if (std.ascii.eqlIgnoreCase(entry.name, name_dll)) {
-                                        file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
-                                        break;
-                                    }
-                                }
-                                real_dir.close();
-                                if (file_path != null) break;
-                            }
-                            continue;
-                        };
-                        defer dir.close();
+                }
 
-                        var it = dir.iterate();
+                // Open the directory and search case-insensitively
+                var dir = openDirPortable(path, .{ .iterate = true }) catch {
+                    // If the path itself fails to open, it might be due to casing (e.g. BIN vs Bin)
+                    // Check parent directory
+                    const parent = std.fs.path.dirname(path) orelse continue;
+                    const base = std.fs.path.basename(path);
+                    var parent_dir = openDirPortable(parent, .{ .iterate = true }) catch continue;
+                    defer parent_dir.close();
+
+                    var found_real_base: ?[]const u8 = null;
+                    var p_it = parent_dir.iterate();
+                    while (p_it.next() catch null) |entry| {
+                        if (entry.kind == .directory and std.ascii.eqlIgnoreCase(entry.name, base)) {
+                            found_real_base = try self.allocator.dupe(u8, entry.name);
+                            break;
+                        }
+                    }
+
+                    if (found_real_base) |real_base| {
+                        defer self.allocator.free(real_base);
+                        const real_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ parent, real_base });
+                        defer self.allocator.free(real_path);
+                        var real_dir = openDirPortable(real_path, .{ .iterate = true }) catch continue;
+
+                        var it = real_dir.iterate();
                         while (it.next() catch null) |entry| {
                             if (std.ascii.eqlIgnoreCase(entry.name, name)) {
-                                file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
+                                file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
                                 break;
                             }
-
-                            // Check if name + .exe matches
                             const name_exe = std.fmt.allocPrint(self.allocator, "{s}.exe", .{name}) catch continue;
                             defer self.allocator.free(name_exe);
                             if (std.ascii.eqlIgnoreCase(entry.name, name_exe)) {
-                                file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
+                                file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
                                 break;
                             }
-
-                            // Check if name + .dll matches
                             const name_dll = std.fmt.allocPrint(self.allocator, "{s}.dll", .{name}) catch continue;
                             defer self.allocator.free(name_dll);
                             if (std.ascii.eqlIgnoreCase(entry.name, name_dll)) {
-                                file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
-                                std.log.info("Found match for {s} -> {s}", .{ name, file_path.? });
+                                file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
                                 break;
                             }
                         }
+                        real_dir.close();
                         if (file_path != null) break;
-                    },
-                    else => return err,
+                    }
+                    continue;
+                };
+                defer dir.close();
+
+                var it = dir.iterate();
+                while (it.next() catch null) |entry| {
+                    if (std.ascii.eqlIgnoreCase(entry.name, name)) {
+                        file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
+                        break;
+                    }
+
+                    // Check if name + .exe matches
+                    const name_exe = std.fmt.allocPrint(self.allocator, "{s}.exe", .{name}) catch continue;
+                    defer self.allocator.free(name_exe);
+                    if (std.ascii.eqlIgnoreCase(entry.name, name_exe)) {
+                        file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
+                        break;
+                    }
+
+                    // Check if name + .dll matches
+                    const name_dll = std.fmt.allocPrint(self.allocator, "{s}.dll", .{name}) catch continue;
+                    defer self.allocator.free(name_dll);
+                    if (std.ascii.eqlIgnoreCase(entry.name, name_dll)) {
+                        file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
+                        std.log.info("Found match for {s} -> {s}", .{ name, file_path.? });
+                        break;
+                    }
                 }
+                if (file_path != null) break;
             }
         }
 

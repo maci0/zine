@@ -1,35 +1,36 @@
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
+const w32cc = @import("../calling_convention.zig");
 
 pub fn register(environment: *env.Environment) !void {
     const m = "SHELL32.dll";
-    try environment.addBuiltinExport(m, "ShellExecuteA", @intFromPtr(&stub_ShellExecuteA));
-    try environment.addBuiltinExport(m, "DragFinish", @intFromPtr(&stub_DragFinish));
-    try environment.addBuiltinExport(m, "DragAcceptFiles", @intFromPtr(&stub_DragAcceptFiles));
-    try environment.addBuiltinExport(m, "DragQueryFileA", @intFromPtr(&stub_DragQueryFileA));
-    try environment.addBuiltinExport(m, "DragQueryFileW", @intFromPtr(&stub_DragQueryFileW));
-    try environment.addBuiltinExport(m, "SHGetFileInfoA", @intFromPtr(&stub_SHGetFileInfoA));
-    try environment.addBuiltinExport(m, "SHGetPathFromIDListA", @intFromPtr(&stub_SHGetPathFromIDListA));
-    try environment.addBuiltinExport(m, "SHBrowseForFolderA", @intFromPtr(&stub_SHBrowseForFolderA));
-    try environment.addBuiltinExport(m, "ExtractIconA", @intFromPtr(&stub_ExtractIconA));
-    try environment.addBuiltinExport(m, "Shell_NotifyIconA", @intFromPtr(&stub_Shell_NotifyIconA));
-    try environment.addBuiltinExport(m, "ShellAboutW", @intFromPtr(&stub_ShellAboutW));
+    try environment.addBuiltinExportComptime(m, "ShellExecuteA", stub_ShellExecuteA);
+    try environment.addBuiltinExportComptime(m, "DragFinish", stub_DragFinish);
+    try environment.addBuiltinExportComptime(m, "DragAcceptFiles", stub_DragAcceptFiles);
+    try environment.addBuiltinExportComptime(m, "DragQueryFileA", stub_DragQueryFileA);
+    try environment.addBuiltinExportComptime(m, "DragQueryFileW", stub_DragQueryFileW);
+    try environment.addBuiltinExportComptime(m, "SHGetFileInfoA", stub_SHGetFileInfoA);
+    try environment.addBuiltinExportComptime(m, "SHGetPathFromIDListA", stub_SHGetPathFromIDListA);
+    try environment.addBuiltinExportComptime(m, "SHBrowseForFolderA", stub_SHBrowseForFolderA);
+    try environment.addBuiltinExportComptime(m, "ExtractIconA", stub_ExtractIconA);
+    try environment.addBuiltinExportComptime(m, "Shell_NotifyIconA", stub_Shell_NotifyIconA);
+    try environment.addBuiltinExportComptime(m, "ShellAboutW", stub_ShellAboutW);
 
     // --- Remaining SHELL32 stubs for 100% win2k coverage ---
     const kernel32 = @import("kernel32.zig");
-    try environment.addBuiltinExport(m, "SHAppBarMessage", @intFromPtr(&kernel32.stub_args2));
-    try environment.addBuiltinExport(m, "ordinal_258", @intFromPtr(&kernel32.stub_args2));
-    try environment.addBuiltinExport(m, "ShellExecuteW", @intFromPtr(&stub_ShellExecuteA));
-    try environment.addBuiltinExport(m, "ExtractIconW", @intFromPtr(&stub_ExtractIconA));
-    try environment.addBuiltinExport(m, "CommandLineToArgvW", @intFromPtr(&kernel32.stub_args2));
-    try environment.addBuiltinExport(m, "Shell_NotifyIconW", @intFromPtr(&stub_Shell_NotifyIconA));
-    try environment.addBuiltinExport(m, "ordinal_100", @intFromPtr(&kernel32.stub_args0));
-    try environment.addBuiltinExport(m, "ordinal_61", @intFromPtr(&kernel32.stub_args5));
-    try environment.addBuiltinExport(m, "SHGetSpecialFolderPathW", @intFromPtr(&kernel32.stub_args4));
+    try environment.addBuiltinExportComptime(m, "SHAppBarMessage", kernel32.stub_args2);
+    try environment.addBuiltinExportComptime(m, "ordinal_258", kernel32.stub_args2);
+    try environment.addBuiltinExportComptime(m, "ShellExecuteW", stub_ShellExecuteA);
+    try environment.addBuiltinExportComptime(m, "ExtractIconW", stub_ExtractIconA);
+    try environment.addBuiltinExportComptime(m, "CommandLineToArgvW", kernel32.stub_args2);
+    try environment.addBuiltinExportComptime(m, "Shell_NotifyIconW", stub_Shell_NotifyIconA);
+    try environment.addBuiltinExportComptime(m, "ordinal_100", kernel32.stub_args0);
+    try environment.addBuiltinExportComptime(m, "ordinal_61", kernel32.stub_args5);
+    try environment.addBuiltinExportComptime(m, "SHGetSpecialFolderPathW", kernel32.stub_args4);
 }
 
-fn stub_ShellExecuteA(hwnd: usize, lpOperation: usize, lpFile: usize, lpParameters: usize, lpDirectory: usize, nShowCmd: i32) callconv(.winapi) usize {
+fn stub_ShellExecuteA(hwnd: usize, lpOperation: usize, lpFile: usize, lpParameters: usize, lpDirectory: usize, nShowCmd: i32) callconv(w32cc.WINAPI) usize {
     _ = hwnd;
     _ = lpOperation;
     _ = lpParameters;
@@ -42,18 +43,18 @@ fn stub_ShellExecuteA(hwnd: usize, lpOperation: usize, lpFile: usize, lpParamete
     return 33; // > 32 means success
 }
 
-fn stub_DragFinish(hDrop: usize) callconv(.winapi) void {
+fn stub_DragFinish(hDrop: usize) callconv(w32cc.WINAPI) void {
     _ = hDrop;
     if (trace.enable_tracing) trace.print("SHELL32: DragFinish\n", .{});
 }
 
-fn stub_DragAcceptFiles(hWnd: usize, fAccept: i32) callconv(.winapi) void {
+fn stub_DragAcceptFiles(hWnd: usize, fAccept: i32) callconv(w32cc.WINAPI) void {
     _ = hWnd;
     _ = fAccept;
     if (trace.enable_tracing) trace.print("SHELL32: DragAcceptFiles\n", .{});
 }
 
-fn stub_DragQueryFileA(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) callconv(.winapi) u32 {
+fn stub_DragQueryFileA(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) callconv(w32cc.WINAPI) u32 {
     _ = hDrop;
     _ = iFile;
     _ = lpszFile;
@@ -62,7 +63,7 @@ fn stub_DragQueryFileA(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) call
     return 0;
 }
 
-fn stub_DragQueryFileW(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) callconv(.winapi) u32 {
+fn stub_DragQueryFileW(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) callconv(w32cc.WINAPI) u32 {
     _ = hDrop;
     _ = iFile;
     _ = lpszFile;
@@ -71,7 +72,7 @@ fn stub_DragQueryFileW(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) call
     return 0;
 }
 
-fn stub_SHGetFileInfoA(pszPath: usize, dwFileAttributes: u32, psfi: usize, cbFileInfo: u32, uFlags: u32) callconv(.winapi) usize {
+fn stub_SHGetFileInfoA(pszPath: usize, dwFileAttributes: u32, psfi: usize, cbFileInfo: u32, uFlags: u32) callconv(w32cc.WINAPI) usize {
     _ = pszPath;
     _ = dwFileAttributes;
     _ = psfi;
@@ -81,20 +82,20 @@ fn stub_SHGetFileInfoA(pszPath: usize, dwFileAttributes: u32, psfi: usize, cbFil
     return 0;
 }
 
-fn stub_SHGetPathFromIDListA(pidl: usize, pszPath: usize) callconv(.winapi) i32 {
+fn stub_SHGetPathFromIDListA(pidl: usize, pszPath: usize) callconv(w32cc.WINAPI) i32 {
     _ = pidl;
     _ = pszPath;
     if (trace.enable_tracing) trace.print("SHELL32: SHGetPathFromIDListA\n", .{});
     return 0;
 }
 
-fn stub_SHBrowseForFolderA(lpbi: usize) callconv(.winapi) usize {
+fn stub_SHBrowseForFolderA(lpbi: usize) callconv(w32cc.WINAPI) usize {
     _ = lpbi;
     if (trace.enable_tracing) trace.print("SHELL32: SHBrowseForFolderA\n", .{});
     return 0; // cancelled
 }
 
-fn stub_ExtractIconA(hInst: usize, pszExeFileName: usize, nIconIndex: u32) callconv(.winapi) usize {
+fn stub_ExtractIconA(hInst: usize, pszExeFileName: usize, nIconIndex: u32) callconv(w32cc.WINAPI) usize {
     _ = hInst;
     _ = nIconIndex;
     if (trace.enable_tracing) {
@@ -104,14 +105,14 @@ fn stub_ExtractIconA(hInst: usize, pszExeFileName: usize, nIconIndex: u32) callc
     return 0;
 }
 
-fn stub_Shell_NotifyIconA(dwMessage: u32, lpData: usize) callconv(.winapi) i32 {
+fn stub_Shell_NotifyIconA(dwMessage: u32, lpData: usize) callconv(w32cc.WINAPI) i32 {
     _ = dwMessage;
     _ = lpData;
     if (trace.enable_tracing) trace.print("SHELL32: Shell_NotifyIconA\n", .{});
     return 1;
 }
 
-fn stub_ShellAboutW(hWnd: usize, szApp: usize, szOtherStuff: usize, hIcon: usize) callconv(.winapi) i32 {
+fn stub_ShellAboutW(hWnd: usize, szApp: usize, szOtherStuff: usize, hIcon: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = hIcon;
     if (trace.enable_tracing) trace.print("SHELL32: ShellAboutW\n", .{});

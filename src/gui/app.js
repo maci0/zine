@@ -329,7 +329,8 @@ function PopupItem(sub, onAfterClick) {
     if (!sub.name || sub.name === '') {
         return div({class: 'popup-separator'});
     }
-    return div({class: 'popup-item', onclick: (e) => {
+    const isChecked = (sub.flags & 0x0008) !== 0; // MF_CHECKED
+    return div({class: 'popup-item' + (isChecked ? ' checked' : ''), 'data-cmd-id': sub.id, onclick: (e) => {
         e.stopPropagation();
         sendCommand(sub.id);
         if (onAfterClick) onAfterClick();
@@ -574,18 +575,45 @@ function connect() {
     ws.onopen = () => {
         statusEl.style.display = 'none';
 
+        // --- Full UI reset for clean session ---
         closeDialog(true);
         menuBar.innerHTML = '';
+        currentMenuData = null;
+        dialogOverlay.style.display = 'none';
 
+        // Reset window title
+        document.title = 'Zine';
+        const titleEl = document.getElementById('window-title');
+        if (titleEl) titleEl.innerText = '';
+
+        // Reset edit control
         if (hasEditControl.val) {
             hasEditControl.val = false;
         }
+        const editCtrl = document.getElementById('edit-control');
+        if (editCtrl) {
+            editCtrl.value = '';
+            editCtrl.style.fontFamily = '';
+            editCtrl.style.fontSize = '';
+            editCtrl.style.fontWeight = '';
+            editCtrl.style.fontStyle = '';
+            editCtrl.style.display = 'none';
+        }
 
+        // Clear in-place controls container
+        const controlsContainer = document.getElementById('dialog-content');
+        if (controlsContainer) controlsContainer.innerHTML = '';
+
+        // Reset canvas inset sizing
         const inset = document.querySelector('.canvas-inset');
         if (inset) {
             inset.style.width = '';
             inset.style.height = '';
         }
+
+        // Reset icon
+        const iconEl = document.getElementById('window-icon');
+        if (iconEl) iconEl.style.display = 'none';
 
         if (isMaximized) {
             const container = document.getElementById('game-container');
@@ -628,6 +656,25 @@ function connect() {
 
                 } else if (msg.type === "menu") {
                     renderMenu(msg.menu);
+
+                } else if (msg.type === "check_menu_item") {
+                    // Toggle checkmark on a menu item by command ID
+                    document.querySelectorAll('.popup-item[data-cmd-id="' + msg.id + '"]').forEach(el => {
+                        el.classList.toggle('checked', msg.checked);
+                    });
+                    // Also update currentMenuData so reconnects show correct state
+                    if (currentMenuData) {
+                        currentMenuData.forEach(top => {
+                            if (top.popup) {
+                                top.popup.forEach(sub => {
+                                    if (sub.id === msg.id) {
+                                        if (msg.checked) sub.flags |= 0x0008;
+                                        else sub.flags &= ~0x0008;
+                                    }
+                                });
+                            }
+                        });
+                    }
 
                 } else if (msg.type === "message_box") {
                     const mbText = (msg.text || '').replace(/\n/g, '<br>');
@@ -773,8 +820,365 @@ function connect() {
                     );
                     dialogOverlay.style.width = '475px';
 
+                } else if (msg.type === "open_font_dialog") {
+                    // --- Font Dialog ---
+                    const fonts = [
+                        'Arial', 'Arial Black', 'Comic Sans MS', 'Courier New',
+                        'Fixedsys', 'Georgia', 'Impact', 'Lucida Console',
+                        'Microsoft Sans Serif', 'MS Sans Serif', 'Palatino Linotype',
+                        'System', 'Tahoma', 'Terminal', 'Times New Roman',
+                        'Trebuchet MS', 'Verdana'
+                    ];
+                    const styles = ['Regular', 'Italic', 'Bold', 'Bold Italic'];
+                    const sizes = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
+
+                    let selFont = msg.face || 'Lucida Console';
+                    let selSize = msg.size || 10;
+                    let selBold = msg.bold || false;
+                    let selItalic = msg.italic || false;
+
+                    function getStyleIdx() {
+                        if (selBold && selItalic) return 3;
+                        if (selBold) return 2;
+                        if (selItalic) return 1;
+                        return 0;
+                    }
+
+                    const fontInput = input({type: 'text', class: 'win2k-edit', value: selFont, style: 'width:160px; height:21px;'});
+                    const styleInput = input({type: 'text', class: 'win2k-edit', value: styles[getStyleIdx()], style: 'width:100px; height:21px;'});
+                    const sizeInput = input({type: 'text', class: 'win2k-edit', value: String(selSize), style: 'width:50px; height:21px;'});
+
+                    const previewEl = div({class: 'fontdlg-preview', style: 'min-height:60px;'}, 'AaBbYyZz');
+
+                    function updatePreview() {
+                        previewEl.style.fontFamily = "'" + selFont + "', sans-serif";
+                        previewEl.style.fontSize = Math.min(selSize, 48) + 'pt';
+                        previewEl.style.fontWeight = selBold ? 'bold' : 'normal';
+                        previewEl.style.fontStyle = selItalic ? 'italic' : 'normal';
+                    }
+
+                    function selectListItem(listEl, value) {
+                        listEl.querySelectorAll('.fontdlg-list-item').forEach(el => {
+                            el.classList.toggle('selected', el.textContent === String(value));
+                            if (el.textContent === String(value)) {
+                                el.scrollIntoView({block: 'nearest'});
+                            }
+                        });
+                    }
+
+                    // Font list
+                    const fontListEl = div({class: 'fontdlg-list', style: 'width:160px;'});
+                    fonts.forEach(f => {
+                        van.add(fontListEl, div({class: 'fontdlg-list-item' + (f === selFont ? ' selected' : ''), onclick: () => {
+                            selFont = f;
+                            fontInput.value = f;
+                            selectListItem(fontListEl, f);
+                            updatePreview();
+                        }}, f));
+                    });
+
+                    // Style list
+                    const styleListEl = div({class: 'fontdlg-list', style: 'width:100px;'});
+                    styles.forEach((s, i) => {
+                        van.add(styleListEl, div({class: 'fontdlg-list-item' + (i === getStyleIdx() ? ' selected' : ''), onclick: () => {
+                            selBold = (i === 2 || i === 3);
+                            selItalic = (i === 1 || i === 3);
+                            styleInput.value = s;
+                            selectListItem(styleListEl, s);
+                            updatePreview();
+                        }}, s));
+                    });
+
+                    // Size list
+                    const sizeListEl = div({class: 'fontdlg-list', style: 'width:50px;'});
+                    sizes.forEach(sz => {
+                        van.add(sizeListEl, div({class: 'fontdlg-list-item' + (sz === selSize ? ' selected' : ''), onclick: () => {
+                            selSize = sz;
+                            sizeInput.value = String(sz);
+                            selectListItem(sizeListEl, String(sz));
+                            updatePreview();
+                        }}, String(sz)));
+                    });
+
+                    // Handle text input changes
+                    sizeInput.addEventListener('change', () => {
+                        const v = parseInt(sizeInput.value);
+                        if (v > 0 && v < 1000) { selSize = v; selectListItem(sizeListEl, String(v)); updatePreview(); }
+                    });
+                    fontInput.addEventListener('change', () => {
+                        selFont = fontInput.value;
+                        selectListItem(fontListEl, selFont);
+                        updatePreview();
+                    });
+
+                    function onOK() {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({ type: 'font_chosen', face: selFont, size: selSize, bold: selBold, italic: selItalic }));
+                        }
+                    }
+
+                    updatePreview();
+
+                    showDialog('Font',
+                        div({class: 'fontdlg-body'},
+                            div({class: 'fontdlg-col-row'},
+                                div({class: 'fontdlg-col', style: 'flex:1;'},
+                                    label('Font:'), fontInput, fontListEl),
+                                div({class: 'fontdlg-col'},
+                                    label('Font st' + 'yle:'), styleInput, styleListEl),
+                                div({class: 'fontdlg-col'},
+                                    label('Size:'), sizeInput, sizeListEl)),
+                            div({style: 'display:flex; gap:8px; align-items:flex-start; margin-bottom:8px;'},
+                                fieldset({style: 'border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); margin:0; padding:4px 8px; flex:1;'},
+                                    legend({style: 'font-size:11px; padding:0 4px;'}, 'Sample'),
+                                    previewEl),
+                                div({style: 'display:flex; flex-direction:column; gap:4px;'},
+                                    button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => onOK()}, 'OK'),
+                                    button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => closeDialog()}, 'Cancel'))))
+                    );
+                    dialogOverlay.style.width = '440px';
+
+                    // Scroll to initial selections
+                    setTimeout(() => {
+                        selectListItem(fontListEl, selFont);
+                        selectListItem(styleListEl, styles[getStyleIdx()]);
+                        selectListItem(sizeListEl, String(selSize));
+                    }, 50);
+
+                } else if (msg.type === "open_find_dialog") {
+                    // --- Find/Replace Dialog (modeless) ---
+                    const isReplace = msg.mode === 'replace';
+                    const dialogTitle = isReplace ? 'Replace' : 'Find';
+                    let findText = msg.findText || '';
+                    let replaceText = msg.replaceText || '';
+                    let matchCase = false;
+                    let searchDown = true;
+
+                    const findInput = input({type: 'text', value: findText, style: 'width:100%;', id: 'find-input',
+                        oninput: (e) => { findText = e.target.value; }});
+                    const replaceInput = input({type: 'text', value: replaceText, style: 'width:100%;', id: 'replace-input',
+                        oninput: (e) => { replaceText = e.target.value; }});
+                    const matchCaseCheck = input({type: 'checkbox', id: 'find-match-case',
+                        onchange: (e) => { matchCase = e.target.checked; }});
+
+                    function sendFindAction(action) {
+                        if (ws && ws.readyState === 1) {
+                            ws.send(JSON.stringify({
+                                type: 'find_action', action: action,
+                                findText: findText, replaceText: replaceText,
+                                matchCase: matchCase, searchDown: searchDown
+                            }));
+                        }
+                    }
+
+                    const replaceRow = isReplace ? div({style: 'display:flex; align-items:center; gap:8px; margin-bottom:8px;'},
+                        label({style: 'min-width:80px;'}, 'Replace with:'), replaceInput) : null;
+
+                    const replaceButtons = isReplace ? [
+                        button({class: 'win2k-button', style: 'min-width:80px;', onclick: () => sendFindAction('replace')}, 'Replace'),
+                        button({class: 'win2k-button', style: 'min-width:80px;', onclick: () => sendFindAction('replace_all')}, 'Replace All')
+                    ] : [];
+
+                    showDialog(dialogTitle,
+                        div({style: 'display:flex; gap:12px;'},
+                            div({style: 'flex:1;'},
+                                div({style: 'display:flex; align-items:center; gap:8px; margin-bottom:8px;'},
+                                    label({style: 'min-width:80px;'}, 'Find what:'), findInput),
+                                replaceRow ? replaceRow : '',
+                                div({style: 'display:flex; align-items:center; gap:16px; margin-top:4px;'},
+                                    div({style: 'display:flex; align-items:center; gap:4px;'}, matchCaseCheck, label('Match case')),
+                                    !isReplace ? fieldset({style: 'border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); margin:0; padding:4px 8px;'},
+                                        legend({style: 'font-size:11px; padding:0 4px;'}, 'Direction'),
+                                        div({style: 'display:flex; gap:12px;'},
+                                            div({}, input({type: 'radio', name: 'find-dir', id: 'find-up',
+                                                onchange: () => { searchDown = false; }}), label({for: 'find-up'}, 'Up')),
+                                            div({}, input({type: 'radio', name: 'find-dir', id: 'find-down', checked: true,
+                                                onchange: () => { searchDown = true; }}), label({for: 'find-down'}, 'Down'))
+                                        )) : '')),
+                            div({style: 'display:flex; flex-direction:column; gap:4px;'},
+                                button({class: 'win2k-button', style: 'min-width:80px;', onclick: () => sendFindAction('find_next')}, 'Find Next'),
+                                ...replaceButtons,
+                                button({class: 'win2k-button', style: 'min-width:80px;', onclick: () => {
+                                    sendFindAction('close');
+                                    dialogOverlay.style.display = 'none';
+                                }}, 'Cancel')))
+                    );
+                    dialogOverlay.style.width = isReplace ? '420px' : '380px';
+
                 } else if (msg.type === "close_dialog") {
                     dialogOverlay.style.display = 'none';
+
+                } else if (msg.type === "set_edit_font") {
+                    // Apply font to a child control by hwnd, fallback to #edit-control
+                    let el = document.querySelector('[data-hwnd="' + msg.hwnd + '"]');
+                    if (!el) el = document.getElementById('edit-control');
+                    if (el) {
+                        el.style.fontFamily = "'" + msg.face + "', monospace";
+                        el.style.fontSize = msg.size + 'pt';
+                        el.style.fontWeight = msg.bold ? 'bold' : 'normal';
+                        el.style.fontStyle = msg.italic ? 'italic' : 'normal';
+                    }
+
+                } else if (msg.type === "edit_setsel") {
+                    // EM_SETSEL: set textarea selection
+                    const el = document.getElementById('edit-control');
+                    if (el) {
+                        const start = msg.start < 0 ? 0 : msg.start;
+                        const end = msg.end < 0 ? el.value.length : Math.min(msg.end, el.value.length);
+                        el.setSelectionRange(start, end);
+                        el.focus();
+                    }
+
+                } else if (msg.type === "edit_replacesel") {
+                    // EM_REPLACESEL: replace selected text
+                    const el = document.getElementById('edit-control');
+                    if (el) {
+                        const start = el.selectionStart;
+                        const end = el.selectionEnd;
+                        const before = el.value.substring(0, start);
+                        const after = el.value.substring(end);
+                        const newText = msg.text || '';
+                        el.value = before + newText + after;
+                        el.setSelectionRange(start + newText.length, start + newText.length);
+                    }
+
+                } else if (msg.type === "edit_undo") {
+                    const el = document.getElementById('edit-control');
+                    if (el) {
+                        el.focus();
+                        document.execCommand('undo');
+                    }
+
+                } else if (msg.type === "edit_scrollcaret") {
+                    const el = document.getElementById('edit-control');
+                    if (el) {
+                        // Scroll textarea to make caret visible
+                        const pos = el.selectionEnd;
+                        el.blur();
+                        el.focus();
+                        el.setSelectionRange(pos, pos);
+                    }
+
+                } else if (msg.type === "enable_menu_item") {
+                    // EnableMenuItem: add/remove .disabled class from menu items
+                    const items = document.querySelectorAll('[data-cmd-id="' + msg.id + '"]');
+                    items.forEach(item => {
+                        if (msg.enabled) {
+                            item.classList.remove('disabled');
+                        } else {
+                            item.classList.add('disabled');
+                        }
+                    });
+                    // Also update currentMenuData for persistence
+                    if (currentMenuData) {
+                        function updateMenuEnabled(items, id, enabled) {
+                            for (const item of items) {
+                                if (item.id === id) {
+                                    if (enabled) {
+                                        item.flags = (item.flags || 0) & ~0x0003;
+                                    } else {
+                                        item.flags = (item.flags || 0) | 0x0001;
+                                    }
+                                }
+                                if (item.popup) updateMenuEnabled(item.popup, id, enabled);
+                            }
+                        }
+                        updateMenuEnabled(currentMenuData, msg.id, msg.enabled);
+                    }
+
+                } else if (msg.type === "set_statusbar_parts") {
+                    // Create status bar panes
+                    const sb = document.querySelector('.win2k-statusbar');
+                    if (sb) {
+                        // Remove existing panes except grip
+                        const grip = sb.querySelector('.win2k-statusbar-grip');
+                        sb.innerHTML = '';
+                        for (let i = 0; i < msg.count; i++) {
+                            const pane = document.createElement('div');
+                            pane.className = 'win2k-statusbar-pane';
+                            pane.dataset.paneIdx = i;
+                            if (i < msg.count - 1) pane.style.flex = 'none';
+                            sb.appendChild(pane);
+                        }
+                        if (grip) sb.appendChild(grip);
+                    }
+
+                } else if (msg.type === "set_statusbar_text") {
+                    // Update status bar pane text
+                    const sb = document.querySelector('.win2k-statusbar');
+                    if (sb) {
+                        const pane = sb.querySelector('[data-pane-idx="' + msg.part + '"]');
+                        if (pane) {
+                            pane.textContent = msg.text;
+                        } else {
+                            // Fallback: if no panes exist, set entire statusbar text
+                            const firstPane = sb.querySelector('.win2k-statusbar-pane') || sb;
+                            firstPane.textContent = msg.text;
+                        }
+                    }
+
+                } else if (msg.type === "set_clipboard") {
+                    // Backend → browser clipboard
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(msg.text).catch(() => {});
+                    }
+
+                } else if (msg.type === "set_edit_text") {
+                    // Set textarea content from backend
+                    const el = document.getElementById('edit-control');
+                    if (el && msg.text !== undefined) {
+                        el.value = msg.text;
+                    }
+
+                } else if (msg.type === "show_context_menu") {
+                    // Render a context menu popup at (x, y) with items array
+                    let ctxOverlay = document.getElementById('context-menu-overlay');
+                    if (!ctxOverlay) {
+                        ctxOverlay = document.createElement('div');
+                        ctxOverlay.id = 'context-menu-overlay';
+                        ctxOverlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:9999;';
+                        document.body.appendChild(ctxOverlay);
+                    }
+
+                    const menuDiv = document.createElement('div');
+                    menuDiv.className = 'popup-menu';
+                    menuDiv.style.position = 'absolute';
+                    menuDiv.style.left = msg.x + 'px';
+                    menuDiv.style.top = msg.y + 'px';
+                    menuDiv.style.zIndex = '10000';
+
+                    const items = msg.items || [];
+                    items.forEach(item => {
+                        if (item.separator) {
+                            const sep = document.createElement('div');
+                            sep.className = 'popup-separator';
+                            menuDiv.appendChild(sep);
+                        } else {
+                            const mi = document.createElement('div');
+                            mi.className = 'popup-item';
+                            if (item.disabled) mi.classList.add('disabled');
+                            if (item.checked) mi.classList.add('checked');
+                            mi.textContent = item.text || '';
+                            mi.addEventListener('click', () => {
+                                ctxOverlay.remove();
+                                if (ws.readyState === WebSocket.OPEN) {
+                                    ws.send(JSON.stringify({ type: 'context_menu_select', id: item.id }));
+                                }
+                            });
+                            menuDiv.appendChild(mi);
+                        }
+                    });
+
+                    ctxOverlay.innerHTML = '';
+                    ctxOverlay.appendChild(menuDiv);
+                    ctxOverlay.addEventListener('click', (e) => {
+                        if (e.target === ctxOverlay) {
+                            ctxOverlay.remove();
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({ type: 'context_menu_select', id: 0 }));
+                            }
+                        }
+                    });
 
                 } else if (msg.type === "set_title") {
                     document.title = msg.title;
@@ -816,6 +1220,17 @@ function connect() {
                         inset.style.height = '100%';
                     }
                     editEl.focus();
+
+                    // Sync textarea content to backend on input (debounced)
+                    let textSyncTimer = null;
+                    editEl.addEventListener('input', () => {
+                        if (textSyncTimer) clearTimeout(textSyncTimer);
+                        textSyncTimer = setTimeout(() => {
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({ type: 'text_sync', text: editEl.value }));
+                            }
+                        }, 150);
+                    });
 
                 } else if (msg.type === "resize_edit_control") {
                     const editEl = document.getElementById('edit-control');

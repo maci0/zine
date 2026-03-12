@@ -1,5 +1,40 @@
 const std = @import("std");
 const pe = @import("../pe.zig");
+const builtin = @import("builtin");
+
+/// Open a file portably — on WASI, resolves absolute paths through preopened dirs.
+fn openFilePortable(path: []const u8) !std.fs.File {
+    if (comptime builtin.os.tag == .wasi) {
+        if (std.fs.path.isAbsolute(path)) {
+            // Iterate WASI preopened fds (start at fd 3, after stdin/stdout/stderr)
+            var fd: std.os.wasi.fd_t = 3;
+            while (true) : (fd += 1) {
+                var prestat: std.os.wasi.prestat_t = undefined;
+                switch (std.os.wasi.fd_prestat_get(fd, &prestat)) {
+                    .SUCCESS => {},
+                    .OPNOTSUPP, .BADF => break,
+                    else => break,
+                }
+                const name_len = prestat.u.dir.pr_name_len;
+                var name_buf: [4096]u8 = undefined;
+                if (name_len > name_buf.len) continue;
+                switch (std.os.wasi.fd_prestat_dir_name(fd, &name_buf, name_len)) {
+                    .SUCCESS => {},
+                    else => continue,
+                }
+                const preopen_path = name_buf[0..name_len];
+                if (std.mem.startsWith(u8, path, preopen_path)) {
+                    var rest = path[preopen_path.len..];
+                    if (rest.len > 0 and rest[0] == '/') rest = rest[1..];
+                    const dir = std.fs.Dir{ .fd = fd };
+                    return dir.openFile(rest, .{});
+                }
+            }
+            return error.FileNotFound;
+        }
+    }
+    return std.fs.cwd().openFile(path, .{});
+}
 
 pub const Module = struct {
     allocator: std.mem.Allocator,
@@ -13,7 +48,10 @@ pub const Module = struct {
     attached: bool = false,
 
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !*Module {
-        const file = try std.fs.cwd().openFile(path, .{});
+        const file = openFilePortable(path) catch |err| {
+            std.log.err("Module.load: failed to open '{s}': {}", .{ path, err });
+            return err;
+        };
         defer file.close();
 
         const file_size = try file.getEndPos();

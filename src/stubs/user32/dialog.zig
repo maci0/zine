@@ -2,10 +2,18 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const user32 = @import("../user32.zig");
 const renderer = @import("../../gui/renderer.zig");
+const w32 = @import("../../win32_constants.zig");
+const w32cc = @import("../../calling_convention.zig");
 
 const DIALOG_HWND: usize = 0x00000456;
 
-pub fn stub_MessageBoxA(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32) callconv(.winapi) i32 {
+// --- Modal dialog state ---
+pub var modal_dialog_active: bool = false;
+var modal_dialog_result: isize = 0;
+var modal_dialog_dismissed: bool = false;
+var modal_dlgproc: usize = 0;
+
+pub fn stub_MessageBoxA(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = uType;
     const text = if (lpText != 0) trace.c_span(lpText) else "(null)";
@@ -18,7 +26,7 @@ pub fn stub_MessageBoxA(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32
     return 1; // IDOK
 }
 
-pub fn stub_DialogBoxParamA(hInstance: usize, lpTemplateName: usize, hWndParent: usize, lpDialogFunc: usize, dwInitParam: isize) callconv(.winapi) isize {
+pub fn stub_DialogBoxParamA(hInstance: usize, lpTemplateName: usize, hWndParent: usize, lpDialogFunc: usize, dwInitParam: isize) callconv(w32cc.WINAPI) isize {
     _ = hWndParent;
     if (trace.enable_tracing) trace.print("USER32: DialogBoxParamA(template={x}, dlgproc={x})\n", .{ lpTemplateName, lpDialogFunc });
 
@@ -52,6 +60,17 @@ pub fn stub_DialogBoxParamA(hInstance: usize, lpTemplateName: usize, hWndParent:
             renderer.showMessageBox("About", "Windows application running via Zig Winloader\n\n(DialogBoxParamA stub)");
         }
 
+        // Set up modal state BEFORE calling DlgProc (EndDialog may be called from within)
+        modal_dialog_active = true;
+        modal_dialog_dismissed = false;
+        modal_dialog_result = 0;
+        modal_dlgproc = lpDialogFunc;
+
+        // Install cancel_dialog handler for browser close button
+        const prev_cancel = renderer.on_cancel_dialog;
+        renderer.on_cancel_dialog = &handleModalCancel;
+        defer renderer.on_cancel_dialog = prev_cancel;
+
         if (lpDialogFunc != 0) {
             if (trace.enable_tracing) trace.print("USER32: Calling DlgProc with WM_INITDIALOG\n", .{});
             var err_flag: u32 = 0;
@@ -60,25 +79,114 @@ pub fn stub_DialogBoxParamA(hInstance: usize, lpTemplateName: usize, hWndParent:
                 trace.print("USER32: DlgProc WM_INITDIALOG threw exception\n", .{});
             }
         }
+
+        // Modal message loop — block until EndDialog is called
+        modalMessageLoop(lpDialogFunc);
+
+        const result = modal_dialog_result;
+        modal_dialog_active = false;
+        modal_dlgproc = 0;
+
+        // Close the dialog on the frontend
+        renderer.closeDialog();
+
+        if (trace.enable_tracing) trace.print("USER32: DialogBoxParamA returning {d}\n", .{result});
+        return result;
     }
 
     return 1; // IDOK
 }
 
-pub fn stub_EndDialog(hDlg: usize, nResult: isize) callconv(.winapi) i32 {
-    _ = hDlg; _ = nResult;
-    if (trace.enable_tracing) trace.print("USER32: EndDialog\n", .{});
+/// Modal message loop: processes messages and routes WM_COMMAND to the DlgProc.
+/// Blocks until EndDialog sets modal_dialog_dismissed.
+fn modalMessageLoop(dlgproc: usize) void {
+    while (!modal_dialog_dismissed) {
+        var got_message = false;
+
+        // Check for pending command (WM_COMMAND from WebSocket/menu)
+        var cmd_to_dispatch: ?u32 = null;
+        {
+            user32.pending_command_mutex.lock();
+            defer user32.pending_command_mutex.unlock();
+
+            if (user32.pending_command) |cmd_id| {
+                user32.pending_command = null;
+                cmd_to_dispatch = cmd_id;
+                got_message = true;
+            }
+        }
+
+        // Dispatch WM_COMMAND outside the mutex (DlgProc may re-enter message APIs)
+        if (cmd_to_dispatch) |cmd_id| {
+            if (trace.enable_tracing) trace.print("USER32: Modal dialog dispatching WM_COMMAND({d}) to DlgProc\n", .{cmd_id});
+            if (dlgproc != 0) {
+                var err_flag: u32 = 0;
+                _ = user32.callWndProcSafe(dlgproc, DIALOG_HWND, w32.WM_COMMAND, cmd_id, 0, &err_flag);
+            }
+        }
+
+        // Check for queued messages (keyboard, WM_CLOSE, etc.)
+        var queued_msg: ?user32.MSG = null;
+        {
+            user32.pending_command_mutex.lock();
+            defer user32.pending_command_mutex.unlock();
+
+            if (user32.pending_messages_tail != user32.pending_messages_head) {
+                queued_msg = user32.pending_messages[user32.pending_messages_tail];
+                user32.pending_messages_tail = (user32.pending_messages_tail + 1) % user32.pending_messages.len;
+                got_message = true;
+            }
+        }
+
+        // Dispatch queued message outside the mutex
+        if (queued_msg) |msg| {
+            // WM_QUIT should break the modal loop
+            if (msg.message == w32.WM_QUIT) {
+                modal_dialog_dismissed = true;
+                modal_dialog_result = 0;
+                break;
+            }
+
+            if (dlgproc != 0) {
+                var err_flag: u32 = 0;
+                _ = user32.callWndProcSafe(dlgproc, DIALOG_HWND, msg.message, msg.wParam, msg.lParam, &err_flag);
+            }
+        }
+
+        if (!got_message) {
+            // Sleep briefly to avoid busy-waiting
+            std.Thread.sleep(1 * std.time.ns_per_ms);
+        }
+    }
+}
+
+/// Handler for browser dialog close button during modal dialog
+fn handleModalCancel() void {
+    if (modal_dialog_active) {
+        modal_dialog_dismissed = true;
+        modal_dialog_result = 0; // IDCANCEL equivalent
+    }
+}
+
+pub fn stub_EndDialog(hDlg: usize, nResult: isize) callconv(w32cc.WINAPI) i32 {
+    _ = hDlg;
+    if (trace.enable_tracing) trace.print("USER32: EndDialog(result={d})\n", .{nResult});
+
+    if (modal_dialog_active) {
+        modal_dialog_result = nResult;
+        modal_dialog_dismissed = true;
+    }
     return 1;
 }
 
-pub fn stub_GetDlgItem(hDlg: usize, nIDDlgItem: i32) callconv(.winapi) usize {
+pub fn stub_GetDlgItem(hDlg: usize, nIDDlgItem: i32) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("USER32: GetDlgItem(id={d})\n", .{nIDDlgItem});
     // Return a deterministic HWND for the child control based on the parent dialog and child ID
     // This allows subclassing child controls without subclassing the main dialog!
     return (hDlg << 8) ^ @as(usize, @bitCast(@as(isize, nIDDlgItem)));
 }
 
-pub fn stub_SetDlgItemTextA(hDlg: usize, nIDDlgItem: i32, lpString: usize) callconv(.winapi) i32 {
+pub fn stub_SetDlgItemTextA(hDlg: usize, nIDDlgItem: i32, lpString: usize) callconv(w32cc.WINAPI) i32 {
     _ = hDlg;
     const text = if (lpString != 0) trace.c_span(lpString) else "";
     if (trace.enable_tracing) {
@@ -88,7 +196,7 @@ pub fn stub_SetDlgItemTextA(hDlg: usize, nIDDlgItem: i32, lpString: usize) callc
     return 1;
 }
 
-pub fn stub_GetDlgItemTextA(hDlg: usize, nIDDlgItem: i32, lpString: usize, cchMax: i32) callconv(.winapi) i32 {
+pub fn stub_GetDlgItemTextA(hDlg: usize, nIDDlgItem: i32, lpString: usize, cchMax: i32) callconv(w32cc.WINAPI) i32 {
     _ = hDlg;
     _ = nIDDlgItem;
     if (lpString != 0 and cchMax > 0) {
@@ -97,7 +205,7 @@ pub fn stub_GetDlgItemTextA(hDlg: usize, nIDDlgItem: i32, lpString: usize, cchMa
     return 0;
 }
 
-pub fn stub_SendDlgItemMessageA(hDlg: usize, nIDDlgItem: i32, Msg: u32, wParam: usize, lParam: isize) callconv(.winapi) isize {
+pub fn stub_SendDlgItemMessageA(hDlg: usize, nIDDlgItem: i32, Msg: u32, wParam: usize, lParam: isize) callconv(w32cc.WINAPI) isize {
     _ = hDlg;
     _ = wParam;
     _ = lParam;
@@ -108,14 +216,14 @@ pub fn stub_SendDlgItemMessageA(hDlg: usize, nIDDlgItem: i32, Msg: u32, wParam: 
     return 0;
 }
 
-pub fn stub_CheckDlgButton(hDlg: usize, nIDButton: i32, uCheck: u32) callconv(.winapi) i32 {
+pub fn stub_CheckDlgButton(hDlg: usize, nIDButton: i32, uCheck: u32) callconv(w32cc.WINAPI) i32 {
     _ = hDlg;
     _ = nIDButton;
     _ = uCheck;
     return 1;
 }
 
-pub fn stub_CheckRadioButton(hDlg: usize, nIDFirstButton: i32, nIDLastButton: i32, nIDCheckButton: i32) callconv(.winapi) i32 {
+pub fn stub_CheckRadioButton(hDlg: usize, nIDFirstButton: i32, nIDLastButton: i32, nIDCheckButton: i32) callconv(w32cc.WINAPI) i32 {
     _ = hDlg;
     _ = nIDFirstButton;
     _ = nIDLastButton;
@@ -123,13 +231,13 @@ pub fn stub_CheckRadioButton(hDlg: usize, nIDFirstButton: i32, nIDLastButton: i3
     return 1;
 }
 
-pub fn stub_IsDlgButtonChecked(hDlg: usize, nIDButton: i32) callconv(.winapi) u32 {
+pub fn stub_IsDlgButtonChecked(hDlg: usize, nIDButton: i32) callconv(w32cc.WINAPI) u32 {
     _ = hDlg;
     _ = nIDButton;
     return 0;
 }
 
-pub fn stub_GetDlgItemInt(hDlg: usize, nIDDlgItem: i32, lpTranslated: usize, bSigned: i32) callconv(.winapi) u32 {
+pub fn stub_GetDlgItemInt(hDlg: usize, nIDDlgItem: i32, lpTranslated: usize, bSigned: i32) callconv(w32cc.WINAPI) u32 {
     _ = hDlg;
     _ = nIDDlgItem;
     _ = bSigned;
@@ -141,7 +249,7 @@ pub fn stub_GetDlgItemInt(hDlg: usize, nIDDlgItem: i32, lpTranslated: usize, bSi
 
 var next_dialog_hwnd: usize = DIALOG_HWND;
 
-pub fn stub_CreateDialogParamA(hInstance: usize, lpTemplateName: usize, hWndParent: usize, lpDialogFunc: usize, dwInitParam: usize) callconv(.winapi) usize {
+pub fn stub_CreateDialogParamA(hInstance: usize, lpTemplateName: usize, hWndParent: usize, lpDialogFunc: usize, dwInitParam: usize) callconv(w32cc.WINAPI) usize {
     _ = hWndParent;
 
     const dialog_hwnd = next_dialog_hwnd;
@@ -202,14 +310,14 @@ pub fn stub_CreateDialogParamA(hInstance: usize, lpTemplateName: usize, hWndPare
     return dialog_hwnd;
 }
 
-pub fn stub_SetDlgItemInt(hDlg: usize, nIDDlgItem: i32, uValue: u32, bSigned: i32) callconv(.winapi) i32 {
+pub fn stub_SetDlgItemInt(hDlg: usize, nIDDlgItem: i32, uValue: u32, bSigned: i32) callconv(w32cc.WINAPI) i32 {
     _ = hDlg;
     _ = bSigned;
     if (trace.enable_tracing) trace.print("USER32: SetDlgItemInt(id={d}, val={d})\n", .{ nIDDlgItem, uValue });
     return 1;
 }
 
-pub fn stub_MessageBoxW(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32) callconv(.winapi) i32 {
+pub fn stub_MessageBoxW(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = uType;
     if (trace.enable_tracing) trace.print("USER32: MessageBoxW\n", .{});

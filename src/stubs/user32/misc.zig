@@ -1,19 +1,20 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32 = @import("../win32_constants.zig");
+const w32 = @import("../../win32_constants.zig");
+const w32cc = @import("../../calling_convention.zig");
 
-pub fn stub_CharNextA(lpsz: [*:0]const u8) callconv(.winapi) [*:0]const u8 {
+pub fn stub_CharNextA(lpsz: [*:0]const u8) callconv(w32cc.WINAPI) [*:0]const u8 {
     if (lpsz[0] == 0) return lpsz;
     return lpsz + 1;
 }
 
-pub fn stub_CharPrevA(lpszStart: usize, lpszCurrent: usize) callconv(.winapi) usize {
+pub fn stub_CharPrevA(lpszStart: usize, lpszCurrent: usize) callconv(w32cc.WINAPI) usize {
     _ = lpszStart;
     if (lpszCurrent > 0) return lpszCurrent - 1;
     return 0;
 }
 
-pub fn stub_CharToOemA(lpszSrc: usize, lpszDst: usize) callconv(.winapi) i32 {
+pub fn stub_CharToOemA(lpszSrc: usize, lpszDst: usize) callconv(w32cc.WINAPI) i32 {
     if (lpszSrc == 0 or lpszDst == 0) return 0;
     if (lpszSrc != lpszDst) {
         const src = trace.c_span(lpszSrc);
@@ -25,17 +26,17 @@ pub fn stub_CharToOemA(lpszSrc: usize, lpszDst: usize) callconv(.winapi) i32 {
 }
 
 // Identity copy — we don't distinguish ANSI and OEM codepages.
-pub fn stub_OemToCharA(lpszSrc: usize, lpszDst: usize) callconv(.winapi) i32 {
+pub fn stub_OemToCharA(lpszSrc: usize, lpszDst: usize) callconv(w32cc.WINAPI) i32 {
     return stub_CharToOemA(lpszSrc, lpszDst);
 }
 
-pub fn stub_ChangeDisplaySettingsA(lpDevMode: usize, dwFlags: u32) callconv(.winapi) i32 {
+pub fn stub_ChangeDisplaySettingsA(lpDevMode: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: ChangeDisplaySettingsA(lpDevMode=0x{X}, flags=0x{X})\n", .{ lpDevMode, dwFlags });
     // 0 = DISP_CHANGE_SUCCESSFUL
     return 0;
 }
 
-pub fn stub_EnumDisplaySettingsA(lpszDeviceName: usize, iModeNum: u32, lpDevMode: usize) callconv(.winapi) i32 {
+pub fn stub_EnumDisplaySettingsA(lpszDeviceName: usize, iModeNum: u32, lpDevMode: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpszDeviceName;
     if (trace.enable_tracing) trace.print("USER32: EnumDisplaySettingsA(mode={d})\n", .{iModeNum});
 
@@ -55,7 +56,7 @@ pub fn stub_EnumDisplaySettingsA(lpszDeviceName: usize, iModeNum: u32, lpDevMode
 
 var cursor_count: i32 = 0;
 
-pub fn stub_ShowCursor(bShow: i32) callconv(.winapi) i32 {
+pub fn stub_ShowCursor(bShow: i32) callconv(w32cc.WINAPI) i32 {
     if (bShow != 0) {
         cursor_count += 1;
     } else {
@@ -65,7 +66,7 @@ pub fn stub_ShowCursor(bShow: i32) callconv(.winapi) i32 {
     return cursor_count;
 }
 
-pub fn stub_wsprintfA(lpOut: [*:0]u8, lpFmt: [*:0]const u8, a1: usize, a2: usize, a3: usize, a4: usize) callconv(.c) i32 {
+pub fn stub_wsprintfA(lpOut: [*:0]u8, lpFmt: [*:0]const u8, a1: usize, a2: usize, a3: usize, a4: usize) callconv(w32cc.WINAPI) i32 {
     _ = a1;
     _ = a2;
     _ = a3;
@@ -80,17 +81,17 @@ pub fn stub_wsprintfA(lpOut: [*:0]u8, lpFmt: [*:0]const u8, a1: usize, a2: usize
     return 0;
 }
 
-pub fn stub_MessageBeep(uType: u32) callconv(.winapi) i32 {
+pub fn stub_MessageBeep(uType: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: MessageBeep(type=0x{X})\n", .{uType});
     return 1;
 }
 
-pub fn stub_SetActiveWindow(hWnd: usize) callconv(.winapi) usize {
+pub fn stub_SetActiveWindow(hWnd: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("USER32: SetActiveWindow(0x{X})\n", .{hWnd});
     return hWnd;
 }
 
-pub fn stub_GetSysColor(nIndex: i32) callconv(.winapi) u32 {
+pub fn stub_GetSysColor(nIndex: i32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("USER32: GetSysColor({d})\n", .{nIndex});
     // Windows 2000 "Windows Standard" scheme — COLORREF is 0x00BBGGRR
     return switch (nIndex) {
@@ -127,17 +128,17 @@ pub fn stub_GetSysColor(nIndex: i32) callconv(.winapi) u32 {
     };
 }
 
-pub fn stub_GetSysColorBrush(nIndex: i32) callconv(.winapi) usize {
+pub fn stub_GetSysColorBrush(nIndex: i32) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("USER32: GetSysColorBrush({d})\n", .{nIndex});
     return 0xB0000000 | @as(usize, @intCast(@as(u32, @bitCast(nIndex))));
 }
 
-pub fn stub_GetParent(hWnd: usize) callconv(.winapi) usize {
+pub fn stub_GetParent(hWnd: usize) callconv(w32cc.WINAPI) usize {
     _ = hWnd;
     return 0;
 }
 
-pub fn stub_FindWindowA(lpClassName: usize, lpWindowName: usize) callconv(.winapi) usize {
+pub fn stub_FindWindowA(lpClassName: usize, lpWindowName: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) {
         const cls = if (lpClassName != 0 and lpClassName > 0xFFFF) trace.c_span(lpClassName) else "(null)";
         const name = if (lpWindowName != 0) trace.c_span(lpWindowName) else "(null)";
@@ -146,7 +147,7 @@ pub fn stub_FindWindowA(lpClassName: usize, lpWindowName: usize) callconv(.winap
     return 0;
 }
 
-pub fn stub_GetWindowTextA(hWnd: usize, lpString: usize, nMaxCount: i32) callconv(.winapi) i32 {
+pub fn stub_GetWindowTextA(hWnd: usize, lpString: usize, nMaxCount: i32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     if (lpString != 0 and nMaxCount > 0) {
         @as([*]u8, @ptrFromInt(lpString))[0] = 0;
@@ -154,19 +155,19 @@ pub fn stub_GetWindowTextA(hWnd: usize, lpString: usize, nMaxCount: i32) callcon
     return 0;
 }
 
-pub fn stub_GetWindowTextLengthA(hWnd: usize) callconv(.winapi) i32 {
+pub fn stub_GetWindowTextLengthA(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     return 0;
 }
 
-pub fn stub_IsZoomed(hWnd: usize) callconv(.winapi) i32 {
+pub fn stub_IsZoomed(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     return 0;
 }
 
 var next_registered_msg: u32 = 0xC000;
 
-pub fn stub_RegisterWindowMessageA(lpString: usize) callconv(.winapi) u32 {
+pub fn stub_RegisterWindowMessageA(lpString: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) {
         const name = if (lpString != 0) trace.c_span(lpString) else "(null)";
         trace.print("USER32: RegisterWindowMessageA('{s}') -> 0x{X}\n", .{ name, next_registered_msg });
@@ -176,7 +177,7 @@ pub fn stub_RegisterWindowMessageA(lpString: usize) callconv(.winapi) u32 {
     return id;
 }
 
-pub fn stub_RegisterWindowMessageW(lpString: usize) callconv(.winapi) u32 {
+pub fn stub_RegisterWindowMessageW(lpString: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) {
         const window = @import("window.zig");
         const name = if (lpString != 0) window.wideToUtf8(lpString) else "(null)";
@@ -187,25 +188,25 @@ pub fn stub_RegisterWindowMessageW(lpString: usize) callconv(.winapi) u32 {
     return id;
 }
 
-pub fn stub_GetSystemMenu(hWnd: usize, bRevert: i32) callconv(.winapi) usize {
+pub fn stub_GetSystemMenu(hWnd: usize, bRevert: i32) callconv(w32cc.WINAPI) usize {
     _ = hWnd;
     _ = bRevert;
     if (trace.enable_tracing) trace.print("USER32: GetSystemMenu\n", .{});
     return 0x00000BBB;
 }
 
-pub fn stub_GetMessageTime() callconv(.winapi) i32 {
+pub fn stub_GetMessageTime() callconv(w32cc.WINAPI) i32 {
     const ts = std.time.milliTimestamp();
     return @truncate(ts);
 }
 
-pub fn stub_IsDialogMessageA(hDlg: usize, lpMsg: usize) callconv(.winapi) i32 {
+pub fn stub_IsDialogMessageA(hDlg: usize, lpMsg: usize) callconv(w32cc.WINAPI) i32 {
     _ = hDlg;
     _ = lpMsg;
     return 0;
 }
 
-pub fn stub_MsgWaitForMultipleObjects(nCount: u32, pHandles: usize, fWaitAll: i32, dwMilliseconds: u32, dwWakeMask: u32) callconv(.winapi) u32 {
+pub fn stub_MsgWaitForMultipleObjects(nCount: u32, pHandles: usize, fWaitAll: i32, dwMilliseconds: u32, dwWakeMask: u32) callconv(w32cc.WINAPI) u32 {
     _ = pHandles;
     _ = fWaitAll;
     _ = dwMilliseconds;
@@ -213,7 +214,7 @@ pub fn stub_MsgWaitForMultipleObjects(nCount: u32, pHandles: usize, fWaitAll: i3
     return nCount; // WAIT_OBJECT_0 + nCount = message queue signaled
 }
 
-pub fn stub_GetWindowPlacement(hWnd: usize, lpwndpl: usize) callconv(.winapi) i32 {
+pub fn stub_GetWindowPlacement(hWnd: usize, lpwndpl: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     if (lpwndpl != 0) {
         const wp = @as(*w32.WINDOWPLACEMENT, @ptrFromInt(lpwndpl));
@@ -222,13 +223,13 @@ pub fn stub_GetWindowPlacement(hWnd: usize, lpwndpl: usize) callconv(.winapi) i3
     return 1;
 }
 
-pub fn stub_SetWindowPlacement(hWnd: usize, lpwndpl: usize) callconv(.winapi) i32 {
+pub fn stub_SetWindowPlacement(hWnd: usize, lpwndpl: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = lpwndpl;
     return 1;
 }
 
-pub fn stub_WinHelpA(hWndMain: usize, lpszHelp: usize, uCommand: u32, dwData: usize) callconv(.winapi) i32 {
+pub fn stub_WinHelpA(hWndMain: usize, lpszHelp: usize, uCommand: u32, dwData: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWndMain;
     _ = lpszHelp;
     _ = uCommand;
@@ -237,7 +238,7 @@ pub fn stub_WinHelpA(hWndMain: usize, lpszHelp: usize, uCommand: u32, dwData: us
     return 1;
 }
 
-pub fn stub_DrawTextA(hdc: usize, lpchText: usize, cchText: i32, lprc: usize, format: u32) callconv(.winapi) i32 {
+pub fn stub_DrawTextA(hdc: usize, lpchText: usize, cchText: i32, lprc: usize, format: u32) callconv(w32cc.WINAPI) i32 {
     _ = hdc;
     _ = lpchText;
     _ = cchText;
@@ -246,7 +247,7 @@ pub fn stub_DrawTextA(hdc: usize, lpchText: usize, cchText: i32, lprc: usize, fo
     return 0;
 }
 
-pub fn stub_DrawTextW(hdc: usize, lpchText: usize, cchText: i32, lprc: usize, format: u32) callconv(.winapi) i32 {
+pub fn stub_DrawTextW(hdc: usize, lpchText: usize, cchText: i32, lprc: usize, format: u32) callconv(w32cc.WINAPI) i32 {
     _ = hdc;
     _ = lpchText;
     _ = cchText;
@@ -255,7 +256,7 @@ pub fn stub_DrawTextW(hdc: usize, lpchText: usize, cchText: i32, lprc: usize, fo
     return 0;
 }
 
-pub fn stub_CharLowerA(lpsz: usize) callconv(.winapi) usize {
+pub fn stub_CharLowerA(lpsz: usize) callconv(w32cc.WINAPI) usize {
     if (lpsz > 0xFFFF) {
         const span = trace.c_span(lpsz);
         const buf = @as([*]u8, @ptrFromInt(lpsz));
@@ -268,28 +269,28 @@ pub fn stub_CharLowerA(lpsz: usize) callconv(.winapi) usize {
     return lpsz;
 }
 
-pub fn stub_CharUpperW(lpsz: usize) callconv(.winapi) usize {
+pub fn stub_CharUpperW(lpsz: usize) callconv(w32cc.WINAPI) usize {
     return lpsz;
 }
 
-pub fn stub_CharLowerW(lpsz: usize) callconv(.winapi) usize {
+pub fn stub_CharLowerW(lpsz: usize) callconv(w32cc.WINAPI) usize {
     return lpsz;
 }
 
-pub fn stub_GetKeyboardLayout(idThread: u32) callconv(.winapi) usize {
+pub fn stub_GetKeyboardLayout(idThread: u32) callconv(w32cc.WINAPI) usize {
     _ = idThread;
     return 0x04090409; // English US
 }
 
-pub fn stub_GetDoubleClickTime() callconv(.winapi) u32 {
+pub fn stub_GetDoubleClickTime() callconv(w32cc.WINAPI) u32 {
     return 500;
 }
 
-pub fn stub_GetCaretBlinkTime() callconv(.winapi) u32 {
+pub fn stub_GetCaretBlinkTime() callconv(w32cc.WINAPI) u32 {
     return 530;
 }
 
-pub fn stub_EqualRect(lprc1: usize, lprc2: usize) callconv(.winapi) i32 {
+pub fn stub_EqualRect(lprc1: usize, lprc2: usize) callconv(w32cc.WINAPI) i32 {
     if (lprc1 == 0 or lprc2 == 0) return 0;
     const r1 = @as(*const w32.RECT, @ptrFromInt(lprc1));
     const r2 = @as(*const w32.RECT, @ptrFromInt(lprc2));
@@ -297,7 +298,7 @@ pub fn stub_EqualRect(lprc1: usize, lprc2: usize) callconv(.winapi) i32 {
     return 0;
 }
 
-pub fn stub_InflateRect(lprc: usize, dx: i32, dy: i32) callconv(.winapi) i32 {
+pub fn stub_InflateRect(lprc: usize, dx: i32, dy: i32) callconv(w32cc.WINAPI) i32 {
     if (lprc == 0) return 0;
     const r = @as(*w32.RECT, @ptrFromInt(lprc));
     r.left -= dx;
@@ -307,7 +308,7 @@ pub fn stub_InflateRect(lprc: usize, dx: i32, dy: i32) callconv(.winapi) i32 {
     return 1;
 }
 
-pub fn stub_IntersectRect(lprcDst: usize, lprcSrc1: usize, lprcSrc2: usize) callconv(.winapi) i32 {
+pub fn stub_IntersectRect(lprcDst: usize, lprcSrc1: usize, lprcSrc2: usize) callconv(w32cc.WINAPI) i32 {
     if (lprcDst == 0 or lprcSrc1 == 0 or lprcSrc2 == 0) return 0;
     const src1 = @as(*const w32.RECT, @ptrFromInt(lprcSrc1));
     const src2 = @as(*const w32.RECT, @ptrFromInt(lprcSrc2));
@@ -327,17 +328,17 @@ pub fn stub_IntersectRect(lprcDst: usize, lprcSrc1: usize, lprcSrc2: usize) call
     return 0;
 }
 
-pub fn stub_MessageBoxIndirectA(lpmbp: usize) callconv(.winapi) i32 {
+pub fn stub_MessageBoxIndirectA(lpmbp: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpmbp;
     return 1; // IDOK
 }
 
-pub fn stub_SetKeyboardState(lpKeyState: usize) callconv(.winapi) i32 {
+pub fn stub_SetKeyboardState(lpKeyState: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpKeyState;
     return 1;
 }
 
-pub fn stub_ToAsciiEx(uVirtKey: u32, uScanCode: u32, lpKeyState: usize, lpChar: usize, uFlags: u32, dwhkl: usize) callconv(.winapi) i32 {
+pub fn stub_ToAsciiEx(uVirtKey: u32, uScanCode: u32, lpKeyState: usize, lpChar: usize, uFlags: u32, dwhkl: usize) callconv(w32cc.WINAPI) i32 {
     _ = uVirtKey;
     _ = uScanCode;
     _ = lpKeyState;
@@ -347,20 +348,20 @@ pub fn stub_ToAsciiEx(uVirtKey: u32, uScanCode: u32, lpKeyState: usize, lpChar: 
     return 0;
 }
 
-pub fn stub_FlashWindow(hWnd: usize, bInvert: i32) callconv(.winapi) i32 {
+pub fn stub_FlashWindow(hWnd: usize, bInvert: i32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = bInvert;
     return 0;
 }
 
-pub fn stub_SetClassLongA(hWnd: usize, nIndex: i32, dwNewLong: i32) callconv(.winapi) u32 {
+pub fn stub_SetClassLongA(hWnd: usize, nIndex: i32, dwNewLong: i32) callconv(w32cc.WINAPI) u32 {
     _ = hWnd;
     _ = nIndex;
     _ = dwNewLong;
     return 0;
 }
 
-pub fn stub_DefDlgProcA(hDlg: usize, Msg: u32, wParam: usize, lParam: usize) callconv(.winapi) usize {
+pub fn stub_DefDlgProcA(hDlg: usize, Msg: u32, wParam: usize, lParam: usize) callconv(w32cc.WINAPI) usize {
     _ = hDlg;
     _ = Msg;
     _ = wParam;
@@ -368,7 +369,7 @@ pub fn stub_DefDlgProcA(hDlg: usize, Msg: u32, wParam: usize, lParam: usize) cal
     return 0;
 }
 
-pub fn stub_MapDialogRect(hDlg: usize, lpRect: usize) callconv(.winapi) i32 {
+pub fn stub_MapDialogRect(hDlg: usize, lpRect: usize) callconv(w32cc.WINAPI) i32 {
     _ = hDlg;
     _ = lpRect;
     return 1;
@@ -376,7 +377,7 @@ pub fn stub_MapDialogRect(hDlg: usize, lpRect: usize) callconv(.winapi) i32 {
 
 var next_clipboard_format: u32 = 0xC100;
 
-pub fn stub_RegisterClipboardFormatA(lpszFormat: usize) callconv(.winapi) u32 {
+pub fn stub_RegisterClipboardFormatA(lpszFormat: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) {
         const name = if (lpszFormat != 0) trace.c_span(lpszFormat) else "(null)";
         trace.print("USER32: RegisterClipboardFormatA('{s}') -> 0x{X}\n", .{ name, next_clipboard_format });
@@ -388,24 +389,24 @@ pub fn stub_RegisterClipboardFormatA(lpszFormat: usize) callconv(.winapi) u32 {
 
 // --- Europa 1400 compatibility ---
 
-pub fn stub_ValidateRect(hWnd: usize, lpRect: usize) callconv(.winapi) i32 {
+pub fn stub_ValidateRect(hWnd: usize, lpRect: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = lpRect;
     return 1;
 }
 
-pub fn stub_UnregisterClassA(lpClassName: usize, hInstance: usize) callconv(.winapi) i32 {
+pub fn stub_UnregisterClassA(lpClassName: usize, hInstance: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpClassName;
     _ = hInstance;
     return 1;
 }
 
-pub fn stub_IsWindowVisible(hWnd: usize) callconv(.winapi) i32 {
+pub fn stub_IsWindowVisible(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     return 1;
 }
 
-pub fn stub_CallNextHookEx(hhk: usize, nCode: i32, wParam: usize, lParam: usize) callconv(.winapi) usize {
+pub fn stub_CallNextHookEx(hhk: usize, nCode: i32, wParam: usize, lParam: usize) callconv(w32cc.WINAPI) usize {
     _ = hhk;
     _ = nCode;
     _ = wParam;
@@ -413,12 +414,12 @@ pub fn stub_CallNextHookEx(hhk: usize, nCode: i32, wParam: usize, lParam: usize)
     return 0;
 }
 
-pub fn stub_MapVirtualKeyA(uCode: u32, uMapType: u32) callconv(.winapi) u32 {
+pub fn stub_MapVirtualKeyA(uCode: u32, uMapType: u32) callconv(w32cc.WINAPI) u32 {
     _ = uMapType;
     return uCode; // Identity mapping
 }
 
-pub fn stub_RegisterClassExA(lpwcx: usize) callconv(.winapi) u16 {
+pub fn stub_RegisterClassExA(lpwcx: usize) callconv(w32cc.WINAPI) u16 {
     if (lpwcx != 0) {
         const wc = @as(*const w32.WNDCLASSEXA, @ptrFromInt(lpwcx));
         _ = wc.lpfnWndProc;
@@ -433,12 +434,12 @@ pub fn stub_RegisterClassExA(lpwcx: usize) callconv(.winapi) u16 {
     return 0xBEEF; // Fake atom
 }
 
-pub fn stub_RegisterClassExW(lpwcx: usize) callconv(.winapi) u16 {
+pub fn stub_RegisterClassExW(lpwcx: usize) callconv(w32cc.WINAPI) u16 {
     if (lpwcx != 0) {
         const wc = @as(*const w32.WNDCLASSEXA, @ptrFromInt(lpwcx));
         const user32 = @import("../user32.zig");
         if (wc.lpfnWndProc != 0) {
-            user32.global_wndproc = @as(*const fn (usize, u32, usize, isize) callconv(.winapi) isize, @ptrFromInt(wc.lpfnWndProc));
+            user32.global_wndproc = @as(*const fn (usize, u32, usize, isize) callconv(w32cc.WINAPI) isize, @ptrFromInt(wc.lpfnWndProc));
         }
 
         if (wc.lpszMenuName != 0) {
@@ -456,23 +457,23 @@ pub fn stub_RegisterClassExW(lpwcx: usize) callconv(.winapi) u16 {
     return 0xBEEF; // Fake atom
 }
 
-pub fn stub_BringWindowToTop(hWnd: usize) callconv(.winapi) i32 {
+pub fn stub_BringWindowToTop(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     return 1;
 }
 
-pub fn stub_VkKeyScanA(ch: u8) callconv(.winapi) i16 {
+pub fn stub_VkKeyScanA(ch: u8) callconv(w32cc.WINAPI) i16 {
     // Return the VK code for basic ASCII
     return @as(i16, @intCast(ch));
 }
 
-pub fn stub_SetCursorPos(x: i32, y: i32) callconv(.winapi) i32 {
+pub fn stub_SetCursorPos(x: i32, y: i32) callconv(w32cc.WINAPI) i32 {
     _ = x;
     _ = y;
     return 1;
 }
 
-pub fn stub_SetWindowsHookExA(idHook: i32, lpfn: usize, hmod: usize, dwThreadId: u32) callconv(.winapi) usize {
+pub fn stub_SetWindowsHookExA(idHook: i32, lpfn: usize, hmod: usize, dwThreadId: u32) callconv(w32cc.WINAPI) usize {
     _ = idHook;
     _ = lpfn;
     _ = hmod;
@@ -480,12 +481,12 @@ pub fn stub_SetWindowsHookExA(idHook: i32, lpfn: usize, hmod: usize, dwThreadId:
     return 0xBEEF0010; // Fake hook handle
 }
 
-pub fn stub_UnhookWindowsHookEx(hhk: usize) callconv(.winapi) i32 {
+pub fn stub_UnhookWindowsHookEx(hhk: usize) callconv(w32cc.WINAPI) i32 {
     _ = hhk;
     return 1;
 }
 
-pub fn stub_GetWindowThreadProcessId(hWnd: usize, lpdwProcessId: usize) callconv(.winapi) u32 {
+pub fn stub_GetWindowThreadProcessId(hWnd: usize, lpdwProcessId: usize) callconv(w32cc.WINAPI) u32 {
     _ = hWnd;
     if (lpdwProcessId != 0) {
         @as(*u32, @ptrFromInt(lpdwProcessId)).* = 1000; // fake PID
@@ -493,25 +494,25 @@ pub fn stub_GetWindowThreadProcessId(hWnd: usize, lpdwProcessId: usize) callconv
     return 1000; // fake thread ID
 }
 
-pub fn stub_GetWindow(hWnd: usize, uCmd: u32) callconv(.winapi) usize {
+pub fn stub_GetWindow(hWnd: usize, uCmd: u32) callconv(w32cc.WINAPI) usize {
     _ = hWnd;
     _ = uCmd;
     return 0; // No window found
 }
 
-pub fn stub_GetTopWindow(hWnd: usize) callconv(.winapi) usize {
+pub fn stub_GetTopWindow(hWnd: usize) callconv(w32cc.WINAPI) usize {
     _ = hWnd;
     return 0;
 }
 
-pub fn stub_CharNextW(lpsz: usize) callconv(.winapi) usize {
+pub fn stub_CharNextW(lpsz: usize) callconv(w32cc.WINAPI) usize {
     if (lpsz == 0) return 0;
     const ptr = @as([*]const u16, @ptrFromInt(lpsz));
     if (ptr[0] == 0) return lpsz;
     return lpsz + 2; // advance by one u16
 }
 
-pub fn stub_wsprintfW(lpOut: [*]u16, lpFmt: [*]const u16, a1: usize, a2: usize, a3: usize, a4: usize) callconv(.c) i32 {
+pub fn stub_wsprintfW(lpOut: [*]u16, lpFmt: [*]const u16, a1: usize, a2: usize, a3: usize, a4: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpFmt;
     _ = a1;
     _ = a2;

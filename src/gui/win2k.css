@@ -267,9 +267,24 @@ body {
 }
 
 .popup-item {
-    padding: 2px 20px;
+    padding: 2px 20px 2px 22px;
     color: var(--sys-menu-text);
     white-space: nowrap;
+    position: relative;
+}
+
+.popup-item.checked::before {
+    content: '✓';
+    position: absolute;
+    left: 6px;
+    top: 2px;
+    font-size: 11px;
+    line-height: 1;
+}
+
+.popup-item.disabled {
+    color: var(--sys-gray-text, #808080);
+    pointer-events: none;
 }
 
 .popup-item:hover {
@@ -445,6 +460,7 @@ canvas {
     overflow: auto;
     white-space: pre;
     tab-size: 8;
+    -webkit-user-drag: none;
 }
 
 #status {
@@ -1343,9 +1359,11 @@ select.win2k-edit:disabled {
     padding: 8px;
     text-align: center;
     min-height: 48px;
+    max-height: 80px;
     display: flex;
     align-items: center;
     justify-content: center;
+    overflow: hidden;
 }
 
 /* ===================================================================

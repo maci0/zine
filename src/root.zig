@@ -1,1 +1,1 @@
-// Root module for winloader library (currently unused)
+// Root module for zine library (currently unused)

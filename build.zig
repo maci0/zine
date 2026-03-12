@@ -55,7 +55,7 @@ pub fn build(b: *std.Build) void {
                 },
             }),
         });
-        wasm_lib.entry = .disabled;
+        // entry point comes from pub fn main() in wasm_main.zig
         wasm_lib.rdynamic = true;
         // 256MB initial, 2GB max
         wasm_lib.initial_memory = 256 * 1024 * 1024;
@@ -78,6 +78,14 @@ pub fn build(b: *std.Build) void {
             }),
         });
 
+        // On x86 (32-bit), move the host binary to a high address so that
+        // the low address space (0x00400000+) is free for guest Win32 PEs.
+        // Without this, MAP_FIXED at a PE's ImageBase would overwrite the
+        // Zine binary itself.  This is the same approach Wine uses.
+        if (arch == .x86) {
+            exe.image_base = 0x70000000;
+        }
+
         b.installArtifact(exe);
 
         const run_step = b.step("run", "Run the app");
@@ -87,5 +95,31 @@ pub fn build(b: *std.Build) void {
         if (b.args) |args| {
             run_cmd.addArgs(args);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test step: runs x86 interpreter unit tests on the host
+    // -----------------------------------------------------------------------
+    const test_step = b.step("test", "Run x86 interpreter unit tests");
+
+    // Test each x86 module individually (they contain embedded test blocks)
+    const x86_test_files = [_][]const u8{
+        "src/x86/flags.zig",
+        "src/x86/memory.zig",
+        "src/x86/fpu.zig",
+        "src/x86/cpu.zig",
+        "src/x86/decoder.zig",
+        "src/x86/execute.zig",
+        "src/x86/thunks.zig",
+    };
+    for (x86_test_files) |test_file| {
+        const t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(test_file),
+                .target = b.graph.host,
+                .optimize = optimize,
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
     }
 }

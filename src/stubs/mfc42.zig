@@ -1,6 +1,7 @@
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
+const w32cc = @import("../calling_convention.zig");
 
 pub fn register(environment: *env.Environment) !void {
     const builtin_module = "MFC42.DLL";
@@ -50,11 +51,11 @@ pub fn register(environment: *env.Environment) !void {
 
     for (ordinals) |ord| {
         const name = try std.fmt.allocPrint(environment.allocator, "ordinal_{d}", .{ord});
-        try environment.addBuiltinExport(builtin_module, name, @intFromPtr(&stub_mfc_dummy));
+        try environment.addBuiltinExportComptime(builtin_module, name, stub_mfc_dummy);
     }
 }
 
-fn stub_mfc_dummy() callconv(.winapi) usize {
+fn stub_mfc_dummy() callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("MFC42: dummy called from {x}\n", .{@returnAddress()});
     return 0;
 }

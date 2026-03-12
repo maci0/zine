@@ -1,6 +1,7 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
+const platform = @import("../../platform.zig");
 const io = @import("io.zig");
 
 const string = @import("string.zig");
@@ -54,11 +55,15 @@ pub fn stub_getmainargs(
 
 pub fn stub_exit(status: i32) callconv(.c) noreturn {
     if (trace.enable_tracing) trace.print("MSVCRT: exit({d}) called from 0x{X}\n", .{ status, @returnAddress() });
-    std.process.exit(@intCast(status & 0xFF));
+    platform.exitProcess(@intCast(@as(u32, @bitCast(status)) & 0xFF));
 }
 
 pub fn stub_spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 {
-    _ = mode;
+    if (comptime !platform.is_native) {
+        _ = .{ mode, cmdname_ptr, argv_ptr };
+        if (trace.enable_tracing) trace.print("MSVCRT: _spawnvp not supported on this platform\n", .{});
+        return -1;
+    }
     var args: std.ArrayListUnmanaged([]const u8) = .{};
     defer args.deinit(std.heap.page_allocator);
 
@@ -104,18 +109,27 @@ pub fn stub_spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c)
         if (std.fs.path.dirname(exe_path)) |dir| {
             const full_cmd = std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}", .{ dir, cmdname }) catch null;
             if (full_cmd) |fc| {
-                if (!std.ascii.endsWithIgnoreCase(fc, ".dll")) {
-                    args.append(std.heap.page_allocator, fc) catch return -1;
-                    resolved = true;
-                }
+                args.append(std.heap.page_allocator, fc) catch return -1;
+                resolved = true;
             }
         }
     }
 
     // Let standard PATH resolution handle it if it wasn't a relative sibling
     if (!resolved) {
-        if (std.ascii.endsWithIgnoreCase(cmdname, ".dll")) return -1;
-        args.append(std.heap.page_allocator, cmdname) catch return -1;
+        // Sanitize Windows paths for the host OS: strip drive letter (C:) and convert backslashes
+        var clean_cmd = std.heap.page_allocator.dupe(u8, cmdname) catch return -1;
+        std.mem.replaceScalar(u8, clean_cmd, '\\', '/');
+        // Strip Windows drive prefix (e.g. "C:/./path" -> "./path")
+        if (clean_cmd.len >= 2 and clean_cmd[1] == ':' and std.ascii.isAlphabetic(clean_cmd[0])) {
+            clean_cmd = clean_cmd[2..];
+            // If path is now "/./..." strip the leading "/" to make it relative
+            if (clean_cmd.len >= 2 and clean_cmd[0] == '/' and clean_cmd[1] == '.') {
+                clean_cmd = clean_cmd[1..];
+            }
+        }
+        if (trace.enable_tracing) trace.print("spawnvp resolved: {s}\n", .{clean_cmd});
+        args.append(std.heap.page_allocator, clean_cmd) catch return -1;
     }
 
     if (argv_ptr != 0) {        const argv = @as([*]const usize, @ptrFromInt(argv_ptr));

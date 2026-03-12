@@ -2,7 +2,7 @@ const std = @import("std");
 const platform = @import("../platform.zig");
 const renderer = @import("renderer.zig");
 
-var clients: std.ArrayListUnmanaged(std.net.Stream) = .{};
+var clients: if (platform.is_native) std.ArrayListUnmanaged(std.net.Stream) else struct {} = if (platform.is_native) .{} else .{};
 var clients_mutex: if (platform.is_native) std.Thread.Mutex else struct {
     pub fn lock(_: *@This()) void {}
     pub fn unlock(_: *@This()) void {}
@@ -11,7 +11,9 @@ var g_allocator: std.mem.Allocator = undefined;
 var selected_file_path: [1024]u8 = undefined;
 
 pub fn init(allocator: std.mem.Allocator) !void {
-    g_allocator = allocator;
+    // Use page allocator for internal web UI data to avoid alignment issues
+    // with the game's custom HeapAlloc-based allocator
+    g_allocator = std.heap.page_allocator;
     clients = .{};
 
     // Clear buffer to black
@@ -29,6 +31,7 @@ pub fn init(allocator: std.mem.Allocator) !void {
 }
 
 pub fn pushFrame() void {
+    if (comptime !platform.is_native) return;
     clients_mutex.lock();
     defer clients_mutex.unlock();
 
@@ -55,12 +58,31 @@ pub fn pushFrame() void {
 }
 
 pub fn pushMessage(json: []const u8) void {
+    if (comptime !platform.is_native) return;
     clients_mutex.lock();
     defer clients_mutex.unlock();
 
     var i: usize = 0;
     while (i < clients.items.len) {
         const stream = clients.items[i];
+
+        // Validate socket is still alive before writing (prevent INVAL panic from stdlib)
+        if (comptime platform.is_native) {
+            var sock_err: c_int = 0;
+            var errlen: u32 = @sizeOf(c_int);
+            const rc = std.os.linux.getsockopt(
+                @intCast(stream.handle),
+                std.posix.SOL.SOCKET,
+                std.posix.SO.ERROR,
+                @ptrCast(&sock_err),
+                &errlen,
+            );
+            if (rc != 0 or sock_err != 0) {
+                _ = clients.orderedRemove(i);
+                continue;
+            }
+        }
+
         var out_buf: [4096]u8 = undefined;
         var w = std.net.Stream.writer(stream, &out_buf);
         var ws: std.http.Server.WebSocket = .{
@@ -78,6 +100,7 @@ pub fn pushMessage(json: []const u8) void {
 }
 
 pub fn pushAudio(data: []const u8) void {
+    if (comptime !platform.is_native) return;
     clients_mutex.lock();
     defer clients_mutex.unlock();
 
@@ -238,8 +261,61 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                             }
                         } else if (std.mem.eql(u8, type_val.?.string, "close")) {
                             if (renderer.on_close) |cb| cb();
+                        } else if (std.mem.eql(u8, type_val.?.string, "font_chosen")) {
+                            // Parse font selection: { face: "...", size: N, bold: bool, italic: bool }
+                            const face_val = root.object.get("face");
+                            const size_val = root.object.get("size");
+                            const bold_val = root.object.get("bold");
+                            const italic_val = root.object.get("italic");
+                            if (face_val != null and face_val.? == .string and
+                                size_val != null and size_val.? == .integer)
+                            {
+                                const pt_size: i32 = @intCast(@as(i64, size_val.?.integer));
+                                const is_bold = if (bold_val != null and bold_val.? == .bool) bold_val.?.bool else false;
+                                const is_italic = if (italic_val != null and italic_val.? == .bool) italic_val.?.bool else false;
+                                if (renderer.on_font_chosen) |cb| cb(face_val.?.string, pt_size, is_bold, is_italic);
+                            }
                         } else if (std.mem.eql(u8, type_val.?.string, "cancel_dialog")) {
                             if (renderer.on_cancel_dialog) |cb| cb();
+                        } else if (std.mem.eql(u8, type_val.?.string, "find_action")) {
+                            // Parse: { action: "find_next"|"replace"|"replace_all"|"close",
+                            //          findText: "...", replaceText: "...",
+                            //          matchCase: bool, searchDown: bool }
+                            const action_val = root.object.get("action");
+                            const find_val = root.object.get("findText");
+                            if (action_val != null and action_val.? == .string and
+                                find_val != null and find_val.? == .string)
+                            {
+                                const replace_val = root.object.get("replaceText");
+                                const replace_str = if (replace_val != null and replace_val.? == .string) replace_val.?.string else "";
+                                const mc_val = root.object.get("matchCase");
+                                const sd_val = root.object.get("searchDown");
+                                const match_case = if (mc_val != null and mc_val.? == .bool) mc_val.?.bool else false;
+                                const search_down = if (sd_val != null and sd_val.? == .bool) sd_val.?.bool else true;
+                                if (renderer.on_find_action) |cb| cb(action_val.?.string, find_val.?.string, replace_str, match_case, search_down);
+                            }
+                        } else if (std.mem.eql(u8, type_val.?.string, "text_sync")) {
+                            // Frontend syncs textarea content to backend cache
+                            if (root.object.get("text")) |text_val| {
+                                if (text_val == .string) {
+                                    renderer.setEditTextFromSlice(text_val.string);
+                                }
+                            }
+                        } else if (std.mem.eql(u8, type_val.?.string, "clipboard_sync")) {
+                            // Browser clipboard → backend clipboard buffer
+                            if (root.object.get("text")) |text_val| {
+                                if (text_val == .string) {
+                                    renderer.setClipboardFromSlice(text_val.string);
+                                }
+                            }
+                        } else if (std.mem.eql(u8, type_val.?.string, "context_menu_select")) {
+                            // Context menu item selected
+                            if (root.object.get("id")) |id_val| {
+                                if (id_val == .integer) {
+                                    renderer.context_menu_result = @intCast(@as(u32, @truncate(@as(u64, @bitCast(id_val.integer)))));
+                                    renderer.context_menu_chosen = true;
+                                }
+                            }
                         } else if (std.mem.eql(u8, type_val.?.string, "set_volume")) {
                             if (root.object.get("volume")) |vol_val| {
                                 if (vol_val == .integer) {

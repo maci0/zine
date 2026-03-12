@@ -1,0 +1,17 @@
+// Calling convention alias for Win32 API stubs.
+//
+// On native x86/x86_64 targets, this resolves to `std.builtin.CallingConvention.winapi`
+// (stdcall on x86, Win64 on x86_64).  On all other targets (WASM, ARM,
+// RISC-V, etc.) where there is no stdcall convention, we fall back to `.c`.
+//
+// All Win32 API stubs should use `callconv(WINAPI)` instead of
+// `callconv(.winapi)` to ensure cross-target compilation.
+
+const std = @import("std");
+
+const arch = @import("builtin").target.cpu.arch;
+
+pub const WINAPI: std.builtin.CallingConvention = if (arch == .x86 or arch == .x86_64)
+    .winapi
+else
+    .c;

@@ -36,13 +36,21 @@ const stubs_mag_hook = @import("stubs/mag_hook.zig");
 const BatEnv = @import("bat.zig").BatEnv;
 const renderer = @import("gui/renderer.zig");
 const platform = @import("platform.zig");
+const x86_cpu = @import("x86/cpu.zig");
+const x86_execute = @import("x86/execute.zig");
+const x86_thunks = @import("x86/thunks.zig");
+const x86_memory = @import("x86/memory.zig");
 
 const trace = @import("trace.zig");
 
 fn not_implemented() callconv(.c) void {
     const ra = @returnAddress();
-    std.debug.print("\n!!! Unimplemented Win32 API called from 0x{X} !!!\n", .{ra});
-    std.debug.print("Run with --trace to identify the unresolved import.\n", .{});
+    const name = x86_thunks.lookupUnresolvedName(ra);
+    if (name) |func_name| {
+        std.debug.print("\n!!! Unimplemented Win32 API: {s} (called from 0x{X}) !!!\n", .{ func_name, ra });
+    } else {
+        std.debug.print("\n!!! Unimplemented Win32 API called from 0x{X} !!!\n", .{ra});
+    }
     std.process.exit(1);
 }
 
@@ -62,17 +70,100 @@ const reg_bp = if (native_arch == .x86) REG.EBP else @as(usize, REG.RBP);
 const reg_fl = if (native_arch == .x86) REG.EFL else @as(usize, REG.EFL);
 
 fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const anyopaque) callconv(.c) void {
-    _ = sig;
     const uctx = @as(*std.posix.ucontext_t, @ptrCast(@constCast(@alignCast(ctx_ptr.?))));
     const fault_addr = @intFromPtr(info.fields.sigfault.addr);
     const ip: usize = @bitCast(uctx.mcontext.gregs[reg_ip]);
+
+    // Handle SIGFPE (divide by zero) in game or native DLL code — skip the instruction
+    if (sig == std.posix.SIG.FPE) {
+        const code = @as([*]const u8, @ptrFromInt(ip));
+        // Determine instruction length: div/idiv are 2 bytes (F7 /6 or F7 /7 with modrm)
+        var inst_len: usize = 2;
+        if (code[0] == 0xF7) {
+            const modrm = code[1];
+            const mod = (modrm >> 6) & 3;
+            const rm = modrm & 7;
+            if (mod == 0 and rm == 5) inst_len += 4  // [disp32]
+            else if (mod == 1) inst_len += 1         // [reg+disp8]
+            else if (mod == 2) inst_len += 4;        // [reg+disp32]
+            if (rm == 4 and mod != 3) inst_len += 1; // SIB byte
+        }
+        std.debug.print("AppCompat: SIGFPE at 0x{X}, skipping {d} bytes\n", .{ ip, inst_len });
+        uctx.mcontext.gregs[reg_ip] = @bitCast(ip + inst_len);
+        uctx.mcontext.gregs[reg_ax] = 0;
+        uctx.mcontext.gregs[reg_dx] = 0;
+        return;
+    }
+
+    // Guard: If IP is outside game code range AND outside loaded native DLL ranges,
+    // check if it's a near-null jump (bad function pointer call from game code).
+    // Native DLLs like MSS32 may legally crash (e.g., null pointer deref) and should
+    // fall through to the SEH handler dispatch below.
+    const is_app_code = (ip >= 0x400000 and ip <= 0x700000);
+    const is_native_dll = (ip >= 0x21000000 and ip < 0x30000000) or // MSS32, .asi plugins
+        (ip >= 0x10000000 and ip < 0x20000000); // other DLLs
+    if (ip != 0 and !is_app_code and !is_native_dll) {
+        // Bad function pointer call from game code — try to recover
+        // This handles both near-null (0x40) and garbage (0xF0EB1210) addresses
+        const esp: usize = @bitCast(uctx.mcontext.gregs[reg_sp]);
+        if (esp > 0x1000) {
+            const stack = @as([*]const u32, @ptrFromInt(esp));
+            std.debug.print("AppCompat: Bad IP=0x{X} jump. Stack walk:\n", .{ip});
+            var found_ret: ?u32 = null;
+            var found_idx: usize = 0;
+            for (0..200) |si| {
+                const val = stack[si];
+                if (val >= 0x401000 and val <= 0x6B0000) {
+                    if (found_ret == null) {
+                        found_ret = val;
+                        found_idx = si;
+                    }
+                    if (si < 10 or found_ret != null) {
+                        std.debug.print("  stack[{d}] = 0x{X} <app>\n", .{ si, val });
+                    }
+                } else if (si < 10) {
+                    std.debug.print("  stack[{d}] = 0x{X}\n", .{ si, val });
+                }
+            }
+            if (found_ret) |ret| {
+                std.debug.print("AppCompat: Recovering from bad IP=0x{X} to 0x{X} (stack[{d}])\n", .{ ip, ret, found_idx });
+                uctx.mcontext.gregs[reg_ip] = ret;
+                uctx.mcontext.gregs[reg_sp] = @bitCast(esp + (found_idx + 1) * 4);
+                uctx.mcontext.gregs[reg_ax] = 0;
+                return;
+            }
+        }
+        // True emulator crash — print diagnostics and exit
+        std.debug.print("\nFATAL: Segfault in emulator code at IP=0x{X}, fault_addr=0x{X}\n", .{ ip, fault_addr });
+        std.debug.print("  EAX=0x{X} ECX=0x{X} EDX=0x{X} EBX=0x{X}\n", .{
+            @as(usize, @bitCast(uctx.mcontext.gregs[reg_ax])),
+            @as(usize, @bitCast(uctx.mcontext.gregs[reg_cx])),
+            @as(usize, @bitCast(uctx.mcontext.gregs[reg_dx])),
+            @as(usize, @bitCast(uctx.mcontext.gregs[reg_bx])),
+        });
+        std.debug.print("  ESP=0x{X} EBP=0x{X} ESI=0x{X} EDI=0x{X}\n", .{
+            @as(usize, @bitCast(uctx.mcontext.gregs[reg_sp])),
+            @as(usize, @bitCast(uctx.mcontext.gregs[reg_bp])),
+            @as(usize, @bitCast(uctx.mcontext.gregs[reg_si])),
+            @as(usize, @bitCast(uctx.mcontext.gregs[reg_di])),
+        });
+        const fatal_esp: usize = @bitCast(uctx.mcontext.gregs[reg_sp]);
+        if (fatal_esp > 0x1000) {
+            const stack = @as([*]const u32, @ptrFromInt(fatal_esp));
+            std.debug.print("  Stack (first 16):\n", .{});
+            for (0..16) |si| {
+                std.debug.print("    [{d}] = 0x{X}\n", .{ si, stack[si] });
+            }
+        }
+        std.process.exit(1);
+    }
 
     // AppCompat: Handle EIP=0 (null function pointer call or corrupted ret)
     if (ip == 0) {
         const esp: usize = @bitCast(uctx.mcontext.gregs[reg_sp]);
         if (esp > 0x1000) {
             // Walk the stack to find the first valid code address
-            // App code is in 0x401000-0x6B0000, winloader code is in 0x100000-0x300000
+            // App code is in 0x401000-0x6B0000, zine code is in 0x100000-0x300000
             const stack = @as([*]const u32, @ptrFromInt(esp));
             std.debug.print("AppCompat: EIP=0 fault. Stack walk:\n", .{});
             var found_ret: ?u32 = null;
@@ -260,6 +351,41 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         }
     }
 
+    // All SEH handlers returned ExceptionContinueSearch.
+    // Try the top-level exception filter set via SetUnhandledExceptionFilter.
+    const kernel32_misc = @import("stubs/kernel32/misc.zig");
+    if (kernel32_misc.unhandled_exception_filter != 0) {
+        // Build EXCEPTION_POINTERS on the stack
+        var exc_ptrs: extern struct {
+            ExceptionRecord: *teb.EXCEPTION_RECORD,
+            ContextRecord: *teb.CONTEXT,
+        } = .{
+            .ExceptionRecord = &record,
+            .ContextRecord = &context,
+        };
+
+        const filter_fn = @as(*const fn (*const anyopaque) callconv(.winapi) i32, @ptrFromInt(kernel32_misc.unhandled_exception_filter));
+        if (trace.enable_tracing) trace.print("SEH: Calling top-level exception filter at 0x{X}\n", .{kernel32_misc.unhandled_exception_filter});
+        const result = filter_fn(@ptrCast(&exc_ptrs));
+
+        if (result == -1) { // EXCEPTION_CONTINUE_EXECUTION
+            if (trace.enable_tracing) trace.print("SEH: Top-level filter returned CONTINUE_EXECUTION. Resuming at 0x{X}\n", .{context.Eip});
+            uctx.mcontext.gregs[reg_ax] = context.Eax;
+            uctx.mcontext.gregs[reg_cx] = context.Ecx;
+            uctx.mcontext.gregs[reg_dx] = context.Edx;
+            uctx.mcontext.gregs[reg_bx] = context.Ebx;
+            uctx.mcontext.gregs[reg_si] = context.Esi;
+            uctx.mcontext.gregs[reg_di] = context.Edi;
+            uctx.mcontext.gregs[reg_bp] = context.Ebp;
+            uctx.mcontext.gregs[reg_sp] = context.Esp;
+            uctx.mcontext.gregs[reg_ip] = context.Eip;
+            uctx.mcontext.gregs[reg_fl] = context.EFlags;
+            return;
+        }
+        // result == 0 (EXCEPTION_CONTINUE_SEARCH) or 1 (EXCEPTION_EXECUTE_HANDLER)
+        // Fall through to crash report
+    }
+
     const eax: usize = @bitCast(uctx.mcontext.gregs[reg_ax]);
     const ecx: usize = @bitCast(uctx.mcontext.gregs[reg_cx]);
     const edx: usize = @bitCast(uctx.mcontext.gregs[reg_dx]);
@@ -306,9 +432,13 @@ pub fn main() !void {
     var target_exe_opt: ?[]const u8 = null;
     var argv0_opt: ?[]const u8 = null;
     var app_args: std.ArrayListUnmanaged(?[*:0]u8) = .{};
+    var use_interpreter = false;
 
-    if (std.process.hasEnvVarConstant("WINLOADER_TRACE")) {
+    if (std.process.hasEnvVarConstant("ZINE_TRACE")) {
         trace.enable_tracing = true;
+    }
+    if (std.process.hasEnvVarConstant("ZINE_TRACE_INSN")) {
+        trace.enable_instructions = true;
     }
     
     var end_of_options = false;
@@ -319,29 +449,45 @@ pub fn main() !void {
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--trace") or std.mem.eql(u8, arg, "-t"))) {
             trace.enable_tracing = true;
+            trace.enable_instructions = true;
+            continue;
+        }
+        if (!end_of_options and std.mem.eql(u8, arg, "--trace-api")) {
+            trace.enable_tracing = true;
+            continue;
+        }
+        if (!end_of_options and std.mem.eql(u8, arg, "--trace-insn")) {
+            trace.enable_instructions = true;
+            continue;
+        }
+        if (!end_of_options and (std.mem.eql(u8, arg, "--interpret") or std.mem.eql(u8, arg, "-i"))) {
+            use_interpreter = true;
             continue;
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
-            const stderr = std.fs.File.stderr();
-            stderr.writeAll(
-                \\Usage: winloader [options] [--] <target.exe> [args...]
+            std.fs.File.stdout().writeAll(
+                \\Usage: zine [options] [--] <target.exe> [args...]
                 \\
                 \\Run a Win32 PE executable on Linux.
                 \\
                 \\Options:
-                \\  -t, --trace       Enable API tracing output
+                \\  -t, --trace       Enable all tracing output (API + instructions)
+                \\      --trace-api   Enable API tracing only
+                \\      --trace-insn  Enable x86 instruction tracing only
+                \\  -i, --interpret   Use x86 software interpreter instead of native execution
                 \\  --argv0 <name>    Override argv[0] passed to the target
                 \\  -h, --help        Show this help message
-                \\  --                End of winloader options
+                \\  --                End of zine options
                 \\
                 \\Environment:
-                \\  WINLOADER_TRACE   Set to any value to enable tracing
+                \\  ZINE_TRACE        Set to any value to enable API tracing
+                \\  ZINE_TRACE_INSN   Set to any value to enable instruction tracing
                 \\
                 \\Examples:
-                \\  winloader myapp.exe
-                \\  winloader --trace myapp.exe input.txt
-                \\  winloader --argv0 editor notepad.exe file.txt
-                \\  winloader -- -weird-name.exe
+                \\  zine myapp.exe
+                \\  zine --trace myapp.exe input.txt
+                \\  zine --argv0 editor notepad.exe file.txt
+                \\  zine -- -weird-name.exe
                 \\
             ) catch {};
             std.process.exit(0);
@@ -350,15 +496,15 @@ pub fn main() !void {
             if (args.next()) |val| {
                 argv0_opt = val;
             } else {
-                std.fs.File.stderr().writeAll("Error: --argv0 requires a value.\nTry 'winloader --help' for more information.\n") catch {};
+                std.debug.print("Error: --argv0 requires a value.\nTry 'zine --help' for more information.\n", .{});
                 std.process.exit(1);
             }
             continue;
         }
         if (!end_of_options and target_exe_opt == null and arg.len > 1 and arg[0] == '-') {
             var err_buf: [256]u8 = undefined;
-            const msg = std.fmt.bufPrint(&err_buf, "Error: unknown option '{s}'.\nTry 'winloader --help' for more information.\n", .{arg}) catch "Error: unknown option.\n";
-            std.fs.File.stderr().writeAll(msg) catch {};
+            const msg = std.fmt.bufPrint(&err_buf, "Error: unknown option '{s}'.\nTry 'zine --help' for more information.\n", .{arg}) catch "Error: unknown option.\n";
+            std.debug.print("{s}", .{msg});
             std.process.exit(1);
         }
 
@@ -375,9 +521,11 @@ pub fn main() !void {
 
             first_arg = std.mem.trim(u8, first_arg, " \t\r\n\"");
 
-            // Convert to Windows path separators for the program name
-            const win_arg = try allocator.dupeZ(u8, first_arg);
-            std.mem.replaceScalar(u8, win_arg, '/', '\\');
+            // Convert to proper Win32 path (drive_c/... -> C:\..., /abs -> Z:\...)
+            const path_utils = @import("path_utils.zig");
+            var win_path_buf: [1024]u8 = undefined;
+            const win_len = path_utils.posixToWin32(first_arg, &win_path_buf);
+            const win_arg = try allocator.dupeZ(u8, win_path_buf[0..win_len]);
 
             try app_args.append(allocator, win_arg);
         } else {
@@ -386,7 +534,7 @@ pub fn main() !void {
     }
 
     if (target_exe_opt == null) {
-        std.fs.File.stderr().writeAll("Usage: winloader [options] <target.exe> [args...]\nTry 'winloader --help' for more information.\n") catch {};
+        std.fs.File.stderr().writeAll("Usage: zine [options] <target.exe> [args...]\nTry 'zine --help' for more information.\n") catch {};
         std.process.exit(1);
     }
     var target_exe = target_exe_opt.?;
@@ -469,7 +617,7 @@ pub fn main() !void {
         if (bat_path_opt == null) bat_path_opt = be.env.get("Path");
         
         if (bat_path_opt) |bat_path| {
-            if (trace.enable_tracing) std.debug.print("WINLOADER BAT PATH: {s}\n", .{bat_path});
+            if (trace.enable_tracing) std.debug.print("ZINE BAT PATH: {s}\n", .{bat_path});
             var it = std.mem.tokenizeAny(u8, bat_path, ";:");
             while (it.next()) |p| {
                 // Strip quotes
@@ -496,28 +644,38 @@ pub fn main() !void {
 
     // Store the exe's directory as a Windows-style path for GetModuleFileNameA
     {
-        // Get the real absolute path of the exe's directory
+        const path_utils = @import("path_utils.zig");
+        const kernel32_misc = @import("stubs/kernel32/misc.zig");
         const fixed_exe = try allocator.dupe(u8, target_exe);
         defer allocator.free(fixed_exe);
         std.mem.replaceScalar(u8, fixed_exe, '\\', '/');
         if (std.fs.path.dirname(fixed_exe)) |dir| {
-            if (std.fs.cwd().realpathAlloc(allocator, dir)) |abs_dir| {
-                defer allocator.free(abs_dir);
-                // Build "Z:\<abs_dir>\" with backslashes
-                stubs_kernel32.main_exe_dir[0] = 'Z';
-                stubs_kernel32.main_exe_dir[1] = ':';
-                var pos: usize = 2;
-                for (abs_dir) |c| {
-                    if (pos >= stubs_kernel32.main_exe_dir.len - 2) break;
-                    stubs_kernel32.main_exe_dir[pos] = if (c == '/') '\\' else c;
-                    pos += 1;
-                }
-                if (pos > 0 and stubs_kernel32.main_exe_dir[pos - 1] != '\\') {
-                    stubs_kernel32.main_exe_dir[pos] = '\\';
-                    pos += 1;
-                }
-                stubs_kernel32.main_exe_dir_len = pos;
-            } else |_| {}
+            // Convert the exe directory to Win32 path
+            var win_dir_buf: [1024]u8 = undefined;
+            const win_dir_len = path_utils.posixToWin32(dir, &win_dir_buf);
+            const copy_len = @min(win_dir_len, stubs_kernel32.main_exe_dir.len - 2);
+            @memcpy(stubs_kernel32.main_exe_dir[0..copy_len], win_dir_buf[0..copy_len]);
+            var pos = copy_len;
+            // Ensure trailing backslash
+            if (pos > 0 and stubs_kernel32.main_exe_dir[pos - 1] != '\\') {
+                stubs_kernel32.main_exe_dir[pos] = '\\';
+                pos += 1;
+            }
+            stubs_kernel32.main_exe_dir_len = pos;
+
+            // Set virtual CWD to the actual host process CWD (not exe dir)
+            // This ensures relative file opens (e.g. "hello.c") resolve against where the user invoked zine
+            if (std.fs.cwd().realpathAlloc(allocator, ".")) |real_cwd| {
+                var cwd_win_buf: [1024]u8 = undefined;
+                const cwd_win_len = path_utils.posixToWin32(real_cwd, &cwd_win_buf);
+                const cwd_copy_len = @min(cwd_win_len, kernel32_misc.current_directory.len - 1);
+                @memcpy(kernel32_misc.current_directory[0..cwd_copy_len], cwd_win_buf[0..cwd_copy_len]);
+                kernel32_misc.current_directory_len = cwd_copy_len;
+            } else |_| {
+                // Fallback: use exe dir if we can't get the real cwd
+                @memcpy(kernel32_misc.current_directory[0..win_dir_len], win_dir_buf[0..win_dir_len]);
+                kernel32_misc.current_directory_len = win_dir_len;
+            }
         }
     }
 
@@ -595,7 +753,7 @@ pub fn main() !void {
     }
 
     // Dump arguments when tracing is active
-    if (trace.enable_tracing) trace.print("WINLOADER ARGS:\n", .{});
+    if (trace.enable_tracing) trace.print("ZINE ARGS:\n", .{});
     for (app_args.items) |arg_opt| {
         if (arg_opt) |arg| {
             const span = std.mem.span(arg);
@@ -678,6 +836,29 @@ pub fn main() !void {
     params.Environment = @truncate(@intFromPtr(env_block.ptr));
 
     try teb.setupFS(thread_env);
+
+    if (use_interpreter) {
+        // x86 software interpreter path — jump straight to the entry point.
+        // The PE entry point calls CRT init and DllMain itself, so we skip
+        // the native DllMain dispatch and CRT env logging.
+        const ep = main_module.entry_point orelse {
+            std.fs.File.stderr().writeAll("Error: no entry point found in executable.\n") catch {};
+            std.process.exit(1);
+        };
+        const base: u32 = @truncate(main_module.image_base);
+        var cpu = x86_cpu.Cpu{};
+        cpu.memory = x86_memory.GuestMemory{
+            .base = main_module.mapped_memory,
+            .base_addr = base,
+        };
+        cpu.eip = @truncate(ep);
+        cpu.esp = base +% @as(u32, @truncate(main_module.mapped_memory.len)) -% 16;
+        cpu.ebp = cpu.esp;
+        if (trace.enable_tracing) std.debug.print("Interpreter: EIP=0x{X} ESP=0x{X} (image base=0x{X})\n", .{ cpu.eip, cpu.esp, base });
+        x86_execute.run(&cpu);
+        if (trace.enable_tracing) std.debug.print("*** Interpreter halted, EAX=0x{X} ***\n", .{cpu.eax});
+        std.process.exit(@truncate(cpu.eax));
+    }
 
     if (stubs_msvcrt.global_env_initialized) {
         var i: usize = 0;

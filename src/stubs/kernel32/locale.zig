@@ -3,7 +3,7 @@ const trace = @import("../../trace.zig");
 
 // --- Code page functions ---
 
-pub fn stub_GetCPInfo(CodePage: u32, lpCPInfo: *anyopaque) callconv(.winapi) i32 {
+pub fn stub_GetCPInfo(CodePage: u32, lpCPInfo: *anyopaque) callconv(w32cc.WINAPI) i32 {
     _ = CodePage;
     const cpinfo = @as([*]u8, @ptrCast(lpCPInfo));
     @memset(cpinfo[0..18], 0);
@@ -12,22 +12,22 @@ pub fn stub_GetCPInfo(CodePage: u32, lpCPInfo: *anyopaque) callconv(.winapi) i32
     return 1;
 }
 
-pub fn stub_GetACP() callconv(.winapi) u32 {
+pub fn stub_GetACP() callconv(w32cc.WINAPI) u32 {
     return 1252;
 }
 
-pub fn stub_IsValidCodePage(CodePage: u32) callconv(.winapi) i32 {
+pub fn stub_IsValidCodePage(CodePage: u32) callconv(w32cc.WINAPI) i32 {
     _ = CodePage;
     return 1;
 }
 
-pub fn stub_IsDBCSLeadByteEx(CodePage: u32, TestChar: u8) callconv(.winapi) i32 {
+pub fn stub_IsDBCSLeadByteEx(CodePage: u32, TestChar: u8) callconv(w32cc.WINAPI) i32 {
     _ = CodePage;
     _ = TestChar;
     return 0;
 }
 
-pub fn stub_IsDBCSLeadByte(testChar: u8) callconv(.winapi) i32 {
+pub fn stub_IsDBCSLeadByte(testChar: u8) callconv(w32cc.WINAPI) i32 {
     _ = testChar;
     // We assume an ASCII/ANSI setup without DBCS
     return 0; // FALSE
@@ -35,7 +35,7 @@ pub fn stub_IsDBCSLeadByte(testChar: u8) callconv(.winapi) i32 {
 
 // --- Conversion functions ---
 
-pub fn stub_MultiByteToWideChar(CodePage: u32, dwFlags: u32, lpMultiByteStr_ptr: usize, cbMultiByte: i32, lpWideCharStr_ptr: usize, cchWideChar: i32) callconv(.winapi) i32 {
+pub fn stub_MultiByteToWideChar(CodePage: u32, dwFlags: u32, lpMultiByteStr_ptr: usize, cbMultiByte: i32, lpWideCharStr_ptr: usize, cchWideChar: i32) callconv(w32cc.WINAPI) i32 {
     _ = CodePage;
     _ = dwFlags;
 
@@ -68,7 +68,7 @@ pub fn stub_MultiByteToWideChar(CodePage: u32, dwFlags: u32, lpMultiByteStr_ptr:
     return @intCast(len);
 }
 
-pub fn stub_WideCharToMultiByte(CodePage: u32, dwFlags: u32, lpWideCharStr_ptr: usize, cchWideChar: i32, lpMultiByteStr_ptr: usize, cbMultiByte: i32, lpDefaultChar: ?*const u8, lpUsedDefaultChar: ?*i32) callconv(.winapi) i32 {
+pub fn stub_WideCharToMultiByte(CodePage: u32, dwFlags: u32, lpWideCharStr_ptr: usize, cchWideChar: i32, lpMultiByteStr_ptr: usize, cbMultiByte: i32, lpDefaultChar: ?*const u8, lpUsedDefaultChar: ?*i32) callconv(w32cc.WINAPI) i32 {
     _ = CodePage;
     _ = dwFlags;
     _ = lpDefaultChar;
@@ -91,8 +91,9 @@ pub fn stub_WideCharToMultiByte(CodePage: u32, dwFlags: u32, lpWideCharStr_ptr: 
 }
 
 const kernel32_mem = @import("mem.zig");
+const w32cc = @import("../../calling_convention.zig");
 
-pub fn stub_FormatMessageA(dwFlags: u32, lpSource: ?*anyopaque, dwMessageId: u32, dwLanguageId: u32, lpBuffer: [*]u8, nSize: u32, Arguments: ?*anyopaque) callconv(.winapi) u32 {
+pub fn stub_FormatMessageA(dwFlags: u32, lpSource: ?*anyopaque, dwMessageId: u32, dwLanguageId: u32, lpBuffer: [*]u8, nSize: u32, Arguments: ?*anyopaque) callconv(w32cc.WINAPI) u32 {
     _ = dwLanguageId;
 
     if (trace.enable_tracing) {
@@ -151,7 +152,7 @@ pub fn stub_FormatMessageA(dwFlags: u32, lpSource: ?*anyopaque, dwMessageId: u32
 
 // --- String type/comparison functions ---
 
-pub fn stub_GetStringTypeW(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpCharType: usize) callconv(.winapi) i32 {
+pub fn stub_GetStringTypeW(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpCharType: usize) callconv(w32cc.WINAPI) i32 {
     _ = dwInfoType;
     _ = lpSrcStr;
     _ = cchSrc;
@@ -160,7 +161,7 @@ pub fn stub_GetStringTypeW(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpChar
     return 1;
 }
 
-pub fn stub_GetStringTypeA(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpCharType: usize) callconv(.winapi) i32 {
+pub fn stub_GetStringTypeA(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpCharType: usize) callconv(w32cc.WINAPI) i32 {
     _ = dwInfoType;
     _ = lpSrcStr;
     _ = cchSrc;
@@ -169,7 +170,7 @@ pub fn stub_GetStringTypeA(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpChar
     return 1;
 }
 
-pub fn stub_CompareStringA(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1: i32, lpString2: usize, cchCount2: i32) callconv(.winapi) i32 {
+pub fn stub_CompareStringA(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1: i32, lpString2: usize, cchCount2: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     const s1 = if (lpString1 != 0) trace.c_span(lpString1) else "";
     const s2 = if (lpString2 != 0) trace.c_span(lpString2) else "";
@@ -198,7 +199,7 @@ pub fn stub_CompareStringA(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCo
     return 2; // CSTR_EQUAL
 }
 
-pub fn stub_CompareStringW(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1: i32, lpString2: usize, cchCount2: i32) callconv(.winapi) i32 {
+pub fn stub_CompareStringW(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1: i32, lpString2: usize, cchCount2: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     _ = dwCmpFlags;
     _ = lpString1;
@@ -211,32 +212,32 @@ pub fn stub_CompareStringW(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCo
 
 // --- Locale functions ---
 
-pub fn stub_GetSystemDefaultLCID() callconv(.winapi) u32 {
+pub fn stub_GetSystemDefaultLCID() callconv(w32cc.WINAPI) u32 {
     return 1033; // English (US)
 }
 
-pub fn stub_GetUserDefaultLCID() callconv(.winapi) u32 {
+pub fn stub_GetUserDefaultLCID() callconv(w32cc.WINAPI) u32 {
     return 0x0409; // English (US)
 }
 
-pub fn stub_IsValidLocale(Locale: u32, dwFlags: u32) callconv(.winapi) i32 {
+pub fn stub_IsValidLocale(Locale: u32, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     _ = dwFlags;
     return 1; // TRUE
 }
 
-pub fn stub_EnumSystemLocalesA(lpLocaleEnumProc: usize, dwFlags: u32) callconv(.winapi) i32 {
+pub fn stub_EnumSystemLocalesA(lpLocaleEnumProc: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = dwFlags;
     if (lpLocaleEnumProc != 0) {
         // Call callback with "00000409" (English US)
         var buf: [9]u8 = .{ '0', '0', '0', '0', '0', '4', '0', '9', 0 };
-        const cb = @as(*const fn (usize) callconv(.winapi) i32, @ptrFromInt(lpLocaleEnumProc));
+        const cb = @as(*const fn (usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(lpLocaleEnumProc));
         _ = cb(@intFromPtr(&buf));
     }
     return 1;
 }
 
-pub fn stub_GetLocaleInfoA(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) callconv(.winapi) i32 {
+pub fn stub_GetLocaleInfoA(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetLocaleInfoA(Locale={x}, LCType={x})\n", .{Locale, LCType});
 
     const default_val = "1252";
@@ -255,7 +256,7 @@ pub fn stub_GetLocaleInfoA(Locale: u32, LCType: u32, lpLCData: usize, cchData: i
     return 0;
 }
 
-pub fn stub_GetLocaleInfoW(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) callconv(.winapi) i32 {
+pub fn stub_GetLocaleInfoW(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     if (trace.enable_tracing) trace.print("KERNEL32: GetLocaleInfoW(LCType={x})\n", .{LCType});
     const default_val = "1252";
@@ -270,13 +271,13 @@ pub fn stub_GetLocaleInfoW(Locale: u32, LCType: u32, lpLCData: usize, cchData: i
     return 0;
 }
 
-pub fn stub_GetThreadLocale() callconv(.winapi) u32 {
+pub fn stub_GetThreadLocale() callconv(w32cc.WINAPI) u32 {
     return 1033; // en-US
 }
 
 // --- Formatting functions ---
 
-pub fn stub_GetDateFormatA(Locale: u32, dwFlags: u32, lpDate: usize, lpFormat: usize, lpDateStr: usize, cchDate: i32) callconv(.winapi) i32 {
+pub fn stub_GetDateFormatA(Locale: u32, dwFlags: u32, lpDate: usize, lpFormat: usize, lpDateStr: usize, cchDate: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     _ = dwFlags;
     _ = lpDate;
@@ -293,7 +294,7 @@ pub fn stub_GetDateFormatA(Locale: u32, dwFlags: u32, lpDate: usize, lpFormat: u
     return 0;
 }
 
-pub fn stub_GetTimeFormatA(Locale: u32, dwFlags: u32, lpTime: usize, lpFormat: usize, lpTimeStr: usize, cchTime: i32) callconv(.winapi) i32 {
+pub fn stub_GetTimeFormatA(Locale: u32, dwFlags: u32, lpTime: usize, lpFormat: usize, lpTimeStr: usize, cchTime: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     _ = dwFlags;
     _ = lpTime;
@@ -312,7 +313,7 @@ pub fn stub_GetTimeFormatA(Locale: u32, dwFlags: u32, lpTime: usize, lpFormat: u
 
 // --- String functions (lstr*) ---
 
-pub fn stub_lstrcpynA(lpString1: usize, lpString2: usize, iMaxLength: i32) callconv(.winapi) usize {
+pub fn stub_lstrcpynA(lpString1: usize, lpString2: usize, iMaxLength: i32) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0 or lpString2 == 0 or iMaxLength <= 0) return lpString1;
     const src = trace.c_span(lpString2);
     const dst = @as([*]u8, @ptrFromInt(lpString1));
@@ -323,7 +324,7 @@ pub fn stub_lstrcpynA(lpString1: usize, lpString2: usize, iMaxLength: i32) callc
     return lpString1;
 }
 
-pub fn stub_lstrcmpA(lpString1: usize, lpString2: usize) callconv(.winapi) i32 {
+pub fn stub_lstrcmpA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 {
     const s1 = if (lpString1 != 0) trace.c_span(lpString1) else "";
     const s2 = if (lpString2 != 0) trace.c_span(lpString2) else "";
     const order = std.mem.order(u8, s1, s2);
@@ -334,7 +335,7 @@ pub fn stub_lstrcmpA(lpString1: usize, lpString2: usize) callconv(.winapi) i32 {
     };
 }
 
-pub fn stub_lstrcpyA(lpString1: usize, lpString2: usize) callconv(.winapi) usize {
+pub fn stub_lstrcpyA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0 or lpString2 == 0) return lpString1;
     const src = trace.c_span(lpString2);
     const dst = @as([*]u8, @ptrFromInt(lpString1));
@@ -343,13 +344,13 @@ pub fn stub_lstrcpyA(lpString1: usize, lpString2: usize) callconv(.winapi) usize
     return lpString1;
 }
 
-pub fn stub_lstrlenA(lpString: usize) callconv(.winapi) i32 {
+pub fn stub_lstrlenA(lpString: usize) callconv(w32cc.WINAPI) i32 {
     if (lpString == 0) return 0;
     const s = trace.c_span(lpString);
     return @intCast(s.len);
 }
 
-pub fn stub_lstrcatA(lpString1: usize, lpString2: usize) callconv(.winapi) usize {
+pub fn stub_lstrcatA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0) return 0;
     if (lpString2 == 0) return lpString1;
     const dst = @as([*]u8, @ptrFromInt(lpString1));
@@ -361,7 +362,7 @@ pub fn stub_lstrcatA(lpString1: usize, lpString2: usize) callconv(.winapi) usize
     return lpString1;
 }
 
-pub fn stub_lstrcmpiA(lpString1: usize, lpString2: usize) callconv(.winapi) i32 {
+pub fn stub_lstrcmpiA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 {
     if (lpString1 == 0 or lpString2 == 0) return 0;
     const s1 = trace.c_span(lpString1);
     const s2 = trace.c_span(lpString2);
@@ -377,7 +378,7 @@ pub fn stub_lstrcmpiA(lpString1: usize, lpString2: usize) callconv(.winapi) i32 
     return 0;
 }
 
-pub fn stub_GetUserDefaultLangID() callconv(.winapi) u16 {
+pub fn stub_GetUserDefaultLangID() callconv(w32cc.WINAPI) u16 {
     return 0x0409; // English (US)
 }
 
@@ -389,12 +390,12 @@ fn wlen(ptr: [*]const u16) usize {
     return i;
 }
 
-pub fn stub_lstrlenW(lpString: usize) callconv(.winapi) i32 {
+pub fn stub_lstrlenW(lpString: usize) callconv(w32cc.WINAPI) i32 {
     if (lpString == 0) return 0;
     return @intCast(wlen(@ptrFromInt(lpString)));
 }
 
-pub fn stub_lstrcpyW(lpString1: usize, lpString2: usize) callconv(.winapi) usize {
+pub fn stub_lstrcpyW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0) return 0;
     if (lpString2 == 0) return lpString1;
     const dst = @as([*]u16, @ptrFromInt(lpString1));
@@ -405,7 +406,7 @@ pub fn stub_lstrcpyW(lpString1: usize, lpString2: usize) callconv(.winapi) usize
     return lpString1;
 }
 
-pub fn stub_lstrcpynW(lpString1: usize, lpString2: usize, iMaxLength: i32) callconv(.winapi) usize {
+pub fn stub_lstrcpynW(lpString1: usize, lpString2: usize, iMaxLength: i32) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0 or iMaxLength <= 0) return lpString1;
     const dst = @as([*]u16, @ptrFromInt(lpString1));
     if (lpString2 == 0) {
@@ -421,7 +422,7 @@ pub fn stub_lstrcpynW(lpString1: usize, lpString2: usize, iMaxLength: i32) callc
     return lpString1;
 }
 
-pub fn stub_lstrcatW(lpString1: usize, lpString2: usize) callconv(.winapi) usize {
+pub fn stub_lstrcatW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0) return 0;
     if (lpString2 == 0) return lpString1;
     const dst = @as([*]u16, @ptrFromInt(lpString1));
@@ -433,7 +434,7 @@ pub fn stub_lstrcatW(lpString1: usize, lpString2: usize) callconv(.winapi) usize
     return lpString1;
 }
 
-pub fn stub_lstrcmpW(lpString1: usize, lpString2: usize) callconv(.winapi) i32 {
+pub fn stub_lstrcmpW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 {
     if (lpString1 == 0 or lpString2 == 0) return 0;
     const s1 = @as([*]const u16, @ptrFromInt(lpString1));
     const s2 = @as([*]const u16, @ptrFromInt(lpString2));
@@ -447,7 +448,7 @@ pub fn stub_lstrcmpW(lpString1: usize, lpString2: usize) callconv(.winapi) i32 {
     return 0;
 }
 
-pub fn stub_lstrcmpiW(lpString1: usize, lpString2: usize) callconv(.winapi) i32 {
+pub fn stub_lstrcmpiW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 {
     if (lpString1 == 0 or lpString2 == 0) return 0;
     const s1 = @as([*]const u16, @ptrFromInt(lpString1));
     const s2 = @as([*]const u16, @ptrFromInt(lpString2));

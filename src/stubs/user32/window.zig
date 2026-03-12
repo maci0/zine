@@ -3,9 +3,10 @@ const trace = @import("../../trace.zig");
 const user32 = @import("../user32.zig");
 const kernel32 = @import("../kernel32.zig");
 const renderer = @import("../../gui/renderer.zig");
-const w32 = @import("../win32_constants.zig");
+const w32 = @import("../../win32_constants.zig");
+const w32cc = @import("../../calling_convention.zig");
 
-pub fn stub_SetRect(lprc: *user32.RECT, xLeft: i32, yTop: i32, xRight: i32, yBottom: i32) callconv(.winapi) i32 {
+pub fn stub_SetRect(lprc: *user32.RECT, xLeft: i32, yTop: i32, xRight: i32, yBottom: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: SetRect\n", .{});
     lprc.left = xLeft;
     lprc.top = yTop;
@@ -14,7 +15,7 @@ pub fn stub_SetRect(lprc: *user32.RECT, xLeft: i32, yTop: i32, xRight: i32, yBot
     return 1;
 }
 
-pub fn stub_AdjustWindowRectEx(lpRect: *user32.RECT, dwStyle: u32, bMenu: i32, dwExStyle: u32) callconv(.winapi) i32 {
+pub fn stub_AdjustWindowRectEx(lpRect: *user32.RECT, dwStyle: u32, bMenu: i32, dwExStyle: u32) callconv(w32cc.WINAPI) i32 {
     const adj = user32.calcFrameAdjustments(dwStyle, bMenu != 0, dwExStyle);
     if (trace.enable_tracing) trace.print("USER32: AdjustWindowRectEx(style={x}, menu={d}, exstyle={x}) -> l={d} t={d} r={d} b={d}\n", .{ dwStyle, bMenu, dwExStyle, adj.left, adj.top, adj.right, adj.bottom });
     lpRect.left -= adj.left;
@@ -24,11 +25,11 @@ pub fn stub_AdjustWindowRectEx(lpRect: *user32.RECT, dwStyle: u32, bMenu: i32, d
     return 1;
 }
 
-pub fn stub_AdjustWindowRect(lpRect: *user32.RECT, dwStyle: u32, bMenu: i32) callconv(.winapi) i32 {
+pub fn stub_AdjustWindowRect(lpRect: *user32.RECT, dwStyle: u32, bMenu: i32) callconv(w32cc.WINAPI) i32 {
     return stub_AdjustWindowRectEx(lpRect, dwStyle, bMenu, 0);
 }
 
-pub fn stub_SystemParametersInfoA(uiAction: u32, uiParam: u32, pvParam: usize, fWinIni: u32) callconv(.winapi) i32 {
+pub fn stub_SystemParametersInfoA(uiAction: u32, uiParam: u32, pvParam: usize, fWinIni: u32) callconv(w32cc.WINAPI) i32 {
     _ = uiParam;
     _ = fWinIni;
     if (trace.enable_tracing) trace.print("USER32: SystemParametersInfoA(action={x})\n", .{uiAction});
@@ -53,7 +54,7 @@ pub fn stub_SystemParametersInfoA(uiAction: u32, uiParam: u32, pvParam: usize, f
     return 1;
 }
 
-pub fn stub_GetSystemMetrics(nIndex: i32) callconv(.winapi) i32 {
+pub fn stub_GetSystemMetrics(nIndex: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: GetSystemMetrics({d})\n", .{nIndex});
     // Windows 2000 "Windows Standard" at 96 DPI
     return switch (nIndex) {
@@ -115,11 +116,11 @@ pub fn stub_GetSystemMetrics(nIndex: i32) callconv(.winapi) i32 {
     };
 }
 
-pub fn stub_RegisterClassA(lpWndClass: usize) callconv(.winapi) u16 {
+pub fn stub_RegisterClassA(lpWndClass: usize) callconv(w32cc.WINAPI) u16 {
     if (lpWndClass != 0) {
         const wc = @as(*const w32.WNDCLASSA, @ptrFromInt(lpWndClass));
         if (wc.lpfnWndProc != 0) {
-            user32.global_wndproc = @as(*const fn (usize, u32, usize, isize) callconv(.winapi) isize, @ptrFromInt(wc.lpfnWndProc));
+            user32.global_wndproc = @as(*const fn (usize, u32, usize, isize) callconv(w32cc.WINAPI) isize, @ptrFromInt(wc.lpfnWndProc));
         }
 
         const menu_name = if (wc.lpszMenuName != 0) trace.c_span(wc.lpszMenuName) else "(null)";
@@ -183,7 +184,7 @@ pub fn stub_CreateWindowExA(
     dwExStyle: u32, lpClassName: usize, lpWindowName: usize, dwStyle: u32,
     x: i32, y: i32, nWidth: i32, nHeight: i32,
     hWndParent: usize, hMenu: usize, hInstance: usize, lpParam: usize,
-) callconv(.winapi) usize {
+) callconv(w32cc.WINAPI) usize {
     _ = hInstance;
     _ = lpParam;
 
@@ -276,7 +277,7 @@ pub fn stub_CreateWindowExW(
     dwExStyle: u32, lpClassName: usize, lpWindowName: usize, dwStyle: u32,
     x: i32, y: i32, nWidth: i32, nHeight: i32,
     hWndParent: usize, hMenu: usize, hInstance: usize, lpParam: usize,
-) callconv(.winapi) usize {
+) callconv(w32cc.WINAPI) usize {
     _ = hInstance;
     _ = lpParam;
 
@@ -378,7 +379,7 @@ fn fillFramebufWhite() void {
     }
 }
 
-pub fn stub_SetWindowTextA(hWnd: usize, lpString: usize) callconv(.winapi) i32 {
+pub fn stub_SetWindowTextA(hWnd: usize, lpString: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     if (trace.enable_tracing) trace.print("USER32: SetWindowTextA\n", .{});
 
@@ -390,7 +391,7 @@ pub fn stub_SetWindowTextA(hWnd: usize, lpString: usize) callconv(.winapi) i32 {
     return 1;
 }
 
-pub fn stub_SetWindowTextW(hWnd: usize, lpString: usize) callconv(.winapi) i32 {
+pub fn stub_SetWindowTextW(hWnd: usize, lpString: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     if (lpString != 0) {
         const title = wideToUtf8(lpString);
@@ -400,7 +401,7 @@ pub fn stub_SetWindowTextW(hWnd: usize, lpString: usize) callconv(.winapi) i32 {
     return 1;
 }
 
-pub fn stub_GetClientRect(hWnd: usize, lpRect: *user32.RECT) callconv(.winapi) i32 {
+pub fn stub_GetClientRect(hWnd: usize, lpRect: *user32.RECT) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     lpRect.left = 0;
     lpRect.top = 0;
@@ -410,7 +411,7 @@ pub fn stub_GetClientRect(hWnd: usize, lpRect: *user32.RECT) callconv(.winapi) i
     return 1;
 }
 
-pub fn stub_GetWindowRect(hWnd: usize, lpRect: *user32.RECT) callconv(.winapi) i32 {
+pub fn stub_GetWindowRect(hWnd: usize, lpRect: *user32.RECT) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     lpRect.left = user32.window_x;
     lpRect.top = user32.window_y;
@@ -420,7 +421,7 @@ pub fn stub_GetWindowRect(hWnd: usize, lpRect: *user32.RECT) callconv(.winapi) i
     return 1;
 }
 
-pub fn stub_DefWindowProcA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) callconv(.winapi) isize {
+pub fn stub_DefWindowProcA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) callconv(w32cc.WINAPI) isize {
     _ = hWnd; _ = wParam; _ = lParam;
     return switch (Msg) {
         0x0081 => 1, // WM_NCCREATE: must return TRUE to continue creation
@@ -434,7 +435,7 @@ pub fn stub_DefWindowProcA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) 
     };
 }
 
-pub fn stub_GetWindowLongA(hWnd: usize, nIndex: i32) callconv(.winapi) i32 {
+pub fn stub_GetWindowLongA(hWnd: usize, nIndex: i32) callconv(w32cc.WINAPI) i32 {
     const is_main = (hWnd == user32.global_hwnd) or (hWnd == 0);
     var result: i32 = 0;
 
@@ -466,7 +467,7 @@ pub fn stub_GetWindowLongA(hWnd: usize, nIndex: i32) callconv(.winapi) i32 {
     return result;
 }
 
-pub fn stub_SetWindowLongA(hWnd: usize, nIndex: i32, dwNewLong: i32) callconv(.winapi) i32 {
+pub fn stub_SetWindowLongA(hWnd: usize, nIndex: i32, dwNewLong: i32) callconv(w32cc.WINAPI) i32 {
     const old = stub_GetWindowLongA(hWnd, nIndex);
     const is_main = (hWnd == user32.global_hwnd) or (hWnd == 0);
 
@@ -496,7 +497,7 @@ pub fn stub_SetWindowLongA(hWnd: usize, nIndex: i32, dwNewLong: i32) callconv(.w
     return old;
 }
 
-pub fn stub_SetWindowPos(hWnd: usize, hWndInsertAfter: usize, X: i32, Y: i32, cx: i32, cy: i32, uFlags: u32) callconv(.winapi) i32 {
+pub fn stub_SetWindowPos(hWnd: usize, hWndInsertAfter: usize, X: i32, Y: i32, cx: i32, cy: i32, uFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = hWndInsertAfter;
     if (trace.enable_tracing) trace.print("USER32: SetWindowPos(hwnd={x}, cx={d}, cy={d}, flags={x})\n", .{ hWnd, cx, cy, uFlags });
 
@@ -532,19 +533,19 @@ pub fn stub_SetWindowPos(hWnd: usize, hWndInsertAfter: usize, X: i32, Y: i32, cx
     return 1;
 }
 
-pub fn stub_MoveWindow(hWnd: usize, X: i32, Y: i32, nWidth: i32, nHeight: i32, bRepaint: i32) callconv(.winapi) i32 {
+pub fn stub_MoveWindow(hWnd: usize, X: i32, Y: i32, nWidth: i32, nHeight: i32, bRepaint: i32) callconv(w32cc.WINAPI) i32 {
     _ = bRepaint;
     return stub_SetWindowPos(hWnd, 0, X, Y, nWidth, nHeight, 0);
 }
 
 
-pub fn stub_ShowWindow(hWnd: usize, nCmdShow: i32) callconv(.winapi) i32 {
+pub fn stub_ShowWindow(hWnd: usize, nCmdShow: i32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     if (trace.enable_tracing) trace.print("USER32: ShowWindow(nCmdShow={d})\n", .{nCmdShow});
     return 1;
 }
 
-pub fn stub_DestroyWindow(hWnd: usize) callconv(.winapi) i32 {
+pub fn stub_DestroyWindow(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: DestroyWindow(0x{X})\n", .{hWnd});
     // Send WM_DESTROY to WndProc so the app calls PostQuitMessage
     if (user32.global_wndproc) |wndproc| {
@@ -554,81 +555,81 @@ pub fn stub_DestroyWindow(hWnd: usize) callconv(.winapi) i32 {
     return 1;
 }
 
-pub fn stub_EnableWindow(hWnd: usize, bEnable: i32) callconv(.winapi) i32 {
+pub fn stub_EnableWindow(hWnd: usize, bEnable: i32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = bEnable;
     return 0;
 }
 
-pub fn stub_IsWindow(hWnd: usize) callconv(.winapi) i32 {
+pub fn stub_IsWindow(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     return 1;
 }
 
-pub fn stub_GetForegroundWindow() callconv(.winapi) usize {
+pub fn stub_GetForegroundWindow() callconv(w32cc.WINAPI) usize {
     return user32.global_hwnd;
 }
 
-pub fn stub_SetForegroundWindow(hWnd: usize) callconv(.winapi) i32 {
+pub fn stub_SetForegroundWindow(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     return 1;
 }
 
-pub fn stub_GetActiveWindow() callconv(.winapi) usize {
+pub fn stub_GetActiveWindow() callconv(w32cc.WINAPI) usize {
     return user32.global_hwnd;
 }
 
-pub fn stub_GetDesktopWindow() callconv(.winapi) usize {
+pub fn stub_GetDesktopWindow() callconv(w32cc.WINAPI) usize {
     return 0x00010010;
 }
 
-pub fn stub_SetFocus(hWnd: usize) callconv(.winapi) usize {
+pub fn stub_SetFocus(hWnd: usize) callconv(w32cc.WINAPI) usize {
     _ = hWnd;
     if (trace.enable_tracing) trace.print("USER32: SetFocus\n", .{});
     return 0;
 }
 
-pub fn stub_GetFocus() callconv(.winapi) usize {
+pub fn stub_GetFocus() callconv(w32cc.WINAPI) usize {
     return user32.global_hwnd;
 }
 
-pub fn stub_IsIconic(hWnd: usize) callconv(.winapi) i32 {
+pub fn stub_IsIconic(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     return 0;
 }
 
-pub fn stub_UpdateWindow(hWnd: usize) callconv(.winapi) i32 {
+pub fn stub_UpdateWindow(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     if (trace.enable_tracing) trace.print("USER32: UpdateWindow\n", .{});
     return 1;
 }
 
-pub fn stub_RedrawWindow(hWnd: usize, lprcUpdate: usize, hrgnUpdate: usize, flags: u32) callconv(.winapi) i32 {
+pub fn stub_RedrawWindow(hWnd: usize, lprcUpdate: usize, hrgnUpdate: usize, flags: u32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd; _ = lprcUpdate; _ = hrgnUpdate; _ = flags;
     if (trace.enable_tracing) trace.print("USER32: RedrawWindow\n", .{});
     return 1;
 }
 
-pub fn stub_InvalidateRect(hWnd: usize, lpRect: usize, bErase: i32) callconv(.winapi) i32 {
+pub fn stub_InvalidateRect(hWnd: usize, lpRect: usize, bErase: i32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = lpRect;
     _ = bErase;
     return 1;
 }
 
-pub fn stub_ClientToScreen(hWnd: usize, lpPoint: usize) callconv(.winapi) i32 {
+pub fn stub_ClientToScreen(hWnd: usize, lpPoint: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd; _ = lpPoint;
     if (trace.enable_tracing) trace.print("USER32: ClientToScreen\n", .{});
     return 1;
 }
 
-pub fn stub_ScreenToClient(hWnd: usize, lpPoint: usize) callconv(.winapi) i32 {
+pub fn stub_ScreenToClient(hWnd: usize, lpPoint: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = lpPoint;
     return 1;
 }
 
-pub fn stub_MapWindowPoints(hWndFrom: usize, hWndTo: usize, lpPoints: usize, cPoints: u32) callconv(.winapi) i32 {
+pub fn stub_MapWindowPoints(hWndFrom: usize, hWndTo: usize, lpPoints: usize, cPoints: u32) callconv(w32cc.WINAPI) i32 {
     _ = hWndFrom;
     _ = hWndTo;
     _ = lpPoints;
@@ -636,36 +637,36 @@ pub fn stub_MapWindowPoints(hWndFrom: usize, hWndTo: usize, lpPoints: usize, cPo
     return 0;
 }
 
-pub fn stub_FillRect(hDC: usize, lprc: usize, hbr: usize) callconv(.winapi) i32 {
+pub fn stub_FillRect(hDC: usize, lprc: usize, hbr: usize) callconv(w32cc.WINAPI) i32 {
     _ = hDC;
     _ = lprc;
     _ = hbr;
     return 1;
 }
 
-pub fn stub_GetDC(hWnd: usize) callconv(.winapi) usize {
+pub fn stub_GetDC(hWnd: usize) callconv(w32cc.WINAPI) usize {
     _ = hWnd;
     return 0xDC123;
 }
 
-pub fn stub_ReleaseDC(hWnd: usize, hDC: usize) callconv(.winapi) i32 {
+pub fn stub_ReleaseDC(hWnd: usize, hDC: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd; _ = hDC;
     return 1;
 }
 
-pub fn stub_BeginPaint(hWnd: usize, lpPaint: usize) callconv(.winapi) usize {
+pub fn stub_BeginPaint(hWnd: usize, lpPaint: usize) callconv(w32cc.WINAPI) usize {
     _ = hWnd; _ = lpPaint;
     return 0xDC123;
 }
 
-pub fn stub_EndPaint(hWnd: usize, lpPaint: usize) callconv(.winapi) i32 {
+pub fn stub_EndPaint(hWnd: usize, lpPaint: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd; _ = lpPaint;
     return 1;
 }
 
 // --- Scroll ---
 
-pub fn stub_SetScrollInfo(hwnd: usize, nBar: i32, lpsi: usize, redraw: i32) callconv(.winapi) i32 {
+pub fn stub_SetScrollInfo(hwnd: usize, nBar: i32, lpsi: usize, redraw: i32) callconv(w32cc.WINAPI) i32 {
     _ = hwnd;
     _ = nBar;
     _ = lpsi;
@@ -673,7 +674,7 @@ pub fn stub_SetScrollInfo(hwnd: usize, nBar: i32, lpsi: usize, redraw: i32) call
     return 0;
 }
 
-pub fn stub_GetScrollInfo(hwnd: usize, nBar: i32, lpsi: usize) callconv(.winapi) i32 {
+pub fn stub_GetScrollInfo(hwnd: usize, nBar: i32, lpsi: usize) callconv(w32cc.WINAPI) i32 {
     _ = hwnd;
     _ = nBar;
     _ = lpsi;
@@ -682,7 +683,7 @@ pub fn stub_GetScrollInfo(hwnd: usize, nBar: i32, lpsi: usize) callconv(.winapi)
 
 // --- Drawing ---
 
-pub fn stub_CopyImage(h: usize, typ: u32, cx: i32, cy: i32, flags: u32) callconv(.winapi) usize {
+pub fn stub_CopyImage(h: usize, typ: u32, cx: i32, cy: i32, flags: u32) callconv(w32cc.WINAPI) usize {
     _ = typ;
     _ = cx;
     _ = cy;
@@ -690,7 +691,7 @@ pub fn stub_CopyImage(h: usize, typ: u32, cx: i32, cy: i32, flags: u32) callconv
     return h;
 }
 
-pub fn stub_DrawEdge(hdc: usize, qrc: usize, edge: u32, grfFlags: u32) callconv(.winapi) i32 {
+pub fn stub_DrawEdge(hdc: usize, qrc: usize, edge: u32, grfFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = hdc;
     _ = qrc;
     _ = edge;
@@ -698,13 +699,13 @@ pub fn stub_DrawEdge(hdc: usize, qrc: usize, edge: u32, grfFlags: u32) callconv(
     return 1;
 }
 
-pub fn stub_DrawFocusRect(hDC: usize, lprc: usize) callconv(.winapi) i32 {
+pub fn stub_DrawFocusRect(hDC: usize, lprc: usize) callconv(w32cc.WINAPI) i32 {
     _ = hDC;
     _ = lprc;
     return 1;
 }
 
-pub fn stub_FrameRect(hDC: usize, lprc: usize, hbr: usize) callconv(.winapi) i32 {
+pub fn stub_FrameRect(hDC: usize, lprc: usize, hbr: usize) callconv(w32cc.WINAPI) i32 {
     _ = hDC;
     _ = lprc;
     _ = hbr;
@@ -713,78 +714,78 @@ pub fn stub_FrameRect(hDC: usize, lprc: usize, hbr: usize) callconv(.winapi) i32
 
 // --- Window Enumeration & State ---
 
-pub fn stub_EnumWindows(lpEnumFunc: usize, lParam: usize) callconv(.winapi) i32 {
+pub fn stub_EnumWindows(lpEnumFunc: usize, lParam: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpEnumFunc;
     _ = lParam;
     return 1;
 }
 
-pub fn stub_IsChild(hWndParent: usize, hWnd: usize) callconv(.winapi) i32 {
+pub fn stub_IsChild(hWndParent: usize, hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWndParent;
     _ = hWnd;
     return 0;
 }
 
-pub fn stub_IsWindowEnabled(hWnd: usize) callconv(.winapi) i32 {
+pub fn stub_IsWindowEnabled(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     return 1;
 }
 
 // --- Icons & Cursors ---
 
-pub fn stub_GetIconInfo(hIcon: usize, piconinfo: usize) callconv(.winapi) i32 {
+pub fn stub_GetIconInfo(hIcon: usize, piconinfo: usize) callconv(w32cc.WINAPI) i32 {
     _ = hIcon;
     _ = piconinfo;
     return 0;
 }
 
-pub fn stub_DestroyIcon(hIcon: usize) callconv(.winapi) i32 {
+pub fn stub_DestroyIcon(hIcon: usize) callconv(w32cc.WINAPI) i32 {
     _ = hIcon;
     return 1;
 }
 
-pub fn stub_DestroyCursor(hCursor: usize) callconv(.winapi) i32 {
+pub fn stub_DestroyCursor(hCursor: usize) callconv(w32cc.WINAPI) i32 {
     _ = hCursor;
     return 1;
 }
 
 // --- Clipboard ---
 
-pub fn stub_OpenClipboard(hWndNewOwner: usize) callconv(.winapi) i32 {
+pub fn stub_OpenClipboard(hWndNewOwner: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWndNewOwner;
     return 1;
 }
 
-pub fn stub_CloseClipboard() callconv(.winapi) i32 {
+pub fn stub_CloseClipboard() callconv(w32cc.WINAPI) i32 {
     return 1;
 }
 
-pub fn stub_EmptyClipboard() callconv(.winapi) i32 {
+pub fn stub_EmptyClipboard() callconv(w32cc.WINAPI) i32 {
     return 1;
 }
 
-pub fn stub_GetClipboardData(uFormat: u32) callconv(.winapi) usize {
+pub fn stub_GetClipboardData(uFormat: u32) callconv(w32cc.WINAPI) usize {
     _ = uFormat;
     return 0;
 }
 
-pub fn stub_SetClipboardData(uFormat: u32, hMem: usize) callconv(.winapi) usize {
+pub fn stub_SetClipboardData(uFormat: u32, hMem: usize) callconv(w32cc.WINAPI) usize {
     _ = uFormat;
     return hMem;
 }
 
-pub fn stub_IsClipboardFormatAvailable(format: u32) callconv(.winapi) i32 {
+pub fn stub_IsClipboardFormatAvailable(format: u32) callconv(w32cc.WINAPI) i32 {
     _ = format;
     return 0;
 }
 
-pub fn stub_GetClipboardOwner() callconv(.winapi) usize {
+pub fn stub_GetClipboardOwner() callconv(w32cc.WINAPI) usize {
     return 0;
 }
 
 // --- Caret ---
 
-pub fn stub_CreateCaret(hWnd: usize, hBitmap: usize, nWidth: i32, nHeight: i32) callconv(.winapi) i32 {
+pub fn stub_CreateCaret(hWnd: usize, hBitmap: usize, nWidth: i32, nHeight: i32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = hBitmap;
     _ = nWidth;
@@ -792,40 +793,40 @@ pub fn stub_CreateCaret(hWnd: usize, hBitmap: usize, nWidth: i32, nHeight: i32) 
     return 1;
 }
 
-pub fn stub_DestroyCaret() callconv(.winapi) i32 {
+pub fn stub_DestroyCaret() callconv(w32cc.WINAPI) i32 {
     return 1;
 }
 
-pub fn stub_SetCaretPos(X: i32, Y: i32) callconv(.winapi) i32 {
+pub fn stub_SetCaretPos(X: i32, Y: i32) callconv(w32cc.WINAPI) i32 {
     _ = X;
     _ = Y;
     return 1;
 }
 
-pub fn stub_ShowCaret(hWnd: usize) callconv(.winapi) i32 {
+pub fn stub_ShowCaret(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     return 1;
 }
 
-pub fn stub_HideCaret(hWnd: usize) callconv(.winapi) i32 {
+pub fn stub_HideCaret(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     return 1;
 }
 
 // --- Rect Utilities (faithful Win32 implementations) ---
 
-pub fn stub_CopyRect(lprcDst: *user32.RECT, lprcSrc: *const user32.RECT) callconv(.winapi) i32 {
+pub fn stub_CopyRect(lprcDst: *user32.RECT, lprcSrc: *const user32.RECT) callconv(w32cc.WINAPI) i32 {
     lprcDst.* = lprcSrc.*;
     return 1;
 }
 
-pub fn stub_PtInRect(lprc: *const user32.RECT, ptX: i32, ptY: i32) callconv(.winapi) i32 {
+pub fn stub_PtInRect(lprc: *const user32.RECT, ptX: i32, ptY: i32) callconv(w32cc.WINAPI) i32 {
     // Win32: returns TRUE if point is inside rect (left <= x < right, top <= y < bottom)
     if (ptX >= lprc.left and ptX < lprc.right and ptY >= lprc.top and ptY < lprc.bottom) return 1;
     return 0;
 }
 
-pub fn stub_OffsetRect(lprc: *user32.RECT, dx: i32, dy: i32) callconv(.winapi) i32 {
+pub fn stub_OffsetRect(lprc: *user32.RECT, dx: i32, dy: i32) callconv(w32cc.WINAPI) i32 {
     lprc.left += dx;
     lprc.top += dy;
     lprc.right += dx;
@@ -833,7 +834,7 @@ pub fn stub_OffsetRect(lprc: *user32.RECT, dx: i32, dy: i32) callconv(.winapi) i
     return 1;
 }
 
-pub fn stub_SetRectEmpty(lprc: *user32.RECT) callconv(.winapi) i32 {
+pub fn stub_SetRectEmpty(lprc: *user32.RECT) callconv(w32cc.WINAPI) i32 {
     lprc.left = 0;
     lprc.top = 0;
     lprc.right = 0;
@@ -841,19 +842,19 @@ pub fn stub_SetRectEmpty(lprc: *user32.RECT) callconv(.winapi) i32 {
     return 1;
 }
 
-pub fn stub_IsRectEmpty(lprc: *const user32.RECT) callconv(.winapi) i32 {
+pub fn stub_IsRectEmpty(lprc: *const user32.RECT) callconv(w32cc.WINAPI) i32 {
     // Win32: empty if width <= 0 or height <= 0
     if (lprc.right <= lprc.left or lprc.bottom <= lprc.top) return 1;
     return 0;
 }
 
-pub fn stub_EqualRect(lprc1: *const user32.RECT, lprc2: *const user32.RECT) callconv(.winapi) i32 {
+pub fn stub_EqualRect(lprc1: *const user32.RECT, lprc2: *const user32.RECT) callconv(w32cc.WINAPI) i32 {
     if (lprc1.left == lprc2.left and lprc1.top == lprc2.top and
         lprc1.right == lprc2.right and lprc1.bottom == lprc2.bottom) return 1;
     return 0;
 }
 
-pub fn stub_InflateRect(lprc: *user32.RECT, dx: i32, dy: i32) callconv(.winapi) i32 {
+pub fn stub_InflateRect(lprc: *user32.RECT, dx: i32, dy: i32) callconv(w32cc.WINAPI) i32 {
     lprc.left -= dx;
     lprc.top -= dy;
     lprc.right += dx;
@@ -861,7 +862,7 @@ pub fn stub_InflateRect(lprc: *user32.RECT, dx: i32, dy: i32) callconv(.winapi) 
     return 1;
 }
 
-pub fn stub_IntersectRect(lprcDst: *user32.RECT, lprcSrc1: *const user32.RECT, lprcSrc2: *const user32.RECT) callconv(.winapi) i32 {
+pub fn stub_IntersectRect(lprcDst: *user32.RECT, lprcSrc1: *const user32.RECT, lprcSrc2: *const user32.RECT) callconv(w32cc.WINAPI) i32 {
     const left = @max(lprcSrc1.left, lprcSrc2.left);
     const top = @max(lprcSrc1.top, lprcSrc2.top);
     const right = @min(lprcSrc1.right, lprcSrc2.right);
@@ -880,7 +881,7 @@ pub fn stub_IntersectRect(lprcDst: *user32.RECT, lprcSrc1: *const user32.RECT, l
     return 0;
 }
 
-pub fn stub_UnionRect(lprcDst: *user32.RECT, lprcSrc1: *const user32.RECT, lprcSrc2: *const user32.RECT) callconv(.winapi) i32 {
+pub fn stub_UnionRect(lprcDst: *user32.RECT, lprcSrc1: *const user32.RECT, lprcSrc2: *const user32.RECT) callconv(w32cc.WINAPI) i32 {
     lprcDst.left = @min(lprcSrc1.left, lprcSrc2.left);
     lprcDst.top = @min(lprcSrc1.top, lprcSrc2.top);
     lprcDst.right = @max(lprcSrc1.right, lprcSrc2.right);
@@ -888,7 +889,7 @@ pub fn stub_UnionRect(lprcDst: *user32.RECT, lprcSrc1: *const user32.RECT, lprcS
     return 1;
 }
 
-pub fn stub_SubtractRect(lprcDst: *user32.RECT, lprcSrc1: *const user32.RECT, lprcSrc2: *const user32.RECT) callconv(.winapi) i32 {
+pub fn stub_SubtractRect(lprcDst: *user32.RECT, lprcSrc1: *const user32.RECT, lprcSrc2: *const user32.RECT) callconv(w32cc.WINAPI) i32 {
     // Simplified: if src2 doesn't intersect src1, result is src1
     // Full implementation is complex; this handles the common case
     _ = lprcSrc2;
@@ -898,14 +899,14 @@ pub fn stub_SubtractRect(lprcDst: *user32.RECT, lprcSrc1: *const user32.RECT, lp
 
 // --- Window/Class W variants ---
 
-pub fn stub_FindWindowW(lpClassName: usize, lpWindowName: usize) callconv(.winapi) usize {
+pub fn stub_FindWindowW(lpClassName: usize, lpWindowName: usize) callconv(w32cc.WINAPI) usize {
     _ = lpClassName;
     _ = lpWindowName;
     if (trace.enable_tracing) trace.print("USER32: FindWindowW -> 0\n", .{});
     return 0; // not found
 }
 
-pub fn stub_FindWindowExW(hWndParent: usize, hWndChildAfter: usize, lpszClass: usize, lpszWindow: usize) callconv(.winapi) usize {
+pub fn stub_FindWindowExW(hWndParent: usize, hWndChildAfter: usize, lpszClass: usize, lpszWindow: usize) callconv(w32cc.WINAPI) usize {
     _ = hWndParent;
     _ = hWndChildAfter;
     _ = lpszClass;
@@ -913,7 +914,7 @@ pub fn stub_FindWindowExW(hWndParent: usize, hWndChildAfter: usize, lpszClass: u
     return 0;
 }
 
-pub fn stub_GetClassInfoW(hInstance: usize, lpClassName: usize, lpWndClass: usize) callconv(.winapi) i32 {
+pub fn stub_GetClassInfoW(hInstance: usize, lpClassName: usize, lpWndClass: usize) callconv(w32cc.WINAPI) i32 {
     _ = hInstance;
     _ = lpClassName;
     _ = lpWndClass;
@@ -921,14 +922,14 @@ pub fn stub_GetClassInfoW(hInstance: usize, lpClassName: usize, lpWndClass: usiz
     return 0; // class not found
 }
 
-pub fn stub_GetClassInfoExW(hInstance: usize, lpszClass: usize, lpwcx: usize) callconv(.winapi) i32 {
+pub fn stub_GetClassInfoExW(hInstance: usize, lpszClass: usize, lpwcx: usize) callconv(w32cc.WINAPI) i32 {
     _ = hInstance;
     _ = lpszClass;
     _ = lpwcx;
     return 0;
 }
 
-pub fn stub_SystemParametersInfoW(uiAction: u32, uiParam: u32, pvParam: usize, fWinIni: u32) callconv(.winapi) i32 {
+pub fn stub_SystemParametersInfoW(uiAction: u32, uiParam: u32, pvParam: usize, fWinIni: u32) callconv(w32cc.WINAPI) i32 {
     _ = uiParam;
     _ = fWinIni;
     if (trace.enable_tracing) trace.print("USER32: SystemParametersInfoW(action=0x{x})\n", .{uiAction});
@@ -953,7 +954,7 @@ pub fn stub_SystemParametersInfoW(uiAction: u32, uiParam: u32, pvParam: usize, f
     return 1; // success for unhandled
 }
 
-pub fn stub_GetUpdateRect(hWnd: usize, lpRect: usize, bErase: i32) callconv(.winapi) i32 {
+pub fn stub_GetUpdateRect(hWnd: usize, lpRect: usize, bErase: i32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = bErase;
     if (lpRect != 0) {
@@ -966,12 +967,12 @@ pub fn stub_GetUpdateRect(hWnd: usize, lpRect: usize, bErase: i32) callconv(.win
     return 0; // no update region
 }
 
-pub fn stub_GetWindowDC(hWnd: usize) callconv(.winapi) usize {
+pub fn stub_GetWindowDC(hWnd: usize) callconv(w32cc.WINAPI) usize {
     _ = hWnd;
     return 0xDC123; // same as GetDC
 }
 
-pub fn stub_DrawMenuBar(hWnd: usize) callconv(.winapi) i32 {
+pub fn stub_DrawMenuBar(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     return 1;
 }

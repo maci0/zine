@@ -2,56 +2,57 @@ const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
 const mem = @import("kernel32/mem.zig");
+const w32cc = @import("../calling_convention.zig");
 
 pub fn register(environment: *env.Environment) !void {
     // ole32.dll
     const m = "ole32.dll";
-    try environment.addBuiltinExport(m, "CoInitialize", @intFromPtr(&stub_CoInitialize));
-    try environment.addBuiltinExport(m, "CoInitializeEx", @intFromPtr(&stub_CoInitializeEx));
-    try environment.addBuiltinExport(m, "CoUninitialize", @intFromPtr(&stub_CoUninitialize));
-    try environment.addBuiltinExport(m, "CoCreateInstance", @intFromPtr(&stub_CoCreateInstance));
-    try environment.addBuiltinExport(m, "CoTaskMemAlloc", @intFromPtr(&stub_CoTaskMemAlloc));
-    try environment.addBuiltinExport(m, "CoTaskMemFree", @intFromPtr(&stub_CoTaskMemFree));
-    try environment.addBuiltinExport(m, "DoDragDrop", @intFromPtr(&stub_DoDragDrop));
+    try environment.addBuiltinExportComptime(m, "CoInitialize", stub_CoInitialize);
+    try environment.addBuiltinExportComptime(m, "CoInitializeEx", stub_CoInitializeEx);
+    try environment.addBuiltinExportComptime(m, "CoUninitialize", stub_CoUninitialize);
+    try environment.addBuiltinExportComptime(m, "CoCreateInstance", stub_CoCreateInstance);
+    try environment.addBuiltinExportComptime(m, "CoTaskMemAlloc", stub_CoTaskMemAlloc);
+    try environment.addBuiltinExportComptime(m, "CoTaskMemFree", stub_CoTaskMemFree);
+    try environment.addBuiltinExportComptime(m, "DoDragDrop", stub_DoDragDrop);
 
     // oleaut32.dll
     const o = "oleaut32.dll";
-    try environment.addBuiltinExport(o, "SysFreeString", @intFromPtr(&stub_SysFreeString));
-    try environment.addBuiltinExport(o, "SysAllocStringLen", @intFromPtr(&stub_SysAllocStringLen));
+    try environment.addBuiltinExportComptime(o, "SysFreeString", stub_SysFreeString);
+    try environment.addBuiltinExportComptime(o, "SysAllocStringLen", stub_SysAllocStringLen);
 
     // --- Remaining OLE32 stubs for 100% win2k coverage ---
     const kernel32 = @import("kernel32.zig");
-    try environment.addBuiltinExport(m, "StringFromCLSID", @intFromPtr(&kernel32.stub_args2));
-    try environment.addBuiltinExport(m, "WriteFmtUserTypeStg", @intFromPtr(&kernel32.stub_args3));
-    try environment.addBuiltinExport(m, "WriteClassStg", @intFromPtr(&kernel32.stub_args2));
-    try environment.addBuiltinExport(m, "OleUninitialize", @intFromPtr(&stub_CoUninitialize));
-    try environment.addBuiltinExport(m, "StgOpenStorage", @intFromPtr(&kernel32.stub_args6));
-    try environment.addBuiltinExport(m, "OleRegGetUserType", @intFromPtr(&kernel32.stub_args3));
-    try environment.addBuiltinExport(m, "ReadClassStg", @intFromPtr(&kernel32.stub_args2));
-    try environment.addBuiltinExport(m, "StgCreateDocfileOnILockBytes", @intFromPtr(&kernel32.stub_args4));
-    try environment.addBuiltinExport(m, "CreateILockBytesOnHGlobal", @intFromPtr(&kernel32.stub_args3));
-    try environment.addBuiltinExport(m, "ReleaseStgMedium", @intFromPtr(&kernel32.stub_args1));
-    try environment.addBuiltinExport(m, "OleInitialize", @intFromPtr(&stub_CoInitialize));
+    try environment.addBuiltinExportComptime(m, "StringFromCLSID", kernel32.stub_args2);
+    try environment.addBuiltinExportComptime(m, "WriteFmtUserTypeStg", kernel32.stub_args3);
+    try environment.addBuiltinExportComptime(m, "WriteClassStg", kernel32.stub_args2);
+    try environment.addBuiltinExportComptime(m, "OleUninitialize", stub_CoUninitialize);
+    try environment.addBuiltinExportComptime(m, "StgOpenStorage", kernel32.stub_args6);
+    try environment.addBuiltinExportComptime(m, "OleRegGetUserType", kernel32.stub_args3);
+    try environment.addBuiltinExportComptime(m, "ReadClassStg", kernel32.stub_args2);
+    try environment.addBuiltinExportComptime(m, "StgCreateDocfileOnILockBytes", kernel32.stub_args4);
+    try environment.addBuiltinExportComptime(m, "CreateILockBytesOnHGlobal", kernel32.stub_args3);
+    try environment.addBuiltinExportComptime(m, "ReleaseStgMedium", kernel32.stub_args1);
+    try environment.addBuiltinExportComptime(m, "OleInitialize", stub_CoInitialize);
 }
 
-fn stub_CoInitialize(pvReserved: usize) callconv(.winapi) i32 {
+fn stub_CoInitialize(pvReserved: usize) callconv(w32cc.WINAPI) i32 {
     _ = pvReserved;
     if (trace.enable_tracing) trace.print("OLE32: CoInitialize\n", .{});
     return 0; // S_OK
 }
 
-fn stub_CoInitializeEx(pvReserved: usize, dwCoInit: u32) callconv(.winapi) i32 {
+fn stub_CoInitializeEx(pvReserved: usize, dwCoInit: u32) callconv(w32cc.WINAPI) i32 {
     _ = pvReserved;
     _ = dwCoInit;
     if (trace.enable_tracing) trace.print("OLE32: CoInitializeEx\n", .{});
     return 0; // S_OK
 }
 
-fn stub_CoUninitialize() callconv(.winapi) void {
+fn stub_CoUninitialize() callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("OLE32: CoUninitialize\n", .{});
 }
 
-fn stub_CoCreateInstance(rclsid: usize, pUnkOuter: usize, dwClsContext: u32, riid: usize, ppv: usize) callconv(.winapi) i32 {
+fn stub_CoCreateInstance(rclsid: usize, pUnkOuter: usize, dwClsContext: u32, riid: usize, ppv: usize) callconv(w32cc.WINAPI) i32 {
     _ = rclsid;
     _ = pUnkOuter;
     _ = dwClsContext;
@@ -63,7 +64,7 @@ fn stub_CoCreateInstance(rclsid: usize, pUnkOuter: usize, dwClsContext: u32, rii
     return @as(i32, @bitCast(@as(u32, 0x80004002))); // E_NOINTERFACE
 }
 
-fn stub_CoTaskMemAlloc(cb: usize) callconv(.winapi) usize {
+fn stub_CoTaskMemAlloc(cb: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("OLE32: CoTaskMemAlloc({d})\n", .{cb});
     if (mem.raw_alloc(cb)) |ptr| {
         return @intFromPtr(ptr);
@@ -71,12 +72,12 @@ fn stub_CoTaskMemAlloc(cb: usize) callconv(.winapi) usize {
     return 0;
 }
 
-fn stub_CoTaskMemFree(pv: usize) callconv(.winapi) void {
+fn stub_CoTaskMemFree(pv: usize) callconv(w32cc.WINAPI) void {
     _ = pv;
     if (trace.enable_tracing) trace.print("OLE32: CoTaskMemFree\n", .{});
 }
 
-fn stub_DoDragDrop(pDataObj: usize, pDropSource: usize, dwOKEffects: u32, pdwEffect: usize) callconv(.winapi) i32 {
+fn stub_DoDragDrop(pDataObj: usize, pDropSource: usize, dwOKEffects: u32, pdwEffect: usize) callconv(w32cc.WINAPI) i32 {
     _ = pDataObj;
     _ = pDropSource;
     _ = dwOKEffects;
@@ -85,12 +86,12 @@ fn stub_DoDragDrop(pDataObj: usize, pDropSource: usize, dwOKEffects: u32, pdwEff
     return @as(i32, @bitCast(@as(u32, 0x80004001))); // E_NOTIMPL
 }
 
-fn stub_SysFreeString(bstrString: usize) callconv(.winapi) void {
+fn stub_SysFreeString(bstrString: usize) callconv(w32cc.WINAPI) void {
     _ = bstrString;
     if (trace.enable_tracing) trace.print("OLEAUT32: SysFreeString\n", .{});
 }
 
-fn stub_SysAllocStringLen(strIn: usize, ui: u32) callconv(.winapi) usize {
+fn stub_SysAllocStringLen(strIn: usize, ui: u32) callconv(w32cc.WINAPI) usize {
     _ = strIn;
     _ = ui;
     if (trace.enable_tracing) trace.print("OLEAUT32: SysAllocStringLen\n", .{});

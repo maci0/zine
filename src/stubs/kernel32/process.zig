@@ -5,57 +5,71 @@ const kernel32 = @import("../kernel32.zig");
 const loader = @import("../../loader/loader.zig");
 const kernel32_mem = @import("mem.zig");
 const platform = @import("../../platform.zig");
-const w32 = @import("../win32_constants.zig");
+const w32 = @import("../../win32_constants.zig");
+const x86_thunks = @import("../../x86/thunks.zig");
+const w32cc = @import("../../calling_convention.zig");
 
 const EXCEPTION_POINTERS = extern struct {
     ExceptionRecord: *const @import("../../teb.zig").EXCEPTION_RECORD,
     ContextRecord: *const @import("../../teb.zig").CONTEXT,
 };
 
-pub fn stub_UnhandledExceptionFilter(ExceptionInfo: usize) callconv(.winapi) u32 {
+pub fn stub_UnhandledExceptionFilter(ExceptionInfo: usize) callconv(w32cc.WINAPI) u32 {
     if (ExceptionInfo != 0) {
         const ptrs = @as(*EXCEPTION_POINTERS, @ptrFromInt(ExceptionInfo));
         const code = ptrs.ExceptionRecord.ExceptionCode;
         const addr = ptrs.ExceptionRecord.ExceptionAddress;
 
-        std.log.err("UnhandledExceptionFilter caught code 0x{X} at 0x{X}", .{code, addr});
+        std.log.err("UnhandledExceptionFilter caught code 0x{X} at 0x{X}", .{ code, addr });
 
         const renderer = @import("../../gui/renderer.zig");
         var buf: [512]u8 = undefined;
-        const text = std.fmt.bufPrint(&buf, "This program has performed an illegal operation and will be shut down.\\n\\nException Code: 0x{X}\\nFault Address: 0x{X}", .{code, addr}) catch "Error";
+        const text = std.fmt.bufPrint(&buf, "This program has performed an illegal operation and will be shut down.\\n\\nException Code: 0x{X}\\nFault Address: 0x{X}", .{ code, addr }) catch "Error";
         renderer.showMessageBox("Application Error", text);
     }
 
     // Give WebSocket time to flush
-    std.Thread.sleep(100 * std.time.ns_per_ms);
-    std.process.exit(1);
+    platform.sleep(100 * std.time.ns_per_ms);
+    platform.exitProcess(1);
     return 1; // EXCEPTION_EXECUTE_HANDLER (though we never reach here)
 }
 
-pub fn stub_ExitProcess(exitCode: u32) callconv(.winapi) void {
+pub fn stub_ExitProcess(exitCode: u32) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: ExitProcess({d})\n", .{exitCode});
-    std.process.exit(@intCast(exitCode & 0xFF));
+    platform.exitProcess(@intCast(exitCode & 0xFF));
 }
 
-pub fn stub_SetConsoleCtrlHandler(handler: *const anyopaque, add: i32) callconv(.winapi) i32 {
+pub fn stub_SetConsoleCtrlHandler(handler: *const anyopaque, add: i32) callconv(w32cc.WINAPI) i32 {
     _ = handler;
     _ = add;
     return 1;
 }
 
-pub fn stub_DisableThreadLibraryCalls(hLibModule: ?*anyopaque) callconv(.winapi) i32 {
+pub fn stub_DisableThreadLibraryCalls(hLibModule: ?*anyopaque) callconv(w32cc.WINAPI) i32 {
     _ = hLibModule;
     return 1;
 }
 
-pub fn stub_LoadLibraryA(lpFileName_ptr: usize) callconv(.winapi) usize {
+pub fn stub_LoadLibraryA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
     if (lpFileName_ptr == 0) return 0;
     const name = trace.c_span(lpFileName_ptr);
 
     if (trace.enable_tracing) trace.print("KERNEL32: LoadLibraryA('{s}')\n", .{name});
 
     if (kernel32.global_env) |genv| {
-        if (genv.registry.loadModule(name)) |mod| {
+        // Convert Win32 path (e.g. C:\Desktop\Guild\MP3DEC.ASI) to POSIX
+        const path_utils = @import("../../path_utils.zig");
+        var posix_buf: [1024]u8 = undefined;
+        const posix_len = path_utils.win32ToPosix(name, &posix_buf);
+        var load_name = if (posix_len > 0) posix_buf[0..posix_len] else name;
+
+        // Strip "./" or ".\" prefix — Windows apps use ".\foo.dll" meaning "same dir as me"
+        // but loadModule will search registered paths, so just use the basename
+        if (load_name.len > 2 and load_name[0] == '.' and (load_name[1] == '/' or load_name[1] == '\\')) {
+            load_name = load_name[2..];
+        }
+
+        if (genv.registry.loadModule(load_name)) |mod| {
             if (!mod.imports_resolved) {
                 loader.resolveImports(genv, mod) catch |err| {
                     if (trace.enable_tracing) trace.print("KERNEL32: LoadLibraryA failed to resolve imports: {}\n", .{err});
@@ -68,8 +82,8 @@ pub fn stub_LoadLibraryA(lpFileName_ptr: usize) callconv(.winapi) usize {
                 const opt_header = &mod.parser.getNtHeaders().OptionalHeader;
                 if (opt_header.AddressOfEntryPoint != 0) {
                     const entry_point_addr = @intFromPtr(mod.mapped_memory.ptr) + opt_header.AddressOfEntryPoint;
-                    const DllMain = @as(*const fn (usize, u32, usize) callconv(.winapi) i32, @ptrFromInt(entry_point_addr));
-                    if (trace.enable_tracing) trace.print("KERNEL32: Executing DllMain for {s} at {x}\n", .{ name, entry_point_addr });
+                    const DllMain = @as(*const fn (usize, u32, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(entry_point_addr));
+                    if (trace.enable_tracing) trace.print("KERNEL32: Executing DllMain for {s} at {x}\n", .{ load_name, entry_point_addr });
                     const ret = DllMain(@intFromPtr(mod.mapped_memory.ptr), 1, 0);
                     if (trace.enable_tracing) trace.print("KERNEL32: DllMain returned {d}\n", .{ret});
                 }
@@ -83,7 +97,7 @@ pub fn stub_LoadLibraryA(lpFileName_ptr: usize) callconv(.winapi) usize {
                 return handle;
             }
 
-            // Strip path (e.g. "Z:\WINDOWS\SYSTEM32\advapi32.dll" -> "advapi32.dll")
+            // Strip path (e.g. "C:\WINDOWS\SYSTEM32\advapi32.dll" -> "advapi32.dll")
             var basename = name;
             for (name, 0..) |c, i| {
                 if (c == '\\' or c == '/') basename = name[i + 1 ..];
@@ -102,7 +116,7 @@ pub fn stub_LoadLibraryA(lpFileName_ptr: usize) callconv(.winapi) usize {
     return 0;
 }
 
-pub fn stub_GetProcAddress(hModule: usize, lpProcName_ptr: usize) callconv(.winapi) usize {
+pub fn stub_GetProcAddress(hModule: usize, lpProcName_ptr: usize) callconv(w32cc.WINAPI) usize {
     if (hModule == 0 or lpProcName_ptr == 0) return 0;
 
     var is_ordinal = false;
@@ -117,9 +131,13 @@ pub fn stub_GetProcAddress(hModule: usize, lpProcName_ptr: usize) callconv(.wina
             while (it.next()) |entry| {
                 const builtin = entry.value_ptr.*;
                 if (builtin.handle == hModule) {
-                    if (builtin.exports.get(name)) |addr| {
-                        if (trace.enable_tracing) trace.print("KERNEL32: GetProcAddress('{s}') -> {x} (from builtin)\n", .{ name, addr });
-                        return addr;
+                    if (builtin.exports.get(name)) |exp| {
+                        if (trace.enable_tracing) trace.print("KERNEL32: GetProcAddress('{s}') -> {x} (from builtin)\n", .{ name, exp.addr });
+                        // Register the resolved address as a native import so the
+                        // interpreter can dispatch calls to it (GetProcAddress results
+                        // bypass the normal IAT-based import registration).
+                        x86_thunks.registerNativeImport(@intCast(exp.addr), entry.key_ptr.*, name, exp.param_bytes);
+                        return exp.addr;
                     }
                 }
             }
@@ -152,14 +170,14 @@ pub fn stub_GetProcAddress(hModule: usize, lpProcName_ptr: usize) callconv(.wina
     return 0;
 }
 
-pub fn stub_GetStartupInfoA(lpStartupInfo_ptr: usize) callconv(.winapi) void {
+pub fn stub_GetStartupInfoA(lpStartupInfo_ptr: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: GetStartupInfoA({x})\n", .{lpStartupInfo_ptr});
     if (lpStartupInfo_ptr == 0) return;
     const si = @as(*w32.STARTUPINFOA, @ptrFromInt(lpStartupInfo_ptr));
     si.* = .{}; // zero all, cb defaults to 68
 }
 
-pub fn stub_GetModuleHandleA(lpModuleName_ptr: usize) callconv(.winapi) usize {
+pub fn stub_GetModuleHandleA(lpModuleName_ptr: usize) callconv(w32cc.WINAPI) usize {
     @setRuntimeSafety(false);
     const frame_addr = @frameAddress();
     if (trace.enable_tracing) trace.print("KERNEL32: GetModuleHandleA esp={x}\n", .{frame_addr});
@@ -189,68 +207,67 @@ pub fn stub_GetModuleHandleA(lpModuleName_ptr: usize) callconv(.winapi) usize {
 var cmdline_buf: [4096]u8 = undefined;
 var cmdline_initialized: bool = false;
 
-pub fn stub_GetCommandLineA() callconv(.winapi) usize {
+pub fn stub_GetCommandLineA() callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineA\n", .{});
 
     if (!cmdline_initialized) {
-        if (kernel32.global_env) |genv| {
-            _ = genv;
-            var i: usize = 0;
-            var pos: usize = 0;
-            const msvcrt = @import("../msvcrt.zig");
-            if (msvcrt.global_argc > 0) {
-                // Hardcode the executable name to avoid path parsing bugs in legacy apps
+        const msvcrt = @import("../msvcrt.zig");
+        var pos: usize = 0;
+        if (msvcrt.global_argc > 0) {
+            // Use the actual argv[0] (already has Win32-style path from posixToWin32)
+            if (msvcrt.global_argv[0]) |argv0| {
+                const span = trace.c_span(@intFromPtr(argv0));
+                const copy_len = @min(span.len, 4094);
+                @memcpy(cmdline_buf[0..copy_len], span[0..copy_len]);
+                pos = copy_len;
+            } else {
                 const exe_stub = "C:\\program.exe";
                 @memcpy(cmdline_buf[0..exe_stub.len], exe_stub);
                 pos = exe_stub.len;
-
-                if (msvcrt.global_argc > 1) {
-                    cmdline_buf[pos] = ' ';
-                    pos += 1;
-                }
-
-                i = 1; // Skip actual argv[0]
-                while (i < msvcrt.global_argc) : (i += 1) {
-                    if (msvcrt.global_argv[i]) |arg_ptr| {
-                        const arg = trace.c_span(@intFromPtr(arg_ptr));
-
-                        var write_arg = arg;
-                        var needs_quotes = false;
-                        for (write_arg) |c| {
-                            if (c == ' ' or c == '\t') needs_quotes = true;
-                        }
-
-                        if (write_arg.len >= 2 and write_arg[0] == '"' and write_arg[write_arg.len - 1] == '"') {
-                            write_arg = write_arg[1 .. write_arg.len - 1];
-                            needs_quotes = true;
-                        }
-
-                        if (needs_quotes and pos < 4094) {
-                            cmdline_buf[pos] = '"';
-                            pos += 1;
-                        }
-
-                        const copy_len = @min(write_arg.len, 4094 - pos);
-                        @memcpy(cmdline_buf[pos .. pos + copy_len], write_arg[0..copy_len]);
-                        pos += copy_len;
-
-                        if (needs_quotes and pos < 4094) {
-                            cmdline_buf[pos] = '"';
-                            pos += 1;
-                        }
-
-                        if (i < msvcrt.global_argc - 1 and pos < 4094) {
-                            cmdline_buf[pos] = ' ';
-                            pos += 1;
-                        }
-                    }
-                }            } else {
-                const dummy = "C:\\program.exe";
-                @memcpy(cmdline_buf[0..dummy.len], dummy);
-                pos = dummy.len;
             }
-            cmdline_buf[pos] = 0;
+
+            var i: usize = 1;
+            while (i < msvcrt.global_argc) : (i += 1) {
+                if (msvcrt.global_argv[i]) |arg_ptr| {
+                    const arg = trace.c_span(@intFromPtr(arg_ptr));
+
+                    if (pos < 4094) {
+                        cmdline_buf[pos] = ' ';
+                        pos += 1;
+                    }
+
+                    var write_arg = arg;
+                    var needs_quotes = false;
+                    for (write_arg) |c| {
+                        if (c == ' ' or c == '\t') needs_quotes = true;
+                    }
+
+                    if (write_arg.len >= 2 and write_arg[0] == '"' and write_arg[write_arg.len - 1] == '"') {
+                        write_arg = write_arg[1 .. write_arg.len - 1];
+                        needs_quotes = true;
+                    }
+
+                    if (needs_quotes and pos < 4094) {
+                        cmdline_buf[pos] = '"';
+                        pos += 1;
+                    }
+
+                    const copy_len = @min(write_arg.len, 4094 - pos);
+                    @memcpy(cmdline_buf[pos .. pos + copy_len], write_arg[0..copy_len]);
+                    pos += copy_len;
+
+                    if (needs_quotes and pos < 4094) {
+                        cmdline_buf[pos] = '"';
+                        pos += 1;
+                    }
+                }
+            }
+        } else {
+            const dummy = "C:\\program.exe";
+            @memcpy(cmdline_buf[0..dummy.len], dummy);
+            pos = dummy.len;
         }
+        cmdline_buf[pos] = 0;
         cmdline_initialized = true;
     }
 
@@ -258,19 +275,19 @@ pub fn stub_GetCommandLineA() callconv(.winapi) usize {
     return @intFromPtr(&cmdline_buf);
 }
 
-pub fn stub_GetCurrentProcess() callconv(.winapi) usize {
+pub fn stub_GetCurrentProcess() callconv(w32cc.WINAPI) usize {
     return 0xFFFFFFFF; // Pseudo-handle for current process
 }
 
-pub fn stub_GetCurrentProcessId() callconv(.winapi) u32 {
+pub fn stub_GetCurrentProcessId() callconv(w32cc.WINAPI) u32 {
     return platform.getProcessId();
 }
 
-pub fn stub_GetCurrentThreadId() callconv(.winapi) u32 {
+pub fn stub_GetCurrentThreadId() callconv(w32cc.WINAPI) u32 {
     return @intCast(std.Thread.getCurrentId());
 }
 
-pub fn stub_SetEnvironmentVariableA(lpName: usize, lpValue: usize) callconv(.winapi) i32 {
+pub fn stub_SetEnvironmentVariableA(lpName: usize, lpValue: usize) callconv(w32cc.WINAPI) i32 {
     if (lpName != 0 and lpValue != 0) {
         const name = trace.c_span(lpName);
         const value = trace.c_span(lpValue);
@@ -293,7 +310,7 @@ pub fn stub_SetEnvironmentVariableA(lpName: usize, lpValue: usize) callconv(.win
     return 0; // FALSE
 }
 
-pub fn stub_GetEnvironmentVariableA(lpName: usize, lpBuffer: usize, nSize: u32) callconv(.winapi) u32 {
+pub fn stub_GetEnvironmentVariableA(lpName: usize, lpBuffer: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
     const name = trace.c_span(lpName);
     if (trace.enable_tracing) trace.print("KERNEL32: GetEnvironmentVariableA('{s}')\n", .{name});
 
@@ -333,7 +350,7 @@ pub fn stub_GetEnvironmentVariableA(lpName: usize, lpBuffer: usize, nSize: u32) 
     return 0; // Not found
 }
 
-pub fn stub_GetModuleFileNameA(hModule: usize, lpFilename: usize, nSize: u32) callconv(.winapi) u32 {
+pub fn stub_GetModuleFileNameA(hModule: usize, lpFilename: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
     _ = hModule;
     if (lpFilename != 0 and nSize > 0) {
         if (kernel32.global_env) |genv| {
@@ -368,7 +385,7 @@ pub fn stub_CreateProcessA(
     lpCurrentDirectory: usize,
     lpStartupInfo: usize,
     lpProcessInformation: usize,
-) callconv(.winapi) i32 {
+) callconv(w32cc.WINAPI) i32 {
     _ = lpProcessAttributes;
     _ = lpThreadAttributes;
     _ = bInheritHandles;
@@ -393,7 +410,7 @@ pub fn stub_CreateProcessA(
     return 1; // TRUE
 }
 
-pub fn stub_GetEnvironmentStringsA() callconv(.winapi) ?*anyopaque {
+pub fn stub_GetEnvironmentStringsA() callconv(w32cc.WINAPI) ?*anyopaque {
     if (trace.enable_tracing) trace.print("KERNEL32: GetEnvironmentStringsA()\n", .{});
     const msvcrt = @import("../msvcrt.zig");
     var total_len: usize = 1; // Final null
@@ -421,17 +438,17 @@ pub fn stub_GetEnvironmentStringsA() callconv(.winapi) ?*anyopaque {
     return ptr;
 }
 
-pub fn stub_FreeEnvironmentStringsA(penv: usize) callconv(.winapi) i32 {
+pub fn stub_FreeEnvironmentStringsA(penv: usize) callconv(w32cc.WINAPI) i32 {
     _ = penv;
     return 1;
 }
 
-pub fn stub_FreeEnvironmentStringsW(penv: usize) callconv(.winapi) i32 {
+pub fn stub_FreeEnvironmentStringsW(penv: usize) callconv(w32cc.WINAPI) i32 {
     _ = penv;
     return 1;
 }
 
-pub fn stub_GetEnvironmentStringsW() callconv(.winapi) ?*anyopaque {
+pub fn stub_GetEnvironmentStringsW() callconv(w32cc.WINAPI) ?*anyopaque {
     if (trace.enable_tracing) trace.print("KERNEL32: GetEnvironmentStringsW()\n", .{});
     const msvcrt = @import("../msvcrt.zig");
     var total_chars: usize = 1; // Final null
@@ -461,7 +478,7 @@ pub fn stub_GetEnvironmentStringsW() callconv(.winapi) ?*anyopaque {
     return ptr;
 }
 
-const ThreadStartFn = *const fn (usize) callconv(.winapi) u32;
+const ThreadStartFn = *const fn (usize) callconv(w32cc.WINAPI) u32;
 var next_thread_handle: usize = 0xA0000001;
 
 fn threadWrapper(start_address: usize, parameter: usize) void {
@@ -469,7 +486,7 @@ fn threadWrapper(start_address: usize, parameter: usize) void {
     _ = func(parameter);
 }
 
-pub fn stub_CreateThread(lpThreadAttributes: usize, dwStackSize: usize, lpStartAddress: usize, lpParameter: usize, dwCreationFlags: u32, lpThreadId: usize) callconv(.winapi) usize {
+pub fn stub_CreateThread(lpThreadAttributes: usize, dwStackSize: usize, lpStartAddress: usize, lpParameter: usize, dwCreationFlags: u32, lpThreadId: usize) callconv(w32cc.WINAPI) usize {
     _ = lpThreadAttributes;
     _ = dwStackSize;
     _ = dwCreationFlags;
@@ -482,28 +499,22 @@ pub fn stub_CreateThread(lpThreadAttributes: usize, dwStackSize: usize, lpStartA
         @as(*u32, @ptrFromInt(lpThreadId)).* = @intCast(handle & 0xFFFF);
     }
 
-    if (comptime platform.is_wasm) {
-        // Threading not supported on WASM yet
-        if (trace.enable_tracing) trace.print("KERNEL32: CreateThread not supported on WASM\n", .{});
+    if (!platform.spawnThread(threadWrapper, .{ lpStartAddress, lpParameter })) {
+        if (trace.enable_tracing) trace.print("KERNEL32: CreateThread spawn failed\n", .{});
         return 0;
-    } else {
-        _ = std.Thread.spawn(.{}, threadWrapper, .{ lpStartAddress, lpParameter }) catch |err| {
-            if (trace.enable_tracing) trace.print("KERNEL32: CreateThread spawn failed: {}\n", .{err});
-            return 0;
-        };
     }
 
     return handle;
 }
 
-pub fn stub_ExitThread(dwExitCode: u32) callconv(.winapi) void {
+pub fn stub_ExitThread(dwExitCode: u32) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: ExitThread({d})\n", .{dwExitCode});
 }
 
 var cmdline_w_buf: [8192]u8 = undefined;
 var cmdline_w_initialized: bool = false;
 
-pub fn stub_GetModuleFileNameW(hModule: usize, lpFilename: usize, nSize: u32) callconv(.winapi) u32 {
+pub fn stub_GetModuleFileNameW(hModule: usize, lpFilename: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
     _ = hModule;
     if (trace.enable_tracing) trace.print("KERNEL32: GetModuleFileNameW\n", .{});
     if (lpFilename == 0 or nSize == 0) return 0;
@@ -523,7 +534,7 @@ pub fn stub_GetModuleFileNameW(hModule: usize, lpFilename: usize, nSize: u32) ca
     return 0;
 }
 
-pub fn stub_GetCommandLineW() callconv(.winapi) usize {
+pub fn stub_GetCommandLineW() callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineW\n", .{});
     if (!cmdline_w_initialized) {
         // Get narrow command line and widen it
@@ -540,7 +551,7 @@ pub fn stub_GetCommandLineW() callconv(.winapi) usize {
     return @intFromPtr(&cmdline_w_buf);
 }
 
-pub fn stub_LoadLibraryW(lpFileName_ptr: usize) callconv(.winapi) usize {
+pub fn stub_LoadLibraryW(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
     if (lpFileName_ptr == 0) return 0;
     const wstr = trace.c_span_w(lpFileName_ptr);
     if (trace.enable_tracing) trace.print("KERNEL32: LoadLibraryW (len={d})\n", .{wstr.len});
@@ -555,7 +566,7 @@ pub fn stub_LoadLibraryW(lpFileName_ptr: usize) callconv(.winapi) usize {
     return stub_LoadLibraryA(@intFromPtr(&narrow_buf));
 }
 
-pub fn stub_FindFirstFileW(lpFileName: usize, lpFindFileData: usize) callconv(.winapi) usize {
+pub fn stub_FindFirstFileW(lpFileName: usize, lpFindFileData: usize) callconv(w32cc.WINAPI) usize {
     if (lpFileName == 0 or lpFindFileData == 0) return 0xFFFFFFFF;
 
     // Convert wide filename to narrow
@@ -604,13 +615,13 @@ pub fn stub_FindFirstFileW(lpFileName: usize, lpFindFileData: usize) callconv(.w
     return result;
 }
 
-pub fn stub_FindNextFileW(hFindFile: usize, lpFindFileData: usize) callconv(.winapi) i32 {
+pub fn stub_FindNextFileW(hFindFile: usize, lpFindFileData: usize) callconv(w32cc.WINAPI) i32 {
     _ = hFindFile;
     _ = lpFindFileData;
     return 0; // No more files
 }
 
-pub fn stub_OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) callconv(.winapi) usize {
+pub fn stub_OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) callconv(w32cc.WINAPI) usize {
     _ = dwDesiredAccess;
     _ = bInheritHandle;
     _ = dwProcessId;
@@ -618,14 +629,14 @@ pub fn stub_OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: 
     return 0;
 }
 
-pub fn stub_SetHandleInformation(hObject: usize, dwMask: u32, dwFlags: u32) callconv(.winapi) i32 {
+pub fn stub_SetHandleInformation(hObject: usize, dwMask: u32, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = hObject;
     _ = dwMask;
     _ = dwFlags;
     return 1;
 }
 
-pub fn stub_CreatePipe(hReadPipe: usize, hWritePipe: usize, lpPipeAttributes: usize, nSize: u32) callconv(.winapi) i32 {
+pub fn stub_CreatePipe(hReadPipe: usize, hWritePipe: usize, lpPipeAttributes: usize, nSize: u32) callconv(w32cc.WINAPI) i32 {
     _ = hReadPipe;
     _ = hWritePipe;
     _ = lpPipeAttributes;
@@ -635,7 +646,7 @@ pub fn stub_CreatePipe(hReadPipe: usize, hWritePipe: usize, lpPipeAttributes: us
 
 // GetPriorityClass: returns priority class of a process
 // NORMAL_PRIORITY_CLASS = 0x00000020
-pub fn stub_GetPriorityClass(hProcess: usize) callconv(.winapi) u32 {
+pub fn stub_GetPriorityClass(hProcess: usize) callconv(w32cc.WINAPI) u32 {
     _ = hProcess;
     return 0x20; // NORMAL_PRIORITY_CLASS
 }

@@ -1,13 +1,14 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32 = @import("../win32_constants.zig");
+const w32 = @import("../../win32_constants.zig");
+const w32cc = @import("../../calling_convention.zig");
 
 pub fn raw_alloc(size: usize) ?*anyopaque {
-    if (size == 0) return null;
-    const ptr = std.heap.page_allocator.alloc(u8, size + 8) catch return null;
+    const actual_size = if (size == 0) @as(usize, 64) else size;
+    const ptr = std.heap.page_allocator.alloc(u8, actual_size + 8) catch return null;
     @memset(ptr, 0);
     const header = @as(*usize, @ptrCast(@alignCast(ptr.ptr)));
-    header.* = size;
+    header.* = actual_size;
     return @ptrCast(ptr.ptr + 8);
 }
 
@@ -47,7 +48,7 @@ pub fn get_aligned_hint(size: usize) usize {
     return hint;
 }
 
-pub fn stub_VirtualAlloc(lpAddress: usize, dwSize: usize, flAllocationType: u32, flProtect: u32) callconv(.winapi) usize {
+pub fn stub_VirtualAlloc(lpAddress: usize, dwSize: usize, flAllocationType: u32, flProtect: u32) callconv(w32cc.WINAPI) usize {
     _ = flProtect;
     if (trace.enable_tracing) trace.print("KERNEL32: VirtualAlloc(addr={x}, size={x}, type={x})\n", .{ lpAddress, dwSize, flAllocationType });
 
@@ -70,14 +71,14 @@ pub fn stub_VirtualAlloc(lpAddress: usize, dwSize: usize, flAllocationType: u32,
     return @intFromPtr(ptr.ptr);
 }
 
-pub fn stub_VirtualFree(lpAddress: usize, dwSize: usize, dwFreeType: u32) callconv(.winapi) i32 {
+pub fn stub_VirtualFree(lpAddress: usize, dwSize: usize, dwFreeType: u32) callconv(w32cc.WINAPI) i32 {
     _ = dwSize;
     _ = dwFreeType;
     if (trace.enable_tracing) trace.print("KERNEL32: VirtualFree(addr={x})\n", .{lpAddress});
     return 1;
 }
 
-pub fn stub_VirtualQuery(lpAddress: usize, lpBuffer_ptr: usize, dwLength: usize) callconv(.winapi) usize {
+pub fn stub_VirtualQuery(lpAddress: usize, lpBuffer_ptr: usize, dwLength: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: VirtualQuery(addr={x})\n", .{lpAddress});
 
     if (lpBuffer_ptr != 0 and dwLength >= 28) {
@@ -94,7 +95,7 @@ pub fn stub_VirtualQuery(lpAddress: usize, lpBuffer_ptr: usize, dwLength: usize)
     return 0;
 }
 
-pub fn stub_HeapCreate(flOptions: u32, dwInitialSize: usize, dwMaximumSize: usize) callconv(.winapi) ?*anyopaque {
+pub fn stub_HeapCreate(flOptions: u32, dwInitialSize: usize, dwMaximumSize: usize) callconv(w32cc.WINAPI) ?*anyopaque {
     _ = flOptions;
     _ = dwInitialSize;
     _ = dwMaximumSize;
@@ -102,63 +103,63 @@ pub fn stub_HeapCreate(flOptions: u32, dwInitialSize: usize, dwMaximumSize: usiz
     return @ptrFromInt(0xDEADBEEF);
 }
 
-pub fn stub_HeapDestroy(hHeap: ?*anyopaque) callconv(.winapi) i32 {
+pub fn stub_HeapDestroy(hHeap: ?*anyopaque) callconv(w32cc.WINAPI) i32 {
     _ = hHeap;
     return 1;
 }
 
-pub fn stub_GetProcessHeap() callconv(.winapi) ?*anyopaque {
+pub fn stub_GetProcessHeap() callconv(w32cc.WINAPI) ?*anyopaque {
     if (trace.enable_tracing) trace.print("KERNEL32: GetProcessHeap()\n", .{});
     return @ptrFromInt(0xDEADC0DE);
 }
 
-pub fn stub_HeapAlloc(hHeap: ?*anyopaque, dwFlags: u32, dwBytes: usize) callconv(.winapi) ?*anyopaque {
+pub fn stub_HeapAlloc(hHeap: ?*anyopaque, dwFlags: u32, dwBytes: usize) callconv(w32cc.WINAPI) ?*anyopaque {
     _ = hHeap;
     _ = dwFlags;
     return raw_alloc(dwBytes);
 }
 
-pub fn stub_HeapReAlloc(hHeap: ?*anyopaque, dwFlags: u32, lpMem: ?*anyopaque, dwBytes: usize) callconv(.winapi) ?*anyopaque {
+pub fn stub_HeapReAlloc(hHeap: ?*anyopaque, dwFlags: u32, lpMem: ?*anyopaque, dwBytes: usize) callconv(w32cc.WINAPI) ?*anyopaque {
     _ = hHeap;
     _ = dwFlags;
     return raw_realloc(lpMem, dwBytes);
 }
 
-pub fn stub_HeapFree(hHeap: ?*anyopaque, dwFlags: u32, lpMem: ?*anyopaque) callconv(.winapi) i32 {
+pub fn stub_HeapFree(hHeap: ?*anyopaque, dwFlags: u32, lpMem: ?*anyopaque) callconv(w32cc.WINAPI) i32 {
     _ = hHeap;
     _ = dwFlags;
     _ = lpMem;
     return 1;
 }
 
-pub fn stub_LocalAlloc(uFlags: u32, uBytes: usize) callconv(.winapi) ?*anyopaque {
+pub fn stub_LocalAlloc(uFlags: u32, uBytes: usize) callconv(w32cc.WINAPI) ?*anyopaque {
     _ = uFlags;
     return raw_alloc(uBytes);
 }
 
-pub fn stub_LocalFree(hMem: ?*anyopaque) callconv(.winapi) ?*anyopaque {
+pub fn stub_LocalFree(hMem: ?*anyopaque) callconv(w32cc.WINAPI) ?*anyopaque {
     _ = hMem;
     return null;
 }
 
-pub fn stub_LocalLock(hMem: usize) callconv(.winapi) usize {
+pub fn stub_LocalLock(hMem: usize) callconv(w32cc.WINAPI) usize {
     // For LMEM_FIXED, the handle IS the pointer
     return hMem;
 }
 
-pub fn stub_LocalUnlock(hMem: usize) callconv(.winapi) i32 {
+pub fn stub_LocalUnlock(hMem: usize) callconv(w32cc.WINAPI) i32 {
     _ = hMem;
     return 0;
 }
 
-pub fn stub_LocalSize(hMem: usize) callconv(.winapi) usize {
+pub fn stub_LocalSize(hMem: usize) callconv(w32cc.WINAPI) usize {
     if (hMem == 0) return 0;
     // raw_alloc stores size in the 8 bytes before the returned pointer
     const header = @as(*const usize, @ptrFromInt(hMem - 8));
     return header.*;
 }
 
-pub fn stub_LocalReAlloc(hMem: usize, uBytes: usize, uFlags: u32) callconv(.winapi) usize {
+pub fn stub_LocalReAlloc(hMem: usize, uBytes: usize, uFlags: u32) callconv(w32cc.WINAPI) usize {
     _ = uFlags;
     if (hMem == 0) {
         const ptr = raw_alloc(uBytes) orelse return 0;
@@ -168,7 +169,7 @@ pub fn stub_LocalReAlloc(hMem: usize, uBytes: usize, uFlags: u32) callconv(.wina
     return @intFromPtr(ptr);
 }
 
-pub fn stub_GlobalMemoryStatus(lpBuffer: usize) callconv(.winapi) void {
+pub fn stub_GlobalMemoryStatus(lpBuffer: usize) callconv(w32cc.WINAPI) void {
     if (lpBuffer != 0) {
         const status = @as(*w32.MEMORYSTATUS, @ptrFromInt(lpBuffer));
         status.* = .{
@@ -183,36 +184,37 @@ pub fn stub_GlobalMemoryStatus(lpBuffer: usize) callconv(.winapi) void {
     }
 }
 
-pub fn stub_GlobalAlloc(uFlags: u32, dwBytes: usize) callconv(.winapi) usize {
+pub fn stub_GlobalAlloc(uFlags: u32, dwBytes: usize) callconv(w32cc.WINAPI) usize {
     _ = uFlags;
-    if (trace.enable_tracing) trace.print("KERNEL32: GlobalAlloc(size={d})\n", .{dwBytes});
+    const ret_addr = @returnAddress();
     const ptr = raw_alloc(dwBytes) orelse return 0;
+    if (trace.enable_tracing) trace.print("KERNEL32: GlobalAlloc(size={d}) = {x} (from {x})\n", .{ dwBytes, @intFromPtr(ptr), ret_addr });
     return @intFromPtr(ptr);
 }
 
-pub fn stub_GlobalFree(hMem: usize) callconv(.winapi) usize {
+pub fn stub_GlobalFree(hMem: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: GlobalFree({x})\n", .{hMem});
     return 0; // Success
 }
 
-pub fn stub_GlobalLock(hMem: usize) callconv(.winapi) usize {
+pub fn stub_GlobalLock(hMem: usize) callconv(w32cc.WINAPI) usize {
     // For GMEM_FIXED, the handle IS the pointer
     return hMem;
 }
 
-pub fn stub_GlobalUnlock(hMem: usize) callconv(.winapi) i32 {
+pub fn stub_GlobalUnlock(hMem: usize) callconv(w32cc.WINAPI) i32 {
     _ = hMem;
     return 0;
 }
 
-pub fn stub_GlobalSize(hMem: usize) callconv(.winapi) usize {
+pub fn stub_GlobalSize(hMem: usize) callconv(w32cc.WINAPI) usize {
     if (hMem == 0) return 0;
     // raw_alloc stores size in the 8 bytes before the returned pointer
     const header = @as(*const usize, @ptrFromInt(hMem - 8));
     return header.*;
 }
 
-pub fn stub_GlobalReAlloc(hMem: usize, dwBytes: usize, uFlags: u32) callconv(.winapi) usize {
+pub fn stub_GlobalReAlloc(hMem: usize, dwBytes: usize, uFlags: u32) callconv(w32cc.WINAPI) usize {
     _ = uFlags;
     if (hMem == 0) {
         const ptr = raw_alloc(dwBytes) orelse return 0;

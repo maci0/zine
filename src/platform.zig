@@ -16,6 +16,9 @@ pub const mmap = interface.mmap;
 pub const munmap = interface.munmap;
 
 pub const yield = interface.yield;
+pub const sleep = interface.sleep;
+pub const Mutex = interface.Mutex;
+pub const spawnThread = interface.spawnThread;
 
 pub const getProcessId = interface.getProcessId;
 pub const exitProcess = interface.exitProcess;
@@ -25,6 +28,8 @@ pub const StackBounds = interface.StackBounds;
 pub const getStackBounds = interface.getStackBounds;
 
 pub const setupFS = interface.setupFS;
+
+pub const readExceptionList = interface.readExceptionList;
 
 pub const installSegfaultHandler = interface.installSegfaultHandler;
 pub const mapNullPage = interface.mapNullPage;

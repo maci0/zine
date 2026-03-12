@@ -1,6 +1,7 @@
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
+const w32cc = @import("../calling_convention.zig");
 
 // --- COM VTables ---
 
@@ -9,11 +10,11 @@ const IDirectInput = extern struct {
 };
 
 const IDirectInputVtbl = extern struct {
-    QueryInterface: *const fn (*anyopaque, usize, *?*anyopaque) callconv(.winapi) i32,
+    QueryInterface: *const fn (*anyopaque, usize, *?*anyopaque) callconv(w32cc.WINAPI) i32,
     AddRef: usize,
-    Release: *const fn (*IDirectInput) callconv(.winapi) u32,
-    CreateDevice: *const fn (*IDirectInput, usize, *?*IDirectInputDevice, usize) callconv(.winapi) i32,
-    EnumDevices: *const fn (*IDirectInput, u32, usize, usize, u32) callconv(.winapi) i32,
+    Release: *const fn (*IDirectInput) callconv(w32cc.WINAPI) u32,
+    CreateDevice: *const fn (*IDirectInput, usize, *?*IDirectInputDevice, usize) callconv(w32cc.WINAPI) i32,
+    EnumDevices: *const fn (*IDirectInput, u32, usize, usize, u32) callconv(w32cc.WINAPI) i32,
     GetDeviceStatus: usize,
     RunControlPanel: usize,
     Initialize: usize,
@@ -25,20 +26,20 @@ const IDirectInputDevice = extern struct {
 
 // IDirectInputDevice8 vtable — extended from IDirectInputDevice with extra methods
 const IDirectInputDeviceVtbl = extern struct {
-    QueryInterface: *const fn (*anyopaque, usize, *?*anyopaque) callconv(.winapi) i32,
+    QueryInterface: *const fn (*anyopaque, usize, *?*anyopaque) callconv(w32cc.WINAPI) i32,
     AddRef: usize,
-    Release: *const fn (*IDirectInputDevice) callconv(.winapi) u32,
+    Release: *const fn (*IDirectInputDevice) callconv(w32cc.WINAPI) u32,
     GetCapabilities: usize,
     EnumObjects: usize,
     GetProperty: usize,
-    SetProperty: *const fn (*IDirectInputDevice, usize, usize) callconv(.winapi) i32,
-    Acquire: *const fn (*IDirectInputDevice) callconv(.winapi) i32,
+    SetProperty: *const fn (*IDirectInputDevice, usize, usize) callconv(w32cc.WINAPI) i32,
+    Acquire: *const fn (*IDirectInputDevice) callconv(w32cc.WINAPI) i32,
     Unacquire: usize,
-    GetDeviceState: *const fn (*IDirectInputDevice, u32, usize) callconv(.winapi) i32,
+    GetDeviceState: *const fn (*IDirectInputDevice, u32, usize) callconv(w32cc.WINAPI) i32,
     GetDeviceData: usize,
-    SetDataFormat: *const fn (*IDirectInputDevice, usize) callconv(.winapi) i32,
+    SetDataFormat: *const fn (*IDirectInputDevice, usize) callconv(w32cc.WINAPI) i32,
     SetEventNotification: usize,
-    SetCooperativeLevel: *const fn (*IDirectInputDevice, usize, u32) callconv(.winapi) i32,
+    SetCooperativeLevel: *const fn (*IDirectInputDevice, usize, u32) callconv(w32cc.WINAPI) i32,
     GetObjectInfo: usize,
     GetDeviceInfo: usize,
     RunControlPanel: usize,
@@ -67,44 +68,44 @@ var global_dinput_device: IDirectInputDevice = undefined;
 
 // --- IDirectInputDevice Implementation ---
 
-fn dinput_QueryInterface(this: *anyopaque, riid: usize, ppvObj: *?*anyopaque) callconv(.winapi) i32 {
+fn dinput_QueryInterface(this: *anyopaque, riid: usize, ppvObj: *?*anyopaque) callconv(w32cc.WINAPI) i32 {
     _ = riid;
     if (trace.enable_tracing) trace.print("DINPUT: QueryInterface\n", .{});
     ppvObj.* = this;
     return 0; // S_OK
 }
 
-fn device_Release(this: *IDirectInputDevice) callconv(.winapi) u32 {
+fn device_Release(this: *IDirectInputDevice) callconv(w32cc.WINAPI) u32 {
     _ = this;
     if (trace.enable_tracing) trace.print("DINPUT: IDirectInputDevice::Release\n", .{});
     return 0;
 }
 
-fn device_Acquire(this: *IDirectInputDevice) callconv(.winapi) i32 {
+fn device_Acquire(this: *IDirectInputDevice) callconv(w32cc.WINAPI) i32 {
     _ = this;
     if (trace.enable_tracing) trace.print("DINPUT: IDirectInputDevice::Acquire\n", .{});
     return 0; // DI_OK
 }
 
-fn device_SetDataFormat(this: *IDirectInputDevice, lpFormat: usize) callconv(.winapi) i32 {
+fn device_SetDataFormat(this: *IDirectInputDevice, lpFormat: usize) callconv(w32cc.WINAPI) i32 {
     _ = this; _ = lpFormat;
     if (trace.enable_tracing) trace.print("DINPUT: IDirectInputDevice::SetDataFormat\n", .{});
     return 0; // DI_OK
 }
 
-fn device_SetCooperativeLevel(this: *IDirectInputDevice, hwnd: usize, dwFlags: u32) callconv(.winapi) i32 {
+fn device_SetCooperativeLevel(this: *IDirectInputDevice, hwnd: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = this; _ = hwnd; _ = dwFlags;
     if (trace.enable_tracing) trace.print("DINPUT: IDirectInputDevice::SetCooperativeLevel\n", .{});
     return 0; // DI_OK
 }
 
-fn device_SetProperty(this: *IDirectInputDevice, rguidProp: usize, pdiph: usize) callconv(.winapi) i32 {
+fn device_SetProperty(this: *IDirectInputDevice, rguidProp: usize, pdiph: usize) callconv(w32cc.WINAPI) i32 {
     _ = this; _ = rguidProp; _ = pdiph;
     if (trace.enable_tracing) trace.print("DINPUT: IDirectInputDevice::SetProperty\n", .{});
     return 0; // DI_OK
 }
 
-fn device_GetDeviceState(this: *IDirectInputDevice, cbData: u32, lpvData: usize) callconv(.winapi) i32 {
+fn device_GetDeviceState(this: *IDirectInputDevice, cbData: u32, lpvData: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
     if (trace.enable_tracing) trace.print("DINPUT: IDirectInputDevice::GetDeviceState({d})\n", .{cbData});
     
@@ -120,37 +121,37 @@ fn device_GetDeviceState(this: *IDirectInputDevice, cbData: u32, lpvData: usize)
     return 0; // DI_OK
 }
 
-fn device_noop1(a: usize) callconv(.winapi) usize { _ = a; return 0; }
-fn device_noop2(a: usize, b: usize) callconv(.winapi) usize { _ = a; _ = b; return 0; }
-fn device_noop3(a: usize, b: usize, c: usize) callconv(.winapi) usize { _ = a; _ = b; _ = c; return 0; }
-fn device_noop4(a: usize, b: usize, c: usize, d: usize) callconv(.winapi) usize { _ = a; _ = b; _ = c; _ = d; return 0; }
-fn device_noop5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(.winapi) usize { _ = a; _ = b; _ = c; _ = d; _ = e; return 0; }
-fn device_noop6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(.winapi) usize { _ = a; _ = b; _ = c; _ = d; _ = e; _ = f; return 0; }
+fn device_noop1(a: usize) callconv(w32cc.WINAPI) usize { _ = a; return 0; }
+fn device_noop2(a: usize, b: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; return 0; }
+fn device_noop3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; _ = c; return 0; }
+fn device_noop4(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; _ = c; _ = d; return 0; }
+fn device_noop5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; _ = c; _ = d; _ = e; return 0; }
+fn device_noop6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; _ = c; _ = d; _ = e; _ = f; return 0; }
 
 var device_vtbl: IDirectInputDeviceVtbl = undefined;
 var dinput_vtbl: IDirectInputVtbl = undefined;
 
-fn dinput_EnumDevices(this: *IDirectInput, dwDevType: u32, lpCallback: usize, pvRef: usize, dwFlags: u32) callconv(.winapi) i32 {
+fn dinput_EnumDevices(this: *IDirectInput, dwDevType: u32, lpCallback: usize, pvRef: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = this; _ = dwDevType; _ = dwFlags;
     if (trace.enable_tracing) trace.print("DINPUT: IDirectInput::EnumDevices\n", .{});
     if (lpCallback != 0) {
         var inst: [300]u8 = undefined;
         @memset(&inst, 0);
         @as(*u32, @ptrCast(@alignCast(&inst[0]))).* = 260; // dwSize = sizeof(DIDEVICEINSTANCEA)
-        const cb = @as(*const fn (usize, usize) callconv(.winapi) i32, @ptrFromInt(lpCallback));
+        const cb = @as(*const fn (usize, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(lpCallback));
         _ = cb(@intFromPtr(&inst), pvRef);
     }
     return 0; // DI_OK
 }
 
-fn dinput_CreateDevice(this: *IDirectInput, rguid: usize, lplpDirectInputDevice: *?*IDirectInputDevice, pUnkOuter: usize) callconv(.winapi) i32 {
+fn dinput_CreateDevice(this: *IDirectInput, rguid: usize, lplpDirectInputDevice: *?*IDirectInputDevice, pUnkOuter: usize) callconv(w32cc.WINAPI) i32 {
     _ = this; _ = rguid; _ = pUnkOuter;
     if (trace.enable_tracing) trace.print("DINPUT: IDirectInput::CreateDevice\n", .{});
     lplpDirectInputDevice.* = &global_dinput_device;
     return 0; // DI_OK
 }
 
-fn dinput_Release(this: *IDirectInput) callconv(.winapi) u32 {
+fn dinput_Release(this: *IDirectInput) callconv(w32cc.WINAPI) u32 {
     _ = this;
     if (trace.enable_tracing) trace.print("DINPUT: IDirectInput::Release\n", .{});
     return 0; // Reference count
@@ -216,20 +217,20 @@ pub fn register(environment: *env.Environment) !void {
     global_dinput.lpVtbl = &dinput_vtbl;
     global_dinput_device.lpVtbl = &device_vtbl;
     const builtin_module = "DINPUT.dll";
-    try environment.addBuiltinExport(builtin_module, "DirectInputCreateA", @intFromPtr(&stub_DirectInputCreateA));
+    try environment.addBuiltinExportComptime(builtin_module, "DirectInputCreateA", stub_DirectInputCreateA);
 
     // DINPUT8.dll
-    try environment.addBuiltinExport("DINPUT8.dll", "DirectInput8Create", @intFromPtr(&stub_DirectInput8Create));
+    try environment.addBuiltinExportComptime("DINPUT8.dll", "DirectInput8Create", stub_DirectInput8Create);
 }
 
-fn stub_DirectInputCreateA(hinst: usize, dwVersion: u32, ppDI: *?*IDirectInput, punkOuter: usize) callconv(.winapi) i32 {
+fn stub_DirectInputCreateA(hinst: usize, dwVersion: u32, ppDI: *?*IDirectInput, punkOuter: usize) callconv(w32cc.WINAPI) i32 {
     _ = hinst; _ = dwVersion; _ = punkOuter;
     if (trace.enable_tracing) trace.print("DINPUT: DirectInputCreateA\n", .{});
     ppDI.* = &global_dinput;
     return 0; // DI_OK
 }
 
-fn stub_DirectInput8Create(hinst: usize, dwVersion: u32, riidltf: usize, ppvOut: *?*IDirectInput, punkOuter: usize) callconv(.winapi) i32 {
+fn stub_DirectInput8Create(hinst: usize, dwVersion: u32, riidltf: usize, ppvOut: *?*IDirectInput, punkOuter: usize) callconv(w32cc.WINAPI) i32 {
     _ = hinst; _ = dwVersion; _ = riidltf; _ = punkOuter;
     if (trace.enable_tracing) trace.print("DINPUT8: DirectInput8Create\n", .{});
     ppvOut.* = &global_dinput;

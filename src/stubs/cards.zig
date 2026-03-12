@@ -3,9 +3,9 @@ const kernel32 = @import("kernel32.zig");
 
 pub fn register(environment: *env.Environment) !void {
     const m = "CARDS.dll";
-    try environment.addBuiltinExport(m, "cdtInit", @intFromPtr(&kernel32.stub_args2));
-    try environment.addBuiltinExport(m, "cdtTerm", @intFromPtr(&kernel32.stub_args0));
-    try environment.addBuiltinExport(m, "cdtDraw", @intFromPtr(&kernel32.stub_args6));
-    try environment.addBuiltinExport(m, "cdtDrawExt", @intFromPtr(&kernel32.stub_args8));
-    try environment.addBuiltinExport(m, "cdtAnimate", @intFromPtr(&kernel32.stub_args4));
+    try environment.addBuiltinExportComptime(m, "cdtInit", kernel32.stub_args2);
+    try environment.addBuiltinExportComptime(m, "cdtTerm", kernel32.stub_args0);
+    try environment.addBuiltinExportComptime(m, "cdtDraw", kernel32.stub_args6);
+    try environment.addBuiltinExportComptime(m, "cdtDrawExt", kernel32.stub_args8);
+    try environment.addBuiltinExportComptime(m, "cdtAnimate", kernel32.stub_args4);
 }

@@ -2,9 +2,10 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const renderer = @import("../../gui/renderer.zig");
 const gdi32 = @import("../gdi32.zig");
-const w32 = @import("../win32_constants.zig");
+const w32 = @import("../../win32_constants.zig");
+const w32cc = @import("../../calling_convention.zig");
 
-pub fn stub_BitBlt(hdcDest: usize, x: i32, y: i32, cx: i32, cy: i32, hdcSrc: usize, x1: i32, y1: i32, rop: u32) callconv(.winapi) i32 {
+pub fn stub_BitBlt(hdcDest: usize, x: i32, y: i32, cx: i32, cy: i32, hdcSrc: usize, x1: i32, y1: i32, rop: u32) callconv(w32cc.WINAPI) i32 {
     _ = hdcDest; _ = x; _ = y; _ = x1; _ = y1; _ = rop;
     // Look up source DC's DIB section
     if (gdi32.getDcDib(hdcSrc)) |dib| {
@@ -14,7 +15,7 @@ pub fn stub_BitBlt(hdcDest: usize, x: i32, y: i32, cx: i32, cy: i32, hdcSrc: usi
     return 1;
 }
 
-pub fn stub_StretchBlt(hdcDest: usize, xDest: i32, yDest: i32, wDest: i32, hDest: i32, hdcSrc: usize, xSrc: i32, ySrc: i32, wSrc: i32, hSrc: i32) callconv(.winapi) i32 {
+pub fn stub_StretchBlt(hdcDest: usize, xDest: i32, yDest: i32, wDest: i32, hDest: i32, hdcSrc: usize, xSrc: i32, ySrc: i32, wSrc: i32, hSrc: i32) callconv(w32cc.WINAPI) i32 {
     _ = hdcDest; _ = xDest; _ = yDest; _ = xSrc; _ = ySrc;
     // Look up source DC's DIB section
     if (gdi32.getDcDib(hdcSrc)) |dib| {
@@ -125,106 +126,106 @@ fn blitDIBToFramebuf(lpBits: usize, lpbmi: usize) void {
     renderer.pushFrame();
 }
 
-pub fn stub_StretchDIBits(hdc: usize, xDest: i32, yDest: i32, DestWidth: i32, DestHeight: i32, xSrc: i32, ySrc: i32, SrcWidth: i32, SrcHeight: i32, lpBits: usize, lpbmi: usize, iUsage: u32, rop: u32) callconv(.winapi) i32 {
+pub fn stub_StretchDIBits(hdc: usize, xDest: i32, yDest: i32, DestWidth: i32, DestHeight: i32, xSrc: i32, ySrc: i32, SrcWidth: i32, SrcHeight: i32, lpBits: usize, lpbmi: usize, iUsage: u32, rop: u32) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = xDest; _ = yDest; _ = xSrc; _ = ySrc; _ = iUsage; _ = rop;
     if (trace.enable_tracing) trace.print("GDI32: StretchDIBits({d}x{d} -> {d}x{d})\n", .{ SrcWidth, SrcHeight, DestWidth, DestHeight });
     blitDIBToFramebuf(lpBits, lpbmi);
     return if (DestHeight > 0) DestHeight else -DestHeight;
 }
 
-pub fn stub_TextOutA(hdc: usize, x: i32, y: i32, lpString: usize, c: i32) callconv(.winapi) i32 {
+pub fn stub_TextOutA(hdc: usize, x: i32, y: i32, lpString: usize, c: i32) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = x; _ = y; _ = lpString; _ = c;
     return 1;
 }
 
-pub fn stub_TextOutW(hdc: usize, x: i32, y: i32, lpString: usize, c: i32) callconv(.winapi) i32 {
+pub fn stub_TextOutW(hdc: usize, x: i32, y: i32, lpString: usize, c: i32) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = x; _ = y; _ = lpString; _ = c;
     return 1;
 }
 
-pub fn stub_SetPixel(hdc: usize, x: i32, y: i32, color: u32) callconv(.winapi) u32 {
+pub fn stub_SetPixel(hdc: usize, x: i32, y: i32, color: u32) callconv(w32cc.WINAPI) u32 {
     _ = hdc; _ = x; _ = y;
     return color;
 }
 
-pub fn stub_GetPixel(hdc: usize, x: i32, y: i32) callconv(.winapi) u32 {
+pub fn stub_GetPixel(hdc: usize, x: i32, y: i32) callconv(w32cc.WINAPI) u32 {
     _ = hdc; _ = x; _ = y;
     return 0;
 }
 
-pub fn stub_MoveToEx(hdc: usize, x: i32, y: i32, lppt: usize) callconv(.winapi) i32 {
+pub fn stub_MoveToEx(hdc: usize, x: i32, y: i32, lppt: usize) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = x; _ = y; _ = lppt;
     return 1;
 }
 
-pub fn stub_LineTo(hdc: usize, x: i32, y: i32) callconv(.winapi) i32 {
+pub fn stub_LineTo(hdc: usize, x: i32, y: i32) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = x; _ = y;
     return 1;
 }
 
-pub fn stub_Rectangle(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callconv(.winapi) i32 {
+pub fn stub_Rectangle(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = left; _ = top; _ = right; _ = bottom;
     return 1;
 }
 
-pub fn stub_SetDIBitsToDevice(hdc: usize, xDest: i32, yDest: i32, w: u32, h: u32, xSrc: i32, ySrc: i32, StartScan: u32, cLines: u32, lpvBits: usize, lpbmi: usize, ColorUse: u32) callconv(.winapi) i32 {
+pub fn stub_SetDIBitsToDevice(hdc: usize, xDest: i32, yDest: i32, w: u32, h: u32, xSrc: i32, ySrc: i32, StartScan: u32, cLines: u32, lpvBits: usize, lpbmi: usize, ColorUse: u32) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = xDest; _ = yDest; _ = xSrc; _ = ySrc; _ = StartScan; _ = ColorUse;
     if (trace.enable_tracing) trace.print("GDI32: SetDIBitsToDevice({d}x{d}, {d} lines)\n", .{ w, h, cLines });
     blitDIBToFramebuf(lpvBits, lpbmi);
     return @intCast(cLines);
 }
 
-pub fn stub_GetDIBits(hdc: usize, hbm: usize, start: u32, cLines: u32, lpvBits: usize, lpbmi: usize, usage: u32) callconv(.winapi) i32 {
+pub fn stub_GetDIBits(hdc: usize, hbm: usize, start: u32, cLines: u32, lpvBits: usize, lpbmi: usize, usage: u32) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = hbm; _ = start; _ = cLines; _ = lpvBits; _ = lpbmi; _ = usage;
     return 0;
 }
 
-pub fn stub_PatBlt(hdc: usize, x: i32, y: i32, w: i32, h: i32, rop: u32) callconv(.winapi) i32 {
+pub fn stub_PatBlt(hdc: usize, x: i32, y: i32, w: i32, h: i32, rop: u32) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = x; _ = y; _ = w; _ = h; _ = rop;
     return 1;
 }
 
-pub fn stub_ExtTextOutA(hdc: usize, x: i32, y: i32, options: u32, lprect: usize, lpString: usize, c: u32, lpDx: usize) callconv(.winapi) i32 {
+pub fn stub_ExtTextOutA(hdc: usize, x: i32, y: i32, options: u32, lprect: usize, lpString: usize, c: u32, lpDx: usize) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = x; _ = y; _ = options; _ = lprect; _ = lpString; _ = c; _ = lpDx;
     return 1;
 }
 
-pub fn stub_ExtTextOutW(hdc: usize, x: i32, y: i32, options: u32, lprect: usize, lpString: usize, c: u32, lpDx: usize) callconv(.winapi) i32 {
+pub fn stub_ExtTextOutW(hdc: usize, x: i32, y: i32, options: u32, lprect: usize, lpString: usize, c: u32, lpDx: usize) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = x; _ = y; _ = options; _ = lprect; _ = lpString; _ = c; _ = lpDx;
     return 1;
 }
 
-pub fn stub_IntersectClipRect(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callconv(.winapi) i32 {
+pub fn stub_IntersectClipRect(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = left; _ = top; _ = right; _ = bottom;
     return 1; // SIMPLEREGION
 }
 
-pub fn stub_ExcludeClipRect(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callconv(.winapi) i32 {
+pub fn stub_ExcludeClipRect(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = left; _ = top; _ = right; _ = bottom;
     return 1;
 }
 
-pub fn stub_CombineRgn(hrgnDst: usize, hrgnSrc1: usize, hrgnSrc2: usize, iMode: i32) callconv(.winapi) i32 {
+pub fn stub_CombineRgn(hrgnDst: usize, hrgnSrc1: usize, hrgnSrc2: usize, iMode: i32) callconv(w32cc.WINAPI) i32 {
     _ = hrgnDst; _ = hrgnSrc1; _ = hrgnSrc2; _ = iMode;
     return 1;
 }
 
-pub fn stub_Ellipse(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callconv(.winapi) i32 {
+pub fn stub_Ellipse(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = left; _ = top; _ = right; _ = bottom;
     return 1;
 }
 
-pub fn stub_RoundRect(hdc: usize, left: i32, top: i32, right: i32, bottom: i32, width: i32, height: i32) callconv(.winapi) i32 {
+pub fn stub_RoundRect(hdc: usize, left: i32, top: i32, right: i32, bottom: i32, width: i32, height: i32) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = left; _ = top; _ = right; _ = bottom; _ = width; _ = height;
     return 1;
 }
 
-pub fn stub_Polygon(hdc: usize, apt: usize, cpt: i32) callconv(.winapi) i32 {
+pub fn stub_Polygon(hdc: usize, apt: usize, cpt: i32) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = apt; _ = cpt;
     return 1;
 }
 
-pub fn stub_Polyline(hdc: usize, apt: usize, cpt: i32) callconv(.winapi) i32 {
+pub fn stub_Polyline(hdc: usize, apt: usize, cpt: i32) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = apt; _ = cpt;
     return 1;
 }

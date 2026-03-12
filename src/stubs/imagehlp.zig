@@ -1,13 +1,14 @@
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
+const w32cc = @import("../calling_convention.zig");
 
 pub fn register(environment: *env.Environment) !void {
     const imagehlp = "IMAGEHLP.dll";
-    try environment.addBuiltinExport(imagehlp, "UnDecorateSymbolName", @intFromPtr(&stub_UnDecorateSymbolName));
+    try environment.addBuiltinExportComptime(imagehlp, "UnDecorateSymbolName", stub_UnDecorateSymbolName);
 }
 
-fn stub_UnDecorateSymbolName(lpName_ptr: usize, lpOutput_ptr: usize, nSize: u32, Flags: u32) callconv(.winapi) u32 {
+fn stub_UnDecorateSymbolName(lpName_ptr: usize, lpOutput_ptr: usize, nSize: u32, Flags: u32) callconv(w32cc.WINAPI) u32 {
     _ = Flags;
     if (lpOutput_ptr == 0) return 0;
     var name: []const u8 = "";

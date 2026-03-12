@@ -2,6 +2,8 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const kernel32 = @import("../kernel32.zig");
 const kernel32_mem = @import("mem.zig");
+const platform = @import("../../platform.zig");
+const w32cc = @import("../../calling_convention.zig");
 
 pub const EXCEPTION_RECORD = extern struct {
     ExceptionCode: u32,
@@ -14,11 +16,29 @@ pub const EXCEPTION_RECORD = extern struct {
 
 pub const CONTEXT = extern struct {
     ContextFlags: u32,
-    Dr0: u32, Dr1: u32, Dr2: u32, Dr3: u32, Dr6: u32, Dr7: u32,
+    Dr0: u32,
+    Dr1: u32,
+    Dr2: u32,
+    Dr3: u32,
+    Dr6: u32,
+    Dr7: u32,
     FloatSave: [112]u8, // dummy
-    SegGs: u32, SegFs: u32, SegEs: u32, SegDs: u32,
-    Edi: u32, Esi: u32, Ebx: u32, Edx: u32, Ecx: u32, Eax: u32,
-    Ebp: u32, Eip: u32, SegCs: u32, EFlags: u32, Esp: u32, SegSs: u32,
+    SegGs: u32,
+    SegFs: u32,
+    SegEs: u32,
+    SegDs: u32,
+    Edi: u32,
+    Esi: u32,
+    Ebx: u32,
+    Edx: u32,
+    Ecx: u32,
+    Eax: u32,
+    Ebp: u32,
+    Eip: u32,
+    SegCs: u32,
+    EFlags: u32,
+    Esp: u32,
+    SegSs: u32,
     ExtendedRegisters: [512]u8,
 };
 
@@ -27,13 +47,12 @@ pub const EXCEPTION_REGISTRATION_RECORD = extern struct {
     Handler: u32,
 };
 
-pub fn stub_RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArguments: u32, lpArguments: usize) callconv(.winapi) void {
+pub fn stub_RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArguments: u32, lpArguments: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) {
         trace.print("KERNEL32: RaiseException(code={x})\n", .{dwExceptionCode});
     }
 
-    var exception_list: u32 = 0;
-    exception_list = asm volatile ("movl %%fs:0, %[out]" : [out] "=r" (-> u32));
+    const exception_list: u32 = platform.readExceptionList();
 
     var rec = std.mem.zeroes(EXCEPTION_RECORD);
     rec.ExceptionCode = dwExceptionCode;
@@ -58,12 +77,7 @@ pub fn stub_RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberO
 
         if (handler != 0) {
             if (trace.enable_tracing) trace.print("  Calling SEH Handler: {x}\n", .{handler});
-            const HandlerFn = *const fn(
-                record: *EXCEPTION_RECORD,
-                establisherFrame: u32,
-                contextRecord: *CONTEXT,
-                dispatcherContext: u32
-            ) callconv(.c) u32; // SEH handlers use C calling convention
+            const HandlerFn = *const fn (record: *EXCEPTION_RECORD, establisherFrame: u32, contextRecord: *CONTEXT, dispatcherContext: u32) callconv(w32cc.WINAPI) u32; // SEH handlers use C calling convention
 
             const func = @as(HandlerFn, @ptrFromInt(handler));
             const disp = func(&rec, current_node, &ctx, 0);
@@ -82,10 +96,10 @@ pub fn stub_RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberO
     }
 
     if (trace.enable_tracing) trace.print("KERNEL32: Unhandled exception! Terminating.\n", .{});
-    std.process.exit(1);
+    platform.exitProcess(1);
 }
 
-pub fn stub_GetConsoleMode(hConsoleHandle: usize, lpMode_ptr: usize) callconv(.winapi) i32 {
+pub fn stub_GetConsoleMode(hConsoleHandle: usize, lpMode_ptr: usize) callconv(w32cc.WINAPI) i32 {
     _ = hConsoleHandle;
     if (lpMode_ptr != 0) {
         const lpMode = @as(*u32, @ptrFromInt(lpMode_ptr));
@@ -95,29 +109,29 @@ pub fn stub_GetConsoleMode(hConsoleHandle: usize, lpMode_ptr: usize) callconv(.w
     return 0; // FALSE
 }
 
-pub fn stub_GetConsoleScreenBufferInfo(hConsoleOutput: usize, lpConsoleScreenBufferInfo: usize) callconv(.winapi) i32 {
+pub fn stub_GetConsoleScreenBufferInfo(hConsoleOutput: usize, lpConsoleScreenBufferInfo: usize) callconv(w32cc.WINAPI) i32 {
     _ = hConsoleOutput;
     if (trace.enable_tracing) trace.print("KERNEL32: GetConsoleScreenBufferInfo\n", .{});
     if (lpConsoleScreenBufferInfo != 0) {
         // CONSOLE_SCREEN_BUFFER_INFO: 11 WORDs (22 bytes)
         const info = @as(*[11]u16, @ptrFromInt(lpConsoleScreenBufferInfo));
-        info[0] = 80;  // dwSize.X (buffer width)
+        info[0] = 80; // dwSize.X (buffer width)
         info[1] = 300; // dwSize.Y (buffer height)
-        info[2] = 0;   // dwCursorPosition.X
-        info[3] = 0;   // dwCursorPosition.Y
+        info[2] = 0; // dwCursorPosition.X
+        info[3] = 0; // dwCursorPosition.Y
         info[4] = 0x07; // wAttributes (light gray on black)
-        info[5] = 0;   // srWindow.Left
-        info[6] = 0;   // srWindow.Top
-        info[7] = 79;  // srWindow.Right
-        info[8] = 24;  // srWindow.Bottom
-        info[9] = 80;  // dwMaximumWindowSize.X
+        info[5] = 0; // srWindow.Left
+        info[6] = 0; // srWindow.Top
+        info[7] = 79; // srWindow.Right
+        info[8] = 24; // srWindow.Bottom
+        info[9] = 80; // dwMaximumWindowSize.X
         info[10] = 25; // dwMaximumWindowSize.Y
         return 1;
     }
     return 0;
 }
 
-pub fn stub_ReadConsoleW(hConsoleInput: usize, lpBuffer: usize, nNumberOfCharsToRead: u32, lpNumberOfCharsRead: usize, pInputControl: usize) callconv(.winapi) i32 {
+pub fn stub_ReadConsoleW(hConsoleInput: usize, lpBuffer: usize, nNumberOfCharsToRead: u32, lpNumberOfCharsRead: usize, pInputControl: usize) callconv(w32cc.WINAPI) i32 {
     _ = hConsoleInput;
     _ = pInputControl;
     if (trace.enable_tracing) trace.print("KERNEL32: ReadConsoleW(max={d})\n", .{nNumberOfCharsToRead});
@@ -142,7 +156,7 @@ pub fn stub_ReadConsoleW(hConsoleInput: usize, lpBuffer: usize, nNumberOfCharsTo
     return 1;
 }
 
-pub fn stub_WriteConsoleW(hConsoleOutput: usize, lpBuffer_ptr: usize, nNumberOfCharsToWrite: u32, lpNumberOfCharsWritten_ptr: usize, lpReserved: usize) callconv(.winapi) i32 {
+pub fn stub_WriteConsoleW(hConsoleOutput: usize, lpBuffer_ptr: usize, nNumberOfCharsToWrite: u32, lpNumberOfCharsWritten_ptr: usize, lpReserved: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpReserved;
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hConsoleOutput))));
     if (lpBuffer_ptr != 0) {
@@ -162,7 +176,7 @@ pub fn stub_WriteConsoleW(hConsoleOutput: usize, lpBuffer_ptr: usize, nNumberOfC
     return 0; // FALSE
 }
 
-pub fn stub_WriteConsoleA(hConsoleOutput: usize, lpBuffer: usize, nNumberOfCharsToWrite: u32, lpNumberOfCharsWritten: usize, lpReserved: usize) callconv(.winapi) i32 {
+pub fn stub_WriteConsoleA(hConsoleOutput: usize, lpBuffer: usize, nNumberOfCharsToWrite: u32, lpNumberOfCharsWritten: usize, lpReserved: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpReserved;
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hConsoleOutput))));
     if (lpBuffer != 0) {
@@ -177,11 +191,11 @@ pub fn stub_WriteConsoleA(hConsoleOutput: usize, lpBuffer: usize, nNumberOfChars
     return 0;
 }
 
-pub fn stub_SetFileApisToOEM() callconv(.winapi) void {
+pub fn stub_SetFileApisToOEM() callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: SetFileApisToOEM()\n", .{});
 }
 
-pub fn stub_GetSystemInfo(lpSystemInfo_ptr: usize) callconv(.winapi) void {
+pub fn stub_GetSystemInfo(lpSystemInfo_ptr: usize) callconv(w32cc.WINAPI) void {
     if (lpSystemInfo_ptr != 0) {
         const lpSystemInfo = @as(*[9]u32, @ptrFromInt(lpSystemInfo_ptr));
         lpSystemInfo[0] = 0; // wProcessorArchitecture
@@ -196,7 +210,7 @@ pub fn stub_GetSystemInfo(lpSystemInfo_ptr: usize) callconv(.winapi) void {
     }
 }
 
-pub fn stub_SetErrorMode(uMode: u32) callconv(.winapi) u32 {
+pub fn stub_SetErrorMode(uMode: u32) callconv(w32cc.WINAPI) u32 {
     _ = uMode;
     return 0; // Return old mode
 }
@@ -204,7 +218,7 @@ pub fn stub_SetErrorMode(uMode: u32) callconv(.winapi) u32 {
 pub var current_directory: [1024]u8 = undefined;
 pub var current_directory_len: usize = 0;
 
-pub fn stub_GetCurrentDirectoryA(nBufferLength: u32, lpBuffer: usize) callconv(.winapi) u32 {
+pub fn stub_GetCurrentDirectoryA(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCurrentDirectoryA(len={d})\n", .{nBufferLength});
     if (current_directory_len == 0) {
         const cwd = "C:\\";
@@ -221,7 +235,7 @@ pub fn stub_GetCurrentDirectoryA(nBufferLength: u32, lpBuffer: usize) callconv(.
     return @intCast(current_directory_len + 1);
 }
 
-pub fn stub_GetCurrentDirectoryW(nBufferLength: u32, lpBuffer: usize) callconv(.winapi) u32 {
+pub fn stub_GetCurrentDirectoryW(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCurrentDirectoryW(len={d})\n", .{nBufferLength});
     if (current_directory_len == 0) {
         const cwd = "C:\\";
@@ -239,7 +253,7 @@ pub fn stub_GetCurrentDirectoryW(nBufferLength: u32, lpBuffer: usize) callconv(.
     return @intCast(current_directory_len + 1);
 }
 
-pub fn stub_SetCurrentDirectoryA(lpPathName: usize) callconv(.winapi) i32 {
+pub fn stub_SetCurrentDirectoryA(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
     if (lpPathName == 0) return 0;
     const path = trace.c_span(lpPathName);
     if (trace.enable_tracing) trace.print("KERNEL32: SetCurrentDirectoryA('{s}')\n", .{path});
@@ -251,9 +265,9 @@ pub fn stub_SetCurrentDirectoryA(lpPathName: usize) callconv(.winapi) i32 {
     return 1;
 }
 
-pub fn stub_GetWindowsDirectoryA(lpBuffer: usize, uSize: u32) callconv(.winapi) u32 {
+pub fn stub_GetWindowsDirectoryA(lpBuffer: usize, uSize: u32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetWindowsDirectoryA(buffer={x}, size={d})\n", .{ lpBuffer, uSize });
-    const win_dir = "Z:\\WINDOWS";
+    const win_dir = "C:\\WINDOWS";
     if (lpBuffer != 0 and uSize > win_dir.len) {
         const buf = @as([*]u8, @ptrFromInt(lpBuffer));
         @memcpy(buf[0..win_dir.len], win_dir);
@@ -263,14 +277,14 @@ pub fn stub_GetWindowsDirectoryA(lpBuffer: usize, uSize: u32) callconv(.winapi) 
     return @intCast(win_dir.len + 1);
 }
 
-pub fn stub_MulDiv(nNumber: i32, nNumerator: i32, nDenominator: i32) callconv(.winapi) i32 {
+pub fn stub_MulDiv(nNumber: i32, nNumerator: i32, nDenominator: i32) callconv(w32cc.WINAPI) i32 {
     if (nDenominator == 0) return -1;
     const result = @divTrunc(@as(i64, nNumber) * @as(i64, nNumerator), @as(i64, nDenominator));
     if (result > 0x7FFFFFFF or result < -0x80000000) return -1;
     return @intCast(result);
 }
 
-pub fn stub_HeapSize(hHeap: usize, dwFlags: u32, lpMem: usize) callconv(.winapi) usize {
+pub fn stub_HeapSize(hHeap: usize, dwFlags: u32, lpMem: usize) callconv(w32cc.WINAPI) usize {
     _ = hHeap;
     _ = dwFlags;
     if (lpMem == 0) return 0;
@@ -279,14 +293,14 @@ pub fn stub_HeapSize(hHeap: usize, dwFlags: u32, lpMem: usize) callconv(.winapi)
     return header.*;
 }
 
-pub fn stub_HeapValidate(hHeap: usize, dwFlags: u32, lpMem: usize) callconv(.winapi) i32 {
+pub fn stub_HeapValidate(hHeap: usize, dwFlags: u32, lpMem: usize) callconv(w32cc.WINAPI) i32 {
     _ = hHeap;
     _ = dwFlags;
     _ = lpMem;
     return 1; // TRUE = valid
 }
 
-pub fn stub_Beep(dwFreq: u32, dwDuration: u32) callconv(.winapi) i32 {
+pub fn stub_Beep(dwFreq: u32, dwDuration: u32) callconv(w32cc.WINAPI) i32 {
     _ = dwFreq;
     _ = dwDuration;
     return 1;
@@ -296,23 +310,26 @@ pub fn stub_Beep(dwFreq: u32, dwDuration: u32) callconv(.winapi) i32 {
 
 pub var last_error: u32 = 0;
 
-pub fn stub_SetLastError(dwErrCode: u32) callconv(.winapi) void {
+pub fn stub_SetLastError(dwErrCode: u32) callconv(w32cc.WINAPI) void {
     last_error = dwErrCode;
 }
 
-pub fn stub_SetUnhandledExceptionFilter(lpTopLevelExceptionFilter: usize) callconv(.winapi) usize {
-    _ = lpTopLevelExceptionFilter;
-    return 0; // Return previous filter (NULL)
+pub var unhandled_exception_filter: usize = 0;
+
+pub fn stub_SetUnhandledExceptionFilter(lpTopLevelExceptionFilter: usize) callconv(w32cc.WINAPI) usize {
+    const prev = unhandled_exception_filter;
+    unhandled_exception_filter = lpTopLevelExceptionFilter;
+    return prev;
 }
 
-pub fn stub_OutputDebugStringA(lpOutputString: usize) callconv(.winapi) void {
+pub fn stub_OutputDebugStringA(lpOutputString: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing and lpOutputString != 0) {
         const s = trace.c_span(lpOutputString);
         trace.print("KERNEL32: OutputDebugStringA('{s}')\n", .{s});
     }
 }
 
-pub fn stub_GetFullPathNameA(lpFileName: usize, nBufferLength: u32, lpBuffer: usize, lpFilePart: usize) callconv(.winapi) u32 {
+pub fn stub_GetFullPathNameA(lpFileName: usize, nBufferLength: u32, lpBuffer: usize, lpFilePart: usize) callconv(w32cc.WINAPI) u32 {
     if (lpFileName == 0) return 0;
     const name = trace.c_span(lpFileName);
     if (trace.enable_tracing) trace.print("KERNEL32: GetFullPathNameA('{s}')\n", .{name});
@@ -332,7 +349,7 @@ pub fn stub_GetFullPathNameA(lpFileName: usize, nBufferLength: u32, lpBuffer: us
     return @intCast(name.len + 1);
 }
 
-pub fn stub_CreateDirectoryA(lpPathName: usize, lpSecurityAttributes: usize) callconv(.winapi) i32 {
+pub fn stub_CreateDirectoryA(lpPathName: usize, lpSecurityAttributes: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpSecurityAttributes;
     if (lpPathName == 0) return 0;
     const path = trace.c_span(lpPathName);
@@ -346,7 +363,7 @@ pub fn stub_CreateDirectoryA(lpPathName: usize, lpSecurityAttributes: usize) cal
     return 1;
 }
 
-pub fn stub_IsProcessorFeaturePresent(ProcessorFeature: u32) callconv(.winapi) i32 {
+pub fn stub_IsProcessorFeaturePresent(ProcessorFeature: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: IsProcessorFeaturePresent({d})\n", .{ProcessorFeature});
     // PF_FLOATING_POINT_EMULATED=1 -> FALSE (we have real FP)
     // PF_MMX_INSTRUCTIONS_AVAILABLE=3 -> TRUE
@@ -359,17 +376,17 @@ pub fn stub_IsProcessorFeaturePresent(ProcessorFeature: u32) callconv(.winapi) i
     };
 }
 
-pub fn stub_IsBadReadPtr(lp: usize, ucb: usize) callconv(.winapi) i32 {
+pub fn stub_IsBadReadPtr(lp: usize, ucb: usize) callconv(w32cc.WINAPI) i32 {
     _ = ucb;
     return if (lp == 0) 1 else 0; // Only NULL is "bad"
 }
 
-pub fn stub_IsBadWritePtr(lp: usize, ucb: usize) callconv(.winapi) i32 {
+pub fn stub_IsBadWritePtr(lp: usize, ucb: usize) callconv(w32cc.WINAPI) i32 {
     _ = ucb;
     return if (lp == 0) 1 else 0;
 }
 
-pub fn stub_IsBadCodePtr(lpfn: usize) callconv(.winapi) i32 {
+pub fn stub_IsBadCodePtr(lpfn: usize) callconv(w32cc.WINAPI) i32 {
     return if (lpfn == 0) 1 else 0;
 }
 
@@ -382,19 +399,10 @@ fn readIniValue(lpFileName: usize, lpAppName: usize, lpKeyName: usize) ?[]const 
     const section_name = trace.c_span(lpAppName);
     const key_name = trace.c_span(lpKeyName);
 
-    // Convert Windows path to Linux: strip drive letter, convert backslashes
+    // Convert Windows path to POSIX using canonical mapping
+    const path_utils = @import("../../path_utils.zig");
     var path_buf: [1024]u8 = undefined;
-    var path_len: usize = 0;
-    var src = file_path_raw;
-    // Strip drive letter (e.g., "C:" or "Z:")
-    if (src.len >= 2 and src[1] == ':' and std.ascii.isAlphabetic(src[0])) {
-        src = src[2..];
-    }
-    for (src) |c| {
-        if (path_len >= path_buf.len) return null;
-        path_buf[path_len] = if (c == '\\') '/' else c;
-        path_len += 1;
-    }
+    const path_len = path_utils.win32ToPosix(file_path_raw, &path_buf);
     const path = path_buf[0..path_len];
 
     // Try to open the file
@@ -465,7 +473,7 @@ fn readIniValue(lpFileName: usize, lpAppName: usize, lpKeyName: usize) ?[]const 
     return null;
 }
 
-pub fn stub_GetPrivateProfileStringA(lpAppName: usize, lpKeyName: usize, lpDefault: usize, lpReturnedString: usize, nSize: u32, lpFileName: usize) callconv(.winapi) u32 {
+pub fn stub_GetPrivateProfileStringA(lpAppName: usize, lpKeyName: usize, lpDefault: usize, lpReturnedString: usize, nSize: u32, lpFileName: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) {
         const app = if (lpAppName != 0) trace.c_span(lpAppName) else "(null)";
         const key = if (lpKeyName != 0) trace.c_span(lpKeyName) else "(null)";
@@ -496,7 +504,7 @@ pub fn stub_GetPrivateProfileStringA(lpAppName: usize, lpKeyName: usize, lpDefau
     return 0;
 }
 
-pub fn stub_GetPrivateProfileIntA(lpAppName: usize, lpKeyName: usize, nDefault: i32, lpFileName: usize) callconv(.winapi) u32 {
+pub fn stub_GetPrivateProfileIntA(lpAppName: usize, lpKeyName: usize, nDefault: i32, lpFileName: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) {
         const app = if (lpAppName != 0) trace.c_span(lpAppName) else "(null)";
         const key = if (lpKeyName != 0) trace.c_span(lpKeyName) else "(null)";
@@ -510,7 +518,7 @@ pub fn stub_GetPrivateProfileIntA(lpAppName: usize, lpKeyName: usize, nDefault: 
     return @bitCast(nDefault);
 }
 
-pub fn stub_WritePrivateProfileStringA(lpAppName: usize, lpKeyName: usize, lpString: usize, lpFileName: usize) callconv(.winapi) i32 {
+pub fn stub_WritePrivateProfileStringA(lpAppName: usize, lpKeyName: usize, lpString: usize, lpFileName: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpAppName;
     _ = lpKeyName;
     _ = lpString;
@@ -518,7 +526,7 @@ pub fn stub_WritePrivateProfileStringA(lpAppName: usize, lpKeyName: usize, lpStr
     return 1; // Success
 }
 
-pub fn stub_WritePrivateProfileStringW(lpAppName: usize, lpKeyName: usize, lpString: usize, lpFileName: usize) callconv(.winapi) i32 {
+pub fn stub_WritePrivateProfileStringW(lpAppName: usize, lpKeyName: usize, lpString: usize, lpFileName: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpAppName;
     _ = lpKeyName;
     _ = lpString;
@@ -538,7 +546,7 @@ fn wideToNarrow(wide_ptr: usize, buf: []u8) []const u8 {
     return buf[0..i];
 }
 
-pub fn stub_GetPrivateProfileStringW(lpAppName: usize, lpKeyName: usize, lpDefault: usize, lpReturnedString: usize, nSize: u32, lpFileName: usize) callconv(.winapi) u32 {
+pub fn stub_GetPrivateProfileStringW(lpAppName: usize, lpKeyName: usize, lpDefault: usize, lpReturnedString: usize, nSize: u32, lpFileName: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) {
         var app_buf: [256]u8 = undefined;
         var key_buf: [256]u8 = undefined;
@@ -561,9 +569,12 @@ pub fn stub_GetPrivateProfileStringW(lpAppName: usize, lpKeyName: usize, lpDefau
     // Use narrow INI reader
     var narrow_result: [1024]u8 = undefined;
     const a_result = stub_GetPrivateProfileStringA(
-        @intFromPtr(&app_buf), @intFromPtr(&key_buf),
+        @intFromPtr(&app_buf),
+        @intFromPtr(&key_buf),
         0, // no default for A version, handle W default below
-        @intFromPtr(&narrow_result), @min(nSize, 1024), @intFromPtr(&fname_buf),
+        @intFromPtr(&narrow_result),
+        @min(nSize, 1024),
+        @intFromPtr(&fname_buf),
     );
 
     if (a_result > 0) {
@@ -588,22 +599,21 @@ pub fn stub_GetPrivateProfileStringW(lpAppName: usize, lpKeyName: usize, lpDefau
     return 0;
 }
 
-
-pub fn stub_FatalAppExitA(uAction: u32, lpMessageText: usize) callconv(.winapi) void {
+pub fn stub_FatalAppExitA(uAction: u32, lpMessageText: usize) callconv(w32cc.WINAPI) void {
     _ = uAction;
     if (lpMessageText != 0) {
         const msg = trace.c_span(lpMessageText);
         trace.print("KERNEL32: FatalAppExitA: {s}\n", .{msg});
     }
-    std.process.exit(1);
+    platform.exitProcess(1);
 }
 
-pub fn stub_GetDriveTypeA(lpRootPathName: usize) callconv(.winapi) u32 {
+pub fn stub_GetDriveTypeA(lpRootPathName: usize) callconv(w32cc.WINAPI) u32 {
     _ = lpRootPathName;
     return 3; // DRIVE_FIXED
 }
 
-pub fn stub_FindResourceA(hModule: usize, lpName: usize, lpType: usize) callconv(.winapi) usize {
+pub fn stub_FindResourceA(hModule: usize, lpName: usize, lpType: usize) callconv(w32cc.WINAPI) usize {
     _ = hModule;
     if (trace.enable_tracing) {
         const name_s = if (lpName > 0xFFFF) trace.c_span(lpName) else "INTRESOURCE";
@@ -613,30 +623,30 @@ pub fn stub_FindResourceA(hModule: usize, lpName: usize, lpType: usize) callconv
     return 0; // Not found
 }
 
-pub fn stub_FindResourceW(hModule: usize, lpName: usize, lpType: usize) callconv(.winapi) usize {
+pub fn stub_FindResourceW(hModule: usize, lpName: usize, lpType: usize) callconv(w32cc.WINAPI) usize {
     _ = hModule;
     _ = lpName;
     _ = lpType;
     return 0; // Not found
 }
 
-pub fn stub_LoadResource(hModule: usize, hResInfo: usize) callconv(.winapi) usize {
+pub fn stub_LoadResource(hModule: usize, hResInfo: usize) callconv(w32cc.WINAPI) usize {
     _ = hModule;
     _ = hResInfo;
     return 0;
 }
 
-pub fn stub_SizeofResource(hModule: usize, hResInfo: usize) callconv(.winapi) u32 {
+pub fn stub_SizeofResource(hModule: usize, hResInfo: usize) callconv(w32cc.WINAPI) u32 {
     _ = hModule;
     _ = hResInfo;
     return 0;
 }
 
-pub fn stub_LockResource(hResData: usize) callconv(.winapi) usize {
+pub fn stub_LockResource(hResData: usize) callconv(w32cc.WINAPI) usize {
     return hResData; // In Win32, LockResource just returns the pointer
 }
 
-pub fn stub_GetModuleFileNameA(hModule: usize, lpFilename: usize, nSize: u32) callconv(.winapi) u32 {
+pub fn stub_GetModuleFileNameA(hModule: usize, lpFilename: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetModuleFileNameA(hModule={x})\n", .{hModule});
     if (lpFilename == 0 or nSize == 0) return 0;
     const buf = @as([*]u8, @ptrFromInt(lpFilename));
@@ -690,14 +700,14 @@ pub fn stub_GetModuleFileNameA(hModule: usize, lpFilename: usize, nSize: u32) ca
             return @intCast(total);
         }
     }
-    const name = "Z:\\program.exe";
+    const name = "C:\\program.exe";
     const copy_len = @min(name.len, @as(usize, nSize) - 1);
     @memcpy(buf[0..copy_len], name[0..copy_len]);
     buf[copy_len] = 0;
     return @intCast(copy_len);
 }
 
-pub fn stub_OpenFile(lpFileName: usize, lpReOpenBuff: usize, uStyle: u32) callconv(.winapi) i32 {
+pub fn stub_OpenFile(lpFileName: usize, lpReOpenBuff: usize, uStyle: u32) callconv(w32cc.WINAPI) i32 {
     _ = lpReOpenBuff;
     _ = uStyle;
     if (trace.enable_tracing) {
@@ -707,7 +717,7 @@ pub fn stub_OpenFile(lpFileName: usize, lpReOpenBuff: usize, uStyle: u32) callco
     return -1; // HFILE_ERROR
 }
 
-pub fn stub_GetProfileStringA(lpAppName: usize, lpKeyName: usize, lpDefault: usize, lpReturnedString: usize, nSize: u32) callconv(.winapi) u32 {
+pub fn stub_GetProfileStringA(lpAppName: usize, lpKeyName: usize, lpDefault: usize, lpReturnedString: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
     if (lpReturnedString == 0 or nSize == 0) return 0;
     const buf = @as([*]u8, @ptrFromInt(lpReturnedString));
     if (lpDefault != 0) {
@@ -727,24 +737,25 @@ pub fn stub_GetProfileStringA(lpAppName: usize, lpKeyName: usize, lpDefault: usi
 }
 
 // --- Return TRUE helpers (for functions that must succeed) ---
-pub fn stub_ret_true_1(a: usize) callconv(.winapi) i32 {
+pub fn stub_ret_true_1(a: usize) callconv(w32cc.WINAPI) i32 {
     _ = a;
     return 1; // TRUE
 }
 
-pub fn stub_ret_true_2(a: usize, b: usize) callconv(.winapi) i32 {
-    _ = a; _ = b;
+pub fn stub_ret_true_2(a: usize, b: usize) callconv(w32cc.WINAPI) i32 {
+    _ = a;
+    _ = b;
     return 1;
 }
 
 // GetDriveTypeW: returns drive type for a root path
 // DRIVE_FIXED = 3 (typical for hard drives)
-pub fn stub_GetDriveTypeW(lpRootPathName: usize) callconv(.winapi) u32 {
+pub fn stub_GetDriveTypeW(lpRootPathName: usize) callconv(w32cc.WINAPI) u32 {
     _ = lpRootPathName;
     return 3; // DRIVE_FIXED
 }
 
 // GetConsoleOutputCP: returns console output code page
-pub fn stub_GetConsoleOutputCP() callconv(.winapi) u32 {
+pub fn stub_GetConsoleOutputCP() callconv(w32cc.WINAPI) u32 {
     return 437; // OEM United States
 }

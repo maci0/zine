@@ -2,6 +2,7 @@ const std = @import("std");
 const platform = @import("platform.zig");
 
 pub var enable_tracing: bool = false;
+pub var enable_instructions: bool = false;
 
 var trace_buf: [16384]u8 = undefined;
 
