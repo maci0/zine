@@ -212,9 +212,8 @@ pub const PEParser = struct {
     }
 };
 
-// NOTE: These structs are also defined in pe_resources.zig. They are kept here
-// because stubs/user32/resource.zig imports pe.zig for resource walking.
-// Consider consolidating to a single location.
+// NOTE: These structs are also defined in pe_resources.zig (used by loader/).
+// They are duplicated here because stubs/user32/resource.zig imports pe.zig.
 pub const IMAGE_RESOURCE_DIRECTORY = extern struct {
     Characteristics: u32,
     TimeDateStamp: u32,
@@ -225,7 +224,7 @@ pub const IMAGE_RESOURCE_DIRECTORY = extern struct {
 };
 
 pub const IMAGE_RESOURCE_DIRECTORY_ENTRY = extern struct {
-    NameId: u32,
+    NameOrId: u32,
     OffsetToData: u32,
 };
 

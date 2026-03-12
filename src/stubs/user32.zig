@@ -393,58 +393,18 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetNextDlgTabItem", stub_ret0_3);
 }
 
-// --- Generic stubs ---
+// --- Generic stubs (imported from stub_common) ---
 
-fn stub_ret0_0() callconv(w32cc.WINAPI) usize {
-    return 0;
-}
-fn stub_ret0_1(a: usize) callconv(w32cc.WINAPI) usize {
-    _ = a;
-    return 0;
-}
-fn stub_ret0_2(a: usize, b: usize) callconv(w32cc.WINAPI) usize {
-    _ = a;
-    _ = b;
-    return 0;
-}
-fn stub_ret0_3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize {
-    _ = a;
-    _ = b;
-    _ = c;
-    return 0;
-}
-fn stub_ret0_4(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize {
-    _ = a;
-    _ = b;
-    _ = c;
-    _ = d;
-    return 0;
-}
-fn stub_ret0_5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) usize {
-    _ = a;
-    _ = b;
-    _ = c;
-    _ = d;
-    _ = e;
-    return 0;
-}
-fn stub_ret0_6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) usize {
-    _ = a;
-    _ = b;
-    _ = c;
-    _ = d;
-    _ = e;
-    _ = f;
-    return 0;
-}
-fn stub_ret0_7(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize) callconv(w32cc.WINAPI) usize {
-    _ = a; _ = b; _ = c; _ = d; _ = e; _ = f; _ = g;
-    return 0;
-}
-fn stub_ret0_8(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize) callconv(w32cc.WINAPI) usize {
-    _ = a; _ = b; _ = c; _ = d; _ = e; _ = f; _ = g; _ = h;
-    return 0;
-}
+const stub_common = @import("stub_common.zig");
+const stub_ret0_0 = stub_common.stub_args0;
+const stub_ret0_1 = stub_common.stub_args1;
+const stub_ret0_2 = stub_common.stub_args2;
+const stub_ret0_3 = stub_common.stub_args3;
+const stub_ret0_4 = stub_common.stub_args4;
+const stub_ret0_5 = stub_common.stub_args5;
+const stub_ret0_6 = stub_common.stub_args6;
+const stub_ret0_7 = stub_common.stub_args7;
+const stub_ret0_8 = stub_common.stub_args8;
 // --- Shared Types ---
 
 pub const RECT = extern struct {
@@ -647,24 +607,7 @@ pub fn postGenericMessage(msg_id: u32, wParam: usize, lParam: isize) void {
     }
 }
 
-pub fn postKeyboardMessage(msg_id: u32, wParam: usize, lParam: isize) void {
-    pending_command_mutex.lock();
-    defer pending_command_mutex.unlock();
-
-    const next_head = (pending_messages_head + 1) % pending_messages.len;
-    if (next_head != pending_messages_tail) {
-        pending_messages[pending_messages_head] = .{
-            .hwnd = global_hwnd,
-            .message = msg_id,
-            .wParam = wParam,
-            .lParam = lParam,
-            .time = 0,
-            .pt_x = 0,
-            .pt_y = 0,
-        };
-        pending_messages_head = next_head;
-    }
-}
+pub const postKeyboardMessage = postGenericMessage;
 
 // --- Renderer Input Callbacks ---
 
@@ -784,13 +727,13 @@ comptime {
     }
 }
 
-pub const callWndProcSafe = if (platform_mod.is_x86) callWndProcSafe_extern else callWndProcSafe_zig;
+pub const callWndProcSafe = callWndProcSafe_zig;
 
 extern fn callWndProcSafe_extern(wndproc: usize, hwnd: usize, msg: u32, wParam: usize, lParam: isize, err_out: *u32) callconv(.c) isize;
 
 /// x86_64: direct call without SEH frame (no 32-bit SEH on x86_64)
 fn callWndProcSafe_zig(wndproc: usize, hwnd: usize, msg: u32, wParam: usize, lParam: isize, err_out: *u32) callconv(.c) isize {
-    err_out.* = 0;
+    err_out.* = 0; std.debug.print(">>> NATIVE CALLING GUEST WNDPROC AT {X}\n", .{wndproc});
     if (wndproc == 0) return 0;
     const WndProc = *const fn (usize, u32, usize, isize) callconv(w32cc.WINAPI) isize;
     const func = @as(WndProc, @ptrFromInt(wndproc));

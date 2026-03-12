@@ -656,6 +656,10 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(builtin_module, "DirectDrawCreate", stub_DirectDrawCreate);
     try environment.addBuiltinExportComptime(builtin_module, "DirectDrawCreateEx", stub_DirectDrawCreateEx);
     try environment.addBuiltinExportComptime(builtin_module, "DirectDrawEnumerateExA", stub_DirectDrawEnumerateExA);
+    
+    environment.addBuiltinVtableComptime(IDirectDrawVtbl, &ddraw_vtbl);
+    environment.addBuiltinVtableComptime(IDirectDrawSurfaceVtbl, &surface_vtbl);
+    environment.addBuiltinVtableComptime(IDirectDrawClipperVtbl, &clipper_vtbl);
 }
 
 fn stub_DirectDrawCreate(lpGUID: usize, lplpDD: *?*IDirectDraw, pUnkOuter: usize) callconv(w32cc.WINAPI) i32 {

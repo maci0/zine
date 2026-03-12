@@ -68,7 +68,7 @@ fn loadStringFromPE(hInst: usize, uID: u32, out_buf: [*]u8, max_len: usize) usiz
 
             for (0..num_id) |i| {
                 const entry = entries[num_named + i];
-                if (entry.NameId == id) {
+                if (entry.NameOrId == id) {
                     return entry.OffsetToData;
                 }
             }
@@ -194,7 +194,7 @@ fn loadStringFromPEW(hInst: usize, uID: u32, out_buf: [*]u16, max_len: usize) us
             const entries = @as([*]const pe.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrFromInt(@intFromPtr(dir) + @sizeOf(pe.IMAGE_RESOURCE_DIRECTORY)));
             for (0..num_id) |i| {
                 const entry = entries[num_named + i];
-                if (entry.NameId == id) return entry.OffsetToData;
+                if (entry.NameOrId == id) return entry.OffsetToData;
             }
             return null;
         }

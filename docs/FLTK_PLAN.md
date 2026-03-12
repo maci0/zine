@@ -55,7 +55,7 @@ graph TD
 
 Extract the backend-specific dispatching into a clean interface. The current pattern already switches on `active_backend` in 4 functions — generalize this.
 
-#### [MODIFY] [renderer.zig](file:///home/maci/Desktop/Projects/zine/src/gui/renderer.zig)
+#### [MODIFY] [renderer.zig](../src/gui/renderer.zig)
 
 Expand the `Backend` enum and refactor dispatch functions:
 
@@ -91,7 +91,7 @@ The ~25 typed output functions (`setTitle`, `showMessageBox`, `setMenu`, etc.) c
 
 This means each of the ~25 output functions in `renderer.zig` gains a 3-way switch. The JSON building only runs for `.web_ui`.
 
-#### [NEW] [fltk_ui.zig](file:///home/maci/Desktop/Projects/zine/src/gui/fltk_ui.zig)
+#### [NEW] [fltk_ui.zig](../src/gui/fltk_ui.zig)
 
 New backend module, parallel to `web_ui.zig`. Implements all typed output functions plus the event loop.
 
@@ -275,7 +275,7 @@ Key mapping: FLTK uses `FL_Left`, `FL_Right`, `FL_F+n` etc. Map these to Win32 V
 
 ### Phase 4: Build System & Backend Selection
 
-#### [MODIFY] [build.zig](file:///home/maci/Desktop/Projects/zine/build.zig)
+#### [MODIFY] [build.zig](../build.zig)
 
 ```diff
 +const use_fltk = b.option(bool, "fltk", "Enable FLTK native GUI backend") orelse false;
@@ -287,7 +287,7 @@ Key mapping: FLTK uses `FL_Left`, `FL_Right`, `FL_F+n` etc. Map these to Win32 V
 +}
 ```
 
-#### [MODIFY] [renderer.zig](file:///home/maci/Desktop/Projects/zine/src/gui/renderer.zig)
+#### [MODIFY] [renderer.zig](../src/gui/renderer.zig)
 
 Use comptime or build option to conditionally import `fltk_ui.zig`:
 
@@ -298,7 +298,7 @@ Use comptime or build option to conditionally import `fltk_ui.zig`:
 +    struct {}; // no-op when FLTK not compiled in
 ```
 
-#### [MODIFY] [main.zig](file:///home/maci/Desktop/Projects/zine/src/main.zig)
+#### [MODIFY] [main.zig](../src/main.zig)
 
 Add `--fltk` CLI flag to select backend at startup:
 

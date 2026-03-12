@@ -108,7 +108,7 @@ Each API is categorized by its emulation fidelity:
 | 🟢 | `_EH_prolog` | Proper asm naked call frame setup allowing x86 exception handlers without segfaulting. |
 | 🟢 | `_setjmp3` / `longjmp` | Handles specific MSVC-ABI setjmp jumps properly routing them inside execution state safely. |
 | 🟢 | `exit` / `_exit` | Translates directly to Zig `process.exit()`. |
-| 🟢 | `_spawnvp` / `_spawnv` | Converts paths dynamically to execute native Unix binaries or re-inject `winloader` recursively. |
+| 🟢 | `_spawnvp` / `_spawnv` | Converts paths dynamically to execute native Unix binaries or re-inject `zine` recursively. |
 | 🟢 | `getenv` / `_putenv` | Natively gets/sets from our environment tracker. |
 | 🟢 | `_splitpath` / `_makepath` / `_fullpath` | Windows native string splitting routines adapted correctly for POSIX string slices. |
 
@@ -312,13 +312,73 @@ Each API is categorized by its emulation fidelity:
 
 ---
 
-## DDRAW.dll / DSOUND.dll / DINPUT.dll / WINMM.dll
+## DDRAW.dll / DSOUND.dll / DINPUT.dll / DINPUT8.dll / WINMM.dll
 | Status | DLL | API | Comments |
 | :---: | :--- | :--- | :--- |
 | 🟢 | `DDRAW` | `DirectDrawCreate` | COM-style vtable emulation. Supports SetCooperativeLevel, CreateSurface (primary/offscreen), CreateClipper, SetHWnd, GetDisplayMode. Surface Lock/Unlock writes to shared framebuffer pushed to web UI via WebSocket binary frames. |
 | 🟢 | `DSOUND` | `DirectSoundCreate` (ordinal 1) | COM vtable stubs for IDirectSound and IDirectSoundBuffer. CreateSoundBuffer, SetFormat, Lock/Unlock, Play/Stop, GetStatus, SetVolume, GetCurrentPosition all stubbed. |
 | 🟡 | `DINPUT` | `DirectInputCreateA` | COM vtable stubs for IDirectInput and IDirectInputDevice. EnumDevices, CreateDevice, SetDataFormat, SetCooperativeLevel, SetProperty, Acquire, GetDeviceState all stubbed. |
+| 🟡 | `DINPUT8` | `DirectInput8Create` | Reuses DINPUT COM vtable stubs for IDirectInput and IDirectInputDevice. |
 | 🟡 | `WINMM` | `timeGetTime` / `timeBeginPeriod` / `timeEndPeriod` | Timer stubs returning reasonable values. |
+
+---
+
+## OLEAUT32.dll
+| Status | API | Comments |
+| :---: | :--- | :--- |
+| 🟡 | `SysFreeString` | Stub (no-op). |
+| 🟡 | `SysAllocStringLen` | Stub returning null. |
+
+---
+
+## D3D8.dll
+| Status | API | Comments |
+| :---: | :--- | :--- |
+| 🟢 | `Direct3DCreate8` | COM-style vtable emulation. Implements IDirect3D8 (GetAdapterDisplayMode, CreateDevice) and IDirect3DDevice8 (CreateVertexBuffer, SetRenderState, BeginScene/EndScene, Present, Clear, SetTexture, SetStreamSource, DrawPrimitive/DrawIndexedPrimitive). Integrates with shared framebuffer for rendering output. |
+
+---
+
+## SHELL32.dll / COMCTL32.dll / OLE32.dll
+| Status | DLL | API | Comments |
+| :---: | :--- | :--- | :--- |
+| 🟡 | `SHELL32` | `ShellExecuteA/W`, `SHGetSpecialFolderPathA`, `SHGetFileInfoA`, `SHBrowseForFolderA`, `DragAcceptFiles`, `Shell_NotifyIcon`, etc. (29 exports) | Mix of custom implementations and generic stubs. |
+| 🟡 | `COMCTL32` | `InitCommonControls`, `InitCommonControlsEx`, `ImageList_Create/Destroy/Add/GetImageCount`, `TrackMouseEvent`, `CreateStatusWindow`, etc. (20 exports) | Mix of custom implementations and generic stubs. |
+| 🟡 | `OLE32` | `CoInitialize`, `CoInitializeEx`, `CoCreateInstance`, `CoTaskMemAlloc/Free`, `CoUninitialize`, `DoDragDrop`, etc. (21 exports) | Mix of custom implementations and generic stubs. |
+
+---
+
+## MSS32.dll (Miles Sound System)
+| Status | API | Comments |
+| :---: | :--- | :--- |
+| 🟡 | `AIL_*` (60 exports) | Decorated Miles Sound System API stubs. Functions like `AIL_open_digital_driver`, `AIL_allocate_sample_handle`, `AIL_set_sample_file`, `AIL_start_sample`, etc. Most return dummy success values or no-op. |
+
+---
+
+## WS2_32.dll / WSOCK32.dll / ICMP.dll
+| Status | DLL | API | Comments |
+| :---: | :--- | :--- | :--- |
+| 🟡 | `WS2_32` | `WSAStartup/Cleanup`, `socket`, `bind`, `listen`, `accept`, `connect`, `send/recv`, `select`, `htonl/htons/ntohl/ntohs`, `inet_addr/ntoa`, `gethostbyname/addr`, etc. (33 exports) | Custom implementations returning failure/dummy values for network operations. |
+| 🟡 | `WSOCK32` | 40 exports (26 named + 14 ordinals) | Thin compatibility layer forwarding to WS2_32 implementations. |
+| 🟡 | `ICMP` | `IcmpCreateFile`, `IcmpSendEcho2`, `IcmpCloseHandle` | Generic stubs. |
+
+---
+
+## IMM32.dll / VERSION.dll / WINSPOOL.DRV
+| Status | DLL | API | Comments |
+| :---: | :--- | :--- | :--- |
+| 🟡 | `IMM32` | `ImmGetContext`, `ImmReleaseContext`, `ImmGetCompositionStringW`, `ImmSetCompositionWindow/Font`, `ImmGetVirtualKey` (9 exports) | Return dummy values. |
+| 🟡 | `VERSION` | `GetFileVersionInfoSizeA/W`, `GetFileVersionInfoA/W`, `VerQueryValueA/W` (6 exports) | Return 0 (no version info). |
+| 🟡 | `WINSPOOL.DRV` | `OpenPrinter`, `ClosePrinter`, `StartDocPrinter`, `EndDocPrinter`, `WritePrinter`, `EnumPrinters`, `DocumentProperties`, etc. (11 exports) | Return success with no actual printing. |
+
+---
+
+## Other Minor DLLs
+| Status | DLL | API | Comments |
+| :---: | :--- | :--- | :--- |
+| 🟡 | `NDDEAPI` | 11 ordinal-only exports | Generic stubs for legacy DDE networking. |
+| 🟡 | `CARDS` | `cdtInit`, `cdtTerm`, `cdtDraw`, `cdtDrawExt`, `cdtAnimate` | Generic stubs for Solitaire card rendering. |
+| 🟡 | `VDMDBG` | `VDMTerminateTaskWOW`, `VDMEnumTaskWOWEx` | Generic stubs for 16-bit VDM debugging. |
+| 🟡 | `MAG_HOOK` | `_FakeCursorMove@8`, `_SetZoomRect@8`, `_InstallEventHook@4` | Generic stubs. |
 
 ---
 

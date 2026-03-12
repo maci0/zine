@@ -1,17 +1,19 @@
 // Import thunk mechanism for the x86 interpreter.
 //
-// When PE import tables are resolved for WASM targets, each imported
-// function gets a thunk slot in guest memory.  The thunk is a short
-// x86 code sequence (INT 0xFE + thunk_id) that traps into the
-// interpreter, which dispatches to the corresponding Zig stub.
+// When PE import tables are resolved for interpreter targets (WASM or
+// native --interpret), each imported function gets a thunk slot in guest
+// memory.  The thunk is a short x86 code sequence (INT 0xFE + thunk_id)
+// that traps into the interpreter, which dispatches to the corresponding
+// Zig stub.
 //
 // This module provides:
-//   - ThunkTable: registration of stub functions by thunk ID
+//   - registerThunk(): registration of stub functions by thunk ID
 //   - dispatch(): called from execute.zig when INT 0xFE is hit
-//   - createThunk(): generate thunk code in guest memory
+//   - writeThunkCode(): generate thunk code in guest memory
 
 const std = @import("std");
 const cpu_mod = @import("cpu.zig");
+const profiler = @import("../profiler.zig");
 const Cpu = cpu_mod.Cpu;
 
 /// A registered thunk entry.
@@ -50,6 +52,7 @@ pub fn registerThunk(entry: ThunkEntry) u32 {
     const id = thunk_count;
     thunk_entries[id] = entry;
     thunk_count += 1;
+    profiler.registerThunkName(id, entry.name);
     return id;
 }
 
@@ -85,6 +88,7 @@ pub fn dispatch(cpu: *Cpu) void {
     }
 
     if (thunk_entries[thunk_id]) |entry| {
+        profiler.tickThunk(thunk_id);
         entry.handler(cpu);
 
         // For stdcall: callee pops parameters
@@ -162,34 +166,10 @@ fn dispatchNativeThunk(cpu: *Cpu) void {
         args[i] = cpu.memory.read32(cpu.esp +% @as(u32, @intCast(i * 4)));
     }
 
-    const w32cc = @import("../calling_convention.zig");
-    var result: u32 = 0;
-
-    if (entry.native_is_cdecl) {
-        const GenericFnC = *const fn (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) callconv(.c) u32;
-        const func: GenericFnC = @ptrFromInt(target_addr);
-        result = func(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15]);
-    } else {
-        result = switch (entry.native_param_bytes) {
-            0 => @as(*const fn () callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(),
-            4 => @as(*const fn (u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0]),
-            8 => @as(*const fn (u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1]),
-            12 => @as(*const fn (u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2]),
-            16 => @as(*const fn (u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3]),
-            20 => @as(*const fn (u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4]),
-            24 => @as(*const fn (u32, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4], args[5]),
-            28 => @as(*const fn (u32, u32, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4], args[5], args[6]),
-            32 => @as(*const fn (u32, u32, u32, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]),
-            else => blk: {
-                // Fallback: call as cdecl with 16 args
-                const GenericFnC = *const fn (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) callconv(.c) u32;
-                const func: GenericFnC = @ptrFromInt(target_addr);
-                break :blk func(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15]);
-            },
-        };
-    }
-
-    cpu.eax = result;
+    cpu.eax = if (entry.native_is_cdecl)
+        callNativeCdecl(target_addr, args)
+    else
+        callNativeByArity(target_addr, entry.native_param_bytes, args);
 
     // For stdcall, callee pops parameters
     if (!entry.native_is_cdecl) {
@@ -200,9 +180,62 @@ fn dispatchNativeThunk(cpu: *Cpu) void {
 }
 
 // -----------------------------------------------------------------------
+// Comptime native call dispatch — eliminates hand-written N-arg switches
+// -----------------------------------------------------------------------
+
+/// Call a cdecl function at `addr` with 16 u32 args (extras are harmless).
+pub fn callNativeCdecl(addr: usize, args: [16]u32) u32 {
+    const GenericFnC = *const fn (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) callconv(.c) u32;
+    const func: GenericFnC = @ptrFromInt(addr);
+    return func(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15]);
+}
+
+/// Call a stdcall/WINAPI function at `addr` with the correct arity
+/// determined by `param_bytes` (0, 4, 8, …, 64). Uses comptime
+/// `inline for` to generate all 17 arity variants.
+pub fn callNativeByArity(addr: usize, param_bytes: u32, args: [16]u32) u32 {
+    inline for (0..17) |n| {
+        if (param_bytes == n * 4) {
+            return callNativeN(n, addr, args);
+        }
+    }
+    // Fallback for unexpected param_bytes — call as cdecl with 16 args
+    std.log.warn("x86: native call unsupported param_bytes={d}", .{param_bytes});
+    return callNativeCdecl(addr, args);
+}
+
+/// Comptime-generated call with exactly N u32 arguments using WINAPI convention.
+fn callNativeN(comptime n: usize, addr: usize, args: [16]u32) u32 {
+    const FnType = FnTypeForArity(n);
+    const func: *const FnType = @ptrFromInt(addr);
+    var call_args: std.meta.ArgsTuple(FnType) = undefined;
+    inline for (0..n) |i| {
+        call_args[i] = args[i];
+    }
+    return @call(.auto, func, call_args);
+}
+
+/// Generate a function type: fn(u32, u32, ...) callconv(WINAPI) u32 with N params.
+fn FnTypeForArity(comptime n: usize) type {
+    comptime var params: [n]std.builtin.Type.Fn.Param = undefined;
+    inline for (0..n) |i| {
+        params[i] = .{ .is_generic = false, .is_noalias = false, .type = u32 };
+    }
+    return @Type(.{ .@"fn" = .{
+        .calling_convention = @import("../calling_convention.zig").WINAPI,
+        .is_generic = false,
+        .is_var_args = false,
+        .return_type = u32,
+        .params = &params,
+    } });
+}
+
+// -----------------------------------------------------------------------
 // Native import registry — maps resolved native addresses to stdcall
 // parameter byte counts.  Used by execute.zig's dispatchNativeCall to
 // adjust guest ESP after calling native stubs.
+//
+// Sorted by addr on first lookup for O(log n) binary search.
 // -----------------------------------------------------------------------
 
 const MAX_IMPORTS = 2048;
@@ -215,6 +248,7 @@ const ImportEntry = struct {
 
 var import_registry: [MAX_IMPORTS]ImportEntry = undefined;
 var import_count: u32 = 0;
+var imports_sorted: bool = false;
 
 /// Register a resolved import address with its stdcall parameter byte count.
 /// Called from loader.zig during import resolution.
@@ -237,33 +271,43 @@ pub fn registerNativeImport(addr: u32, dll_name: []const u8, func_name: []const 
         .is_cdecl = is_msvcrt,
     };
     import_count += 1;
+    imports_sorted = false; // invalidate sort
+}
+
+/// Sort the import registry by addr for binary search, if not already sorted.
+fn ensureImportsSorted() void {
+    if (imports_sorted) return;
+    const slice = import_registry[0..import_count];
+    std.mem.sortUnstable(ImportEntry, slice, {}, struct {
+        fn cmp(_: void, a: ImportEntry, b: ImportEntry) bool {
+            return a.addr < b.addr;
+        }
+    }.cmp);
+    imports_sorted = true;
+}
+
+/// Binary search for an import entry by address.
+fn findImport(addr: u32) ?*const ImportEntry {
+    ensureImportsSorted();
+    const slice = import_registry[0..import_count];
+    const idx = std.sort.binarySearch(ImportEntry, slice, addr, struct {
+        fn cmp(key: u32, entry: ImportEntry) std.math.Order {
+            return std.math.order(key, entry.addr);
+        }
+    }.cmp);
+    return if (idx) |i| &slice[i] else null;
 }
 
 pub fn getParamBytes(addr: u32) u32 {
-    for (0..import_count) |i| {
-        if (import_registry[i].addr == addr) {
-            return import_registry[i].param_bytes;
-        }
-    }
-    return 0; // default for e.g MSVCRT which is cdecl anyway
+    return if (findImport(addr)) |entry| entry.param_bytes else 0;
 }
 
 pub fn isTargetCdecl(addr: u32) bool {
-    for (0..import_count) |i| {
-        if (import_registry[i].addr == addr) {
-            return import_registry[i].is_cdecl;
-        }
-    }
-    return false; // winapi by default
+    return if (findImport(addr)) |entry| entry.is_cdecl else false;
 }
 
 pub fn isNativeImport(addr: u32) bool {
-    for (0..import_count) |i| {
-        if (import_registry[i].addr == addr) {
-            return true;
-        }
-    }
-    return false;
+    return findImport(addr) != null;
 }
 
 pub const getStdcallCleanup = getParamBytes;
@@ -273,6 +317,7 @@ pub const getStdcallCleanup = getParamBytes;
 // -----------------------------------------------------------------------
 // Maps IAT slot addresses to "DLL::FuncName" strings for diagnostics.
 // Populated by loader.zig when patching unresolved imports to not_implemented.
+// Sorted by iat_slot_addr on first lookup for O(log n) binary search.
 
 const MAX_UNRESOLVED = 512;
 
@@ -284,6 +329,7 @@ const UnresolvedEntry = struct {
 
 var unresolved_registry: [MAX_UNRESOLVED]UnresolvedEntry = undefined;
 var unresolved_count: u32 = 0;
+var unresolved_sorted: bool = false;
 
 pub fn registerUnresolvedImport(iat_slot_addr: u32, dll_name: []const u8, func_name: []const u8) void {
     if (unresolved_count >= MAX_UNRESOLVED) return;
@@ -308,6 +354,18 @@ pub fn registerUnresolvedImport(iat_slot_addr: u32, dll_name: []const u8, func_n
     }
     entry.name_len = @intCast(pos);
     unresolved_count += 1;
+    unresolved_sorted = false;
+}
+
+fn ensureUnresolvedSorted() void {
+    if (unresolved_sorted) return;
+    const slice = unresolved_registry[0..unresolved_count];
+    std.mem.sortUnstable(UnresolvedEntry, slice, {}, struct {
+        fn cmp(_: void, a: UnresolvedEntry, b: UnresolvedEntry) bool {
+            return a.iat_slot_addr < b.iat_slot_addr;
+        }
+    }.cmp);
+    unresolved_sorted = true;
 }
 
 /// Look up an unresolved import name by examining the caller's CALL instruction.
@@ -325,12 +383,17 @@ pub fn lookupUnresolvedName(ret_addr: usize) ?[]const u8 {
 }
 
 /// Look up an unresolved import name by IAT slot address directly.
-/// Used by the interpreter which reads guest memory separately.
+/// Uses binary search on the sorted registry.
 pub fn lookupUnresolvedName_bySlot(iat_slot: u32) ?[]const u8 {
-    for (0..unresolved_count) |i| {
-        if (unresolved_registry[i].iat_slot_addr == iat_slot) {
-            return unresolved_registry[i].name[0..unresolved_registry[i].name_len];
+    ensureUnresolvedSorted();
+    const slice = unresolved_registry[0..unresolved_count];
+    const idx = std.sort.binarySearch(UnresolvedEntry, slice, iat_slot, struct {
+        fn cmp(key: u32, entry: UnresolvedEntry) std.math.Order {
+            return std.math.order(key, entry.iat_slot_addr);
         }
+    }.cmp);
+    if (idx) |i| {
+        return slice[i].name[0..slice[i].name_len];
     }
     return null;
 }

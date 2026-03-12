@@ -1,0 +1,150 @@
+# Executing Windows Applications Natively from a 64-bit Zine Process
+
+Zine is currently designed to run 32-bit Windows executables. When Zine is compiled as a 64-bit application (`x86_64`), running PE files presents two distinct challenges depending on the target PE architecture:
+1. Running a **32-bit** Windows executable natively.
+2. Running a **64-bit** Windows executable natively.
+
+This document outlines the architecture, requirements, and missing pieces needed to support native execution for both scenarios.
+
+## Part 1: Executing 32-bit x86 Applications on x86_64 Zine
+
+Currently, compiling `zine` for the `x86_64` target and attempting to directly execute a 32-bit PE natively will result in a crash. Wait, why? Because a 64-bit process runs in "Long Mode" (64-bit submode), where the CPU fetches and decodes instructions under 64-bit rules. Meanwhile, the loaded PE contains 32-bit machine code.
+
+### The Problem: CS segment and Mode Switch
+An x86_64 CPU is perfectly capable of executing 32-bit x86 instructions natively via its **Compatibility Mode**.
+To engage compatibility mode, the code must be executing from a Code Segment (CS) where the `L` (Long) bit is `0`, and the `D` (Default operation size) bit is `1`.
+On Linux, the standard 32-bit user-space code segment is `0x23` (Index 4, RPL 3), while the 64-bit code segment is `0x33` (Index 6, RPL 3).
+
+Currently, `src/main.zig` does:
+```zig
+const entry_point = @as(EntryPointFn, @ptrFromInt(ep));
+entry_point(); // 64-bit call
+```
+This fails because `CS` remains `0x33`. We need a mechanism to switch `CS` to `0x23` before jumping to the PE's entry point, and switch back to `0x33` when calling Zine's Win32 API stubs.
+
+## What is Missing in the Zine Codebase?
+
+### 1. 32-bit Addressable Memory (`mmap`)
+All allocations for the guest (the PE image, its heap, its stack) *must* reside in the lower 4GB of the address space so that 32-bit pointers can reference them.
+- **Current State**: `platform.mmap` uses `MAP_FIXED_NOREPLACE`, which attempts to map the PE at its preferred address (e.g., `0x00400000`), which often succeeds. However, anonymous maps or non-fixed allocations may end up in high memory.
+- **Missing**: We need to use `MAP_32BIT` on x86_64 Linux for any guest memory allocations (like the guest stack and heap).
+
+### 2. A 32-bit Compatible Stack
+The native 64-bit Zine host stack is allocated by Linux in high memory (e.g., `0x7FFFFFF...`). A 32-bit program's `ESP` cannot point there.
+- **Current State**: The guest program inherits the host's stack through standard function calls.
+- **Missing**: Before doing the mode switch, we must allocate a dedicated 32-bit stack (e.g., `mmap` with `MAP_32BIT` or `MAP_FIXED` to an address like `0x70000000`) and manually pivot the stack pointer (`ESP`/`RSP`) to this new region.
+
+### 3. The 64 → 32 Context Switch Trampoline
+We cannot just `call` the entry point. We must use a far jump, far return (`lret`), or `iretq` to load the 32-bit `CS` register.
+- **Missing**: An inline assembly trampoline to enter the 32-bit application.
+```asm
+// Conceptual 64 -> 32 transition
+pushq $0x2B         // 32-bit SS
+pushq %rcx          // Guest 32-bit ESP
+pushq $0x202        // RFLAGS (interrupts enabled)
+pushq $0x23         // 32-bit CS
+pushq %rax          // Guest 32-bit EIP (entry point)
+iretq               // Pops the above, switches to 32-bit mode
+```
+
+### 4. The 32 → 64 Thunk Mechanism (Win32 API Stubs)
+When the 32-bit application wants to call a Win32 API (e.g., `kernel32.dll!GetVersion`), it cannot directly call a 64-bit Zine stub function pointer.
+- **Current State**: On the native `x86` build, the IAT is patched with direct pointers to the Zine `.winapi` host functions. On `wasm32`, `INT 0xFE` thunks are used which are trapped by the software interpreter.
+- **Missing**: We need a thunking layer for x86_64 similar to the WASM build.
+  1. Patch the IAT with pointers to trampolines placed in low memory.
+  2. The trampoline executes a transition instruction to get back to 64-bit mode (e.g., a far call to `0x33:ThunkHandler_64`, or a software interrupt mapped via a custom signal handler, or `syscall`).
+  3. A 64-bit marshalling function reads the 32-bit arguments from the 32-bit guest stack.
+  4. The 64-bit Zine zig function is called.
+  5. The return value is placed in `EAX`, and we mode-switch back to 32-bit mode to resume execution.
+
+### 5. FS Segment Setup (TEB)
+- **Current State**: `platform.setupFS` correctly uses `arch_prctl(ARCH_SET_FS)` on x86_64, which sets the hidden base of the `FS` segment register.
+- **Status**: This actually works perfectly for both 64-bit and 32-bit code under an x86_64 host! The TEB memory just needs to be allocated in the lower 4GB.
+
+### 6. Signal Handling (SIGSEGV/SIGFPE)
+- **Current State**: `sigsegvHandler` assumes all registers are 64-bit on an x86_64 build.
+- **Missing**: When a crash happens in 32-bit compat mode, the `ucontext_t` still contains 64-bit registers, but we must reconstruct the `teb.CONTEXT` structure using 32-bit semantics. The exception handler must correctly identify whether the fault happened in 32-bit mode (checking if `CS == 0x23` from the `ucontext_t`) or 64-bit mode.
+
+## Implementation Plan & Checklist
+
+### Phase 1: Sub-4GB Memory Management
+- [ ] Create `GuestAllocator` in `platform.zig` / `platform/native.zig`.
+- [ ] Implement x86_64 `mmap` wrapper to always include `MAP_32BIT` flag for guest allocations.
+- [ ] Update `loader/module.zig` to use the `GuestAllocator` for allocating the PE image and all its sections.
+- [ ] Ensure `teb.zig` allocates the TEB/PEB using the `GuestAllocator`.
+
+### Phase 2: Thunking & Stubs
+- [ ] Implement `x86/native_thunks_64.zig` to manage a pool of 32-bit executable memory (`GuestAllocator`) for thunk stubs.
+- [ ] Generate 32-bit trampoline assembly for each Win32 API stub (`push thunk_id`, `lcall $0x33, $ThunkDispatcher_64`).
+- [ ] Implement the `ThunkDispatcher_64` assembly stub that receives the 64-bit call, saves callee-saved registers, aligns the stack, reads arguments via `ESP`, and calls the Zig backend handler.
+- [ ] Modify `loader/loader.zig` to patch the guest 32-bit IAT with addresses pointing to these low-memory trampolines.
+
+### Phase 3: Bootstrapping & Mode Transition
+- [ ] Add CLI support or auto-detection logic to identify when a 32-bit PE is being run on a 64-bit host.
+- [ ] Allocate a 32-bit compatible Thread Stack (`MAP_32BIT`) for the main thread.
+- [ ] Write the 64->32 inline assembly trampoline (`iret` based) that pushes `SS`, `ESP`, `EFLAGS`, `CS` (`0x23`), and `EIP`, then executes `iretq`.
+- [ ] Update `main.zig` to jump to the entry point using the trampoline.
+
+### Phase 4: Signal Handling & Compatibility
+- [ ] Update `platform/native.zig` `sigsegvHandler` to detect whether the fault occurred in `CS == 0x23` (32-bit) or `CS == 0x33` (64-bit).
+- [ ] Implement 32-bit CONTEXT extraction from a 64-bit `ucontext_t` when `CS == 0x23`.
+- [ ] Verify `FS` (TEB) accesses correctly trigger the 32-bit SEH linked list lookup.
+
+---
+
+## Part 2: Executing 64-bit x86_64 Applications on x86_64 Zine
+
+If we want to extend Zine to execute 64-bit Windows applications natively on a 64-bit Linux host, the problems are different. We no longer have the 32-bit to 64-bit mode switch problem, but we introduce several other significant challenges:
+
+### 1. 64-bit PE Parsing and Definition
+- **Current State**: Zine's `pe.zig` only defines `IMAGE_NT_HEADERS32` and 32-bit specific structures.
+- **Missing**: We need to implement `IMAGE_NT_HEADERS64` and support for the `PE32+` format (Magic = `0x020B`). The structures for `IMAGE_OPTIONAL_HEADER64` have slightly different field layouts, particularly with 64-bit pointers (e.g., `ImageBase` is `u64`).
+
+### 2. Calling Convention Mismatches
+The most significant hurdle is the difference between the **Windows x64 calling convention** and the **System V AMD64 ABI** (used by Linux and Zig natively).
+- **Windows x64**: Arguments in `RCX`, `RDX`, `R8`, `R9`. Float arguments in `XMM0-XMM3`. Caller-allocated 32-byte shadow space on the stack. Registers `RBX`, `RBP`, `RDI`, `RSI`, `R12-R15` are non-volatile (callee-saved).
+- **System V**: Arguments in `RDI`, `RSI`, `RDX`, `RCX`, `R8`, `R9`. No default shadow space. Registers `RBX`, `RBP`, `R12-R15` are non-volatile.
+- **Missing**: When a 64-bit Windows PE calls a Zine stub function (e.g., `kernel32.GetTickCount`), it uses the Windows x64 convention. Because Zine is compiled with `callconv(.c)` on Linux, it expects the System V convention. We either need to compile the Zine Win32 stubs using the Windows calling convention (Zig supports `callconv(.Win64)`), or we need a trampoline layer for *every* stub that rearranges the registers before jumping to the actual implementation. Using `callconv(.Win64)` for the stubs is the most correct approach, but it will require updating the `Environment` function pointer typedefs.
+
+### 3. SEH Exception Handling (64-bit)
+On 32-bit Windows, SEH uses a dynamic linked list stored in `FS:0`. On 64-bit Windows, SEH is fundamentally different.
+- **Current State**: `sigsegvHandler` and exception dispatching in `teb.zig` rely entirely on the 32-bit `FS:0` linked list.
+- **Missing**: 64-bit Windows uses **table-based SEH**. The exceptions are resolved by looking up the faulting instruction pointer in the `IMAGE_DIRECTORY_ENTRY_EXCEPTION` table (`.pdata` section), looking at the unwind codes in `.rdata`. Zine must implement a full stack unwinder to parse these tables and invoke the appropriate handlers. We cannot just read `FS:0`.
+
+### 4. PEB and TEB Structures
+- **Current State**: `teb.zig` defines `TEB` and `PEB` as 32-bit structures with 32-bit pointers. They are accessed via the `FS` register.
+- **Missing**: We need 64-bit definitions for `TEB64` and `PEB64`. Additionally, on 64-bit Windows, the TEB is accessed via the **GS** segment register (`GS:0x30` for PEB), not `FS`. We must use `arch_prctl(ARCH_SET_GS)` on Linux to setup the base address.
+
+### 5. Memory Allocation
+- **Current State**: Zine implicitly expects the entire memory space limits of 32-bit.
+- **Missing**: Ensure all pointers throughout Zine's loading layers seamlessly support 64-bit addresses, which should naturally follow from using standard Zig `usize` pointer types, but requires careful audits of anywhere hardcoded 32-bit assumptions were made. Lengthy 64-bit addresses now apply to stack limits, image bases, and allocations.
+
+## Implementation Plan & Checklist for 64-bit Applications
+
+### Phase 1: PE32+ Parsing and Loading
+- [ ] Define `IMAGE_NT_HEADERS64`, `IMAGE_OPTIONAL_HEADER64`, and 64-bit relocation types in `src/pe.zig`.
+- [ ] Refactor `loader/module.zig` to dynamically detect `PE32` vs `PE32+` via the Magic value (`0x10B` vs `0x20B`), parsing the respective optional header.
+- [ ] Implement 64-bit Import Address Table (IAT) patching. 64-bit thunk entries are 8 bytes (`IMAGE_THUNK_DATA64`).
+- [ ] Ensure image loading correctly applies 64-bit base relocations if the preferred base is unavailable.
+
+### Phase 2: Calling Convention & API Stubs
+- [ ] Update `stubs/calling_convention.zig` to define `WINAPI` as `callconv(.Win64)` for 64-bit builds.
+- [ ] Audit `loader/env.zig` to ensure function pointers for unresolved stubs match the `.Win64` calling convention.
+- [ ] Review all 31 Win32 stub modules to ensure no hardcoded 32-bit types are used where pointers or handle-sized integers should scale to 64-bit.
+- [ ] Ensure Zig correctly allocates 32-byte shadow space when Zine's `.Win64` functions call back into native Windows code (e.g., callbacks in GUI/Event loops).
+
+### Phase 3: TEB, PEB, and GS Segment
+- [ ] Define `TEB64` and `PEB64` structures (with 64-bit pointers and correct padding) in `src/teb.zig`.
+- [ ] Update `platform/native.zig` to implement `setupGS()` using `arch_prctl(ARCH_SET_GS)`.
+- [ ] Modify the Zine bootstrapper to allocate and initialize the 64-bit PEB/TEB and bind it to the `GS` register for 64-bit apps.
+
+### Phase 4: Table-Based SEH Exception Handling
+- [ ] Define `IMAGE_RUNTIME_FUNCTION_ENTRY` and UWOP (Unwind Operation) structures from the `.pdata` and `.rdata` specifications.
+- [ ] Write a stack unwinder (`unwind64.zig`) capable of walking the 64-bit stack frame by frame, interpreting UWOP codes (push nonvol, alloc stack, save xmm).
+- [ ] Update `sigsegvHandler` to use the stack unwinder when a trap occurs in 64-bit guest code.
+- [ ] Dispatch to Language Specific Handlers (LSH) by calling the exception routines specified in the `.pdata` table.
+
+### Phase 5: Testing & Finalization
+- [ ] Write a "Hello World" 64-bit Win32 console app using MSVC and verify execution.
+- [ ] Write a simple 64-bit Win32 MessageBox app and verify Windows x64 register passing.
+- [ ] Trigger an intentional exception/crash and verify the `.pdata` unwinder successfully produces a stack trace.

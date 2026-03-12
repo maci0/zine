@@ -1,241 +1,85 @@
 const env = @import("../loader/env.zig");
-const trace = @import("../trace.zig");
-const w32 = @import("../win32_constants.zig");
-const w32cc = @import("../calling_convention.zig");
+const stubs = @import("ws2_32/stubs.zig");
 
-/// WS2_32.dll — Winsock 2 (primary implementation on Win2K)
+// Re-export symbols used by wsock32.zig
+pub const stub_WSAStartup = stubs.stub_WSAStartup;
+pub const stub_WSACleanup = stubs.stub_WSACleanup;
+pub const stub_WSAGetLastError = stubs.stub_WSAGetLastError;
+pub const stub_WSASetLastError = stubs.stub_WSASetLastError;
+pub const stub_accept = stubs.stub_accept;
+pub const stub_bind = stubs.stub_bind;
+pub const stub_closesocket = stubs.stub_closesocket;
+pub const stub_connect = stubs.stub_connect;
+pub const stub_getpeername = stubs.stub_getpeername;
+pub const stub_getsockname = stubs.stub_getsockname;
+pub const stub_getsockopt = stubs.stub_getsockopt;
+pub const stub_htonl = stubs.stub_htonl;
+pub const stub_htons = stubs.stub_htons;
+pub const stub_ioctlsocket = stubs.stub_ioctlsocket;
+pub const stub_inet_addr = stubs.stub_inet_addr;
+pub const stub_inet_ntoa = stubs.stub_inet_ntoa;
+pub const stub_listen = stubs.stub_listen;
+pub const stub_ntohl = stubs.stub_ntohl;
+pub const stub_ntohs = stubs.stub_ntohs;
+pub const stub_recv = stubs.stub_recv;
+pub const stub_recvfrom = stubs.stub_recvfrom;
+pub const stub_select = stubs.stub_select;
+pub const stub_send = stubs.stub_send;
+pub const stub_sendto = stubs.stub_sendto;
+pub const stub_setsockopt = stubs.stub_setsockopt;
+pub const stub_shutdown = stubs.stub_shutdown;
+pub const stub_socket = stubs.stub_socket;
+pub const stub_gethostbyaddr = stubs.stub_gethostbyaddr;
+pub const stub_gethostbyname = stubs.stub_gethostbyname;
+pub const stub_gethostname = stubs.stub_gethostname;
+
 pub fn register(environment: *env.Environment) !void {
-    const dll = "WS2_32.dll";
+    const m = "WS2_32.dll";
+    try environment.addBuiltinExportComptime(m, "WSAStartup", stubs.stub_WSAStartup);
+    try environment.addBuiltinExportComptime(m, "WSACleanup", stubs.stub_WSACleanup);
+    try environment.addBuiltinExportComptime(m, "WSAGetLastError", stubs.stub_WSAGetLastError);
+    try environment.addBuiltinExportComptime(m, "WSASetLastError", stubs.stub_WSASetLastError);
+    try environment.addBuiltinExportComptime(m, "accept", stubs.stub_accept);
+    try environment.addBuiltinExportComptime(m, "bind", stubs.stub_bind);
+    try environment.addBuiltinExportComptime(m, "closesocket", stubs.stub_closesocket);
+    try environment.addBuiltinExportComptime(m, "connect", stubs.stub_connect);
+    try environment.addBuiltinExportComptime(m, "getpeername", stubs.stub_getpeername);
+    try environment.addBuiltinExportComptime(m, "getsockname", stubs.stub_getsockname);
+    try environment.addBuiltinExportComptime(m, "getsockopt", stubs.stub_getsockopt);
+    try environment.addBuiltinExportComptime(m, "htonl", stubs.stub_htonl);
+    try environment.addBuiltinExportComptime(m, "htons", stubs.stub_htons);
+    try environment.addBuiltinExportComptime(m, "ioctlsocket", stubs.stub_ioctlsocket);
+    try environment.addBuiltinExportComptime(m, "inet_addr", stubs.stub_inet_addr);
+    try environment.addBuiltinExportComptime(m, "inet_ntoa", stubs.stub_inet_ntoa);
+    try environment.addBuiltinExportComptime(m, "listen", stubs.stub_listen);
+    try environment.addBuiltinExportComptime(m, "ntohl", stubs.stub_ntohl);
+    try environment.addBuiltinExportComptime(m, "ntohs", stubs.stub_ntohs);
+    try environment.addBuiltinExportComptime(m, "recv", stubs.stub_recv);
+    try environment.addBuiltinExportComptime(m, "recvfrom", stubs.stub_recvfrom);
+    try environment.addBuiltinExportComptime(m, "select", stubs.stub_select);
+    try environment.addBuiltinExportComptime(m, "send", stubs.stub_send);
+    try environment.addBuiltinExportComptime(m, "sendto", stubs.stub_sendto);
+    try environment.addBuiltinExportComptime(m, "setsockopt", stubs.stub_setsockopt);
+    try environment.addBuiltinExportComptime(m, "shutdown", stubs.stub_shutdown);
+    try environment.addBuiltinExportComptime(m, "socket", stubs.stub_socket);
+    try environment.addBuiltinExportComptime(m, "gethostbyname", stubs.stub_gethostbyname);
+    try environment.addBuiltinExportComptime(m, "gethostbyaddr", stubs.stub_gethostbyaddr);
+    try environment.addBuiltinExportComptime(m, "gethostname", stubs.stub_gethostname);
 
-    // Named exports
-    try environment.addBuiltinExportComptime(dll, "accept", stub_accept);
-    try environment.addBuiltinExportComptime(dll, "bind", stub_bind);
-    try environment.addBuiltinExportComptime(dll, "closesocket", stub_closesocket);
-    try environment.addBuiltinExportComptime(dll, "connect", stub_connect);
-    try environment.addBuiltinExportComptime(dll, "getpeername", stub_getpeername);
-    try environment.addBuiltinExportComptime(dll, "getsockname", stub_getsockname);
-    try environment.addBuiltinExportComptime(dll, "getsockopt", stub_getsockopt);
-    try environment.addBuiltinExportComptime(dll, "htonl", stub_htonl);
-    try environment.addBuiltinExportComptime(dll, "htons", stub_htons);
-    try environment.addBuiltinExportComptime(dll, "ioctlsocket", stub_ioctlsocket);
-    try environment.addBuiltinExportComptime(dll, "inet_addr", stub_inet_addr);
-    try environment.addBuiltinExportComptime(dll, "inet_ntoa", stub_inet_ntoa);
-    try environment.addBuiltinExportComptime(dll, "listen", stub_listen);
-    try environment.addBuiltinExportComptime(dll, "ntohl", stub_ntohl);
-    try environment.addBuiltinExportComptime(dll, "ntohs", stub_ntohs);
-    try environment.addBuiltinExportComptime(dll, "recv", stub_recv);
-    try environment.addBuiltinExportComptime(dll, "recvfrom", stub_recvfrom);
-    try environment.addBuiltinExportComptime(dll, "select", stub_select);
-    try environment.addBuiltinExportComptime(dll, "send", stub_send);
-    try environment.addBuiltinExportComptime(dll, "sendto", stub_sendto);
-    try environment.addBuiltinExportComptime(dll, "setsockopt", stub_setsockopt);
-    try environment.addBuiltinExportComptime(dll, "shutdown", stub_shutdown);
-    try environment.addBuiltinExportComptime(dll, "socket", stub_socket);
-    try environment.addBuiltinExportComptime(dll, "gethostbyaddr", stub_gethostbyaddr);
-    try environment.addBuiltinExportComptime(dll, "gethostbyname", stub_gethostbyname);
-    try environment.addBuiltinExportComptime(dll, "gethostname", stub_gethostname);
-    try environment.addBuiltinExportComptime(dll, "WSAStartup", stub_WSAStartup);
-    try environment.addBuiltinExportComptime(dll, "WSACleanup", stub_WSACleanup);
-    try environment.addBuiltinExportComptime(dll, "WSAGetLastError", stub_WSAGetLastError);
-    try environment.addBuiltinExportComptime(dll, "WSASetLastError", stub_WSASetLastError);
-
-    // Ordinal exports (canonical Winsock ordinal table)
-    try environment.addBuiltinExportComptime(dll, "ordinal_1", stub_accept);
-    try environment.addBuiltinExportComptime(dll, "ordinal_2", stub_bind);
-    try environment.addBuiltinExportComptime(dll, "ordinal_3", stub_closesocket);
-    try environment.addBuiltinExportComptime(dll, "ordinal_4", stub_connect);
-    try environment.addBuiltinExportComptime(dll, "ordinal_5", stub_getpeername);
-    try environment.addBuiltinExportComptime(dll, "ordinal_6", stub_getsockname);
-    try environment.addBuiltinExportComptime(dll, "ordinal_7", stub_getsockopt);
-    try environment.addBuiltinExportComptime(dll, "ordinal_8", stub_htonl);
-    try environment.addBuiltinExportComptime(dll, "ordinal_9", stub_htons);
-    try environment.addBuiltinExportComptime(dll, "ordinal_10", stub_ioctlsocket);
-    try environment.addBuiltinExportComptime(dll, "ordinal_11", stub_inet_addr);
-    try environment.addBuiltinExportComptime(dll, "ordinal_12", stub_inet_ntoa);
-    try environment.addBuiltinExportComptime(dll, "ordinal_13", stub_listen);
-    try environment.addBuiltinExportComptime(dll, "ordinal_14", stub_ntohl);
-    try environment.addBuiltinExportComptime(dll, "ordinal_15", stub_ntohs);
-    try environment.addBuiltinExportComptime(dll, "ordinal_16", stub_recv);
-    try environment.addBuiltinExportComptime(dll, "ordinal_17", stub_recvfrom);
-    try environment.addBuiltinExportComptime(dll, "ordinal_18", stub_select);
-    try environment.addBuiltinExportComptime(dll, "ordinal_19", stub_send);
-    try environment.addBuiltinExportComptime(dll, "ordinal_20", stub_sendto);
-    try environment.addBuiltinExportComptime(dll, "ordinal_21", stub_setsockopt);
-    try environment.addBuiltinExportComptime(dll, "ordinal_22", stub_shutdown);
-    try environment.addBuiltinExportComptime(dll, "ordinal_23", stub_socket);
-    try environment.addBuiltinExportComptime(dll, "ordinal_51", stub_gethostbyaddr);
-    try environment.addBuiltinExportComptime(dll, "ordinal_52", stub_gethostbyname);
-    try environment.addBuiltinExportComptime(dll, "ordinal_57", stub_gethostname);
-    try environment.addBuiltinExportComptime(dll, "ordinal_115", stub_WSAStartup);
-    try environment.addBuiltinExportComptime(dll, "ordinal_116", stub_WSACleanup);
-}
-
-// ============================================================
-// Winsock stub implementations (all pub, shared with wsock32)
-// ============================================================
-
-pub fn stub_WSAStartup(wVersionRequired: u16, lpWSAData: usize) callconv(w32cc.WINAPI) i32 {
-    _ = wVersionRequired;
-    if (trace.enable_tracing) trace.print("WS2_32: WSAStartup\n", .{});
-    if (lpWSAData != 0) {
-        const wsa = @as(*w32.WSADATA, @ptrFromInt(lpWSAData));
-        wsa.* = .{};
-        wsa.wVersion = 0x0202;
-        wsa.wHighVersion = 0x0202;
-    }
-    return 0; // Success
-}
-
-pub fn stub_WSACleanup() callconv(w32cc.WINAPI) i32 {
-    return 0;
-}
-
-pub fn stub_WSAGetLastError() callconv(w32cc.WINAPI) i32 {
-    return 0;
-}
-
-pub fn stub_WSASetLastError(iError: i32) callconv(w32cc.WINAPI) void {
-    _ = iError;
-}
-
-pub fn stub_accept(s: usize, addr: usize, addrlen: usize) callconv(w32cc.WINAPI) usize {
-    _ = s; _ = addr; _ = addrlen;
-    if (trace.enable_tracing) trace.print("WS2_32: accept\n", .{});
-    return @as(usize, @bitCast(@as(isize, -1))); // INVALID_SOCKET
-}
-
-pub fn stub_bind(s: usize, name: usize, namelen: i32) callconv(w32cc.WINAPI) i32 {
-    _ = s; _ = name; _ = namelen;
-    if (trace.enable_tracing) trace.print("WS2_32: bind\n", .{});
-    return -1; // SOCKET_ERROR
-}
-
-pub fn stub_closesocket(s: usize) callconv(w32cc.WINAPI) i32 {
-    _ = s;
-    return 0;
-}
-
-pub fn stub_connect(s: usize, name: usize, namelen: i32) callconv(w32cc.WINAPI) i32 {
-    _ = s; _ = name; _ = namelen;
-    if (trace.enable_tracing) trace.print("WS2_32: connect\n", .{});
-    return -1;
-}
-
-pub fn stub_getpeername(s: usize, name: usize, namelen: usize) callconv(w32cc.WINAPI) i32 {
-    _ = s; _ = name; _ = namelen;
-    return -1;
-}
-
-pub fn stub_getsockname(s: usize, name: usize, namelen: usize) callconv(w32cc.WINAPI) i32 {
-    _ = s; _ = name; _ = namelen;
-    return -1;
-}
-
-pub fn stub_getsockopt(s: usize, level: i32, optname: i32, optval: usize, optlen: usize) callconv(w32cc.WINAPI) i32 {
-    _ = s; _ = level; _ = optname; _ = optval; _ = optlen;
-    return -1;
-}
-
-pub fn stub_htonl(hostlong: u32) callconv(w32cc.WINAPI) u32 {
-    return @byteSwap(hostlong);
-}
-
-pub fn stub_htons(hostshort: u16) callconv(w32cc.WINAPI) u16 {
-    return @byteSwap(hostshort);
-}
-
-pub fn stub_ioctlsocket(s: usize, cmd: i32, argp: usize) callconv(w32cc.WINAPI) i32 {
-    _ = s; _ = cmd; _ = argp;
-    return 0;
-}
-
-pub fn stub_inet_addr(cp: usize) callconv(w32cc.WINAPI) u32 {
-    _ = cp;
-    return 0xFFFFFFFF; // INADDR_NONE
-}
-
-var inet_ntoa_buf: [16]u8 = undefined;
-pub fn stub_inet_ntoa(in_addr: u32) callconv(w32cc.WINAPI) usize {
-    _ = in_addr;
-    const result = "0.0.0.0";
-    @memcpy(inet_ntoa_buf[0..result.len], result);
-    inet_ntoa_buf[result.len] = 0;
-    return @intFromPtr(&inet_ntoa_buf);
-}
-
-pub fn stub_listen(s: usize, backlog: i32) callconv(w32cc.WINAPI) i32 {
-    _ = s; _ = backlog;
-    return -1;
-}
-
-pub fn stub_ntohl(netlong: u32) callconv(w32cc.WINAPI) u32 {
-    return @byteSwap(netlong);
-}
-
-pub fn stub_ntohs(netshort: u16) callconv(w32cc.WINAPI) u16 {
-    return @byteSwap(netshort);
-}
-
-pub fn stub_recv(s: usize, buf: usize, len: i32, flags: i32) callconv(w32cc.WINAPI) i32 {
-    _ = s; _ = buf; _ = len; _ = flags;
-    return -1;
-}
-
-pub fn stub_recvfrom(s: usize, buf: usize, len: i32, flags: i32, from: usize, fromlen: usize) callconv(w32cc.WINAPI) i32 {
-    _ = s; _ = buf; _ = len; _ = flags; _ = from; _ = fromlen;
-    return -1;
-}
-
-pub fn stub_select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, timeout: usize) callconv(w32cc.WINAPI) i32 {
-    _ = nfds; _ = readfds; _ = writefds; _ = exceptfds; _ = timeout;
-    return 0; // No sockets ready
-}
-
-pub fn stub_send(s: usize, buf: usize, len: i32, flags: i32) callconv(w32cc.WINAPI) i32 {
-    _ = s; _ = buf; _ = flags;
-    return len; // Pretend we sent everything
-}
-
-pub fn stub_sendto(s: usize, buf: usize, len: i32, flags: i32, to: usize, tolen: i32) callconv(w32cc.WINAPI) i32 {
-    _ = s; _ = buf; _ = flags; _ = to; _ = tolen;
-    return len;
-}
-
-pub fn stub_setsockopt(s: usize, level: i32, optname: i32, optval: usize, optlen: i32) callconv(w32cc.WINAPI) i32 {
-    _ = s; _ = level; _ = optname; _ = optval; _ = optlen;
-    return 0;
-}
-
-pub fn stub_shutdown(s: usize, how: i32) callconv(w32cc.WINAPI) i32 {
-    _ = s; _ = how;
-    return 0;
-}
-
-pub fn stub_socket(af: i32, sock_type: i32, protocol: i32) callconv(w32cc.WINAPI) usize {
-    _ = af; _ = sock_type; _ = protocol;
-    if (trace.enable_tracing) trace.print("WS2_32: socket\n", .{});
-    return @as(usize, @bitCast(@as(isize, -1))); // INVALID_SOCKET
-}
-
-pub fn stub_gethostbyname(name: usize) callconv(w32cc.WINAPI) usize {
-    _ = name;
-    if (trace.enable_tracing) trace.print("WS2_32: gethostbyname\n", .{});
-    return 0; // NULL = failure
-}
-
-pub fn stub_gethostbyaddr(addr: usize, len: i32, atype: i32) callconv(w32cc.WINAPI) usize {
-    _ = addr; _ = len; _ = atype;
-    if (trace.enable_tracing) trace.print("WS2_32: gethostbyaddr\n", .{});
-    return 0; // NULL = failure
-}
-
-pub fn stub_gethostname(name: usize, namelen: i32) callconv(w32cc.WINAPI) i32 {
-    if (name != 0 and namelen > 0) {
-        const hostname = "localhost";
-        const buf = @as([*]u8, @ptrFromInt(name));
-        const copy_len = @min(hostname.len, @as(usize, @intCast(namelen)) - 1);
-        @memcpy(buf[0..copy_len], hostname[0..copy_len]);
-        buf[copy_len] = 0;
-    }
-    return 0;
+    // --- Remaining WS2_32 stubs for 100% win2k coverage ---
+    const kernel32 = @import("kernel32.zig");
+    try environment.addBuiltinExportComptime(m, "WSARecv", kernel32.stub_args7);
+    try environment.addBuiltinExportComptime(m, "WSASend", kernel32.stub_args7);
+    try environment.addBuiltinExportComptime(m, "WSASocketA", kernel32.stub_args6);
+    try environment.addBuiltinExportComptime(m, "WSAIoctl", kernel32.stub_args9);
+    try environment.addBuiltinExportComptime(m, "WSAEventSelect", kernel32.stub_args3);
+    try environment.addBuiltinExportComptime(m, "WSACreateEvent", kernel32.stub_args0);
+    try environment.addBuiltinExportComptime(m, "WSAWaitForMultipleEvents", kernel32.stub_args5);
+    try environment.addBuiltinExportComptime(m, "WSAEnumNetworkEvents", kernel32.stub_args3);
+    try environment.addBuiltinExportComptime(m, "WSACloseEvent", kernel32.stub_args1);
+    try environment.addBuiltinExportComptime(m, "getaddrinfo", kernel32.stub_args4);
+    try environment.addBuiltinExportComptime(m, "freeaddrinfo", kernel32.stub_args1);
+    try environment.addBuiltinExportComptime(m, "getnameinfo", kernel32.stub_args7);
+    try environment.addBuiltinExportComptime(m, "WSAStringToAddressA", kernel32.stub_args5);
+    try environment.addBuiltinExportComptime(m, "__WSAFDIsSet", kernel32.stub_args2);
 }

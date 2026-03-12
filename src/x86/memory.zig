@@ -2,7 +2,7 @@
 //
 // The guest x86 address space lives inside WASM linear memory (or a
 // host-allocated buffer on native).  All memory reads/writes go through
-// this module for bounds checking and segment resolution.
+// this module for bounds checking and address translation.
 
 /// Bounds-checked guest memory accessor.
 pub const GuestMemory = struct {
@@ -16,6 +16,7 @@ pub const GuestMemory = struct {
     /// For native --interpret: the mmap'd address (image_base), so that
     /// absolute x86 addresses (e.g. 0x01006420) translate correctly.
     base_addr: u32 = 0,
+    native_linear: bool = false,
 
     /// Translate a virtual address to a buffer index.
     inline fn translate(self: *const GuestMemory, addr: u32) usize {
@@ -25,18 +26,21 @@ pub const GuestMemory = struct {
     // --- Read operations ---
 
     pub fn read8(self: *const GuestMemory, addr: u32) u8 {
+        if (self.native_linear) { if (addr < 4096) return 0; return @as(*const u8, @ptrFromInt(addr)).*; }
         const a = self.translate(addr);
         if (a >= self.base.len) return 0;
         return self.base[a];
     }
 
     pub fn read16(self: *const GuestMemory, addr: u32) u16 {
+        if (self.native_linear) { if (addr < 4096) return 0; return @as(*align(1) const u16, @ptrFromInt(addr)).*; }
         const a = self.translate(addr);
         if (self.base.len < 2 or a > self.base.len - 2) return 0;
         return @as(u16, self.base[a]) | (@as(u16, self.base[a + 1]) << 8);
     }
 
     pub fn read32(self: *const GuestMemory, addr: u32) u32 {
+        if (self.native_linear) { if (addr < 4096) return 0; return @as(*align(1) const u32, @ptrFromInt(addr)).*; }
         const a = self.translate(addr);
         if (self.base.len < 4 or a > self.base.len - 4) return 0;
         return @as(u32, self.base[a]) |
@@ -48,12 +52,14 @@ pub const GuestMemory = struct {
     // --- Write operations ---
 
     pub fn write8(self: *GuestMemory, addr: u32, val: u8) void {
+        if (self.native_linear) { if (addr >= 4096) @as(*u8, @ptrFromInt(addr)).* = val; return; }
         const a = self.translate(addr);
         if (a >= self.base.len) return;
         self.base[a] = val;
     }
 
     pub fn write16(self: *GuestMemory, addr: u32, val: u16) void {
+        if (self.native_linear) { if (addr >= 4096) @as(*align(1) u16, @ptrFromInt(addr)).* = val; return; }
         const a = self.translate(addr);
         if (self.base.len < 2 or a > self.base.len - 2) return;
         self.base[a] = @truncate(val);
@@ -61,6 +67,7 @@ pub const GuestMemory = struct {
     }
 
     pub fn write32(self: *GuestMemory, addr: u32, val: u32) void {
+        if (self.native_linear) { if (addr >= 4096) @as(*align(1) u32, @ptrFromInt(addr)).* = val; return; }
         const a = self.translate(addr);
         if (self.base.len < 4 or a > self.base.len - 4) return;
         self.base[a] = @truncate(val);
@@ -71,6 +78,7 @@ pub const GuestMemory = struct {
 
     /// Get a read-only slice of guest memory.
     pub fn readSlice(self: *const GuestMemory, addr: u32, len: u32) ?[]const u8 {
+        if (self.native_linear) return @as([*]const u8, @ptrFromInt(addr))[0..len];
         const a = self.translate(addr);
         if (a >= self.base.len) return null;
         const end = @min(a + len, self.base.len);
@@ -79,6 +87,7 @@ pub const GuestMemory = struct {
 
     /// Get a mutable slice of guest memory.
     pub fn writeSlice(self: *GuestMemory, addr: u32, len: u32) ?[]u8 {
+        if (self.native_linear) return @as([*]u8, @ptrFromInt(addr))[0..len];
         const a = self.translate(addr);
         if (a >= self.base.len) return null;
         const end = @min(a + len, self.base.len);

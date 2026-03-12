@@ -497,6 +497,9 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(builtin_module, "ordinal_1", stub_DirectSoundCreate);
     try environment.addBuiltinExportComptime(builtin_module, "DirectSoundCreate", stub_DirectSoundCreate);
     try environment.addBuiltinExportComptime(builtin_module, "DirectSoundEnumerateA", stub_DirectSoundEnumerateA);
+    
+    environment.addBuiltinVtableComptime(IDirectSoundVtbl, &dsound_vtbl);
+    environment.addBuiltinVtableComptime(IDirectSoundBufferVtbl, &dsbuffer_vtbl);
 }
 
 fn stub_DirectSoundCreate(pcGuidDevice: usize, ppDS: *?*IDirectSound, pUnkOuter: usize) callconv(w32cc.WINAPI) i32 {

@@ -48,33 +48,40 @@ pub const Environment = struct {
         self.registry.deinit();
     }
 
-    pub fn addBuiltinExport(self: *Environment, dll: []const u8, name: []const u8, addr: usize) !void {
+    /// Ensure a BuiltinModule exists for the given DLL name (case-insensitive).
+    /// Creates a fake PE header for the module if it doesn't exist yet.
+    fn getOrCreateModule(self: *Environment, dll: []const u8) !*BuiltinModule {
         const lower_dll = try self.allocator.alloc(u8, dll.len);
         defer self.allocator.free(lower_dll);
         _ = std.ascii.lowerString(lower_dll, dll);
 
-        var builtin = self.builtins.getPtr(lower_dll);
-        if (builtin == null) {
-            // Allocate a page for the fake PE header
-            const header = try self.allocator.alloc(u8, 4096);
-            @memset(header, 0);
-
-            // Minimal MZ/PE header
-            const mz = @as(*align(1) u16, @ptrCast(&header[0]));
-            mz.* = 0x5A4D; // "MZ"
-            const e_lfanew = @as(*align(1) u32, @ptrCast(&header[0x3C]));
-            e_lfanew.* = 0x40;
-            const pe_sig = @as(*align(1) u32, @ptrCast(&header[0x40]));
-            pe_sig.* = 0x00004550; // "PE\0\0"
-
-            const new_builtin = BuiltinModule{
-                .handle = @intFromPtr(header.ptr),
-                .exports = std.StringHashMap(BuiltinExport).init(self.allocator),
-            };
-            try self.builtins.put(try self.allocator.dupe(u8, lower_dll), new_builtin);
-            builtin = self.builtins.getPtr(lower_dll);
+        if (self.builtins.getPtr(lower_dll)) |existing| {
+            return existing;
         }
-        try builtin.?.*.exports.put(name, .{ .addr = addr, .param_bytes = 0 });
+
+        // Allocate a page for the fake PE header
+        const header = try self.allocator.alloc(u8, 4096);
+        @memset(header, 0);
+
+        // Minimal MZ/PE header
+        const mz = @as(*align(1) u16, @ptrCast(&header[0]));
+        mz.* = 0x5A4D; // "MZ"
+        const e_lfanew = @as(*align(1) u32, @ptrCast(&header[0x3C]));
+        e_lfanew.* = 0x40;
+        const pe_sig = @as(*align(1) u32, @ptrCast(&header[0x40]));
+        pe_sig.* = 0x00004550; // "PE\0\0"
+
+        const new_builtin = BuiltinModule{
+            .handle = @intFromPtr(header.ptr),
+            .exports = std.StringHashMap(BuiltinExport).init(self.allocator),
+        };
+        try self.builtins.put(try self.allocator.dupe(u8, lower_dll), new_builtin);
+        return self.builtins.getPtr(lower_dll).?;
+    }
+
+    pub fn addBuiltinExport(self: *Environment, dll: []const u8, name: []const u8, addr: usize) !void {
+        const builtin = try self.getOrCreateModule(dll);
+        try builtin.exports.put(name, .{ .addr = addr, .param_bytes = 0 });
     }
 
     pub fn addBuiltinExportComptime(self: *Environment, dll: []const u8, name: []const u8, comptime func: anytype) !void {
@@ -188,36 +195,65 @@ pub const Environment = struct {
         else
             null;
 
-        const lower_dll = try self.allocator.alloc(u8, dll.len);
-        defer self.allocator.free(lower_dll);
-        _ = std.ascii.lowerString(lower_dll, dll);
-
-        var builtin = self.builtins.getPtr(lower_dll);
-        if (builtin == null) {
-            // Allocate a page for the fake PE header
-            const header = try self.allocator.alloc(u8, 4096);
-            @memset(header, 0);
-
-            // Minimal MZ/PE header
-            const mz = @as(*align(1) u16, @ptrCast(&header[0]));
-            mz.* = 0x5A4D; // "MZ"
-            const e_lfanew = @as(*align(1) u32, @ptrCast(&header[0x3C]));
-            e_lfanew.* = 0x40;
-            const pe_sig = @as(*align(1) u32, @ptrCast(&header[0x40]));
-            pe_sig.* = 0x00004550; // "PE\0\0"
-
-            const new_builtin = BuiltinModule{
-                .handle = @intFromPtr(header.ptr),
-                .exports = std.StringHashMap(BuiltinExport).init(self.allocator),
-            };
-            try self.builtins.put(try self.allocator.dupe(u8, lower_dll), new_builtin);
-            builtin = self.builtins.getPtr(lower_dll);
-        }
-        try builtin.?.*.exports.put(name, .{
+        const builtin = try self.getOrCreateModule(dll);
+        try builtin.exports.put(name, .{
             .addr = addr,
             .param_bytes = param_bytes,
             .thunk_handler = handler,
         });
+    }
+
+    /// Recursively registers all function pointers in a COM VTable struct
+    /// to the native thunk registry so the interpreter doesn't crash if
+    /// a COM method is called natively.
+    pub fn addBuiltinVtableComptime(self: *Environment, comptime VTableType: type, vtable: *const VTableType) void {
+        _ = self;
+        if (comptime platform.is_native) {
+            const info = @typeInfo(VTableType);
+            if (info != .@"struct") @compileError("VTableType must be a struct");
+            
+            inline for (info.@"struct".fields) |field| {
+                const func_ptr = @field(vtable, field.name);
+                const FuncType = @TypeOf(func_ptr);
+
+                var target_ptr: usize = 0;
+                var param_len: u32 = 0;
+
+                switch (@typeInfo(FuncType)) {
+                    .pointer => |p| {
+                        if (@typeInfo(p.child) == .@"fn") {
+                            target_ptr = @intFromPtr(func_ptr);
+                            param_len = @intCast(@typeInfo(p.child).@"fn".params.len);
+                        }
+                    },
+                    .optional => |opt| {
+                        if (@typeInfo(opt.child) == .pointer) {
+                            const p = @typeInfo(opt.child).pointer;
+                            if (@typeInfo(p.child) == .@"fn") {
+                                if (func_ptr) |ptr| {
+                                    target_ptr = @intFromPtr(ptr);
+                                    param_len = @intCast(@typeInfo(p.child).@"fn".params.len);
+                                }
+                            }
+                        }
+                    },
+                    .int => {
+                        // Sometimes dummy entries are typed as usize
+                        target_ptr = @intCast(func_ptr);
+                    },
+                    else => {},
+                }
+
+                if (target_ptr != 0) {
+                    x86_thunks.registerNativeImport(
+                        @intCast(target_ptr),
+                        "COM",
+                        field.name,
+                        param_len * 4,
+                    );
+                }
+            }
+        }
     }
 
     pub fn getBuiltinHandle(self: *Environment, dll_name: []const u8) ?usize {

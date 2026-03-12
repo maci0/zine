@@ -721,6 +721,21 @@ pub fn register(environment: *env.Environment) !void {
 
     const builtin_module = "d3d8.dll";
     try environment.addBuiltinExportComptime(builtin_module, "Direct3DCreate8", stub_Direct3DCreate8);
+
+    environment.addBuiltinVtableComptime(IDirect3D8Vtbl, &d3d8_vtbl);
+    environment.addBuiltinVtableComptime(IDirect3DDevice8Vtbl, &device_vtbl);
+    
+    // For resource_vtbl which is an array of usize pointers, we manually register them
+    // assuming safe defaults. If the guest calls them natively, dispatchNativeCall
+    // will jump to them. These are mostly noops.
+    for (&resource_vtbl) |*func_ptr| {
+        if (func_ptr.* != 0) {
+            const thunks = @import("../../x86/thunks.zig");
+            // Since we don't know param_len exactly for the array at comptime, we default to 12 bytes
+            // which handles noop3 safely. 
+            thunks.registerNativeImport(@intCast(func_ptr.*), "COM", "D3D8ResourceMethod", 12);
+        }
+    }
 }
 
 fn stub_Direct3DCreate8(SDKVersion: u32) callconv(w32cc.WINAPI) usize {

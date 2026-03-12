@@ -49,10 +49,19 @@ The build system (`build.zig`) supports three target architectures:
 
 ### 1. Entry Points
 
-**Native** — [`src/main.zig`](file:///home/maci/Desktop/Projects/zine/src/main.zig)
+**Native** — [`src/main.zig`](../src/main.zig)
 
 The native entry point handles:
-- CLI (Command Line Interface) argument parsing (`--trace`, `--interpret`, `--argv0`)
+- CLI (Command Line Interface) argument parsing:
+  - `-t`, `--trace` — enable all tracing (API + instructions)
+  - `--trace-api` — enable API call tracing only
+  - `--trace-insn` — enable x86 instruction tracing only
+  - `-i`, `--interpret` — use x86 software interpreter
+  - `--argv0 <name>` — override argv[0] passed to the target
+  - `-h`, `--help` — show help
+  - `-V`, `--version` — show version
+  - `--` — end of zine options (allows target names starting with `-`)
+  - Environment variables: `ZINE_TRACE` (API tracing), `ZINE_TRACE_INSN` (instruction tracing)
 - `.bat`/`.cmd` file preprocessing via `bat.zig`
 - SIGSEGV/SIGFPE (segmentation fault / floating-point exception) signal handler for SEH (Structured Exception Handling) dispatch and AppCompat (Application Compatibility) shims
 - Environment setup (combining BAT-defined PATH, argv, envp)
@@ -60,7 +69,7 @@ The native entry point handles:
 - GUI subsystem detection (checking PE subsystem field for `IMAGE_SUBSYSTEM_WINDOWS_GUI`)
 - Two execution modes: **direct native execution** (jump to entry point) or **software interpreter** (`--interpret` flag)
 
-**WASM** — [`src/wasm_main.zig`](file:///home/maci/Desktop/Projects/zine/src/wasm_main.zig)
+**WASM** — [`src/wasm_main.zig`](../src/wasm_main.zig)
 
 The WASM entry point runs under a WASI runtime (e.g. wasmtime). It always uses the software interpreter since there is no way to directly execute x86 machine code in WebAssembly. It allocates a combined memory buffer laid out as `[PE image] [stack (64 KB)] [thunks (32 KB)]`, keeping thunks in a separate region beyond the PE's `SizeOfImage` so they don't overwrite import tables or data sections.
 
@@ -68,7 +77,7 @@ The WASM entry point runs under a WASI runtime (e.g. wasmtime). It always uses t
 
 ### 2. PE Parser
 
-[`src/pe.zig`](file:///home/maci/Desktop/Projects/zine/src/pe.zig) · [`src/pe_resources.zig`](file:///home/maci/Desktop/Projects/zine/src/pe_resources.zig)
+[`src/pe.zig`](../src/pe.zig) · [`src/pe_resources.zig`](../src/pe_resources.zig)
 
 Defines all PE/COFF (Common Object File Format) data structures (`IMAGE_DOS_HEADER`, `IMAGE_NT_HEADERS32`, `IMAGE_SECTION_HEADER`, etc.) and provides the `PEParser` struct for parsing PE files from raw byte buffers. The parser validates the MZ (Mark Zbikowski, the DOS signature `0x5A4D`) and PE signatures, extracts section headers, and provides accessors for the DOS header, NT headers, and sections.
 
@@ -78,16 +87,16 @@ The resource module handles the three-level resource directory tree (Type → Na
 
 ### 3. Module Loader
 
-[`src/loader/`](file:///home/maci/Desktop/Projects/zine/src/loader/)
+[`src/loader/`](../src/loader/)
 
 The loader subsystem consists of four core modules and three resource parsers:
 
 | Module | Responsibility |
 |--------|---------------|
-| [module.zig](file:///home/maci/Desktop/Projects/zine/src/loader/module.zig) | Loads a PE file from disk, maps it into memory via `platform.mmap`, copies section data, and applies base relocations if the image was loaded at a non-preferred address. |
-| [registry.zig](file:///home/maci/Desktop/Projects/zine/src/loader/registry.zig) | Maintains a name → `Module*` mapping and search path list. Handles DLL (Dynamic Link Library) search order. |
-| [env.zig](file:///home/maci/Desktop/Projects/zine/src/loader/env.zig) | The `Environment` struct ties together the module registry and built-in stub exports. Provides `resolveExport()` which first checks loaded PE DLLs, then falls back to built-in stubs. Also contains `addBuiltinExportComptime()`, which generates WASM thunk handlers at compile time. |
-| [loader.zig](file:///home/maci/Desktop/Projects/zine/src/loader/loader.zig) | Walks the PE import directory, resolves each function by name or ordinal, and patches the IAT (Import Address Table). On native targets, writes host function addresses directly. On WASM, allocates `INT 0xFE` thunk stubs in guest memory. Also calls `DllMain` (`DLL_PROCESS_ATTACH`) for loaded PE DLLs. |
+| [module.zig](../src/loader/module.zig) | Loads a PE file from disk, maps it into memory via `platform.mmap`, copies section data, and applies base relocations if the image was loaded at a non-preferred address. |
+| [registry.zig](../src/loader/registry.zig) | Maintains a name → `Module*` mapping and search path list. Handles DLL (Dynamic Link Library) search order. |
+| [env.zig](../src/loader/env.zig) | The `Environment` struct ties together the module registry and built-in stub exports. Provides `resolveExport()` which first checks loaded PE DLLs, then falls back to built-in stubs. Also contains `addBuiltinExportComptime()`, which generates WASM thunk handlers at compile time. |
+| [loader.zig](../src/loader/loader.zig) | Walks the PE import directory, resolves each function by name or ordinal, and patches the IAT (Import Address Table). On native targets, writes host function addresses directly. On WASM, allocates `INT 0xFE` thunk stubs in guest memory. Also calls `DllMain` (`DLL_PROCESS_ATTACH`) for loaded PE DLLs. |
 
 #### Import Resolution Flow
 
@@ -110,19 +119,19 @@ flowchart TD
 
 ### 4. x86 Emulation Engine
 
-[`src/x86/`](file:///home/maci/Desktop/Projects/zine/src/x86/)
+[`src/x86/`](../src/x86/)
 
 The software interpreter is used on WASM (always) and optionally on native (`--interpret`).
 
 | Module | Responsibility |
 |--------|---------------|
-| [cpu.zig](file:///home/maci/Desktop/Projects/zine/src/x86/cpu.zig) | CPU state: 8 GPRs (General Purpose Registers: EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI), EIP (Extended Instruction Pointer), segment registers, lazy EFLAGS (CPU status flags register), FPU (Floating Point Unit) state, and guest memory reference. Provides typed accessors for 8/16/32-bit register operations and stack push/pop. |
-| [decoder.zig](file:///home/maci/Desktop/Projects/zine/src/x86/decoder.zig) | Instruction decoder. Reads opcode bytes, prefixes, ModR/M (addressing mode byte), SIB (Scale-Index-Base byte), displacement, and immediates from the code stream. |
-| [execute.zig](file:///home/maci/Desktop/Projects/zine/src/x86/execute.zig) | The main interpreter loop. Fetches, decodes, and executes x86 instructions. Dispatches `INT 0xFE` to the thunk table. |
-| [flags.zig](file:///home/maci/Desktop/Projects/zine/src/x86/flags.zig) | Lazy EFLAGS computation. Defers CF (Carry), ZF (Zero), SF (Sign), OF (Overflow), PF (Parity) flag calculations until read, recording the operation type and operands. |
-| [fpu.zig](file:///home/maci/Desktop/Projects/zine/src/x86/fpu.zig) | x87 FPU state (ST(0)–ST(7) floating-point register stack, control/status words). |
-| [memory.zig](file:///home/maci/Desktop/Projects/zine/src/x86/memory.zig) | `GuestMemory` struct — translates guest virtual addresses to host buffer offsets. Provides `read8/16/32` and `write8/16/32`. |
-| [thunks.zig](file:///home/maci/Desktop/Projects/zine/src/x86/thunks.zig) | Thunk dispatch table. Maps thunk IDs to handlers. On `INT 0xFE`, reads the 4-byte thunk ID from the code stream and calls the registered handler with the CPU state. Also manages the native import registry for stdcall (callee-cleans-stack calling convention) parameter cleanup. |
+| [cpu.zig](../src/x86/cpu.zig) | CPU state: 8 GPRs (General Purpose Registers: EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI), EIP (Extended Instruction Pointer), segment registers, lazy EFLAGS (CPU status flags register), FPU (Floating Point Unit) state, and guest memory reference. Provides typed accessors for 8/16/32-bit register operations and stack push/pop. |
+| [decoder.zig](../src/x86/decoder.zig) | Instruction decoder. Reads opcode bytes, prefixes, ModR/M (addressing mode byte), SIB (Scale-Index-Base byte), displacement, and immediates from the code stream. |
+| [execute.zig](../src/x86/execute.zig) | The main interpreter loop. Fetches, decodes, and executes x86 instructions. Dispatches `INT 0xFE` to the thunk table. |
+| [flags.zig](../src/x86/flags.zig) | Lazy EFLAGS computation. Defers CF (Carry), ZF (Zero), SF (Sign), OF (Overflow), PF (Parity) flag calculations until read, recording the operation type and operands. |
+| [fpu.zig](../src/x86/fpu.zig) | x87 FPU state (ST(0)–ST(7) floating-point register stack, control/status words). |
+| [memory.zig](../src/x86/memory.zig) | `GuestMemory` struct — translates guest virtual addresses to host buffer offsets. Provides `read8/16/32`, `write8/16/32`, and `readSlice`/`writeSlice`. Supports `native_linear` mode for direct host memory access when using `--interpret` on native targets. |
+| [thunks.zig](../src/x86/thunks.zig) | Thunk dispatch table. Maps thunk IDs to handlers. On `INT 0xFE`, reads the 4-byte thunk ID from the code stream and calls the registered handler with the CPU state. Also manages the native import registry for stdcall (callee-cleans-stack calling convention) parameter cleanup. |
 
 #### Thunk Mechanism (WASM)
 
@@ -140,9 +149,9 @@ On WASM, Win32 API calls can't be dispatched by jumping to native function point
 
 ### 5. Win32 API Stubs
 
-[`src/stubs/`](file:///home/maci/Desktop/Projects/zine/src/stubs/)
+[`src/stubs/`](../src/stubs/)
 
-Zine implements 30+ DLL stub modules that provide Win32 API compatibility. Each module exports a `register()` function that adds its exports to the `Environment`. Unresolved functions fall back to `not_implemented`, which prints a diagnostic and exits.
+Zine implements 31 DLL stub modules that provide Win32 API compatibility. Each module exports a `register()` function that adds its exports to the `Environment`. Unresolved functions fall back to `not_implemented`, which prints a diagnostic and exits.
 
 | Category | Stubs |
 |----------|-------|
@@ -150,20 +159,20 @@ Zine implements 30+ DLL stub modules that provide Win32 API compatibility. Each 
 | **Kernel** | `kernel32.zig`, `ntdll.zig` (process, memory, file I/O, heap, threading, registry) |
 | **User Interface** | `user32.zig`, `comctl32.zig`, `comdlg32.zig`, `shell32.zig` |
 | **Graphics** | `gdi32.zig` (GDI — Graphics Device Interface), `ddraw.zig` (DirectDraw), `d3d8.zig` (Direct3D 8) |
-| **Audio/Input** | `dsound.zig` (DirectSound), `winmm.zig` (Windows Multimedia), `dinput.zig` (DirectInput), `mss32.zig` (Miles Sound System) |
-| **Security/RPC** | `advapi32.zig`, `rpcrt4.zig` (RPC — Remote Procedure Call), `ole32.zig` (OLE — Object Linking and Embedding) |
+| **Audio/Input** | `dsound.zig` (DirectSound), `winmm.zig` (Windows Multimedia), `dinput.zig` (DirectInput), `dinput8.zig` (DirectInput8), `mss32.zig` (Miles Sound System) |
+| **Security/RPC** | `advapi32.zig`, `rpcrt4.zig` (RPC — Remote Procedure Call), `ole32.zig` (OLE — Object Linking and Embedding), `oleaut32.zig` (OLE Automation) |
 | **Networking** | `wsock32.zig`, `ws2_32.zig`, `icmp.zig` |
 | **Other** | `imm32.zig`, `version.zig`, `winspool.zig`, `nddeapi.zig`, `imagehlp.zig`, `mfc42.zig`, `cards.zig`, `vdmdbg.zig`, `mag_hook.zig` |
 
 #### Calling Convention
 
-[`src/stubs/calling_convention.zig`](file:///home/maci/Desktop/Projects/zine/src/stubs/calling_convention.zig) defines `WINAPI` as either `.winapi` (native) or `.c` (WASM), abstracting the stdcall (callee pops arguments) vs. cdecl (caller pops arguments) calling convention difference across platforms.
+[`src/calling_convention.zig`](../src/calling_convention.zig) defines `WINAPI` as `.winapi` on x86/x86_64 (stdcall on 32-bit, Win64 on 64-bit) or `.c` on all other targets (WASM, ARM, etc.), abstracting the stdcall (callee pops arguments) vs. cdecl (caller pops arguments) calling convention difference across platforms.
 
 ---
 
 ### 6. TEB (Thread Environment Block) / PEB (Process Environment Block) and the FS Segment Register
 
-[`src/teb.zig`](file:///home/maci/Desktop/Projects/zine/src/teb.zig)
+[`src/teb.zig`](../src/teb.zig)
 
 #### What is the FS segment register?
 
@@ -200,7 +209,7 @@ Zine allocates a page-aligned TEB struct, populates the critical fields, and cre
 
 ### 7. Platform Abstraction
 
-[`src/platform.zig`](file:///home/maci/Desktop/Projects/zine/src/platform.zig) · [`src/platform/`](file:///home/maci/Desktop/Projects/zine/src/platform/)
+[`src/platform.zig`](../src/platform.zig) · [`src/platform/`](../src/platform/)
 
 A comptime-selected backend that abstracts OS-specific functionality:
 
@@ -209,8 +218,13 @@ A comptime-selected backend that abstracts OS-specific functionality:
 | `mmap`/`munmap` | Linux `mmap`/`munmap` syscalls | Zig allocator (page-aligned) |
 | `setupFS` | `arch_prctl(ARCH_SET_FS)` or `set_thread_area` | No-op (interpreter uses `cpu.fs_base`) |
 | `spawnThread` | `std.Thread.spawn` | Stub (single-threaded) |
+| `yield`/`sleep`/`Mutex` | `std.Thread` primitives | No-ops / no-op mutex |
+| `readExceptionList` | Reads `FS:0` (SEH chain head) on x86 | Returns `0xFFFFFFFF` |
+| `getProcessId` | Host PID | Fixed constant |
+| `getStackBounds` | Reads `/proc/self/maps` | Conservative defaults from frame address |
 | `installSegfaultHandler` | `sigaction(SIGSEGV, SIGFPE)` | No-op |
 | `mapNullPage` | `mmap` at address 0 | No-op |
+| `raiseStackLimit` | Sets `RLIMIT_STACK` to 64 MB | No-op |
 | `exitProcess` | `std.process.exit` | `@trap()` |
 | `timestamp` | `std.time.timestamp` | Returns 0 |
 
@@ -218,7 +232,7 @@ A comptime-selected backend that abstracts OS-specific functionality:
 
 ### 8. GUI / Renderer
 
-[`src/gui/`](file:///home/maci/Desktop/Projects/zine/src/gui/)
+[`src/gui/`](../src/gui/)
 
 The GUI subsystem presents Win32 GUI applications in a web browser.
 
@@ -278,9 +292,9 @@ On native targets, Zine installs a `SIGSEGV`/`SIGFPE` handler that implements:
 
 | Module | Path | Purpose |
 |--------|------|---------|
-| **bat.zig** | [`src/bat.zig`](file:///home/maci/Desktop/Projects/zine/src/bat.zig) | Parses `.bat`/`.cmd` launcher scripts, expands `%VARIABLE%` references, and extracts the final command to execute. |
-| **trace.zig** | [`src/trace.zig`](file:///home/maci/Desktop/Projects/zine/src/trace.zig) | Conditional debug printing. Activated by `--trace` CLI flag. |
-| **path_utils.zig** | [`src/stubs/path_utils.zig`](file:///home/maci/Desktop/Projects/zine/src/stubs/path_utils.zig) | Converts between POSIX and Win32 paths (`drive_c/... ↔ C:\...`). |
+| **bat.zig** | [`src/bat.zig`](../src/bat.zig) | Parses `.bat`/`.cmd` launcher scripts, expands `%VARIABLE%` references, and extracts the final command to execute. |
+| **trace.zig** | [`src/trace.zig`](../src/trace.zig) | Conditional debug printing. Activated by `--trace`, `--trace-api`, `--trace-insn` flags or `ZINE_TRACE`/`ZINE_TRACE_INSN` environment variables. |
+| **path_utils.zig** | [`src/path_utils.zig`](../src/path_utils.zig) | Converts between POSIX and Win32 paths (`drive_c/... ↔ C:\...`). |
 
 ---
 
@@ -340,7 +354,7 @@ sequenceDiagram
 
     CLI->>Main: Parse arguments
     Main->>Env: Environment.init()
-    Main->>Stubs: Register 30+ DLL stub modules
+    Main->>Stubs: Register 31 DLL stub modules
     Main->>Reg: Add search paths (cwd, exe dir)
     Main->>Reg: loadModule(target.exe)
     Reg->>Mod: Module.load() — parse PE, mmap, relocate
@@ -367,7 +381,7 @@ The build system includes a `test` step that runs embedded unit tests in the x86
 zig build test
 ```
 
-Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `execute.zig`, `thunks.zig`.
+Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `execute.zig`, `thunks.zig`, `jit/emitter.zig`, `jit/compiler.zig`.
 
 ---
 
@@ -380,18 +394,25 @@ zine/
 ├── docs/                    # Documentation
 │   ├── ARCHITECTURE.md      # This file
 │   ├── CLI_STATUS.md        # CLI functionality status
+│   ├── FLTK_PLAN.md         # FLTK native GUI plan
+│   ├── JIT.md               # JIT compiler architecture
 │   ├── WASM_PLAN.md         # WASM porting plan
 │   ├── WEBGPU_TRANSLATION.md # DirectDraw/D3D → WebGPU translation guide
-│   └── WIN32_STATUS.md      # Win32 API implementation status
+│   ├── WIN32_STATUS.md      # Win32 API implementation status
+│   └── X86_64_NATIVE_EXECUTION.md # x86_64 native execution notes
 ├── drive_c/                 # Virtual C: drive for guest apps
 ├── src/
 │   ├── main.zig             # Native entry point
 │   ├── wasm_main.zig        # WASM entry point
+│   ├── root.zig             # Shared module root (imported as "zine")
 │   ├── pe.zig               # PE format structures and parser
 │   ├── pe_resources.zig     # PE resource directory structures
 │   ├── teb.zig              # Thread Environment Block (TEB/PEB/TIB)
 │   ├── bat.zig              # .bat/.cmd file parser
 │   ├── trace.zig            # Conditional tracing output
+│   ├── win32_constants.zig  # Shared Win32 constant definitions
+│   ├── calling_convention.zig # WINAPI calling convention abstraction
+│   ├── path_utils.zig       # POSIX ↔ Win32 path conversion
 │   ├── platform.zig         # Platform abstraction (re-export)
 │   ├── platform/
 │   │   ├── interface.zig    # Comptime backend selection
@@ -413,18 +434,41 @@ zine/
 │   │   ├── dialog_parser.zig # PE dialog resource parser
 │   │   ├── icon_parser.zig  # PE icon resource parser
 │   │   └── menu_parser.zig  # PE menu resource parser
-│   ├── stubs/               # Win32 API stub implementations (30+ DLLs)
-│   │   ├── kernel32.zig, kernel32/
-│   │   ├── user32.zig, user32/
-│   │   ├── gdi32.zig, gdi32/
-│   │   ├── msvcrt.zig, msvcrt/
-│   │   ├── ddraw.zig, d3d8.zig, dsound.zig, dinput.zig
-│   │   ├── calling_convention.zig
-│   │   ├── path_utils.zig
-│   │   └── ... (25+ more)
+│   ├── jit/
+│   │   ├── compiler.zig     # x86-to-WASM JIT compiler
+│   │   ├── emitter.zig      # WASM binary emitter
+│   │   └── wasm.zig         # WASM constants and opcodes
+│   ├── stubs/               # Win32 API stub implementations (31 DLLs)
+│   │   ├── stub_common.zig  # Generic N-arg stub functions
+│   │   ├── kernel32.zig, kernel32/   # Process, memory, file I/O, sync, time
+│   │   ├── msvcrt.zig, msvcrt/       # C runtime (io, math, mem, string, process)
+│   │   ├── user32.zig, user32/       # Window mgmt, messaging, dialogs, input
+│   │   ├── gdi32.zig, gdi32/         # Graphics Device Interface (dc, object, drawing)
+│   │   ├── ntdll.zig, ntdll/         # NT system information queries
+│   │   ├── advapi32.zig, advapi32/   # Registry stubs
+│   │   ├── comdlg32.zig, comdlg32/  # Common dialogs (file open)
+│   │   ├── ddraw.zig, ddraw/         # DirectDraw COM vtable emulation
+│   │   ├── dsound.zig, dsound/       # DirectSound COM vtable stubs
+│   │   ├── d3d8.zig, d3d8/           # Direct3D 8 COM vtable stubs
+│   │   ├── dinput.zig, dinput/       # DirectInput COM vtable stubs
+│   │   ├── dinput8.zig               # DirectInput8 stubs
+│   │   ├── shell32.zig, shell32/     # Shell API stubs
+│   │   ├── comctl32.zig, comctl32/   # Common controls stubs
+│   │   ├── ole32.zig, ole32/         # OLE/COM stubs
+│   │   ├── oleaut32.zig              # OLE Automation stubs
+│   │   ├── mss32.zig, mss32/         # Miles Sound System stubs
+│   │   ├── winmm.zig, winmm/         # Windows Multimedia stubs
+│   │   ├── ws2_32.zig, ws2_32/       # Winsock 2 stubs
+│   │   ├── wsock32.zig               # Winsock 1 stubs
+│   │   ├── rpcrt4.zig                # RPC runtime (UUID generation)
+│   │   ├── imagehlp.zig              # Symbol demangling
+│   │   ├── mfc42.zig                 # MFC ordinal stubs
+│   │   ├── imm32.zig, version.zig, winspool.zig
+│   │   └── nddeapi.zig, cards.zig, icmp.zig, vdmdbg.zig, mag_hook.zig
 │   └── gui/
 │       ├── renderer.zig     # Rendering API surface & state cache
 │       ├── web_ui.zig       # WebSocket server & HTTP file serving
+│       ├── fltk_ui.zig      # FLTK native GUI backend (experimental)
 │       ├── app.js           # Frontend JavaScript
 │       ├── index.html       # Frontend HTML
 │       └── win2k.css        # Windows 2000 theme CSS

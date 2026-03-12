@@ -1,7 +1,7 @@
 // x86 instruction execution dispatch for the software interpreter.
 //
 // Implements the decode-and-dispatch loop and execution handlers for
-// Phase 1 instructions.
+// all supported x86 instructions.
 
 const std = @import("std");
 const cpu_mod = @import("cpu.zig");
@@ -9,7 +9,8 @@ const decoder = @import("decoder.zig");
 const flags_mod = @import("flags.zig");
 const thunks = @import("thunks.zig");
 const trace = @import("../trace.zig");
-const w32cc = @import("../calling_convention.zig");
+const profiler = @import("../profiler.zig");
+
 
 const Cpu = cpu_mod.Cpu;
 const Instruction = decoder.Instruction;
@@ -18,6 +19,10 @@ const MemOperand = decoder.MemOperand;
 const OpSize = flags_mod.OpSize;
 const FlagOp = flags_mod.FlagOp;
 const Segment = cpu_mod.Segment;
+
+// -----------------------------------------------------------------------
+// Entry point
+// -----------------------------------------------------------------------
 
 /// Run the decode-and-dispatch loop until the CPU halts.
 pub fn run(cpu: *Cpu) void {
@@ -61,6 +66,9 @@ pub fn step(cpu: *Cpu) void {
         trace.print("x86: [EIP={X:0>8}] opcode={X:0>2} len={d} EAX={X}\n", .{ eip, insn.opcode, insn.length, cpu.eax });
     }
 
+    profiler.tickEip(eip);
+    profiler.tickOpcode(insn.opcode);
+
     executeInsn(cpu, &insn, eip);
 }
 
@@ -83,7 +91,7 @@ fn dispatchNativeCall(cpu: *Cpu) void {
     }
 
     // The return address was pushed by the CALL instruction
-    const ret_addr = cpu.pop32();
+    const ret_addr = cpu.pop32(); trace.print("GUEST STACK POPPED {X}.\n", .{ret_addr});
 
     // Read up to 16 dword arguments from guest stack for the native call.
     // Stdcall/cdecl functions won't read more than they need.
@@ -134,51 +142,10 @@ fn dispatchNativeCall(cpu: *Cpu) void {
     var result: u32 = 0;
 
     if (is_cdecl) {
-        const GenericFnC = *const fn (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) callconv(.c) u32;
-        const func: GenericFnC = @ptrFromInt(target_addr);
-        result = func(
-            args[0],
-            args[1],
-            args[2],
-            args[3],
-            args[4],
-            args[5],
-            args[6],
-            args[7],
-            args[8],
-            args[9],
-            args[10],
-            args[11],
-            args[12],
-            args[13],
-            args[14],
-            args[15],
-        );
+        result = thunks.callNativeCdecl(target_addr, args);
     } else {
         const param_bytes = thunks.getParamBytes(target_addr);
-        result = switch (param_bytes) {
-            0 => @as(*const fn () callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(),
-            4 => @as(*const fn (u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0]),
-            8 => @as(*const fn (u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1]),
-            12 => @as(*const fn (u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2]),
-            16 => @as(*const fn (u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3]),
-            20 => @as(*const fn (u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4]),
-            24 => @as(*const fn (u32, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4], args[5]),
-            28 => @as(*const fn (u32, u32, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4], args[5], args[6]),
-            32 => @as(*const fn (u32, u32, u32, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]),
-            36 => @as(*const fn (u32, u32, u32, u32, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]),
-            40 => @as(*const fn (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9]),
-            44 => @as(*const fn (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10]),
-            48 => @as(*const fn (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11]),
-            52 => @as(*const fn (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12]),
-            56 => @as(*const fn (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13]),
-            60 => @as(*const fn (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14]),
-            64 => @as(*const fn (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15]),
-            else => blk: {
-                std.log.warn("x86: native call unsupported param_bytes={d}", .{param_bytes});
-                break :blk @as(*const fn () callconv(w32cc.WINAPI) u32, @ptrFromInt(target_addr))();
-            },
-        };
+        result = thunks.callNativeByArity(target_addr, param_bytes, args);
     }
 
     cpu.eax = result;
@@ -202,9 +169,9 @@ fn dispatchNativeCall(cpu: *Cpu) void {
             }
         }
         if (func_name) |name| {
-            trace.print("x86: Native call to {X:0>8} [{s}] (cleanup={d} is_cdecl={}) ret={X}\n", .{ target_addr, name, cleanup, is_cdecl, result });
+            trace.print("x86_execute: Native call to {X:0>8} [{s}] (cleanup={d} is_cdecl={}) ret={X}\n", .{ target_addr, name, cleanup, is_cdecl, result });
         } else {
-            trace.print("x86: Native call to {X:0>8} (cleanup={d} is_cdecl={}) ret={X}\n", .{ target_addr, cleanup, is_cdecl, result });
+            trace.print("x86_execute: Native call to {X:0>8} (cleanup={d} is_cdecl={}) ret={X}\n", .{ target_addr, cleanup, is_cdecl, result });
         }
     }
 
@@ -213,6 +180,14 @@ fn dispatchNativeCall(cpu: *Cpu) void {
     // For stdcall, the callee cleans up — we must simulate that.
     if (!is_cdecl) {
         cpu.esp +%= cleanup;
+    }
+}
+
+/// Apply a relative jump to EIP if the operand is .rel.
+inline fn applyRel(cpu: *Cpu, operand: Operand) void {
+    switch (operand) {
+        .rel => |r| cpu.eip = cpu.eip +% @as(u32, @bitCast(r)),
+        else => {},
     }
 }
 
@@ -234,7 +209,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 // Thunk trap — dispatch to Win32 stub
                 thunks.dispatch(cpu);
             } else {
-                std.log.warn("x86: INT 0x{X} at 0x{X}", .{ insn.imm, eip });
+                std.log.warn("x86: INT 0x{X} at 0x{X}, eax={X} ebx={X} ecx={X} edx={X} esi={X} edi={X} ebp={X} esp={X}", .{ insn.imm, eip, cpu.eax, cpu.ebx, cpu.ecx, cpu.edx, cpu.esi, cpu.edi, cpu.ebp, cpu.esp });
             }
         },
 
@@ -537,73 +512,33 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         // CALL rel32 (E8)
         0xE8 => {
             cpu.push32(cpu.eip);
-            switch (insn.operands[0]) {
-                .rel => |r| cpu.eip = cpu.eip +% @as(u32, @bitCast(r)),
-                else => {},
-            }
+            applyRel(cpu, insn.operands[0]);
         },
 
-        // JMP rel32 (E9)
-        0xE9 => {
-            switch (insn.operands[0]) {
-                .rel => |r| cpu.eip = cpu.eip +% @as(u32, @bitCast(r)),
-                else => {},
-            }
-        },
-        // JMP rel8 (EB)
-        0xEB => {
-            switch (insn.operands[0]) {
-                .rel => |r| cpu.eip = cpu.eip +% @as(u32, @bitCast(r)),
-                else => {},
-            }
-        },
+        // JMP rel32 (E9) / JMP rel8 (EB)
+        0xE9, 0xEB => applyRel(cpu, insn.operands[0]),
 
         // Jcc short (70-7F)
         0x70...0x7F => {
             const cc: u4 = @truncate(insn.opcode);
-            if (cpu.flags.evaluateCC(cc)) {
-                switch (insn.operands[0]) {
-                    .rel => |r| cpu.eip = cpu.eip +% @as(u32, @bitCast(r)),
-                    else => {},
-                }
-            }
+            if (cpu.flags.evaluateCC(cc)) applyRel(cpu, insn.operands[0]);
         },
 
         // LOOP/LOOPcc/JECXZ (E0-E3)
         0xE0 => { // LOOPNE
             cpu.ecx -%= 1;
-            if (cpu.ecx != 0 and !cpu.flags.getZF()) {
-                switch (insn.operands[0]) {
-                    .rel => |r| cpu.eip = cpu.eip +% @as(u32, @bitCast(r)),
-                    else => {},
-                }
-            }
+            if (cpu.ecx != 0 and !cpu.flags.getZF()) applyRel(cpu, insn.operands[0]);
         },
         0xE1 => { // LOOPE
             cpu.ecx -%= 1;
-            if (cpu.ecx != 0 and cpu.flags.getZF()) {
-                switch (insn.operands[0]) {
-                    .rel => |r| cpu.eip = cpu.eip +% @as(u32, @bitCast(r)),
-                    else => {},
-                }
-            }
+            if (cpu.ecx != 0 and cpu.flags.getZF()) applyRel(cpu, insn.operands[0]);
         },
         0xE2 => { // LOOP
             cpu.ecx -%= 1;
-            if (cpu.ecx != 0) {
-                switch (insn.operands[0]) {
-                    .rel => |r| cpu.eip = cpu.eip +% @as(u32, @bitCast(r)),
-                    else => {},
-                }
-            }
+            if (cpu.ecx != 0) applyRel(cpu, insn.operands[0]);
         },
         0xE3 => { // JECXZ
-            if (cpu.ecx == 0) {
-                switch (insn.operands[0]) {
-                    .rel => |r| cpu.eip = cpu.eip +% @as(u32, @bitCast(r)),
-                    else => {},
-                }
-            }
+            if (cpu.ecx == 0) applyRel(cpu, insn.operands[0]);
         },
 
         // Group 3: F6 (8-bit), F7 (32-bit)
@@ -628,48 +563,19 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         },
 
         // CLC, STC, CLI, STI, CLD, STD
-        0xF8 => {
-            var ef = cpu.flags.toEflags();
-            ef &= ~flags_mod.FLAG_CF;
-            cpu.flags.fromEflags(ef);
-        },
-        0xF9 => {
-            var ef = cpu.flags.toEflags();
-            ef |= flags_mod.FLAG_CF;
-            cpu.flags.fromEflags(ef);
-        },
-        0xFA => {
-            var ef = cpu.flags.toEflags();
-            ef &= ~flags_mod.FLAG_IF;
-            cpu.flags.fromEflags(ef);
-        },
-        0xFB => {
-            var ef = cpu.flags.toEflags();
-            ef |= flags_mod.FLAG_IF;
-            cpu.flags.fromEflags(ef);
-        },
-        0xFC => {
-            var ef = cpu.flags.toEflags();
-            ef &= ~flags_mod.FLAG_DF;
-            cpu.flags.fromEflags(ef);
-        },
-        0xFD => {
-            var ef = cpu.flags.toEflags();
-            ef |= flags_mod.FLAG_DF;
-            cpu.flags.fromEflags(ef);
-        },
+        0xF8 => cpu.flags.clearFlag(flags_mod.FLAG_CF),
+        0xF9 => cpu.flags.setFlag(flags_mod.FLAG_CF),
+        0xFA => cpu.flags.clearFlag(flags_mod.FLAG_IF),
+        0xFB => cpu.flags.setFlag(flags_mod.FLAG_IF),
+        0xFC => cpu.flags.clearFlag(flags_mod.FLAG_DF),
+        0xFD => cpu.flags.setFlag(flags_mod.FLAG_DF),
 
         // --- Two-byte opcodes (0x0Fxx) ---
 
         // Jcc near (0F 80 - 0F 8F)
         0x0F80...0x0F8F => {
             const cc: u4 = @truncate(insn.opcode);
-            if (cpu.flags.evaluateCC(cc)) {
-                switch (insn.operands[0]) {
-                    .rel => |r| cpu.eip = cpu.eip +% @as(u32, @bitCast(r)),
-                    else => {},
-                }
-            }
+            if (cpu.flags.evaluateCC(cc)) applyRel(cpu, insn.operands[0]);
         },
 
         // SETcc (0F 90-9F)
@@ -755,40 +661,21 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             }
         },
 
-        // BT (0F A3)
-        0x0FA3 => {
+        // BT/BTS/BTR/BTC (0F A3/AB/B3/BB)
+        0x0FA3, 0x0FAB, 0x0FB3, 0x0FBB => {
             const val = readOperand(cpu, insn, 0);
             const bit: u5 = @truncate(readOperand(cpu, insn, 1));
             var ef = cpu.flags.toEflags();
             if ((val >> bit) & 1 != 0) ef |= flags_mod.FLAG_CF else ef &= ~flags_mod.FLAG_CF;
             cpu.flags.fromEflags(ef);
-        },
-        // BTS (0F AB)
-        0x0FAB => {
-            const val = readOperand(cpu, insn, 0);
-            const bit: u5 = @truncate(readOperand(cpu, insn, 1));
-            var ef = cpu.flags.toEflags();
-            if ((val >> bit) & 1 != 0) ef |= flags_mod.FLAG_CF else ef &= ~flags_mod.FLAG_CF;
-            cpu.flags.fromEflags(ef);
-            writeOperand(cpu, insn, 0, val | (@as(u32, 1) << bit));
-        },
-        // BTR (0F B3)
-        0x0FB3 => {
-            const val = readOperand(cpu, insn, 0);
-            const bit: u5 = @truncate(readOperand(cpu, insn, 1));
-            var ef = cpu.flags.toEflags();
-            if ((val >> bit) & 1 != 0) ef |= flags_mod.FLAG_CF else ef &= ~flags_mod.FLAG_CF;
-            cpu.flags.fromEflags(ef);
-            writeOperand(cpu, insn, 0, val & ~(@as(u32, 1) << bit));
-        },
-        // BTC (0F BB)
-        0x0FBB => {
-            const val = readOperand(cpu, insn, 0);
-            const bit: u5 = @truncate(readOperand(cpu, insn, 1));
-            var ef = cpu.flags.toEflags();
-            if ((val >> bit) & 1 != 0) ef |= flags_mod.FLAG_CF else ef &= ~flags_mod.FLAG_CF;
-            cpu.flags.fromEflags(ef);
-            writeOperand(cpu, insn, 0, val ^ (@as(u32, 1) << bit));
+            const new_val = switch (insn.opcode) {
+                0x0FA3 => val, // BT — test only
+                0x0FAB => val | (@as(u32, 1) << bit), // BTS
+                0x0FB3 => val & ~(@as(u32, 1) << bit), // BTR
+                0x0FBB => val ^ (@as(u32, 1) << bit), // BTC
+                else => unreachable,
+            };
+            if (insn.opcode != 0x0FA3) writeOperand(cpu, insn, 0, new_val);
         },
 
         // BSWAP (0F C8-CF)
@@ -938,11 +825,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         },
 
         // CMC (F5)
-        0xF5 => {
-            var ef = cpu.flags.toEflags();
-            ef ^= flags_mod.FLAG_CF;
-            cpu.flags.fromEflags(ef);
-        },
+        0xF5 => cpu.flags.toggleFlag(flags_mod.FLAG_CF),
         // WAIT/FWAIT (9B) — no-op
         0x9B => {},
         // INT1/ICEBP (F1) — treat like NOP

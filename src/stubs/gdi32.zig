@@ -78,6 +78,7 @@ pub fn getDcDib(dc_handle: usize) ?*const DibInfo {
 
 pub fn register(environment: *env.Environment) !void {
     const m = "GDI32.dll";
+    const stub = @import("stub_common.zig");
 
     // Object Management (object.zig)
     try environment.addBuiltinExportComptime(m, "GetStockObject", object.stub_GetStockObject);
@@ -92,6 +93,19 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetObjectA", object.stub_GetObjectA);
     try environment.addBuiltinExportComptime(m, "GetCurrentObject", object.stub_GetCurrentObject);
     try environment.addBuiltinExportComptime(m, "LoadImageA", object.stub_LoadImageA);
+    try environment.addBuiltinExportComptime(m, "CreatePalette", object.stub_CreatePalette);
+    try environment.addBuiltinExportComptime(m, "SelectPalette", object.stub_SelectPalette);
+    try environment.addBuiltinExportComptime(m, "RealizePalette", object.stub_RealizePalette);
+    try environment.addBuiltinExportComptime(m, "CreateRectRgn", object.stub_CreateRectRgn);
+    try environment.addBuiltinExportComptime(m, "CreateBrushIndirect", object.stub_CreateBrushIndirect);
+    try environment.addBuiltinExportComptime(m, "CreatePenIndirect", object.stub_CreatePenIndirect);
+    try environment.addBuiltinExportComptime(m, "CreateFontA", object.stub_CreateFontA);
+    try environment.addBuiltinExportComptime(m, "SetPaletteEntries", object.stub_SetPaletteEntries);
+    try environment.addBuiltinExportComptime(m, "UnrealizeObject", object.stub_UnrealizeObject);
+    try environment.addBuiltinExportComptime(m, "CreateHalftonePalette", object.stub_CreateHalftonePalette);
+    try environment.addBuiltinExportComptime(m, "CreatePatternBrush", object.stub_CreatePatternBrush);
+    try environment.addBuiltinExportComptime(m, "CreateFontIndirectW", object.stub_CreateFontIndirectA);
+    try environment.addBuiltinExportComptime(m, "GetObjectW", object.stub_GetObjectA);
 
     // Device Context (dc.zig)
     try environment.addBuiltinExportComptime(m, "GetDeviceCaps", dc.stub_GetDeviceCaps);
@@ -113,12 +127,28 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "SetTextAlign", dc.stub_SetTextAlign);
     try environment.addBuiltinExportComptime(m, "CreateDCA", dc.stub_CreateDCA);
     try environment.addBuiltinExportComptime(m, "GetNearestColor", dc.stub_GetNearestColor);
+    try environment.addBuiltinExportComptime(m, "UpdateColors", dc.stub_UpdateColors);
+    try environment.addBuiltinExportComptime(m, "GetTextExtentExPointA", dc.stub_GetTextExtentExPointA);
+    try environment.addBuiltinExportComptime(m, "GetCharacterPlacementW", dc.stub_GetCharacterPlacementW);
+    try environment.addBuiltinExportComptime(m, "TranslateCharsetInfo", dc.stub_TranslateCharsetInfo);
+    try environment.addBuiltinExportComptime(m, "GetCharWidthA", dc.stub_GetCharWidthA);
+    try environment.addBuiltinExportComptime(m, "GetCharWidth32A", dc.stub_GetCharWidthA);
+    try environment.addBuiltinExportComptime(m, "GetCharWidthW", dc.stub_GetCharWidthA);
+    try environment.addBuiltinExportComptime(m, "GetCharWidth32W", dc.stub_GetCharWidthA);
+    try environment.addBuiltinExportComptime(m, "SetWindowExtEx", dc.stub_SetWindowExtEx);
+    try environment.addBuiltinExportComptime(m, "SetViewportExtEx", dc.stub_SetViewportExtEx);
+    try environment.addBuiltinExportComptime(m, "RectVisible", dc.stub_RectVisible);
+    try environment.addBuiltinExportComptime(m, "GetBkMode", dc.stub_GetBkMode);
+    try environment.addBuiltinExportComptime(m, "GetBkColor", dc.stub_GetBkColor);
+    try environment.addBuiltinExportComptime(m, "CreateDCW", dc.stub_CreateDCA);
+    try environment.addBuiltinExportComptime(m, "CreateICW", dc.stub_CreateDCA);
 
     // Drawing & Blitting (drawing.zig)
     try environment.addBuiltinExportComptime(m, "BitBlt", drawing.stub_BitBlt);
     try environment.addBuiltinExportComptime(m, "StretchBlt", drawing.stub_StretchBlt);
     try environment.addBuiltinExportComptime(m, "StretchDIBits", drawing.stub_StretchDIBits);
     try environment.addBuiltinExportComptime(m, "TextOutA", drawing.stub_TextOutA);
+    try environment.addBuiltinExportComptime(m, "TextOutW", drawing.stub_TextOutW);
     try environment.addBuiltinExportComptime(m, "SetPixel", drawing.stub_SetPixel);
     try environment.addBuiltinExportComptime(m, "GetPixel", drawing.stub_GetPixel);
     try environment.addBuiltinExportComptime(m, "MoveToEx", drawing.stub_MoveToEx);
@@ -137,185 +167,54 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "Polygon", drawing.stub_Polygon);
     try environment.addBuiltinExportComptime(m, "Polyline", drawing.stub_Polyline);
 
-    // Object Management - additional (object.zig)
-    try environment.addBuiltinExportComptime(m, "CreatePalette", object.stub_CreatePalette);
-    try environment.addBuiltinExportComptime(m, "SelectPalette", object.stub_SelectPalette);
-    try environment.addBuiltinExportComptime(m, "RealizePalette", object.stub_RealizePalette);
-    try environment.addBuiltinExportComptime(m, "CreateRectRgn", object.stub_CreateRectRgn);
-    try environment.addBuiltinExportComptime(m, "CreateBrushIndirect", object.stub_CreateBrushIndirect);
-    try environment.addBuiltinExportComptime(m, "CreatePenIndirect", object.stub_CreatePenIndirect);
-    try environment.addBuiltinExportComptime(m, "CreateFontA", object.stub_CreateFontA);
-    try environment.addBuiltinExportComptime(m, "SetPaletteEntries", object.stub_SetPaletteEntries);
-    try environment.addBuiltinExportComptime(m, "UnrealizeObject", object.stub_UnrealizeObject);
-
-    // DC-related additions
-    try environment.addBuiltinExportComptime(m, "UpdateColors", dc.stub_UpdateColors);
-    try environment.addBuiltinExportComptime(m, "GetTextExtentExPointA", dc.stub_GetTextExtentExPointA);
-    try environment.addBuiltinExportComptime(m, "GetCharacterPlacementW", dc.stub_GetCharacterPlacementW);
-    try environment.addBuiltinExportComptime(m, "TranslateCharsetInfo", dc.stub_TranslateCharsetInfo);
-    try environment.addBuiltinExportComptime(m, "GetCharWidthA", dc.stub_GetCharWidthA);
-    try environment.addBuiltinExportComptime(m, "GetCharWidth32A", dc.stub_GetCharWidthA);
-    try environment.addBuiltinExportComptime(m, "GetCharWidthW", dc.stub_GetCharWidthA);
-    try environment.addBuiltinExportComptime(m, "GetCharWidth32W", dc.stub_GetCharWidthA);
-
-    // Wide (W) variants for Unicode apps
-    try environment.addBuiltinExportComptime(m, "TextOutW", drawing.stub_TextOutW);
-    try environment.addBuiltinExportComptime(m, "StartDocW", stub_ret0_2);
-    try environment.addBuiltinExportComptime(m, "SetAbortProc", stub_ret0_2);
-    try environment.addBuiltinExportComptime(m, "StartPage", stub_ret0_1);
-    try environment.addBuiltinExportComptime(m, "EndPage", stub_ret0_1);
-    try environment.addBuiltinExportComptime(m, "EndDoc", stub_ret0_1);
-    try environment.addBuiltinExportComptime(m, "SetWindowExtEx", dc.stub_SetWindowExtEx);
-    try environment.addBuiltinExportComptime(m, "SetViewportExtEx", dc.stub_SetViewportExtEx);
-    try environment.addBuiltinExportComptime(m, "CreateFontIndirectW", object.stub_CreateFontIndirectA);
-    try environment.addBuiltinExportComptime(m, "LPtoDP", stub_ret0_3);
-    try environment.addBuiltinExportComptime(m, "CreateDCW", dc.stub_CreateDCA);
-    try environment.addBuiltinExportComptime(m, "GetObjectW", object.stub_GetObjectA);
-    try environment.addBuiltinExportComptime(m, "EnumFontsW", stub_ret0_4);
-    try environment.addBuiltinExportComptime(m, "GetTextFaceW", stub_ret0_3);
-
-    // --- Remaining GDI32 stubs for 100% win2k coverage ---
-    try environment.addBuiltinExportComptime(m, "SetBrushOrgEx", stub_ret0_4);
-    try environment.addBuiltinExportComptime(m, "RectVisible", stub_RectVisible);
-    try environment.addBuiltinExportComptime(m, "GetPaletteEntries", stub_ret0_4);
-    try environment.addBuiltinExportComptime(m, "GetTextExtentPointW", stub_ret0_4);
-    try environment.addBuiltinExportComptime(m, "CreateICW", dc.stub_CreateDCA);
-    try environment.addBuiltinExportComptime(m, "PtVisible", stub_ret0_3);
-    try environment.addBuiltinExportComptime(m, "CreateDIBitmap", stub_ret0_6);
-    try environment.addBuiltinExportComptime(m, "PlayMetaFile", stub_ret0_2);
-    try environment.addBuiltinExportComptime(m, "SetRectRgn", stub_ret0_5);
-    try environment.addBuiltinExportComptime(m, "FillRgn", stub_ret0_3);
-    try environment.addBuiltinExportComptime(m, "Escape", stub_ret0_5);
-    try environment.addBuiltinExportComptime(m, "EnumFontFamiliesExW", stub_ret0_5);
-    try environment.addBuiltinExportComptime(m, "EnumFontFamiliesW", stub_ret0_4);
-    try environment.addBuiltinExportComptime(m, "SetWindowOrgEx", stub_ret0_4);
-    try environment.addBuiltinExportComptime(m, "SetEnhMetaFileBits", stub_ret0_2);
-    try environment.addBuiltinExportComptime(m, "EnumMetaFile", stub_ret0_4);
-    try environment.addBuiltinExportComptime(m, "PlayMetaFileRecord", stub_ret0_4);
-    try environment.addBuiltinExportComptime(m, "PlayEnhMetaFile", stub_ret0_3);
-    try environment.addBuiltinExportComptime(m, "SetViewportOrgEx", stub_ret0_4);
-    try environment.addBuiltinExportComptime(m, "GetEnhMetaFileHeader", stub_ret0_3);
-    try environment.addBuiltinExportComptime(m, "GetBitmapBits", stub_ret0_3);
-    try environment.addBuiltinExportComptime(m, "GetEnhMetaFileBits", stub_ret0_3);
-    try environment.addBuiltinExportComptime(m, "GetMetaFileBitsEx", stub_ret0_3);
-    try environment.addBuiltinExportComptime(m, "DeleteEnhMetaFile", stub_ret0_1);
-    try environment.addBuiltinExportComptime(m, "GetTextExtentPointA", stub_ret0_4);
-    try environment.addBuiltinExportComptime(m, "SetMetaFileBitsEx", stub_ret0_2);
-    try environment.addBuiltinExportComptime(m, "CreateBitmapIndirect", stub_ret0_1);
-    try environment.addBuiltinExportComptime(m, "SetBitmapDimensionEx", stub_ret0_4);
-    try environment.addBuiltinExportComptime(m, "CreatePolygonRgn", stub_ret0_3);
-    try environment.addBuiltinExportComptime(m, "ExtFloodFill", stub_ret0_5);
-    try environment.addBuiltinExportComptime(m, "OffsetRgn", stub_ret0_3);
-    try environment.addBuiltinExportComptime(m, "CreateHalftonePalette", stub_CreateHalfonePalette);
-    try environment.addBuiltinExportComptime(m, "GetDIBColorTable", stub_ret0_4);
-    try environment.addBuiltinExportComptime(m, "SetDIBColorTable", stub_ret0_4);
-    try environment.addBuiltinExportComptime(m, "CreatePatternBrush", stub_CreateFakeBrush);
-    try environment.addBuiltinExportComptime(m, "GetNearestPaletteIndex", stub_ret0_2);
-    try environment.addBuiltinExportComptime(m, "ResizePalette", stub_ret0_2);
-    try environment.addBuiltinExportComptime(m, "SetDIBits", stub_ret0_6);
-    try environment.addBuiltinExportComptime(m, "CreateRectRgnIndirect", stub_ret0_1);
-    try environment.addBuiltinExportComptime(m, "GetBkMode", stub_GetBkMode);
-    try environment.addBuiltinExportComptime(m, "PolyBezier", stub_ret0_3);
-    try environment.addBuiltinExportComptime(m, "LineDDA", stub_ret0_6);
-    try environment.addBuiltinExportComptime(m, "GetLayout", stub_ret0_1);
-    try environment.addBuiltinExportComptime(m, "SetLayout", stub_ret0_2);
-    try environment.addBuiltinExportComptime(m, "DPtoLP", stub_ret0_3);
-    try environment.addBuiltinExportComptime(m, "ScaleWindowExtEx", stub_ret0_6);
-    try environment.addBuiltinExportComptime(m, "GetBkColor", stub_GetBkColor);
-}
-
-fn stub_ret0_1(a: usize) callconv(w32cc.WINAPI) i32 {
-    _ = a;
-    return 0;
-}
-fn stub_ret0_2(a: usize, b: usize) callconv(w32cc.WINAPI) i32 {
-    _ = a; _ = b;
-    return 0;
-}
-fn stub_ret0_3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) i32 {
-    _ = a; _ = b; _ = c;
-    return 0;
-}
-fn stub_ret0_4(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) i32 {
-    _ = a; _ = b; _ = c; _ = d;
-    return 0;
-}
-fn stub_ret0_5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) i32 {
-    _ = a; _ = b; _ = c; _ = d; _ = e;
-    return 0;
-}
-fn stub_ret0_6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) i32 {
-    _ = a; _ = b; _ = c; _ = d; _ = e; _ = f;
-    return 0;
-}
-
-// =============================================================================
-// Faithful implementations — Tier 4
-// =============================================================================
-
-const trace = @import("../trace.zig");
-const w32cc = @import("../calling_convention.zig");
-
-var next_fake_gdi_handle: usize = 0xBB000001;
-fn alloc_fake_handle() usize {
-    const h = next_fake_gdi_handle;
-    next_fake_gdi_handle +%= 1;
-    return h;
-}
-
-// RectVisible: is any part of the given rect visible in the clip region?
-// Always return TRUE since we don't track clipping
-fn stub_RectVisible(hdc: usize, lprc: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hdc; _ = lprc;
-    return 1; // TRUE — rect is visible
-}
-
-// GetBkMode: returns background mix mode
-// OPAQUE = 2, TRANSPARENT = 1
-fn stub_GetBkMode(hdc: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
-    return 2; // OPAQUE
-}
-
-// GetBkColor: returns background color as COLORREF
-// Default is white
-fn stub_GetBkColor(hdc: usize) callconv(w32cc.WINAPI) u32 {
-    _ = hdc;
-    return 0x00FFFFFF; // RGB(255, 255, 255) = white
-}
-
-// CreateHalftonePalette: creates a halftone palette for a DC
-fn stub_CreateHalfonePalette(hdc: usize) callconv(w32cc.WINAPI) usize {
-    _ = hdc;
-    const h = alloc_fake_handle();
-    if (trace.enable_tracing) trace.print("GDI32: CreateHalftonePalette -> 0x{x}\n", .{h});
-    return h;
-}
-
-// CreatePatternBrush: creates a brush based on a bitmap pattern
-fn stub_CreateFakeBrush(hBitmap: usize) callconv(w32cc.WINAPI) usize {
-    _ = hBitmap;
-    const h = alloc_fake_handle();
-    if (trace.enable_tracing) trace.print("GDI32: CreatePatternBrush -> 0x{x}\n", .{h});
-    return h;
-}
-
-// =============================================================================
-// Tests
-// =============================================================================
-
-test "GetBkMode returns OPAQUE" {
-    try @import("std").testing.expectEqual(@as(i32, 2), stub_GetBkMode(0));
-}
-
-test "GetBkColor returns white" {
-    try @import("std").testing.expectEqual(@as(u32, 0x00FFFFFF), stub_GetBkColor(0));
-}
-
-test "RectVisible returns TRUE" {
-    try @import("std").testing.expectEqual(@as(i32, 1), stub_RectVisible(0, 0));
-}
-
-test "CreateHalftonePalette returns non-zero" {
-    try @import("std").testing.expect(stub_CreateHalfonePalette(0) != 0);
+    // Generic stubs for unimplemented GDI32 functions
+    try environment.addBuiltinExportComptime(m, "StartDocW", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "SetAbortProc", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "StartPage", stub.stub_args1);
+    try environment.addBuiltinExportComptime(m, "EndPage", stub.stub_args1);
+    try environment.addBuiltinExportComptime(m, "EndDoc", stub.stub_args1);
+    try environment.addBuiltinExportComptime(m, "LPtoDP", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "EnumFontsW", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "GetTextFaceW", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "SetBrushOrgEx", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "GetPaletteEntries", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "GetTextExtentPointW", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "PtVisible", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "CreateDIBitmap", stub.stub_args6);
+    try environment.addBuiltinExportComptime(m, "PlayMetaFile", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "SetRectRgn", stub.stub_args5);
+    try environment.addBuiltinExportComptime(m, "FillRgn", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "Escape", stub.stub_args5);
+    try environment.addBuiltinExportComptime(m, "EnumFontFamiliesExW", stub.stub_args5);
+    try environment.addBuiltinExportComptime(m, "EnumFontFamiliesW", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "SetWindowOrgEx", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "SetEnhMetaFileBits", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "EnumMetaFile", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "PlayMetaFileRecord", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "PlayEnhMetaFile", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "SetViewportOrgEx", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "GetEnhMetaFileHeader", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "GetBitmapBits", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "GetEnhMetaFileBits", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "GetMetaFileBitsEx", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "DeleteEnhMetaFile", stub.stub_args1);
+    try environment.addBuiltinExportComptime(m, "GetTextExtentPointA", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "SetMetaFileBitsEx", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "CreateBitmapIndirect", stub.stub_args1);
+    try environment.addBuiltinExportComptime(m, "SetBitmapDimensionEx", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "CreatePolygonRgn", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "ExtFloodFill", stub.stub_args5);
+    try environment.addBuiltinExportComptime(m, "OffsetRgn", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "GetDIBColorTable", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "SetDIBColorTable", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "GetNearestPaletteIndex", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "ResizePalette", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "SetDIBits", stub.stub_args6);
+    try environment.addBuiltinExportComptime(m, "CreateRectRgnIndirect", stub.stub_args1);
+    try environment.addBuiltinExportComptime(m, "PolyBezier", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "LineDDA", stub.stub_args6);
+    try environment.addBuiltinExportComptime(m, "GetLayout", stub.stub_args1);
+    try environment.addBuiltinExportComptime(m, "SetLayout", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "DPtoLP", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "ScaleWindowExtEx", stub.stub_args6);
 }

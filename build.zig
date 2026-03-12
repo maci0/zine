@@ -98,28 +98,18 @@ pub fn build(b: *std.Build) void {
     }
 
     // -----------------------------------------------------------------------
-    // Test step: runs x86 interpreter unit tests on the host
+    // Test step: runs all unit tests via a unified root
     // -----------------------------------------------------------------------
+    // Using a single test root under src/ ensures that ../foo imports
+    // resolve correctly (individual files as module roots can't reach
+    // parent directories).
     const test_step = b.step("test", "Run x86 interpreter unit tests");
-
-    // Test each x86 module individually (they contain embedded test blocks)
-    const x86_test_files = [_][]const u8{
-        "src/x86/flags.zig",
-        "src/x86/memory.zig",
-        "src/x86/fpu.zig",
-        "src/x86/cpu.zig",
-        "src/x86/decoder.zig",
-        "src/x86/execute.zig",
-        "src/x86/thunks.zig",
-    };
-    for (x86_test_files) |test_file| {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(test_file),
-                .target = b.graph.host,
-                .optimize = optimize,
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
-    }
+    const t = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/test_root.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(t).step);
 }

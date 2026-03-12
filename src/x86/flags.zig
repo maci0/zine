@@ -184,6 +184,27 @@ pub const LazyFlags = struct {
         self.operand1 = op1;
         self.operand2 = op2;
     }
+
+    /// Clear a single flag bit.
+    pub inline fn clearFlag(self: *LazyFlags, comptime flag: u32) void {
+        var ef = self.toEflags();
+        ef &= ~flag;
+        self.fromEflags(ef);
+    }
+
+    /// Set a single flag bit.
+    pub inline fn setFlag(self: *LazyFlags, comptime flag: u32) void {
+        var ef = self.toEflags();
+        ef |= flag;
+        self.fromEflags(ef);
+    }
+
+    /// Toggle a single flag bit.
+    pub inline fn toggleFlag(self: *LazyFlags, comptime flag: u32) void {
+        var ef = self.toEflags();
+        ef ^= flag;
+        self.fromEflags(ef);
+    }
 };
 
 // EFLAGS bit positions

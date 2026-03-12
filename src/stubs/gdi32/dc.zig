@@ -218,3 +218,24 @@ pub fn stub_SetViewportExtEx(hdc: usize, x: i32, y: i32, lpSize: usize) callconv
     }
     return 1;
 }
+
+// RectVisible: is any part of the given rect visible in the clip region?
+// Always return TRUE since we don't track clipping
+pub fn stub_RectVisible(hdc: usize, lprc: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hdc; _ = lprc;
+    return 1; // TRUE — rect is visible
+}
+
+// GetBkMode: returns background mix mode
+// OPAQUE = 2, TRANSPARENT = 1
+pub fn stub_GetBkMode(hdc: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hdc;
+    return 2; // OPAQUE
+}
+
+// GetBkColor: returns background color as COLORREF
+// Default is white
+pub fn stub_GetBkColor(hdc: usize) callconv(w32cc.WINAPI) u32 {
+    _ = hdc;
+    return 0x00FFFFFF; // RGB(255, 255, 255) = white
+}

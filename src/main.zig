@@ -17,12 +17,14 @@ const stubs_winmm = @import("stubs/winmm.zig");
 const stubs_ddraw = @import("stubs/ddraw.zig");
 const stubs_gdi32 = @import("stubs/gdi32.zig");
 const stubs_dinput = @import("stubs/dinput.zig");
+const stubs_dinput8 = @import("stubs/dinput8.zig");
 const stubs_dsound = @import("stubs/dsound.zig");
 const stubs_d3d8 = @import("stubs/d3d8.zig");
 const stubs_mss32 = @import("stubs/mss32.zig");
 const stubs_shell32 = @import("stubs/shell32.zig");
 const stubs_comctl32 = @import("stubs/comctl32.zig");
 const stubs_ole32 = @import("stubs/ole32.zig");
+const stubs_oleaut32 = @import("stubs/oleaut32.zig");
 const stubs_imm32 = @import("stubs/imm32.zig");
 const stubs_version = @import("stubs/version.zig");
 const stubs_wsock32 = @import("stubs/wsock32.zig");
@@ -42,6 +44,7 @@ const x86_thunks = @import("x86/thunks.zig");
 const x86_memory = @import("x86/memory.zig");
 
 const trace = @import("trace.zig");
+const profiler = @import("profiler.zig");
 
 fn not_implemented() callconv(.c) void {
     const ra = @returnAddress();
@@ -440,6 +443,9 @@ pub fn main() !void {
     if (std.process.hasEnvVarConstant("ZINE_TRACE_INSN")) {
         trace.enable_instructions = true;
     }
+    if (std.process.hasEnvVarConstant("ZINE_PROFILE")) {
+        profiler.enabled = true;
+    }
     
     var end_of_options = false;
     while (args.next()) |arg| {
@@ -464,6 +470,10 @@ pub fn main() !void {
             use_interpreter = true;
             continue;
         }
+        if (!end_of_options and std.mem.eql(u8, arg, "--profile")) {
+            profiler.enabled = true;
+            continue;
+        }
         if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
             std.fs.File.stdout().writeAll(
                 \\Usage: zine [options] [--] <target.exe> [args...]
@@ -474,14 +484,17 @@ pub fn main() !void {
                 \\  -t, --trace       Enable all tracing output (API + instructions)
                 \\      --trace-api   Enable API tracing only
                 \\      --trace-insn  Enable x86 instruction tracing only
+                \\      --profile     Enable profiling (hot code, opcodes, stubs)
                 \\  -i, --interpret   Use x86 software interpreter instead of native execution
-                \\  --argv0 <name>    Override argv[0] passed to the target
+                \\      --argv0 <name>  Override argv[0] passed to the target
                 \\  -h, --help        Show this help message
+                \\  -V, --version     Show version information
                 \\  --                End of zine options
                 \\
                 \\Environment:
                 \\  ZINE_TRACE        Set to any value to enable API tracing
                 \\  ZINE_TRACE_INSN   Set to any value to enable instruction tracing
+                \\  ZINE_PROFILE      Set to any value to enable profiling
                 \\
                 \\Examples:
                 \\  zine myapp.exe
@@ -492,11 +505,15 @@ pub fn main() !void {
             ) catch {};
             std.process.exit(0);
         }
+        if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-V"))) {
+            std.fs.File.stdout().writeAll("zine 0.1.0\n") catch {};
+            std.process.exit(0);
+        }
         if (!end_of_options and std.mem.eql(u8, arg, "--argv0")) {
             if (args.next()) |val| {
                 argv0_opt = val;
             } else {
-                std.debug.print("Error: --argv0 requires a value.\nTry 'zine --help' for more information.\n", .{});
+                std.fs.File.stderr().writeAll("Error: --argv0 requires a value.\nTry 'zine --help' for more information.\n") catch {};
                 std.process.exit(1);
             }
             continue;
@@ -504,7 +521,7 @@ pub fn main() !void {
         if (!end_of_options and target_exe_opt == null and arg.len > 1 and arg[0] == '-') {
             var err_buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&err_buf, "Error: unknown option '{s}'.\nTry 'zine --help' for more information.\n", .{arg}) catch "Error: unknown option.\n";
-            std.debug.print("{s}", .{msg});
+            std.fs.File.stderr().writeAll(msg) catch {};
             std.process.exit(1);
         }
 
@@ -541,11 +558,13 @@ pub fn main() !void {
     var final_envp: ?[*]?[*:0]u8 = null;
     var bat_env_opt: ?BatEnv = null;
 
-    if (std.mem.endsWith(u8, target_exe, ".bat") or std.mem.endsWith(u8, target_exe, ".BAT") or std.mem.endsWith(u8, target_exe, ".cmd")) {
+    if (std.mem.endsWith(u8, target_exe, ".bat") or std.mem.endsWith(u8, target_exe, ".BAT") or
+        std.mem.endsWith(u8, target_exe, ".cmd") or std.mem.endsWith(u8, target_exe, ".CMD"))
+    {
         bat_env_opt = try BatEnv.init(allocator);
         var bat_env = &bat_env_opt.?;
 
-        var bat_args: std.ArrayList([]const u8) = .{};
+        var bat_args: std.ArrayListUnmanaged([]const u8) = .{};
         for (app_args.items) |arg| {
             if (arg) |a| try bat_args.append(allocator, std.mem.span(a));
         }
@@ -584,12 +603,14 @@ pub fn main() !void {
     try stubs_ddraw.register(&environment);
     try stubs_gdi32.register(&environment);
     try stubs_dinput.register(&environment);
+    try stubs_dinput8.register(&environment);
     try stubs_dsound.register(&environment);
     try stubs_d3d8.register(&environment);
     try stubs_mss32.register(&environment);
     try stubs_shell32.register(&environment);
     try stubs_comctl32.register(&environment);
     try stubs_ole32.register(&environment);
+    try stubs_oleaut32.register(&environment);
     try stubs_imm32.register(&environment);
     try stubs_version.register(&environment);
     try stubs_wsock32.register(&environment);
@@ -850,12 +871,14 @@ pub fn main() !void {
         cpu.memory = x86_memory.GuestMemory{
             .base = main_module.mapped_memory,
             .base_addr = base,
+            .native_linear = true,
         };
         cpu.eip = @truncate(ep);
         cpu.esp = base +% @as(u32, @truncate(main_module.mapped_memory.len)) -% 16;
         cpu.ebp = cpu.esp;
         if (trace.enable_tracing) std.debug.print("Interpreter: EIP=0x{X} ESP=0x{X} (image base=0x{X})\n", .{ cpu.eip, cpu.esp, base });
         x86_execute.run(&cpu);
+        profiler.dump();
         if (trace.enable_tracing) std.debug.print("*** Interpreter halted, EAX=0x{X} ***\n", .{cpu.eax});
         std.process.exit(@truncate(cpu.eax));
     }
@@ -882,6 +905,7 @@ pub fn main() !void {
         const EntryPointFn = *const fn () callconv(.c) void;
         const entry_point = @as(EntryPointFn, @ptrFromInt(ep));
         entry_point();
+        profiler.dump();
         if (trace.enable_tracing) std.debug.print("*** Entry point returned, exiting ***\n", .{});
         std.process.exit(0);
     } else {

@@ -189,3 +189,19 @@ pub fn stub_UnrealizeObject(h: usize) callconv(w32cc.WINAPI) i32 {
     _ = h;
     return 1;
 }
+
+// CreateHalftonePalette: creates a halftone palette for a DC
+pub fn stub_CreateHalftonePalette(hdc: usize) callconv(w32cc.WINAPI) usize {
+    _ = hdc;
+    const h = gdi32.nextHandle();
+    if (trace.enable_tracing) trace.print("GDI32: CreateHalftonePalette -> 0x{x}\n", .{h});
+    return h;
+}
+
+// CreatePatternBrush: creates a brush based on a bitmap pattern
+pub fn stub_CreatePatternBrush(hBitmap: usize) callconv(w32cc.WINAPI) usize {
+    _ = hBitmap;
+    const h = gdi32.nextHandle();
+    if (trace.enable_tracing) trace.print("GDI32: CreatePatternBrush -> 0x{x}\n", .{h});
+    return h;
+}

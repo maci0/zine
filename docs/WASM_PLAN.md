@@ -22,7 +22,7 @@ level, which is what CheerpX does with Linux syscalls but one layer higher.
 | x86 interpreter core (`x86/`) | ✅ Complete (3764 lines) |
 | PE loader + import thunking for WASM | ✅ Complete |
 | TEB/PEB initialization for WASM | ✅ Complete |
-| Win32 stub registration for WASM | ✅ Complete (30+ DLLs) |
+| Win32 stub registration for WASM | ✅ Complete (31 DLLs) |
 | Basic block caching | ❌ Not implemented |
 | x87 FPU instructions | ❌ Not implemented |
 | SSE/SSE2 instructions | ❌ Not implemented |
@@ -54,7 +54,7 @@ level, which is what CheerpX does with Linux syscalls but one layer higher.
 │  │  │  - INT 0xFE thunk dispatch              │  │  │
 │  │  └──────────────┬──────────────────────────┘  │  │
 │  │  ┌──────────────▼──────────────────────────┐  │  │
-│  │  │  Win32 API Stubs (30+ DLLs)             │  │  │
+│  │  │  Win32 API Stubs (31 DLLs)              │  │  │
 │  │  │  kernel32, user32, gdi32, msvcrt, ...   │  │  │
 │  │  │  (platform-agnostic via platform layer) │  │  │
 │  │  └─────────────────────────────────────────┘  │  │
