@@ -69,15 +69,16 @@ pub fn pushMessage(json: []const u8) void {
         // Validate socket is still alive before writing (prevent INVAL panic from stdlib)
         if (comptime platform.is_native) {
             var sock_err: c_int = 0;
-            var errlen: u32 = @sizeOf(c_int);
-            const rc = std.os.linux.getsockopt(
-                @intCast(stream.handle),
+            std.posix.getsockopt(
+                stream.handle,
                 std.posix.SOL.SOCKET,
                 std.posix.SO.ERROR,
-                @ptrCast(&sock_err),
-                &errlen,
-            );
-            if (rc != 0 or sock_err != 0) {
+                std.mem.asBytes(&sock_err),
+            ) catch {
+                _ = clients.orderedRemove(i);
+                continue;
+            };
+            if (sock_err != 0) {
                 _ = clients.orderedRemove(i);
                 continue;
             }

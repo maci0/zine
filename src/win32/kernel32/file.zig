@@ -91,9 +91,13 @@ pub fn CreateFileA(lpFileName_ptr: usize, dwDesiredAccess: u32, dwShareMode: u32
 
     // 1=CREATE_NEW, 2=CREATE_ALWAYS, 3=OPEN_EXISTING, 4=OPEN_ALWAYS, 5=TRUNCATE_EXISTING
     const posix_fs = @import("../msvcrt/posix_fs.zig");
+    const O_CREAT = posix_fs.O_CREAT;
+    const O_RDWR = posix_fs.O_RDWR;
+    const O_TRUNC = posix_fs.O_TRUNC;
+
     if (dwCreationDisposition == w32.CREATE_NEW or dwCreationDisposition == w32.CREATE_ALWAYS or dwCreationDisposition == w32.OPEN_ALWAYS or dwCreationDisposition == w32.TRUNCATE_EXISTING) {
-        var flags: u32 = 0o100 | 0o2; // O_CREAT | O_RDWR
-        if (dwCreationDisposition == w32.CREATE_ALWAYS or dwCreationDisposition == w32.TRUNCATE_EXISTING) flags |= 0o1000; // O_TRUNC
+        var flags: u32 = O_CREAT | O_RDWR;
+        if (dwCreationDisposition == w32.CREATE_ALWAYS or dwCreationDisposition == w32.TRUNCATE_EXISTING) flags |= O_TRUNC;
 
         var rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed_path)), flags, 0o666);
         if (rc < 0) {
@@ -111,11 +115,11 @@ pub fn CreateFileA(lpFileName_ptr: usize, dwDesiredAccess: u32, dwShareMode: u32
         if (trace.enable_tracing) trace.print("  -> createFile failed\n", .{});
     } else {
         // Try original name RDWR
-        var rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed_path)), 0o2, 0); // O_RDWR
+        var rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed_path)), O_RDWR, 0);
         if (rc >= 0) return @as(usize, @intCast(rc));
 
         // Try original name RDONLY
-        rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed_path)), 0, 0); // O_RDONLY
+        rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed_path)), 0, 0);
         if (rc >= 0) return @as(usize, @intCast(rc));
 
         // Try lowercase name RDWR
@@ -127,7 +131,7 @@ pub fn CreateFileA(lpFileName_ptr: usize, dwDesiredAccess: u32, dwShareMode: u32
             fixed_path[i] = std.ascii.toLower(fixed_path[i]);
         }
 
-        rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed_path)), 0o2, 0);
+        rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed_path)), O_RDWR, 0);
         if (rc >= 0) return @as(usize, @intCast(rc));
 
         // Try lowercase name RDONLY
@@ -824,8 +828,7 @@ pub fn SetFilePointerEx(hFile: usize, liDistanceToMove_lo: u32, liDistanceToMove
 pub fn FindFirstFileExW(lpFileName: usize, fInfoLevelId: u32, lpFindFileData: usize, fSearchOp: u32, lpSearchFilter: usize, dwAdditionalFlags: u32) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: FindFirstFileExW(level={d}, op={d}, filter={X}, flags={X})\n", .{ fInfoLevelId, fSearchOp, lpSearchFilter, dwAdditionalFlags });
     // Delegate to FindFirstFileW (ignoring extended parameters)
-    const process = @import("process.zig");
-    return process.FindFirstFileW(lpFileName, lpFindFileData);
+    return FindFirstFileW(lpFileName, lpFindFileData);
 }
 
 pub fn FindFirstFileExA(lpFileName: usize, fInfoLevelId: u32, lpFindFileData: usize, fSearchOp: u32, lpSearchFilter: usize, dwAdditionalFlags: u32) callconv(w32cc.WINAPI) usize {

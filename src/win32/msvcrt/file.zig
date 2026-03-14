@@ -41,21 +41,23 @@ pub fn sopen(path_ptr: usize, oflag: i32, shflag: i32, pmode: i32) callconv(.c) 
     if (trace.enable_tracing) trace.print("MSVCRT: _sopen('{s}', {x})\n", .{ path, oflag });
 
     // Translate Windows oflags to POSIX flags
+    // Windows CRT flag values (from MSVC headers)
     const o_wronly = 0x0001;
     const o_rdwr = 0x0002;
     const o_append = 0x0008;
     const o_creat = 0x0100;
     const o_trunc = 0x0200;
 
+    const pfs = @import("posix_fs.zig");
     var flags: u32 = 0;
-    if ((oflag & o_creat) != 0) flags |= 64; // POSIX O_CREAT
+    if ((oflag & o_creat) != 0) flags |= pfs.O_CREAT;
     if ((oflag & o_rdwr) != 0) {
-        flags |= 2; // POSIX O_RDWR
+        flags |= pfs.O_RDWR;
     } else if ((oflag & o_wronly) != 0) {
-        flags |= 1; // POSIX O_WRONLY
+        flags |= pfs.O_WRONLY;
     }
-    if ((oflag & o_trunc) != 0) flags |= 512; // POSIX O_TRUNC
-    if ((oflag & o_append) != 0) flags |= 1024; // POSIX O_APPEND
+    if ((oflag & o_trunc) != 0) flags |= pfs.O_TRUNC;
+    if ((oflag & o_append) != 0) flags |= pfs.O_APPEND;
 
     const posix_fs = @import("posix_fs.zig");
     const rc = posix_fs.open(@as([*:0]const u8, @ptrCast(@constCast(path.ptr))), flags, 0o666);

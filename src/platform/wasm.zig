@@ -127,9 +127,7 @@ pub fn setupFS(teb_ptr: *anyopaque) !void {
 // -------------------------------------------------------------------------
 
 /// No signals on WASM — the x86 interpreter catches faults directly.
-pub fn installSegfaultHandler(handler: anytype) void {
-    _ = handler;
-}
+pub fn installSegfaultHandler() void {}
 
 pub fn mapNullPage() void {
     // Not applicable on WASM
@@ -137,4 +135,25 @@ pub fn mapNullPage() void {
 
 pub fn raiseStackLimit() void {
     // Not applicable on WASM
+}
+
+// -------------------------------------------------------------------------
+// Memory Protection (no-op on WASM)
+// -------------------------------------------------------------------------
+
+pub fn mprotect(addr: usize, len: usize, readable: bool, writable: bool, executable: bool) void {
+    _ = .{ addr, len, readable, writable, executable };
+}
+
+// -------------------------------------------------------------------------
+// Pipe / Dup (unsupported on WASM)
+// -------------------------------------------------------------------------
+
+pub fn pipe() ![2]i32 {
+    return error.Unsupported;
+}
+
+pub fn dup(fd: i32) !i32 {
+    _ = fd;
+    return error.Unsupported;
 }

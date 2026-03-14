@@ -676,12 +676,7 @@ pub const Environment = struct {
         @as(*align(1) u32, @ptrFromInt(base + 0xBC)).* = 40; // Size
 
         // Make the page executable (thunks need to be executable)
-        if (comptime platform.is_native) {
-            const PROT_READ = 0x1;
-            const PROT_WRITE = 0x2;
-            const PROT_EXEC = 0x4;
-            _ = std.os.linux.mprotect(@ptrFromInt(base), 4096, PROT_READ | PROT_WRITE | PROT_EXEC);
-        }
+        platform.mprotect(base, 4096, true, true, true);
     }
 
     /// Resolves an imported function by name from built-in stubs or loaded PE modules.

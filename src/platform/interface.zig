@@ -26,6 +26,7 @@ pub const is_x86_64 = backend.is_x86_64;
 // Memory
 pub const mmap = backend.mmap;
 pub const munmap = backend.munmap;
+pub const mprotect = backend.mprotect;
 
 // Threading
 pub const yield = backend.yield;
@@ -52,3 +53,7 @@ pub const readExceptionList = backend.readExceptionList;
 pub const installSegfaultHandler = backend.installSegfaultHandler;
 pub const mapNullPage = backend.mapNullPage;
 pub const raiseStackLimit = backend.raiseStackLimit;
+
+// Pipe / Dup
+pub const pipe = backend.pipe;
+pub const dup = backend.dup;

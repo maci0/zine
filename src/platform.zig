@@ -14,6 +14,7 @@ pub const is_x86_64 = interface.is_x86_64;
 
 pub const mmap = interface.mmap;
 pub const munmap = interface.munmap;
+pub const mprotect = interface.mprotect;
 
 pub const yield = interface.yield;
 pub const sleep = interface.sleep;
@@ -34,3 +35,6 @@ pub const readExceptionList = interface.readExceptionList;
 pub const installSegfaultHandler = interface.installSegfaultHandler;
 pub const mapNullPage = interface.mapNullPage;
 pub const raiseStackLimit = interface.raiseStackLimit;
+
+pub const pipe = interface.pipe;
+pub const dup = interface.dup;

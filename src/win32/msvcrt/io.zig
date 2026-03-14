@@ -187,14 +187,14 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
     }
 
     if (w_idx != null) {
-        const rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed)), 0o100 | 0o2 | 0o1000, 0o666);
+        const rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed)), posix_fs.O_CREAT | posix_fs.O_RDWR | posix_fs.O_TRUNC, 0o666);
         if (rc < 0) {
             trace.print("MSVCRT_IO: fopen createFile failed\n", .{});
             return null;
         }
         file = std.fs.File{ .handle = @intCast(rc) };
     } else if (a_idx != null) {
-        const rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed)), 0o100 | 0o2 | 0o2000, 0o666);
+        const rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed)), posix_fs.O_CREAT | posix_fs.O_RDWR | posix_fs.O_APPEND, 0o666);
         if (rc < 0) {
             trace.print("MSVCRT_IO: fopen openFile (append) failed\n", .{});
             return null;

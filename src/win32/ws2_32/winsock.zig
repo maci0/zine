@@ -469,10 +469,11 @@ pub fn ioctlsocket(s: usize, cmd: i32, argp: usize) callconv(w32cc.WINAPI) i32 {
         if (cmd == FIONBIO_WIN32) {
             if (argp != 0) {
                 const flag = @as(*const u32, @ptrFromInt(argp)).*;
-                const cur = std.posix.fcntl(socketToFd(s), std.os.linux.F.GETFL, 0) catch return SOCKET_ERROR;
-                const O_NONBLOCK: u32 = 0o4000;
-                const new_flags = if (flag != 0) cur | O_NONBLOCK else cur & ~O_NONBLOCK;
-                _ = std.posix.fcntl(socketToFd(s), std.os.linux.F.SETFL, new_flags) catch return SOCKET_ERROR;
+                const F = std.posix.F;
+                const cur = std.posix.fcntl(socketToFd(s), F.GETFL, 0) catch return SOCKET_ERROR;
+                const nonblock = @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
+                const new_flags = if (flag != 0) cur | nonblock else cur & ~nonblock;
+                _ = std.posix.fcntl(socketToFd(s), F.SETFL, new_flags) catch return SOCKET_ERROR;
             }
         }
         return 0;

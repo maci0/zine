@@ -1,6 +1,7 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const w32cc = @import("../../calling_convention.zig");
+const platform = @import("../../platform.zig");
 
 // --- Interlocked operations ---
 
@@ -98,7 +99,7 @@ pub fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.W
     // Check if this is a child process handle
     const process = @import("process.zig");
     if (process.getChildProc(hHandle)) |cp| {
-        if (comptime @import("../../platform.zig").is_native) {
+        if (comptime platform.is_native) {
             if (cp.child) |*child| {
                 if (cp.exit_code == null) {
                     // Actually wait for the child process
@@ -242,17 +243,19 @@ pub fn DuplicateHandle(
     if (lpTargetHandle == 0) return 1;
 
     // For real file descriptors (small values), use dup()
-    if (hSourceHandle < 0x10000) {
-        const src_fd = @as(i32, @bitCast(@as(u32, @truncate(hSourceHandle))));
-        const new_fd = std.posix.dup(src_fd) catch {
-            // Fallback to fake handle
-            @as(*usize, @ptrFromInt(lpTargetHandle)).* = next_dup_handle;
-            next_dup_handle += 1;
+    if (comptime platform.is_native) {
+        if (hSourceHandle < 0x10000) {
+            const src_fd = @as(i32, @bitCast(@as(u32, @truncate(hSourceHandle))));
+            const new_fd = platform.dup(src_fd) catch {
+                // Fallback to fake handle
+                @as(*usize, @ptrFromInt(lpTargetHandle)).* = next_dup_handle;
+                next_dup_handle += 1;
+                return 1;
+            };
+            if (trace.enable_tracing) trace.print("KERNEL32: DuplicateHandle fd {d} -> {d}\n", .{ src_fd, new_fd });
+            @as(*usize, @ptrFromInt(lpTargetHandle)).* = @intCast(@as(u32, @bitCast(new_fd)));
             return 1;
-        };
-        if (trace.enable_tracing) trace.print("KERNEL32: DuplicateHandle fd {d} -> {d}\n", .{ src_fd, new_fd });
-        @as(*usize, @ptrFromInt(lpTargetHandle)).* = @intCast(@as(u32, @bitCast(new_fd)));
-        return 1;
+        }
     }
 
     // Synthetic handle: return a new fake one

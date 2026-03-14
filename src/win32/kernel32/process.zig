@@ -923,7 +923,7 @@ pub fn CreatePipe(hReadPipe: usize, hWritePipe: usize, lpPipeAttributes: usize, 
         return 0;
     }
 
-    const fds = std.posix.pipe() catch return 0;
+    const fds = platform.pipe() catch return 0;
     @as(*u32, @ptrFromInt(hReadPipe)).* = @bitCast(fds[0]);
     @as(*u32, @ptrFromInt(hWritePipe)).* = @bitCast(fds[1]);
     if (trace.enable_tracing) trace.print("KERNEL32: CreatePipe -> read={d}, write={d}\n", .{ fds[0], fds[1] });

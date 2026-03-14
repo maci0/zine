@@ -2,6 +2,17 @@ const std = @import("std");
 
 const path_utils = @import("../../path_utils.zig");
 
+// Platform-independent open flag constants.
+// These are only used internally by posix_fs.open() and its callers —
+// not passed to real POSIX syscalls.  Callers should reference these
+// (e.g. posix_fs.O_RDWR) instead of std.posix.O which varies by target.
+pub const O_RDONLY: u32 = 0;
+pub const O_WRONLY: u32 = 1;
+pub const O_RDWR: u32 = 2;
+pub const O_CREAT: u32 = 0x40;
+pub const O_TRUNC: u32 = 0x200;
+pub const O_APPEND: u32 = 0x400;
+
 // ============================================================================
 // POSIX filesystem primitives for Win32 stubs.
 //
@@ -128,12 +139,7 @@ pub fn open(path: [*:0]const u8, flags: u32, mode: u32) i32 {
     const trace = @import("../../trace.zig");
     if (trace.enable_tracing) trace.print("POSIX_FS OPEN: {s} (flags {d})\n", .{ host_buf[0..host_len], flags });
 
-    // Windows → POSIX flag translation
-    const O_WRONLY = 1;
-    const O_RDWR = 2;
-    const O_CREAT = 64;
-    const O_TRUNC = 512;
-    const O_APPEND = 1024;
+    // Use our own platform-independent flag constants (defined at file scope)
 
     const is_write = (flags & O_WRONLY) != 0 or (flags & O_RDWR) != 0;
     const is_create = (flags & O_CREAT) != 0;
