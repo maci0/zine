@@ -794,6 +794,15 @@ pub fn stub_FindFirstFileExW(lpFileName: usize, fInfoLevelId: u32, lpFindFileDat
     return process.stub_FindFirstFileW(lpFileName, lpFindFileData);
 }
 
+pub fn stub_FindFirstFileExA(lpFileName: usize, fInfoLevelId: u32, lpFindFileData: usize, fSearchOp: u32, lpSearchFilter: usize, dwAdditionalFlags: u32) callconv(w32cc.WINAPI) usize {
+    _ = fInfoLevelId;
+    _ = fSearchOp;
+    _ = lpSearchFilter;
+    _ = dwAdditionalFlags;
+    // Delegate to FindFirstFileA (ignoring extended parameters)
+    return stub_FindFirstFileA(lpFileName, lpFindFileData);
+}
+
 // --- Additional file stubs ---
 
 pub fn stub_SetFileAttributesA(lpFileName_ptr: usize, dwFileAttributes: u32) callconv(w32cc.WINAPI) i32 {

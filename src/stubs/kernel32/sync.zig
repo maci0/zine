@@ -58,6 +58,26 @@ pub fn stub_SetEvent(hEvent: usize) callconv(w32cc.WINAPI) i32 {
 // WAIT_OBJECT_0 = 0
 pub fn stub_WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: WaitForSingleObject({x}, {d})\n", .{ hHandle, dwMilliseconds });
+
+    // Check if this is a child process handle
+    const process = @import("process.zig");
+    if (process.getChildProc(hHandle)) |cp| {
+        if (cp.child) |*child| {
+            if (cp.exit_code == null) {
+                // Actually wait for the child process
+                const result = child.wait() catch {
+                    cp.exit_code = 1;
+                    return 0; // WAIT_OBJECT_0
+                };
+                cp.exit_code = switch (result) {
+                    .Exited => |code| @as(u32, code),
+                    else => 1,
+                };
+            }
+            return 0; // WAIT_OBJECT_0
+        }
+    }
+
     // Yield to allow other threads to run
     if (dwMilliseconds > 0) {
         const sleep_ns: u64 = @min(@as(u64, dwMilliseconds) * 1_000_000, 10_000_000); // Cap at 10ms
@@ -65,6 +85,7 @@ pub fn stub_WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w3
     }
     return 0; // WAIT_OBJECT_0
 }
+
 
 pub fn stub_WaitForMultipleObjects(nCount: u32, lpHandles: usize, bWaitAll: i32, dwMilliseconds: u32) callconv(w32cc.WINAPI) u32 {
     _ = nCount; _ = lpHandles; _ = bWaitAll;

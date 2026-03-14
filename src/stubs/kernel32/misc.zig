@@ -846,3 +846,39 @@ pub fn stub_SetCurrentDirectoryW(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
     current_directory[i] = 0;
     return 1;
 }
+
+pub fn stub_SleepEx(dwMilliseconds: u32, bAlertable: i32) callconv(w32cc.WINAPI) u32 {
+    _ = bAlertable;
+    if (dwMilliseconds > 0) {
+        const sleep_ns: u64 = @min(@as(u64, dwMilliseconds) * 1_000_000, 100_000_000); // Cap at 100ms
+        std.Thread.sleep(sleep_ns);
+    }
+    return 0; // The return value is 0 if the specified time interval expired.
+}
+
+pub fn stub_GlobalMemoryStatusEx(lpBuffer: usize) callconv(w32cc.WINAPI) i32 {
+    if (lpBuffer == 0) return 0;
+    // MEMORYSTATUSEX: first field is dwLength (u32), then various 64-bit fields
+    // dwLength, dwMemoryLoad, ullTotalPhys, ullAvailPhys, ullTotalPageFile,
+    // ullAvailPageFile, ullTotalVirtual, ullAvailVirtual, ullAvailExtendedVirtual
+    const buf = @as([*]u8, @ptrFromInt(lpBuffer));
+    // Zero out the structure (64 bytes)
+    @memset(buf[0..64], 0);
+    // dwLength = 64
+    @as(*align(1) u32, @ptrFromInt(lpBuffer)).* = 64;
+    // dwMemoryLoad = 50 (50% used)
+    @as(*align(1) u32, @ptrFromInt(lpBuffer + 4)).* = 50;
+    // ullTotalPhys = 2GB
+    @as(*align(1) u64, @ptrFromInt(lpBuffer + 8)).* = 2 * 1024 * 1024 * 1024;
+    // ullAvailPhys = 1GB
+    @as(*align(1) u64, @ptrFromInt(lpBuffer + 16)).* = 1 * 1024 * 1024 * 1024;
+    // ullTotalPageFile = 4GB
+    @as(*align(1) u64, @ptrFromInt(lpBuffer + 24)).* = 4 * 1024 * 1024 * 1024;
+    // ullAvailPageFile = 3GB
+    @as(*align(1) u64, @ptrFromInt(lpBuffer + 32)).* = 3 * 1024 * 1024 * 1024;
+    // ullTotalVirtual = 2GB
+    @as(*align(1) u64, @ptrFromInt(lpBuffer + 40)).* = 2 * 1024 * 1024 * 1024;
+    // ullAvailVirtual = 1.5GB
+    @as(*align(1) u64, @ptrFromInt(lpBuffer + 48)).* = 1536 * 1024 * 1024;
+    return 1; // TRUE
+}

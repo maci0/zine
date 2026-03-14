@@ -132,6 +132,9 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GenerateConsoleCtrlEvent", stub_args2);
     try environment.addBuiltinExportComptime(m, "FindFirstFileW", kernel32_process.stub_FindFirstFileW);
     try environment.addBuiltinExportComptime(m, "FindNextFileW", kernel32_process.stub_FindNextFileW);
+    try environment.addBuiltinExportComptime(m, "GetExitCodeThread", stub_args2); // same shape as GetExitCodeProcess, returns 0
+    try environment.addBuiltinExportComptime(m, "SetThreadAffinityMask", stub_args2); // returns previous mask (0 is ok)
+    try environment.addBuiltinExportComptime(m, "SignalObjectAndWait", stub_args4); // returns WAIT_OBJECT_0 (0)
 
     // --- Environment (process.zig) ---
     try environment.addBuiltinExportComptime(m, "GetEnvironmentStrings", kernel32_process.stub_GetEnvironmentStringsA);
@@ -249,6 +252,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "SetConsoleTitleA", stub_args1);
     try environment.addBuiltinExportComptime(m, "FreeConsole", stub_args0);
     try environment.addBuiltinExportComptime(m, "AllocConsole", stub_args0);
+    try environment.addBuiltinExportComptime(m, "ReadConsoleInputA", stub_args4); // returns 0 (no input)
     try environment.addBuiltinExportComptime(m, "WriteConsoleA", kernel32_misc.stub_WriteConsoleA);
     try environment.addBuiltinExportComptime(m, "WriteConsoleW", kernel32_misc.stub_WriteConsoleW);
     try environment.addBuiltinExportComptime(m, "GetCurrentDirectoryA", kernel32_misc.stub_GetCurrentDirectoryA);
@@ -258,6 +262,10 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "CreateDirectoryA", kernel32_misc.stub_CreateDirectoryA);
     try environment.addBuiltinExportComptime(m, "SetFileApisToOEM", kernel32_misc.stub_SetFileApisToOEM);
     try environment.addBuiltinExportComptime(m, "GetDriveTypeA", kernel32_misc.stub_GetDriveTypeA);
+    try environment.addBuiltinExportComptime(m, "MoveFileA", stub_args2); // returns TRUE (1 -> stub_args2 returns 0, need real stub)
+    try environment.addBuiltinExportComptime(m, "FindFirstFileExA", kernel32_file.stub_FindFirstFileExA);
+    try environment.addBuiltinExportComptime(m, "SleepEx", kernel32_misc.stub_SleepEx);
+    try environment.addBuiltinExportComptime(m, "GlobalMemoryStatusEx", kernel32_misc.stub_GlobalMemoryStatusEx);
     try environment.addBuiltinExportComptime(m, "GetPrivateProfileStringA", kernel32_misc.stub_GetPrivateProfileStringA);
     try environment.addBuiltinExportComptime(m, "GetPrivateProfileIntA", kernel32_misc.stub_GetPrivateProfileIntA);
     try environment.addBuiltinExportComptime(m, "WritePrivateProfileStringA", kernel32_misc.stub_WritePrivateProfileStringA);
@@ -281,7 +289,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetPrivateProfileIntW", kernel32_misc.stub_GetPrivateProfileIntA);
     try environment.addBuiltinExportComptime(m, "GetPrivateProfileStringW", kernel32_misc.stub_GetPrivateProfileStringW);
     try environment.addBuiltinExportComptime(m, "WritePrivateProfileStringW", kernel32_misc.stub_WritePrivateProfileStringW);
-    try environment.addBuiltinExportComptime(m, "CreateProcessW", kernel32_process.stub_CreateProcessA);
+    try environment.addBuiltinExportComptime(m, "CreateProcessW", kernel32_process.stub_CreateProcessW);
     try environment.addBuiltinExportComptime(m, "ExpandEnvironmentStringsW", stub_args3);
     try environment.addBuiltinExportComptime(m, "CreateDirectoryW", kernel32_misc.stub_CreateDirectoryA);
     try environment.addBuiltinExportComptime(m, "SetCurrentDirectoryW", kernel32_misc.stub_SetCurrentDirectoryW);

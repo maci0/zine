@@ -483,6 +483,37 @@ pub fn stub_GetModuleFileNameA(hModule: usize, lpFilename: usize, nSize: u32) ca
     return 0;
 }
 
+// --- Child process tracking ---
+const max_child_procs = 16;
+pub const ChildProc = struct {
+    handle: usize = 0,
+    child: ?std.process.Child = null,
+    exit_code: ?u32 = null,
+};
+var child_procs: [max_child_procs]ChildProc = [_]ChildProc{.{}} ** max_child_procs;
+var next_process_handle: usize = 0xCA000001;
+
+fn allocChildProc(child: std.process.Child) ?usize {
+    for (&child_procs) |*cp| {
+        if (cp.handle == 0) {
+            const h = next_process_handle;
+            next_process_handle += 1;
+            cp.handle = h;
+            cp.child = child;
+            cp.exit_code = null;
+            return h;
+        }
+    }
+    return null;
+}
+
+pub fn getChildProc(handle: usize) ?*ChildProc {
+    for (&child_procs) |*cp| {
+        if (cp.handle == handle) return cp;
+    }
+    return null;
+}
+
 pub fn stub_CreateProcessA(
     lpApplicationName: usize,
     lpCommandLine: usize,
@@ -508,15 +539,193 @@ pub fn stub_CreateProcessA(
 
     if (trace.enable_tracing) trace.print("KERNEL32: CreateProcessA(app='{s}', cmd='{s}')\n", .{ app_name, cmd_line });
 
-    if (lpProcessInformation != 0) {
-        const pi = @as(*w32.PROCESS_INFORMATION, @ptrFromInt(lpProcessInformation));
-        pi.hProcess = 0x1234;
-        pi.hThread = 0x5678;
-        pi.dwProcessId = 1337;
-        pi.dwThreadId = 1338;
+    // Determine the target PE path from either app_name or cmd_line
+    var target_path_buf: [1024]u8 = undefined;
+    var target_path_len: usize = 0;
+
+    if (app_name.len > 0) {
+        target_path_len = @min(app_name.len, 1023);
+        @memcpy(target_path_buf[0..target_path_len], app_name[0..target_path_len]);
+    } else if (cmd_line.len > 0) {
+        // Parse the executable from the command line (may be quoted)
+        var start: usize = 0;
+        var end: usize = 0;
+        if (cmd_line[0] == '"') {
+            start = 1;
+            end = start;
+            while (end < cmd_line.len and cmd_line[end] != '"') : (end += 1) {}
+        } else {
+            while (end < cmd_line.len and cmd_line[end] != ' ') : (end += 1) {}
+        }
+        target_path_len = @min(end - start, 1023);
+        @memcpy(target_path_buf[0..target_path_len], cmd_line[start .. start + target_path_len]);
     }
 
+    if (target_path_len == 0) {
+        log.warn("CreateProcessA: no target executable specified", .{});
+        return 0;
+    }
+
+    // Convert Win32 path to POSIX
+    const path_utils = @import("../../path_utils.zig");
+    var posix_buf: [1024]u8 = undefined;
+    const posix_len = path_utils.win32ToPosix(target_path_buf[0..target_path_len], &posix_buf);
+
+    if (trace.enable_tracing) trace.print("KERNEL32: CreateProcessA -> spawning '{s}'\n", .{posix_buf[0..posix_len]});
+
+    // Get our own executable path to re-invoke zine
+    var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const self_exe = std.fs.readLinkAbsolute("/proc/self/exe", &self_exe_buf) catch {
+        log.warn("CreateProcessA: failed to read /proc/self/exe", .{});
+        if (lpProcessInformation != 0) {
+            const pi = @as(*align(1) w32.PROCESS_INFORMATION, @ptrFromInt(lpProcessInformation));
+            pi.hProcess = 0x1234;
+            pi.hThread = 0x5678;
+            pi.dwProcessId = 1337;
+            pi.dwThreadId = 1338;
+        }
+        return 1;
+    };
+
+    // Build argv: [zine, "--", <posix_path>]
+    // Also pass through any additional command-line args from cmd_line
+    var argv_buf: [16][]const u8 = undefined;
+    var argc: usize = 0;
+    argv_buf[argc] = self_exe;
+    argc += 1;
+    argv_buf[argc] = "--";
+    argc += 1;
+    argv_buf[argc] = posix_buf[0..posix_len];
+    argc += 1;
+
+    // Parse additional args from cmd_line (after the executable)
+    if (cmd_line.len > 0) {
+        var arg_start: usize = 0;
+        // Skip past the executable in cmd_line
+        if (cmd_line[0] == '"') {
+            arg_start = 1;
+            while (arg_start < cmd_line.len and cmd_line[arg_start] != '"') : (arg_start += 1) {}
+            if (arg_start < cmd_line.len) arg_start += 1; // skip closing quote
+        } else {
+            while (arg_start < cmd_line.len and cmd_line[arg_start] != ' ') : (arg_start += 1) {}
+        }
+        // Skip whitespace
+        while (arg_start < cmd_line.len and cmd_line[arg_start] == ' ') : (arg_start += 1) {}
+        // Add remaining args (split by spaces, respecting quotes)
+        while (arg_start < cmd_line.len and argc < argv_buf.len - 1) {
+            var arg_end = arg_start;
+            if (cmd_line[arg_start] == '"') {
+                arg_start += 1;
+                arg_end = arg_start;
+                while (arg_end < cmd_line.len and cmd_line[arg_end] != '"') : (arg_end += 1) {}
+                argv_buf[argc] = cmd_line[arg_start..arg_end];
+                argc += 1;
+                arg_end += 1; // skip closing quote
+            } else {
+                while (arg_end < cmd_line.len and cmd_line[arg_end] != ' ') : (arg_end += 1) {}
+                if (arg_end > arg_start) {
+                    argv_buf[argc] = cmd_line[arg_start..arg_end];
+                    argc += 1;
+                }
+            }
+            arg_start = arg_end;
+            while (arg_start < cmd_line.len and cmd_line[arg_start] == ' ') : (arg_start += 1) {}
+        }
+    }
+
+    if (trace.enable_tracing) {
+        trace.print("KERNEL32: CreateProcessA -> exec:", .{});
+        for (argv_buf[0..argc]) |arg| {
+            trace.print(" '{s}'", .{arg});
+        }
+        trace.print("\n", .{});
+    }
+
+    // Spawn the child process
+    var child = std.process.Child.init(argv_buf[0..argc], std.heap.page_allocator);
+    child.stdin_behavior = .Inherit;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+    child.spawn() catch |err| {
+        log.warn("CreateProcessA: spawn failed: {}", .{err});
+        return 0; // FALSE
+    };
+
+    const proc_handle = allocChildProc(child) orelse {
+        // No room, but process is running. Store handle anyway.
+        if (lpProcessInformation != 0) {
+            const pi = @as(*align(1) w32.PROCESS_INFORMATION, @ptrFromInt(lpProcessInformation));
+            pi.hProcess = 0x1234;
+            pi.hThread = 0x5678;
+            pi.dwProcessId = @intCast(child.id);
+            pi.dwThreadId = @intCast(child.id);
+        }
+        return 1;
+    };
+
+    if (lpProcessInformation != 0) {
+        const pi = @as(*align(1) w32.PROCESS_INFORMATION, @ptrFromInt(lpProcessInformation));
+        pi.hProcess = proc_handle;
+        pi.hThread = proc_handle + 0x10000; // fake thread handle
+        pi.dwProcessId = @intCast(child.id);
+        pi.dwThreadId = @intCast(child.id);
+    }
+
+    log.info("Spawned child process (pid={d}, handle=0x{X})", .{ child.id, proc_handle });
     return 1; // TRUE
+}
+
+pub fn stub_CreateProcessW(
+    lpApplicationName: usize,
+    lpCommandLine: usize,
+    lpProcessAttributes: usize,
+    lpThreadAttributes: usize,
+    bInheritHandles: i32,
+    dwCreationFlags: u32,
+    lpEnvironment: usize,
+    lpCurrentDirectory: usize,
+    lpStartupInfo: usize,
+    lpProcessInformation: usize,
+) callconv(w32cc.WINAPI) i32 {
+    // Convert wide strings to narrow, then delegate to CreateProcessA
+    var narrow_app: [1024]u8 = undefined;
+    var narrow_app_addr: usize = 0;
+    if (lpApplicationName != 0) {
+        const wstr = trace.c_span_w(lpApplicationName);
+        const copy_len = @min(wstr.len, 1023);
+        for (0..copy_len) |i| {
+            narrow_app[i] = @intCast(wstr[i] & 0xFF);
+        }
+        narrow_app[copy_len] = 0;
+        narrow_app_addr = @intFromPtr(&narrow_app);
+        if (trace.enable_tracing) trace.print("KERNEL32: CreateProcessW(app='{s}')\n", .{narrow_app[0..copy_len]});
+    }
+
+    var narrow_cmd: [4096]u8 = undefined;
+    var narrow_cmd_addr: usize = 0;
+    if (lpCommandLine != 0) {
+        const wstr = trace.c_span_w(lpCommandLine);
+        const copy_len = @min(wstr.len, 4095);
+        for (0..copy_len) |i| {
+            narrow_cmd[i] = @intCast(wstr[i] & 0xFF);
+        }
+        narrow_cmd[copy_len] = 0;
+        narrow_cmd_addr = @intFromPtr(&narrow_cmd);
+        if (trace.enable_tracing) trace.print("KERNEL32: CreateProcessW(cmd='{s}')\n", .{narrow_cmd[0..copy_len]});
+    }
+
+    return stub_CreateProcessA(
+        narrow_app_addr,
+        narrow_cmd_addr,
+        lpProcessAttributes,
+        lpThreadAttributes,
+        bInheritHandles,
+        dwCreationFlags,
+        lpEnvironment,
+        lpCurrentDirectory,
+        lpStartupInfo,
+        lpProcessInformation,
+    );
 }
 
 pub fn stub_GetEnvironmentStringsA() callconv(w32cc.WINAPI) ?*anyopaque {
@@ -832,12 +1041,22 @@ pub fn stub_TerminateProcess(hProcess: usize, uExitCode: u32) callconv(w32cc.WIN
 }
 
 pub fn stub_GetExitCodeProcess(hProcess: usize, lpExitCode: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hProcess;
-    if (lpExitCode != 0) {
-        @as(*u32, @ptrFromInt(lpExitCode)).* = 259; // STILL_ACTIVE
+    if (lpExitCode == 0) return 1;
+
+    // Check if this is a tracked child process
+    if (getChildProc(hProcess)) |cp| {
+        if (cp.exit_code) |code| {
+            @as(*u32, @ptrFromInt(lpExitCode)).* = code;
+        } else {
+            @as(*u32, @ptrFromInt(lpExitCode)).* = 259; // STILL_ACTIVE
+        }
+        return 1;
     }
+
+    @as(*u32, @ptrFromInt(lpExitCode)).* = 0;
     return 1; // TRUE
 }
+
 
 pub fn stub_SuspendThread(hThread: usize) callconv(w32cc.WINAPI) u32 {
     _ = hThread;
