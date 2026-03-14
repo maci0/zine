@@ -267,3 +267,18 @@ pub fn stub_GlobalReAlloc(hMem: usize, dwBytes: usize, uFlags: u32) callconv(w32
     const ptr = raw_realloc(@ptrFromInt(hMem), dwBytes) orelse return 0;
     return @intFromPtr(ptr);
 }
+
+pub fn stub_VirtualProtect(lpAddress: usize, dwSize: usize, flNewProtect: u32, lpflOldProtect: usize) callconv(w32cc.WINAPI) i32 {
+    _ = dwSize;
+    if (trace.enable_tracing) trace.print("KERNEL32: VirtualProtect(addr={x}, prot={x})\n", .{ lpAddress, flNewProtect });
+    // Write old protection value (pretend everything was PAGE_READWRITE)
+    if (lpflOldProtect != 0) {
+        @as(*u32, @ptrFromInt(lpflOldProtect)).* = w32.PAGE_READWRITE;
+    }
+    return 1; // TRUE
+}
+
+pub fn stub_GlobalHandle(pMem: usize) callconv(w32cc.WINAPI) usize {
+    // For GMEM_FIXED allocations (which we always use), the handle IS the pointer
+    return pMem;
+}

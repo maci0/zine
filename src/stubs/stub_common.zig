@@ -18,7 +18,23 @@ inline fn traceStub(comptime n: comptime_int) void {
         if (x86_thunks.lookupUnresolvedName(ret_addr)) |name| {
             trace.print(label ++ " [{s}] called from {x}\n", .{ name, ret_addr });
         } else {
-            trace.print(label ++ " called from {x}\n", .{ret_addr});
+            // Try to read the call instruction before the return address
+            // to find the IAT target (FF 15 xx xx xx xx = call [iat_addr])
+            const ret_ptr: [*]const u8 = @ptrFromInt(ret_addr);
+            const call_site = ret_ptr - 6; // FF 15 + 4 bytes
+            if (call_site[0] == 0xFF and call_site[1] == 0x15) {
+                const iat_addr = @as(*align(1) const u32, @ptrCast(call_site + 2)).*;
+                // Read the function pointer from the IAT
+                const func_ptr = @as(*align(1) const u32, @ptrFromInt(iat_addr)).*;
+                // Try to find unlresolved name from the IAT address
+                if (x86_thunks.lookupUnresolvedName(iat_addr)) |name| {
+                    trace.print(label ++ " [{s}] called from {x} (IAT=0x{x} -> 0x{x})\n", .{ name, ret_addr, iat_addr, func_ptr });
+                } else {
+                    trace.print(label ++ " called from {x} (IAT=0x{x} -> 0x{x})\n", .{ ret_addr, iat_addr, func_ptr });
+                }
+            } else {
+                trace.print(label ++ " called from {x}\n", .{ret_addr});
+            }
         }
     }
 }

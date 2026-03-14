@@ -24,8 +24,10 @@ pub fn stub_GetDeviceCaps(hdc: usize, nIndex: i32) callconv(w32cc.WINAPI) i32 {
 
 pub fn stub_CreateCompatibleDC(hdc: usize) callconv(w32cc.WINAPI) usize {
     _ = hdc;
-    if (trace.enable_tracing) trace.print("GDI32: CreateCompatibleDC\n", .{});
-    return gdi32.nextHandle();
+    const handle = gdi32.nextHandle();
+    gdi32.registerDc(handle);
+    if (trace.enable_tracing) trace.print("GDI32: CreateCompatibleDC -> 0x{x}\n", .{handle});
+    return handle;
 }
 
 pub fn stub_DeleteDC(hdc: usize) callconv(w32cc.WINAPI) i32 {
@@ -33,56 +35,120 @@ pub fn stub_DeleteDC(hdc: usize) callconv(w32cc.WINAPI) i32 {
     return 1;
 }
 
+// --- SaveDC / RestoreDC ---
+// Simple DC save stack (max 32 saved states per DC)
+var saved_dc_stack: [32]gdi32.DeviceContext = undefined;
+var saved_dc_count: usize = 0;
+
 pub fn stub_SaveDC(hdc: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
-    return 1;
+    if (gdi32.getDc(hdc)) |dc| {
+        if (saved_dc_count < saved_dc_stack.len) {
+            saved_dc_stack[saved_dc_count] = dc.*;
+            saved_dc_count += 1;
+            return @intCast(saved_dc_count); // 1-based save ID
+        }
+    }
+    return 0; // failure
 }
 
 pub fn stub_RestoreDC(hdc: usize, nSavedDC: i32) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
-    _ = nSavedDC;
-    return 1;
+    if (gdi32.getDc(hdc)) |dc| {
+        if (nSavedDC == -1 and saved_dc_count > 0) {
+            // Restore most recently saved
+            saved_dc_count -= 1;
+            const saved = saved_dc_stack[saved_dc_count];
+            dc.bitmap = saved.bitmap;
+            dc.brush = saved.brush;
+            dc.pen = saved.pen;
+            dc.font = saved.font;
+            dc.bk_mode = saved.bk_mode;
+            dc.bk_color = saved.bk_color;
+            dc.text_color = saved.text_color;
+            dc.rop2 = saved.rop2;
+            dc.stretch_mode = saved.stretch_mode;
+            dc.text_align = saved.text_align;
+            dc.map_mode = saved.map_mode;
+            return 1;
+        } else if (nSavedDC > 0 and @as(usize, @intCast(nSavedDC)) <= saved_dc_count) {
+            const idx: usize = @intCast(nSavedDC - 1);
+            const saved = saved_dc_stack[idx];
+            dc.bitmap = saved.bitmap;
+            dc.brush = saved.brush;
+            dc.pen = saved.pen;
+            dc.font = saved.font;
+            dc.bk_mode = saved.bk_mode;
+            dc.bk_color = saved.bk_color;
+            dc.text_color = saved.text_color;
+            dc.rop2 = saved.rop2;
+            dc.stretch_mode = saved.stretch_mode;
+            dc.text_align = saved.text_align;
+            dc.map_mode = saved.map_mode;
+            saved_dc_count = idx;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 pub fn stub_SetBkMode(hdc: usize, mode: i32) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
-    _ = mode;
-    return 1; // Previous mode (OPAQUE)
+    var old_mode: i32 = 1; // OPAQUE previous
+    if (gdi32.getDc(hdc)) |dc_entry| {
+        old_mode = dc_entry.bk_mode;
+        dc_entry.bk_mode = mode;
+    }
+    return old_mode;
 }
 
 pub fn stub_SetBkColor(hdc: usize, crColor: u32) callconv(w32cc.WINAPI) u32 {
-    _ = hdc;
-    _ = crColor;
-    return 0x00FFFFFF; // Previous color (white)
+    var old_color: u32 = 0x00FFFFFF;
+    if (gdi32.getDc(hdc)) |dc_entry| {
+        old_color = dc_entry.bk_color;
+        dc_entry.bk_color = crColor;
+    }
+    return old_color;
 }
 
 pub fn stub_SetTextColor(hdc: usize, crColor: u32) callconv(w32cc.WINAPI) u32 {
-    _ = hdc;
-    _ = crColor;
-    return 0; // Previous color (black)
+    var old_color: u32 = 0;
+    if (gdi32.getDc(hdc)) |dc_entry| {
+        old_color = dc_entry.text_color;
+        dc_entry.text_color = crColor;
+    }
+    return old_color;
 }
 
 pub fn stub_GetTextColor(hdc: usize) callconv(w32cc.WINAPI) u32 {
-    _ = hdc;
+    if (gdi32.getDc(hdc)) |dc_entry| {
+        return dc_entry.text_color;
+    }
     return 0; // Black
 }
 
 pub fn stub_SetStretchBltMode(hdc: usize, mode: i32) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
-    _ = mode;
-    return 1;
+    var old_mode: i32 = 1; // BLACKONWHITE
+    if (gdi32.getDc(hdc)) |dc| {
+        old_mode = dc.stretch_mode;
+        dc.stretch_mode = mode;
+    }
+    return old_mode;
 }
 
 pub fn stub_SetMapMode(hdc: usize, iMode: i32) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
-    _ = iMode;
-    return 1; // Previous mode (MM_TEXT)
+    var old_mode: i32 = 1; // MM_TEXT
+    if (gdi32.getDc(hdc)) |dc| {
+        old_mode = dc.map_mode;
+        dc.map_mode = iMode;
+    }
+    return old_mode;
 }
 
 pub fn stub_SetROP2(hdc: usize, rop2: i32) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
-    _ = rop2;
-    return 1;
+    var old_rop: i32 = 13; // R2_COPYPEN
+    if (gdi32.getDc(hdc)) |dc| {
+        old_rop = dc.rop2;
+        dc.rop2 = rop2;
+    }
+    return old_rop;
 }
 
 pub fn stub_GetTextMetricsA(hdc: usize, lptm: usize) callconv(w32cc.WINAPI) i32 {
@@ -121,9 +187,12 @@ pub fn stub_GetTextExtentPoint32W(hdc: usize, lpString: usize, c: i32, lpSize: u
 }
 
 pub fn stub_SetTextAlign(hdc: usize, fMode: u32) callconv(w32cc.WINAPI) u32 {
-    _ = hdc;
-    _ = fMode;
-    return 0; // old mode
+    var old_align: u32 = 0;
+    if (gdi32.getDc(hdc)) |dc| {
+        old_align = dc.text_align;
+        dc.text_align = fMode;
+    }
+    return old_align;
 }
 
 pub fn stub_CreateDCA(lpszDriver: usize, lpszDevice: usize, lpszOutput: usize, lpInitData: usize) callconv(w32cc.WINAPI) usize {
@@ -132,7 +201,9 @@ pub fn stub_CreateDCA(lpszDriver: usize, lpszDevice: usize, lpszOutput: usize, l
     _ = lpszOutput;
     _ = lpInitData;
     if (trace.enable_tracing) trace.print("GDI32: CreateDCA\n", .{});
-    return gdi32.nextHandle();
+    const handle = gdi32.nextHandle();
+    gdi32.registerDc(handle);
+    return handle;
 }
 
 pub fn stub_GetNearestColor(hdc: usize, color: u32) callconv(w32cc.WINAPI) u32 {
@@ -229,13 +300,17 @@ pub fn stub_RectVisible(hdc: usize, lprc: usize) callconv(w32cc.WINAPI) i32 {
 // GetBkMode: returns background mix mode
 // OPAQUE = 2, TRANSPARENT = 1
 pub fn stub_GetBkMode(hdc: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
+    if (gdi32.getDc(hdc)) |dc_entry| {
+        return dc_entry.bk_mode;
+    }
     return 2; // OPAQUE
 }
 
 // GetBkColor: returns background color as COLORREF
 // Default is white
 pub fn stub_GetBkColor(hdc: usize) callconv(w32cc.WINAPI) u32 {
-    _ = hdc;
+    if (gdi32.getDc(hdc)) |dc_entry| {
+        return dc_entry.bk_color;
+    }
     return 0x00FFFFFF; // RGB(255, 255, 255) = white
 }

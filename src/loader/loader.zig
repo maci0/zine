@@ -67,7 +67,7 @@ fn patchImport(
         first_thunk.* = @intCast(exp.addr);
         x86_thunks.registerNativeImport(@intCast(exp.addr), dll_name, func_name, exp.param_bytes);
         if (trace.enable_tracing) {
-            trace.print("loader: {s} -> {s} at {X}\n", .{ dll_name, func_name, exp.addr });
+            trace.print("loader: {s} -> {s} at {X} (IAT=0x{x})\n", .{ dll_name, func_name, exp.addr, @intFromPtr(first_thunk) });
         }
     }
 }

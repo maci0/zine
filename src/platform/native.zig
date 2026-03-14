@@ -213,6 +213,11 @@ pub fn setupFS(teb_ptr: *anyopaque) !void {
             :
             : [sel] "r" (selector),
         );
+
+        // Save selector globally for timer threads that need to set FS for game callbacks
+        const teb = @import("../teb.zig");
+        teb.teb_fs_selector = selector;
+
         log.info("FS segment initialized with selector 0x{X}, TEB at 0x{X}", .{ selector, @intFromPtr(teb_ptr) });
     } else if (arch == .x86_64) {
         // x86_64: use arch_prctl(ARCH_SET_FS, base) syscall

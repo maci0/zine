@@ -277,9 +277,153 @@ pub const Environment = struct {
         return null;
     }
 
-    /// Resolves an imported function by name from loaded PE modules or built-in stubs.
+    /// Build a real PE export directory in the fake header page so games
+    /// that manually parse PE exports (instead of GetProcAddress) can find
+    /// the registered exports.  Must be called AFTER all exports are registered.
+    pub fn finalizeExports(self: *Environment, dll_name: []const u8) void {
+        var lower_buf: [256]u8 = undefined;
+        var search: []const u8 = dll_name;
+        if (dll_name.len <= lower_buf.len) {
+            const lower = lower_buf[0..dll_name.len];
+            _ = std.ascii.lowerString(lower, dll_name);
+            search = lower;
+        }
+        const builtin = self.builtins.getPtr(search) orelse return;
+        const n = builtin.exports.count();
+        if (n == 0) return;
+
+        const header = @as([*]u8, @ptrFromInt(builtin.handle));
+        const base: u32 = @intCast(builtin.handle);
+
+        // PE layout:
+        //   0x00: MZ header
+        //   0x3C: e_lfanew → 0x40
+        //   0x40: PE signature
+        //   0x44: COFF header (20 bytes)
+        //   0x58: Optional header (PE32, 224 bytes)
+        //     +28 (0x74): ImageBase
+        //     +92 (0xB4): NumberOfRvaAndSizes
+        //     +96 (0xB8): DataDirectory[0] = Export (VA, Size)
+
+        // COFF: SizeOfOptionalHeader = 224
+        @as(*align(1) u16, @ptrFromInt(base + 0x54)).* = 224;
+        // Optional: Magic = PE32
+        @as(*align(1) u16, @ptrFromInt(base + 0x58)).* = 0x10B;
+        // ImageBase = actual base (so game adds 0 displacement)
+        @as(*align(1) u32, @ptrFromInt(base + 0x74)).* = base;
+        // SizeOfImage = 0x1000 (one page)
+        @as(*align(1) u32, @ptrFromInt(base + 0x80)).* = 0x1000;
+        // NumberOfRvaAndSizes = 16
+        @as(*align(1) u32, @ptrFromInt(base + 0xB4)).* = 16;
+
+        // All RVAs are relative to module base (= base).
+        // Layout within page (all offsets from base):
+        //   0x200: IMAGE_EXPORT_DIRECTORY (40 bytes)
+        //   0x228: DLL name string (up to 64 bytes)
+        //   0x268: Thunks — 8 bytes each: FF 25 [addr32] + 2 pad (for up to 32 exports)
+        //   0x368: AddressOfFunctions array (n * 4) — RVAs to thunks
+        //   after: AddressOfNames array (n * 4) — RVAs to name strings
+        //   after: AddressOfNameOrdinals array (n * 2)
+        //   after: Name strings (packed, null-terminated)
+
+        const export_dir_off: u32 = 0x200;
+        const dll_name_off: u32 = 0x228;
+        const thunks_off: u32 = 0x268;
+        const thunk_size: u32 = 8; // 6 bytes for jmp + 2 pad
+        const funcs_off: u32 = thunks_off + @as(u32, @intCast(n)) * thunk_size;
+        const names_off: u32 = funcs_off + @as(u32, @intCast(n)) * 4;
+        const ords_off: u32 = names_off + @as(u32, @intCast(n)) * 4;
+        const strings_off: u32 = ords_off + @as(u32, @intCast(n)) * 2;
+
+        // Write DLL name
+        const dll_copy_len = @min(dll_name.len, @as(usize, 63));
+        @memcpy(header[dll_name_off .. dll_name_off + dll_copy_len], dll_name[0..dll_copy_len]);
+        header[dll_name_off + dll_copy_len] = 0;
+
+        // Collect exports sorted by name (PE requires name table sorted)
+        var sorted_names: [64][]const u8 = undefined;
+        var sorted_addrs: [64]usize = undefined;
+        var idx: usize = 0;
+        var it = builtin.exports.iterator();
+        while (it.next()) |entry| {
+            if (idx >= 64) break;
+            sorted_names[idx] = entry.key_ptr.*;
+            sorted_addrs[idx] = entry.value_ptr.addr;
+            idx += 1;
+        }
+        const count = idx;
+
+        // Simple insertion sort by name
+        var i: usize = 1;
+        while (i < count) : (i += 1) {
+            var j = i;
+            while (j > 0) {
+                const order = std.mem.order(u8, sorted_names[j], sorted_names[j - 1]);
+                if (order == .lt) {
+                    const tmp_name = sorted_names[j];
+                    sorted_names[j] = sorted_names[j - 1];
+                    sorted_names[j - 1] = tmp_name;
+                    const tmp_addr = sorted_addrs[j];
+                    sorted_addrs[j] = sorted_addrs[j - 1];
+                    sorted_addrs[j - 1] = tmp_addr;
+                    j -= 1;
+                } else break;
+            }
+        }
+
+        var str_pos: u32 = strings_off;
+        for (0..count) |si| {
+            // Build a jmp thunk: FF 25 [absolute 4-byte addr]
+            // This is an indirect jump through an absolute address.
+            // On x86: FF 25 DD CC BB AA  → jmp dword ptr [0xAABBCCDD]
+            // We store the target address right after the instruction bytes.
+            const thunk_addr = thunks_off + @as(u32, @intCast(si)) * thunk_size;
+            header[thunk_addr + 0] = 0xFF; // jmp
+            header[thunk_addr + 1] = 0x25; // [disp32]
+            // The disp32 is the absolute address of the 4 bytes that hold the target
+            @as(*align(1) u32, @ptrFromInt(base + thunk_addr + 2)).* = base + thunk_addr + 6;
+            // The actual target address (stored at thunk+6)
+            @as(*align(1) u32, @ptrFromInt(base + thunk_addr + 6)).* = @intCast(sorted_addrs[si]);
+
+            // Function RVA → thunk offset
+            @as(*align(1) u32, @ptrFromInt(base + funcs_off + si * 4)).* = thunk_addr;
+            // Name RVA → string offset
+            @as(*align(1) u32, @ptrFromInt(base + names_off + si * 4)).* = str_pos;
+            // Ordinal index
+            @as(*align(1) u16, @ptrFromInt(base + ords_off + si * 2)).* = @intCast(si);
+
+            // Write name string
+            const name_str = sorted_names[si];
+            const name_len: u32 = @intCast(@min(name_str.len, @as(usize, 4096 - str_pos - 1)));
+            @memcpy(header[str_pos .. str_pos + name_len], name_str[0..name_len]);
+            header[str_pos + name_len] = 0;
+            str_pos += name_len + 1;
+        }
+
+        // Write IMAGE_EXPORT_DIRECTORY (40 bytes at export_dir_off)
+        @as(*align(1) u32, @ptrFromInt(base + export_dir_off + 0x0C)).* = dll_name_off; // Name RVA
+        @as(*align(1) u32, @ptrFromInt(base + export_dir_off + 0x10)).* = 1; // Base
+        @as(*align(1) u32, @ptrFromInt(base + export_dir_off + 0x14)).* = @intCast(count); // NumberOfFunctions
+        @as(*align(1) u32, @ptrFromInt(base + export_dir_off + 0x18)).* = @intCast(count); // NumberOfNames
+        @as(*align(1) u32, @ptrFromInt(base + export_dir_off + 0x1C)).* = funcs_off; // AddressOfFunctions RVA
+        @as(*align(1) u32, @ptrFromInt(base + export_dir_off + 0x20)).* = names_off; // AddressOfNames RVA
+        @as(*align(1) u32, @ptrFromInt(base + export_dir_off + 0x24)).* = ords_off; // AddressOfNameOrdinals RVA
+
+        // Set DataDirectory[0] (Export) — at offset 0xB8 from file start
+        @as(*align(1) u32, @ptrFromInt(base + 0xB8)).* = export_dir_off; // VirtualAddress (RVA)
+        @as(*align(1) u32, @ptrFromInt(base + 0xBC)).* = 40; // Size
+
+        // Make the page executable (thunks need to be executable)
+        if (comptime platform.is_native) {
+            const PROT_READ = 0x1;
+            const PROT_WRITE = 0x2;
+            const PROT_EXEC = 0x4;
+            _ = std.os.linux.mprotect(@ptrFromInt(base), 4096, PROT_READ | PROT_WRITE | PROT_EXEC);
+        }
+    }
+
+    /// Resolves an imported function by name from built-in stubs or loaded PE modules.
     pub fn resolveExport(self: *Environment, dll_name: []const u8, func_name: []const u8) ?BuiltinExport {
-        // First, try loaded PE modules (they can export functions)
         var lower_buf: [256]u8 = undefined;
         var search_dll: []const u8 = dll_name;
         if (dll_name.len <= lower_buf.len) {
@@ -288,19 +432,22 @@ pub const Environment = struct {
             search_dll = lower;
         }
 
-        // Check PE DLLs from the registry that were loaded from disk
+        // Check builtin stubs FIRST — these are our verified implementations
+        // and take priority over PE exports (e.g. proxy/wrapper DLLs like
+        // dxwrapper whose forwarding thunks may point to a missing system DLL).
+        if (self.builtins.get(search_dll)) |builtin| {
+            if (builtin.exports.get(func_name)) |exp| {
+                return exp;
+            }
+        }
+
+        // Fallback: check PE DLLs loaded from disk
         if (self.registry.modules.get(search_dll)) |mod| {
             if (mod.getExport(func_name)) |exported_addr| {
                 return .{ .addr = exported_addr, .param_bytes = 0 };
             }
         }
 
-        // Fallback: check builtin stubs
-        if (self.builtins.get(search_dll)) |builtin| {
-            if (builtin.exports.get(func_name)) |exp| {
-                return exp;
-            }
-        }
         return null;
     }
 };

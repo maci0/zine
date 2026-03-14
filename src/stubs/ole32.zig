@@ -25,4 +25,8 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "CreateILockBytesOnHGlobal", kernel32.stub_args3);
     try environment.addBuiltinExportComptime(m, "ReleaseStgMedium", kernel32.stub_args1);
     try environment.addBuiltinExportComptime(m, "OleInitialize", stubs.stub_CoInitialize);
+
+    // --- Notepad2 OLE32 stubs ---
+    try environment.addBuiltinExportComptime(m, "RegisterDragDrop", kernel32.stub_args2);
+    try environment.addBuiltinExportComptime(m, "RevokeDragDrop", kernel32.stub_args1);
 }

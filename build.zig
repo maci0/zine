@@ -34,6 +34,8 @@ pub fn build(b: *std.Build) void {
 
     const target = b.resolveTargetQuery(query);
 
+    const use_fltk = b.option(bool, "fltk", "Enable FLTK native GUI backend") orelse false;
+
     const optimize = b.standardOptimizeOption(.{});
 
     const mod = b.addModule("zine", .{
@@ -85,6 +87,38 @@ pub fn build(b: *std.Build) void {
         if (arch == .x86) {
             exe.image_base = 0x70000000;
         }
+
+        // FLTK native GUI backend (optional)
+        if (use_fltk) {
+            exe.root_module.addCSourceFile(.{
+                .file = b.path("src/gui/fltk_bridge.cpp"),
+                .flags = &.{ "-std=c++11", "-fno-exceptions", "-I/usr/include/fltk1.3" },
+            });
+            exe.root_module.addIncludePath(b.path("src/gui"));
+            // System FLTK 1.3 — add system include/library paths
+            exe.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/fltk1.3" });
+            exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib/fltk1.3" });
+            exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
+            exe.root_module.linkSystemLibrary("fltk", .{});
+            exe.root_module.linkSystemLibrary("fltk_images", .{});
+            // X11 dependencies
+            exe.root_module.linkSystemLibrary("X11", .{});
+            exe.root_module.linkSystemLibrary("Xext", .{});
+            exe.root_module.linkSystemLibrary("Xft", .{});
+            exe.root_module.linkSystemLibrary("fontconfig", .{});
+            exe.root_module.linkSystemLibrary("Xinerama", .{});
+            exe.root_module.linkSystemLibrary("Xcursor", .{});
+            exe.root_module.linkSystemLibrary("Xrender", .{});
+            exe.root_module.linkSystemLibrary("Xfixes", .{});
+            exe.root_module.linkSystemLibrary("pthread", .{});
+            exe.root_module.link_libc = true;
+            exe.root_module.link_libcpp = true;
+        }
+
+        // Pass FLTK flag to Zig source
+        const options = b.addOptions();
+        options.addOption(bool, "use_fltk", use_fltk);
+        exe.root_module.addOptions("build_options", options);
 
         b.installArtifact(exe);
 

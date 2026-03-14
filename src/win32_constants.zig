@@ -189,14 +189,30 @@ pub const D3DLOCKED_RECT = extern struct {
 pub const WM_DESTROY: u32 = 0x0002;
 pub const WM_SIZE: u32 = 0x0005;
 pub const WM_ACTIVATE: u32 = 0x0006;
+pub const WM_ACTIVATEAPP: u32 = 0x001C;
+pub const WM_PAINT: u32 = 0x000F;
 pub const WM_CLOSE: u32 = 0x0010;
 pub const WM_QUIT: u32 = 0x0012;
+pub const WM_TIMER: u32 = 0x0113;
 pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_KEYUP: u32 = 0x0101;
 pub const WM_SYSKEYDOWN: u32 = 0x0104;
 pub const WM_SYSKEYUP: u32 = 0x0105;
 pub const WM_COMMAND: u32 = 0x0111;
 pub const WM_INITDIALOG: u32 = 0x0110;
+
+// Mouse messages
+pub const WM_MOUSEMOVE: u32 = 0x0200;
+pub const WM_LBUTTONDOWN: u32 = 0x0201;
+pub const WM_LBUTTONUP: u32 = 0x0202;
+pub const WM_RBUTTONDOWN: u32 = 0x0204;
+pub const WM_RBUTTONUP: u32 = 0x0205;
+pub const WM_MBUTTONDOWN: u32 = 0x0207;
+pub const WM_MBUTTONUP: u32 = 0x0208;
+
+// Mouse key flags (wParam for mouse messages)
+pub const MK_LBUTTON: usize = 0x0001;
+pub const MK_RBUTTON: usize = 0x0002;
 
 // PeekMessage wRemoveMsg
 pub const PM_REMOVE: u32 = 0x0001;

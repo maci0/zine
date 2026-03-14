@@ -14,9 +14,16 @@ pub var active_backend: Backend = .web_ui;
 pub var global_framebuf: []u8 = &[_]u8{};
 pub var global_width: u32 = 1;
 pub var global_height: u32 = 1;
+pub var resolution_set: bool = false; // True once setResolution is called with real dimensions
 
 // --- Input State (written by backend, read by stubs) ---
 pub var keyboard_state: [256]u8 = [_]u8{0} ** 256;
+pub var last_mouse_x: i32 = 0;
+pub var last_mouse_y: i32 = 0;
+pub var mouse_buttons: [4]u8 = [_]u8{0} ** 4; // 0=left, 1=right, 2=middle, 3=x1
+pub var mouse_dx: i32 = 0; // Accumulated X delta for DirectInput
+pub var mouse_dy: i32 = 0; // Accumulated Y delta for DirectInput
+pub var mouse_dz: i32 = 0; // Accumulated Z (wheel) delta for DirectInput
 
 // --- Cached state for reconnecting clients (web_ui internal) ---
 pub var dynamic_menu_json: ?[]const u8 = null;
@@ -33,10 +40,27 @@ pub var cached_control_text_updates: std.ArrayListUnmanaged([]const u8) = .{};
 var g_allocator: std.mem.Allocator = undefined;
 var last_frame_time: ?i64 = null;
 
+// --- Frame Batching ---
+// Drawing operations set this flag instead of pushing frames immediately.
+// Frames are flushed at EndPaint / message loop idle to avoid partial-draw artifacts.
+pub var screen_dirty: bool = false;
+
+pub fn markScreenDirty() void {
+    screen_dirty = true;
+}
+
+pub fn flushScreenIfDirty() void {
+    if (screen_dirty) {
+        screen_dirty = false;
+        pushFrame();
+    }
+}
+
 // --- Input Callbacks (set by Win32 stubs, called by backend) ---
 pub var on_command: ?*const fn (u32) void = null;
 pub var on_resize: ?*const fn (i32, i32, usize) void = null;
 pub var on_key_event: ?*const fn (usize, bool) void = null;
+pub var on_mouse_event: ?*const fn (u32, i32, i32) void = null; // (msg_id, x, y)
 pub var on_close: ?*const fn () void = null;
 pub var on_cancel_dialog: ?*const fn () void = null;
 pub var on_file_uploaded: ?*const fn ([]const u8) void = null;
@@ -118,16 +142,31 @@ pub var context_menu_result: u32 = 0;
 pub fn init(allocator: std.mem.Allocator) !void {
     g_allocator = allocator;
     global_framebuf = try allocator.alloc(u8, 1024 * 1024 * 4);
+    // Initialize to COLOR_BTNFACE gray (0xC0C0C0) with full alpha.
+    // This ensures any unpainted areas default to the correct Win32
+    // button face background color instead of black.
+    var i: usize = 0;
+    while (i + 3 < global_framebuf.len) : (i += 4) {
+        global_framebuf[i + 0] = 0xC0; // B
+        global_framebuf[i + 1] = 0xC0; // G
+        global_framebuf[i + 2] = 0xC0; // R
+        global_framebuf[i + 3] = 0xFF; // A
+    }
     switch (active_backend) {
         .web_ui => try web_ui.init(allocator),
         .fltk => try fltk_ui.init(allocator),
         .none => {},
     }
+    // Send desktop icons to the web UI
+    sendDesktopIcons();
 }
 
 // --- Output: Framebuffer ---
 
 pub fn pushFrame() void {
+    // Don't push frames before the app has set real window dimensions
+    if (!resolution_set) return;
+
     const current_time = std.time.milliTimestamp();
     if (last_frame_time) |last_time| {
         const diff = current_time - last_time;
@@ -147,6 +186,20 @@ pub fn pushFrame() void {
 pub fn setResolution(w: u32, h: u32) void {
     global_width = w;
     global_height = h;
+    resolution_set = true;
+
+    // Re-initialize visible framebuffer area to gray when resolution changes
+    // to prevent stale pixels from a previous stride causing stagger artifacts.
+    const area = w * h * 4;
+    if (area <= global_framebuf.len) {
+        var i: usize = 0;
+        while (i + 3 < area) : (i += 4) {
+            global_framebuf[i + 0] = 0xC0; // B
+            global_framebuf[i + 1] = 0xC0; // G
+            global_framebuf[i + 2] = 0xC0; // R
+            global_framebuf[i + 3] = 0xFF; // A
+        }
+    }
 
     switch (active_backend) {
         .web_ui => {
@@ -216,7 +269,8 @@ pub fn resizeEditControl(x: i32, y: i32, width: i32, height: i32) void {
 }
 
 pub fn setIcon(json: []const u8) void {
-    icon_json = json;
+    if (icon_json) |old| g_allocator.free(old);
+    icon_json = g_allocator.dupe(u8, json) catch null;
     switch (active_backend) {
         .web_ui => web_ui.pushMessage(json),
         .fltk => fltk_ui.setIcon(json),
@@ -225,7 +279,8 @@ pub fn setIcon(json: []const u8) void {
 }
 
 pub fn setMenu(json: []const u8) void {
-    dynamic_menu_json = json;
+    if (dynamic_menu_json) |old| g_allocator.free(old);
+    dynamic_menu_json = g_allocator.dupe(u8, json) catch null;
     switch (active_backend) {
         .web_ui => web_ui.pushMessage(json),
         .fltk => fltk_ui.setMenu(json),
@@ -586,11 +641,14 @@ pub fn listDirectory(path: []const u8) void {
 /// Helper: append ",\"folders\":[...],\"files\":[...]" to a JSON builder
 /// by iterating the given path relative to cwd.
 fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) void {
-    var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch blk: {
-        // Try with ../ prefix (for when cwd is inside drive_c)
-        var fallback_buf: [512]u8 = undefined;
-        const fallback = std.fmt.bufPrint(&fallback_buf, "../{s}", .{path}) catch break :blk null;
-        break :blk std.fs.cwd().openDir(fallback, .{ .iterate = true }) catch null;
+    // The path is a logical Win32 path (e.g. "Desktop", "Desktop/subfolder").
+    // Map it to the host filesystem under drive_c/.
+    var host_path_buf: [512]u8 = undefined;
+    const host_path = std.fmt.bufPrint(&host_path_buf, "drive_c/{s}", .{path}) catch path;
+
+    var dir = std.fs.cwd().openDir(host_path, .{ .iterate = true }) catch blk: {
+        // Fallback: try the path as-is (in case cwd is already inside drive_c)
+        break :blk std.fs.cwd().openDir(path, .{ .iterate = true }) catch null;
     };
 
     // Folders
@@ -612,10 +670,8 @@ fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) v
     json.appendSlice(g_allocator, "]") catch {};
 
     // Re-open for files (iterator is consumed)
-    var dir2 = std.fs.cwd().openDir(path, .{ .iterate = true }) catch blk: {
-        var fallback_buf2: [512]u8 = undefined;
-        const fallback2 = std.fmt.bufPrint(&fallback_buf2, "../{s}", .{path}) catch break :blk null;
-        break :blk std.fs.cwd().openDir(fallback2, .{ .iterate = true }) catch null;
+    var dir2 = std.fs.cwd().openDir(host_path, .{ .iterate = true }) catch blk: {
+        break :blk std.fs.cwd().openDir(path, .{ .iterate = true }) catch null;
     };
 
     // Files
@@ -727,4 +783,284 @@ pub fn pushMessage(json: []const u8) void {
         .fltk => {}, // FLTK uses typed dispatch, not JSON messages
         .none => {},
     }
+}
+
+// --- Desktop Icons ---
+
+pub var desktop_icons_json: ?[]const u8 = null;
+
+pub fn sendDesktopIcons() void {
+    if (active_backend != .web_ui) return;
+
+    var json: std.ArrayListUnmanaged(u8) = .{};
+    json.appendSlice(g_allocator, "{\"type\":\"desktop_icons\",\"items\":[") catch return;
+
+    var dir = std.fs.cwd().openDir("drive_c/Desktop", .{ .iterate = true }) catch return;
+    defer dir.close();
+
+    var first = true;
+    var it = dir.iterate();
+    while (it.next() catch null) |entry| {
+        // Skip hidden files
+        if (entry.name.len > 0 and entry.name[0] == '.') continue;
+
+        if (!first) json.appendSlice(g_allocator, ",") catch {};
+        first = false;
+
+        json.appendSlice(g_allocator, "{\"name\":\"") catch {};
+        jsonEscapeAppend(&json, entry.name);
+        json.appendSlice(g_allocator, "\",\"is_dir\":") catch {};
+        json.appendSlice(g_allocator, if (entry.kind == .directory) "true" else "false") catch {};
+
+        // Extract extension
+        const ext = blk: {
+            var i = entry.name.len;
+            while (i > 0) {
+                i -= 1;
+                if (entry.name[i] == '.') break :blk entry.name[i + 1 ..];
+            }
+            break :blk "";
+        };
+        json.appendSlice(g_allocator, ",\"ext\":\"") catch {};
+        jsonEscapeAppend(&json, ext);
+        json.appendSlice(g_allocator, "\"") catch {};
+
+        // For .exe files, try to extract icon from PE resources
+        if (entry.kind == .file and ext.len >= 3 and
+            (ext[0] == 'e' or ext[0] == 'E') and
+            (ext[1] == 'x' or ext[1] == 'X') and
+            (ext[2] == 'e' or ext[2] == 'E'))
+        {
+            if (extractExeIconBase64(entry.name)) |icon_b64| {
+                json.appendSlice(g_allocator, ",\"icon\":\"") catch {};
+                json.appendSlice(g_allocator, icon_b64) catch {};
+                json.appendSlice(g_allocator, "\"") catch {};
+                g_allocator.free(icon_b64);
+            }
+        }
+
+        json.appendSlice(g_allocator, "}") catch {};
+    }
+
+    json.appendSlice(g_allocator, "]}") catch {};
+
+    // Cache for reconnecting clients
+    if (desktop_icons_json) |old| g_allocator.free(old);
+    desktop_icons_json = g_allocator.dupe(u8, json.items) catch null;
+
+    web_ui.pushMessage(json.items);
+    json.deinit(g_allocator);
+}
+
+/// Extract icon from a .exe file in drive_c/Desktop/ and return base64-encoded ICO data.
+fn extractExeIconBase64(filename: []const u8) ?[]const u8 {
+    // Build path to the exe
+    var path_buf: [512]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "drive_c/Desktop/{s}", .{filename}) catch return null;
+
+    // Read the file into memory
+    const file = std.fs.cwd().openFile(path, .{}) catch return null;
+    defer file.close();
+
+    const file_size = file.getEndPos() catch return null;
+    if (file_size < 64 or file_size > 50 * 1024 * 1024) return null; // sanity check
+
+    const file_data = g_allocator.alloc(u8, @intCast(file_size)) catch return null;
+    defer g_allocator.free(file_data);
+    const bytes_read = file.readAll(file_data) catch return null;
+    if (bytes_read < 64) return null;
+
+    // Parse PE to find icon resources
+    return extractIconFromPEData(file_data[0..bytes_read]);
+}
+
+/// Parse PE data in memory and extract the first icon group as a base64-encoded .ICO file.
+fn extractIconFromPEData(data: []const u8) ?[]const u8 {
+    if (data.len < 64) return null;
+
+    // Check MZ signature
+    if (data[0] != 'M' or data[1] != 'Z') return null;
+
+    // Get PE offset
+    const pe_offset = std.mem.readInt(u32, data[0x3C..0x40], .little);
+    if (pe_offset + 4 > data.len) return null;
+
+    // Check PE signature
+    if (data[pe_offset] != 'P' or data[pe_offset + 1] != 'E' or data[pe_offset + 2] != 0 or data[pe_offset + 3] != 0) return null;
+
+    // COFF header
+    const coff_start = pe_offset + 4;
+    if (coff_start + 20 > data.len) return null;
+    const num_sections = std.mem.readInt(u16, data[coff_start + 2 ..][0..2], .little);
+    const optional_header_size = std.mem.readInt(u16, data[coff_start + 16 ..][0..2], .little);
+
+    // Optional header
+    const opt_start = coff_start + 20;
+    if (opt_start + optional_header_size > data.len) return null;
+
+    // Data directories start at offset 96 in PE32 optional header
+    const data_dir_start = opt_start + 96;
+    // Resource table is data directory index 2
+    const rsrc_rva_offset = data_dir_start + 2 * 8;
+    if (rsrc_rva_offset + 8 > data.len) return null;
+    const rsrc_rva = std.mem.readInt(u32, data[rsrc_rva_offset..][0..4], .little);
+    const rsrc_size = std.mem.readInt(u32, data[rsrc_rva_offset + 4 ..][0..4], .little);
+    if (rsrc_rva == 0 or rsrc_size == 0) return null;
+
+    // Find the section containing the resource RVA
+    const section_start = opt_start + optional_header_size;
+    var rsrc_file_offset: u32 = 0;
+
+    for (0..num_sections) |i| {
+        const s = section_start + i * 40;
+        if (s + 40 > data.len) break;
+        const s_rva = std.mem.readInt(u32, data[s + 12 ..][0..4], .little);
+        const s_size = std.mem.readInt(u32, data[s + 8 ..][0..4], .little);
+        const s_raw = std.mem.readInt(u32, data[s + 20 ..][0..4], .little);
+        if (rsrc_rva >= s_rva and rsrc_rva < s_rva + s_size) {
+            rsrc_file_offset = s_raw + (rsrc_rva - s_rva);
+            break;
+        }
+    }
+    if (rsrc_file_offset == 0) return null;
+
+    // Now parse the resource directory tree to find RT_GROUP_ICON (type 14)
+    return parseResourceDirForIcon(data, rsrc_file_offset, rsrc_rva);
+}
+
+fn parseResourceDirForIcon(data: []const u8, rsrc_offset: u32, rsrc_rva: u32) ?[]const u8 {
+    if (rsrc_offset + 16 > data.len) return null;
+
+    const num_named = std.mem.readInt(u16, data[rsrc_offset + 12 ..][0..2], .little);
+    const num_id = std.mem.readInt(u16, data[rsrc_offset + 14 ..][0..2], .little);
+
+    var entry_offset = rsrc_offset + 16;
+
+    // Skip named entries, then look for RT_GROUP_ICON (14) and RT_ICON (3)
+    entry_offset += @as(u32, num_named) * 8;
+
+    var group_icon_offset: u32 = 0;
+    var icon_dir_offset: u32 = 0;
+
+    for (0..num_id) |_| {
+        if (entry_offset + 8 > data.len) break;
+        const id = std.mem.readInt(u32, data[entry_offset..][0..4], .little);
+        const offset_or_dir = std.mem.readInt(u32, data[entry_offset + 4 ..][0..4], .little);
+
+        if (id == 14) { // RT_GROUP_ICON
+            group_icon_offset = rsrc_offset + (offset_or_dir & 0x7FFFFFFF);
+        } else if (id == 3) { // RT_ICON
+            icon_dir_offset = rsrc_offset + (offset_or_dir & 0x7FFFFFFF);
+        }
+        entry_offset += 8;
+    }
+
+    if (group_icon_offset == 0) return null;
+
+    // Navigate: type dir → first name/id → first language → data entry
+    const group_data = getFirstResourceData(data, group_icon_offset, rsrc_offset, rsrc_rva) orelse return null;
+
+    // Parse GROUP_ICON header
+    if (group_data.len < 20) return null;
+    const id_type = std.mem.readInt(u16, group_data[2..4], .little);
+    if (id_type != 1) return null;
+
+    // Get first icon entry
+    const bWidth = group_data[6];
+    const bHeight = group_data[7];
+    const bColorCount = group_data[8];
+    const bReserved = group_data[9];
+    const wPlanes = std.mem.readInt(u16, group_data[10..12], .little);
+    const wBitCount = std.mem.readInt(u16, group_data[12..14], .little);
+    const dwBytesInRes = std.mem.readInt(u32, group_data[14..18], .little);
+    const nId = std.mem.readInt(u16, group_data[18..20], .little);
+
+    // Now find the RT_ICON data for this nId
+    if (icon_dir_offset == 0) return null;
+    const icon_data = getResourceDataById(data, icon_dir_offset, rsrc_offset, rsrc_rva, nId) orelse return null;
+    _ = dwBytesInRes;
+
+    // Build ICO file
+    var ico_buf: std.ArrayListUnmanaged(u8) = .{};
+    var writer = ico_buf.writer(g_allocator);
+    writer.writeInt(u16, 0, .little) catch return null;
+    writer.writeInt(u16, 1, .little) catch return null;
+    writer.writeInt(u16, 1, .little) catch return null;
+    writer.writeByte(bWidth) catch return null;
+    writer.writeByte(bHeight) catch return null;
+    writer.writeByte(bColorCount) catch return null;
+    writer.writeByte(bReserved) catch return null;
+    writer.writeInt(u16, wPlanes, .little) catch return null;
+    writer.writeInt(u16, wBitCount, .little) catch return null;
+    writer.writeInt(u32, @intCast(icon_data.len), .little) catch return null;
+    writer.writeInt(u32, 22, .little) catch return null; // data offset
+    writer.writeAll(icon_data) catch return null;
+
+    // Base64 encode
+    const b64_encoder = std.base64.standard.Encoder;
+    const b64_len = b64_encoder.calcSize(ico_buf.items.len);
+    const b64_buf = g_allocator.alloc(u8, b64_len) catch { ico_buf.deinit(g_allocator); return null; };
+    _ = b64_encoder.encode(b64_buf, ico_buf.items);
+    ico_buf.deinit(g_allocator);
+    return b64_buf;
+}
+
+/// Navigate a resource directory (type → first ID → first language) to get data
+fn getFirstResourceData(data: []const u8, dir_offset: u32, rsrc_base: u32, rsrc_rva: u32) ?[]const u8 {
+    if (dir_offset + 16 > data.len) return null;
+    const num_named = std.mem.readInt(u16, data[dir_offset + 12 ..][0..2], .little);
+    const num_id = std.mem.readInt(u16, data[dir_offset + 14 ..][0..2], .little);
+    const total = @as(u32, num_named) + @as(u32, num_id);
+    if (total == 0) return null;
+
+    // Take first entry
+    const first_entry = dir_offset + 16;
+    if (first_entry + 8 > data.len) return null;
+    const sub_offset = std.mem.readInt(u32, data[first_entry + 4 ..][0..4], .little);
+
+    if ((sub_offset & 0x80000000) != 0) {
+        // It's a subdirectory — recurse one more level
+        const sub_dir = rsrc_base + (sub_offset & 0x7FFFFFFF);
+        return getFirstResourceData(data, sub_dir, rsrc_base, rsrc_rva);
+    } else {
+        // It's a data entry
+        const data_entry = rsrc_base + sub_offset;
+        if (data_entry + 16 > data.len) return null;
+        const data_rva = std.mem.readInt(u32, data[data_entry..][0..4], .little);
+        const data_size = std.mem.readInt(u32, data[data_entry + 4 ..][0..4], .little);
+        const file_offset = data_rva - rsrc_rva + rsrc_base;
+        if (file_offset + data_size > data.len) return null;
+        return data[file_offset..][0..data_size];
+    }
+}
+
+/// Find a specific resource ID in a resource directory and return its data
+fn getResourceDataById(data: []const u8, dir_offset: u32, rsrc_base: u32, rsrc_rva: u32, target_id: u16) ?[]const u8 {
+    if (dir_offset + 16 > data.len) return null;
+    const num_named = std.mem.readInt(u16, data[dir_offset + 12 ..][0..2], .little);
+    const num_id = std.mem.readInt(u16, data[dir_offset + 14 ..][0..2], .little);
+
+    var entry = dir_offset + 16 + @as(u32, num_named) * 8;
+    for (0..num_id) |_| {
+        if (entry + 8 > data.len) break;
+        const id = std.mem.readInt(u32, data[entry..][0..4], .little);
+        const sub_offset = std.mem.readInt(u32, data[entry + 4 ..][0..4], .little);
+
+        if (id == target_id) {
+            if ((sub_offset & 0x80000000) != 0) {
+                const sub_dir = rsrc_base + (sub_offset & 0x7FFFFFFF);
+                return getFirstResourceData(data, sub_dir, rsrc_base, rsrc_rva);
+            } else {
+                const data_entry = rsrc_base + sub_offset;
+                if (data_entry + 16 > data.len) return null;
+                const data_rva = std.mem.readInt(u32, data[data_entry..][0..4], .little);
+                const data_size = std.mem.readInt(u32, data[data_entry + 4 ..][0..4], .little);
+                const file_offset = data_rva - rsrc_rva + rsrc_base;
+                if (file_offset + data_size > data.len) return null;
+                return data[file_offset..][0..data_size];
+            }
+        }
+        entry += 8;
+    }
+    return null;
 }

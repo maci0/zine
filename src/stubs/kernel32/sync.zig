@@ -187,3 +187,160 @@ pub fn stub_DuplicateHandle(
     }
     return 1; // TRUE = success
 }
+
+// --- InterlockedCompareExchange ---
+// LONG InterlockedCompareExchange(LONG volatile *Destination, LONG Exchange, LONG Comperand)
+pub fn stub_InterlockedCompareExchange(dest: usize, exchange: i32, comperand: i32) callconv(w32cc.WINAPI) i32 {
+    if (dest == 0) return 0;
+    const ptr = @as(*i32, @ptrFromInt(dest));
+    return @cmpxchgStrong(i32, ptr, comperand, exchange, .seq_cst, .seq_cst) orelse comperand;
+}
+
+// --- File change notifications (stub: return fake handles, no-op poll) ---
+var next_change_handle: usize = 0xCE000001;
+
+pub fn stub_FindFirstChangeNotificationW(path_ptr: usize, watch_subtree: i32, filter: u32) callconv(w32cc.WINAPI) usize {
+    _ = path_ptr;
+    _ = watch_subtree;
+    _ = filter;
+    const h = next_change_handle;
+    next_change_handle += 1;
+    if (trace.enable_tracing) trace.print("KERNEL32: FindFirstChangeNotificationW -> {x}\n", .{h});
+    return h;
+}
+
+pub fn stub_FindNextChangeNotification(hChangeHandle: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hChangeHandle;
+    return 1; // TRUE
+}
+
+// --- SList (Interlocked Singly Linked Lists) ---
+
+pub fn stub_InitializeSListHead(ListHead: usize) callconv(w32cc.WINAPI) void {
+    // SLIST_HEADER is 8 bytes on x86 — zero it out
+    if (ListHead != 0) {
+        @memset(@as([*]u8, @ptrFromInt(ListHead))[0..8], 0);
+    }
+}
+
+pub fn stub_InterlockedFlushSList(ListHead: usize) callconv(w32cc.WINAPI) usize {
+    if (ListHead != 0) {
+        // Read the first pointer (first 4 bytes of SLIST_HEADER)
+        const first = @as(*usize, @ptrFromInt(ListHead)).*;
+        @as(*usize, @ptrFromInt(ListHead)).* = 0; // Clear the list
+        return first;
+    }
+    return 0; // Empty list
+}
+
+// --- Extended Critical Sections ---
+
+pub fn stub_InitializeCriticalSectionEx(lpCriticalSection: usize, dwSpinCount: u32, flags: u32) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("KERNEL32: InitializeCriticalSectionEx(cs={X}, spin={d}, flags={X})\n", .{ lpCriticalSection, dwSpinCount, flags });
+    stub_InitializeCriticalSection(lpCriticalSection);
+    return 1; // TRUE = success
+}
+
+pub fn stub_InitializeCriticalSectionAndSpinCount(lpCriticalSection: usize, dwSpinCount: u32) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("KERNEL32: InitializeCriticalSectionAndSpinCount(cs={X}, spin={d})\n", .{ lpCriticalSection, dwSpinCount });
+    stub_InitializeCriticalSection(lpCriticalSection);
+    return 1; // TRUE = success
+}
+
+// --- Pointer encoding (identity transform in emulation) ---
+
+pub fn stub_EncodePointer(ptr: usize) callconv(w32cc.WINAPI) usize {
+    return ptr; // No encoding needed
+}
+
+pub fn stub_DecodePointer(ptr: usize) callconv(w32cc.WINAPI) usize {
+    return ptr; // No decoding needed
+}
+
+// --- Fiber Local Storage (FLS) ---
+// FLS is like TLS but per-fiber. We're single-fiber, so just use simple slots.
+
+var fls_next: u32 = 0;
+const MAX_FLS_SLOTS = 128;
+var fls_values: [MAX_FLS_SLOTS]usize = [_]usize{0} ** MAX_FLS_SLOTS;
+var fls_callbacks: [MAX_FLS_SLOTS]usize = [_]usize{0} ** MAX_FLS_SLOTS;
+
+pub fn stub_FlsAlloc(lpCallback: usize) callconv(w32cc.WINAPI) u32 {
+    if (fls_next >= MAX_FLS_SLOTS) return 0xFFFFFFFF; // FLS_OUT_OF_INDEXES
+    const idx = fls_next;
+    fls_callbacks[idx] = lpCallback;
+    fls_values[idx] = 0;
+    fls_next += 1;
+    if (trace.enable_tracing) trace.print("KERNEL32: FlsAlloc -> {d}\n", .{idx});
+    return idx;
+}
+
+pub fn stub_FlsGetValue(dwFlsIndex: u32) callconv(w32cc.WINAPI) usize {
+    if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
+    return fls_values[dwFlsIndex];
+}
+
+pub fn stub_FlsSetValue(dwFlsIndex: u32, lpFlsData: usize) callconv(w32cc.WINAPI) i32 {
+    if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
+    fls_values[dwFlsIndex] = lpFlsData;
+    return 1; // TRUE
+}
+
+pub fn stub_FlsFree(dwFlsIndex: u32) callconv(w32cc.WINAPI) i32 {
+    if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
+    fls_values[dwFlsIndex] = 0;
+    fls_callbacks[dwFlsIndex] = 0;
+    return 1; // TRUE
+}
+
+// --- Additional sync stubs ---
+
+pub fn stub_InterlockedExchange(target: usize, value: i32) callconv(w32cc.WINAPI) i32 {
+    if (target == 0) return 0;
+    const ptr = @as(*i32, @ptrFromInt(target));
+    return @atomicRmw(i32, ptr, .Xchg, value, .seq_cst);
+}
+
+pub fn stub_TlsFree(dwTlsIndex: u32) callconv(w32cc.WINAPI) i32 {
+    if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;
+    // Clear the value in all thread entries
+    for (&tls_threads) |*entry| {
+        if (entry.thread_id != 0) {
+            entry.slots[dwTlsIndex] = 0;
+        }
+    }
+    return 1; // TRUE
+}
+
+var next_semaphore_handle: usize = 0xA0000001;
+
+pub fn stub_CreateSemaphoreA(lpSemaphoreAttributes: usize, lInitialCount: i32, lMaximumCount: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
+    _ = lpSemaphoreAttributes;
+    _ = lInitialCount;
+    _ = lMaximumCount;
+    if (trace.enable_tracing) {
+        if (lpName != 0) {
+            trace.print("KERNEL32: CreateSemaphoreA('{s}')\n", .{trace.c_span(lpName)});
+        } else {
+            trace.print("KERNEL32: CreateSemaphoreA(unnamed)\n", .{});
+        }
+    }
+    const handle = next_semaphore_handle;
+    next_semaphore_handle += 1;
+    return handle;
+}
+
+var next_event_handle: usize = 0xE0000010;
+
+pub fn stub_OpenEventA(dwDesiredAccess: u32, bInheritHandle: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
+    _ = dwDesiredAccess;
+    _ = bInheritHandle;
+    if (trace.enable_tracing) {
+        if (lpName != 0) {
+            trace.print("KERNEL32: OpenEventA('{s}')\n", .{trace.c_span(lpName)});
+        }
+    }
+    const handle = next_event_handle;
+    next_event_handle += 1;
+    return handle;
+}

@@ -129,5 +129,13 @@ pub fn initTEB(allocator: std.mem.Allocator) !*TEB {
 }
 
 pub fn setupFS(teb_ptr: *TEB) !void {
+    teb_address = @intFromPtr(teb_ptr);
     try platform.setupFS(teb_ptr);
 }
+
+/// Global TEB address — needed by timer threads that must set up FS base
+/// for calling game x86 callbacks.
+pub var teb_address: usize = 0;
+/// On x86 (32-bit), the FS selector for the TEB GDT entry.
+/// Timer threads need this to set FS to the game's TEB before calling callbacks.
+pub var teb_fs_selector: u16 = 0;

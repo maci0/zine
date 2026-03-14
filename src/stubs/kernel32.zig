@@ -34,28 +34,28 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetFileInformationByHandle", kernel32_file.stub_GetFileInformationByHandle);
     try environment.addBuiltinExportComptime(m, "GetFileAttributesA", kernel32_file.stub_GetFileAttributesA);
     try environment.addBuiltinExportComptime(m, "GetFileAttributesW", kernel32_file.stub_GetFileAttributesW);
-    try environment.addBuiltinExportComptime(m, "SetFileAttributesA", stub_args2);
+    try environment.addBuiltinExportComptime(m, "SetFileAttributesA", kernel32_file.stub_SetFileAttributesA);
     try environment.addBuiltinExportComptime(m, "GetStdHandle", kernel32_file.stub_GetStdHandle);
-    try environment.addBuiltinExportComptime(m, "SetStdHandle", stub_args2);
-    try environment.addBuiltinExportComptime(m, "FlushFileBuffers", stub_args1);
+    try environment.addBuiltinExportComptime(m, "SetStdHandle", kernel32_file.stub_SetStdHandle);
+    try environment.addBuiltinExportComptime(m, "FlushFileBuffers", kernel32_file.stub_FlushFileBuffers);
     try environment.addBuiltinExportComptime(m, "DeleteFileA", kernel32_file.stub_DeleteFileA);
     try environment.addBuiltinExportComptime(m, "FindFirstFileA", kernel32_file.stub_FindFirstFileA);
     try environment.addBuiltinExportComptime(m, "FindNextFileA", kernel32_file.stub_FindNextFileA);
-    try environment.addBuiltinExportComptime(m, "FindClose", stub_args1);
+    try environment.addBuiltinExportComptime(m, "FindClose", kernel32_file.stub_FindClose);
     try environment.addBuiltinExportComptime(m, "CreateFileMappingA", kernel32_file.stub_CreateFileMappingA);
     try environment.addBuiltinExportComptime(m, "MapViewOfFile", kernel32_file.stub_MapViewOfFile);
     try environment.addBuiltinExportComptime(m, "MapViewOfFileEx", kernel32_file.stub_MapViewOfFileEx);
     try environment.addBuiltinExportComptime(m, "UnmapViewOfFile", kernel32_file.stub_UnmapViewOfFile);
     try environment.addBuiltinExportComptime(m, "OpenFileMappingA", kernel32_file.stub_OpenFileMappingA);
-    try environment.addBuiltinExportComptime(m, "CopyFileA", stub_args3);
+    try environment.addBuiltinExportComptime(m, "CopyFileA", kernel32_file.stub_CopyFileA);
     try environment.addBuiltinExportComptime(m, "SearchPathA", kernel32_file.stub_SearchPathA);
     try environment.addBuiltinExportComptime(m, "GetTempPathA", kernel32_file.stub_GetTempPathA);
     try environment.addBuiltinExportComptime(m, "GetTempFileNameA", kernel32_file.stub_GetTempFileNameA);
     try environment.addBuiltinExportComptime(m, "GetSystemDirectoryA", kernel32_file.stub_GetSystemDirectoryA);
     try environment.addBuiltinExportComptime(m, "GetDiskFreeSpaceA", kernel32_file.stub_GetDiskFreeSpaceA);
-    try environment.addBuiltinExportComptime(m, "GetFileTime", stub_args4);
-    try environment.addBuiltinExportComptime(m, "SetFileTime", stub_args4);
-    try environment.addBuiltinExportComptime(m, "SetHandleCount", stub_args1);
+    try environment.addBuiltinExportComptime(m, "GetFileTime", kernel32_file.stub_GetFileTime);
+    try environment.addBuiltinExportComptime(m, "SetFileTime", kernel32_file.stub_SetFileTime);
+    try environment.addBuiltinExportComptime(m, "SetHandleCount", kernel32_file.stub_SetHandleCount);
     try environment.addBuiltinExportComptime(m, "SetCommBreak", stub_args1);
     try environment.addBuiltinExportComptime(m, "ClearCommBreak", stub_args1);
     try environment.addBuiltinExportComptime(m, "GetCommState", stub_args2);
@@ -81,11 +81,11 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GlobalLock", kernel32_mem.stub_GlobalLock);
     try environment.addBuiltinExportComptime(m, "GlobalUnlock", kernel32_mem.stub_GlobalUnlock);
     try environment.addBuiltinExportComptime(m, "GlobalSize", kernel32_mem.stub_GlobalSize);
-    try environment.addBuiltinExportComptime(m, "GlobalHandle", stub_args1);
+    try environment.addBuiltinExportComptime(m, "GlobalHandle", kernel32_mem.stub_GlobalHandle);
     try environment.addBuiltinExportComptime(m, "GlobalMemoryStatus", kernel32_mem.stub_GlobalMemoryStatus);
     try environment.addBuiltinExportComptime(m, "VirtualAlloc", kernel32_mem.stub_VirtualAlloc);
     try environment.addBuiltinExportComptime(m, "VirtualFree", kernel32_mem.stub_VirtualFree);
-    try environment.addBuiltinExportComptime(m, "VirtualProtect", stub_args4);
+    try environment.addBuiltinExportComptime(m, "VirtualProtect", kernel32_mem.stub_VirtualProtect);
     try environment.addBuiltinExportComptime(m, "VirtualQuery", kernel32_mem.stub_VirtualQuery);
     try environment.addBuiltinExportComptime(m, "LocalLock", kernel32_mem.stub_LocalLock);
     try environment.addBuiltinExportComptime(m, "LocalUnlock", kernel32_mem.stub_LocalUnlock);
@@ -97,7 +97,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "CreateProcessA", kernel32_process.stub_CreateProcessA);
     try environment.addBuiltinExportComptime(m, "GetCurrentProcess", kernel32_process.stub_GetCurrentProcess);
     try environment.addBuiltinExportComptime(m, "GetCurrentProcessId", kernel32_process.stub_GetCurrentProcessId);
-    try environment.addBuiltinExportComptime(m, "GetCurrentThread", stub_args0);
+    try environment.addBuiltinExportComptime(m, "GetCurrentThread", kernel32_process.stub_GetCurrentThread);
     try environment.addBuiltinExportComptime(m, "GetCurrentThreadId", kernel32_process.stub_GetCurrentThreadId);
     try environment.addBuiltinExportComptime(m, "CreateThread", kernel32_process.stub_CreateThread);
     try environment.addBuiltinExportComptime(m, "ExitThread", kernel32_process.stub_ExitThread);
@@ -106,7 +106,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetCommandLineW", kernel32_process.stub_GetCommandLineW);
     try environment.addBuiltinExportComptime(m, "LoadLibraryA", kernel32_process.stub_LoadLibraryA);
     try environment.addBuiltinExportComptime(m, "LoadLibraryW", kernel32_process.stub_LoadLibraryW);
-    try environment.addBuiltinExportComptime(m, "FreeLibrary", stub_args1);
+    try environment.addBuiltinExportComptime(m, "FreeLibrary", kernel32_process.stub_FreeLibrary);
     try environment.addBuiltinExportComptime(m, "GetModuleHandleA", kernel32_process.stub_GetModuleHandleA);
     try environment.addBuiltinExportComptime(m, "GetProcAddress", kernel32_process.stub_GetProcAddress);
     try environment.addBuiltinExportComptime(m, "GetModuleFileNameA", kernel32_misc.stub_GetModuleFileNameA);
@@ -114,14 +114,14 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "SetConsoleCtrlHandler", kernel32_process.stub_SetConsoleCtrlHandler);
     try environment.addBuiltinExportComptime(m, "DisableThreadLibraryCalls", kernel32_process.stub_DisableThreadLibraryCalls);
     try environment.addBuiltinExportComptime(m, "OpenProcess", kernel32_process.stub_OpenProcess);
-    try environment.addBuiltinExportComptime(m, "TerminateProcess", stub_args2);
-    try environment.addBuiltinExportComptime(m, "SetPriorityClass", stub_args2);
-    try environment.addBuiltinExportComptime(m, "SetThreadPriority", stub_args2);
-    try environment.addBuiltinExportComptime(m, "ResumeThread", stub_args1);
-    try environment.addBuiltinExportComptime(m, "SuspendThread", stub_args1);
+    try environment.addBuiltinExportComptime(m, "TerminateProcess", kernel32_process.stub_TerminateProcess);
+    try environment.addBuiltinExportComptime(m, "SetPriorityClass", kernel32_process.stub_SetPriorityClass);
+    try environment.addBuiltinExportComptime(m, "SetThreadPriority", kernel32_process.stub_SetThreadPriority);
+    try environment.addBuiltinExportComptime(m, "ResumeThread", kernel32_process.stub_ResumeThread);
+    try environment.addBuiltinExportComptime(m, "SuspendThread", kernel32_process.stub_SuspendThread);
     try environment.addBuiltinExportComptime(m, "GetProcessTimes", stub_args5);
     try environment.addBuiltinExportComptime(m, "GetThreadTimes", stub_args5);
-    try environment.addBuiltinExportComptime(m, "GetExitCodeProcess", stub_args2);
+    try environment.addBuiltinExportComptime(m, "GetExitCodeProcess", kernel32_process.stub_GetExitCodeProcess);
     try environment.addBuiltinExportComptime(m, "DebugBreak", stub_args0);
     try environment.addBuiltinExportComptime(m, "SetHandleInformation", kernel32_process.stub_SetHandleInformation);
     try environment.addBuiltinExportComptime(m, "CreatePipe", kernel32_process.stub_CreatePipe);
@@ -147,21 +147,21 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "DeleteCriticalSection", kernel32_sync.stub_DeleteCriticalSection);
     try environment.addBuiltinExportComptime(m, "InterlockedIncrement", kernel32_sync.stub_InterlockedIncrement);
     try environment.addBuiltinExportComptime(m, "InterlockedDecrement", kernel32_sync.stub_InterlockedDecrement);
-    try environment.addBuiltinExportComptime(m, "InterlockedExchange", stub_args2);
+    try environment.addBuiltinExportComptime(m, "InterlockedExchange", kernel32_sync.stub_InterlockedExchange);
     try environment.addBuiltinExportComptime(m, "CreateEventA", kernel32_sync.stub_CreateEventA);
     try environment.addBuiltinExportComptime(m, "SetEvent", kernel32_sync.stub_SetEvent);
     try environment.addBuiltinExportComptime(m, "ResetEvent", kernel32_sync.stub_ResetEvent);
-    try environment.addBuiltinExportComptime(m, "OpenEventA", stub_args3);
+    try environment.addBuiltinExportComptime(m, "OpenEventA", kernel32_sync.stub_OpenEventA);
     try environment.addBuiltinExportComptime(m, "CreateMutexA", kernel32_sync.stub_CreateMutexA);
     try environment.addBuiltinExportComptime(m, "ReleaseMutex", kernel32_sync.stub_ReleaseMutex);
-    try environment.addBuiltinExportComptime(m, "CreateSemaphoreA", stub_args4);
+    try environment.addBuiltinExportComptime(m, "CreateSemaphoreA", kernel32_sync.stub_CreateSemaphoreA);
     try environment.addBuiltinExportComptime(m, "WaitForSingleObject", kernel32_sync.stub_WaitForSingleObject);
     try environment.addBuiltinExportComptime(m, "WaitForMultipleObjects", kernel32_sync.stub_WaitForMultipleObjects);
     try environment.addBuiltinExportComptime(m, "ReleaseSemaphore", kernel32_sync.stub_ReleaseSemaphore);
     try environment.addBuiltinExportComptime(m, "TlsAlloc", kernel32_sync.stub_TlsAlloc);
     try environment.addBuiltinExportComptime(m, "TlsGetValue", kernel32_sync.stub_TlsGetValue);
     try environment.addBuiltinExportComptime(m, "TlsSetValue", kernel32_sync.stub_TlsSetValue);
-    try environment.addBuiltinExportComptime(m, "TlsFree", stub_args1);
+    try environment.addBuiltinExportComptime(m, "TlsFree", kernel32_sync.stub_TlsFree);
 
     // --- Time & Version (time.zig) ---
     try environment.addBuiltinExportComptime(m, "GetTickCount", kernel32_time.stub_GetTickCount);
@@ -169,13 +169,13 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "QueryPerformanceCounter", kernel32_time.stub_QueryPerformanceCounter);
     try environment.addBuiltinExportComptime(m, "QueryPerformanceFrequency", kernel32_time.stub_QueryPerformanceFrequency);
     try environment.addBuiltinExportComptime(m, "GetLocalTime", kernel32_time.stub_GetLocalTime);
-    try environment.addBuiltinExportComptime(m, "GetSystemTime", stub_args1);
+    try environment.addBuiltinExportComptime(m, "GetSystemTime", kernel32_time.stub_GetSystemTime);
     try environment.addBuiltinExportComptime(m, "GetSystemTimeAsFileTime", kernel32_time.stub_GetSystemTimeAsFileTime);
     try environment.addBuiltinExportComptime(m, "GetSystemTimeAdjustment", kernel32_time.stub_GetSystemTimeAdjustment);
     try environment.addBuiltinExportComptime(m, "GetTimeZoneInformation", kernel32_time.stub_GetTimeZoneInformation);
-    try environment.addBuiltinExportComptime(m, "SystemTimeToFileTime", stub_args2);
-    try environment.addBuiltinExportComptime(m, "FileTimeToSystemTime", stub_args2);
-    try environment.addBuiltinExportComptime(m, "FileTimeToLocalFileTime", stub_args2);
+    try environment.addBuiltinExportComptime(m, "SystemTimeToFileTime", kernel32_time.stub_SystemTimeToFileTime);
+    try environment.addBuiltinExportComptime(m, "FileTimeToSystemTime", kernel32_time.stub_FileTimeToSystemTime);
+    try environment.addBuiltinExportComptime(m, "FileTimeToLocalFileTime", kernel32_time.stub_FileTimeToLocalFileTime);
     try environment.addBuiltinExportComptime(m, "GetVersion", kernel32_time.stub_GetVersion);
     try environment.addBuiltinExportComptime(m, "GetVersionExA", kernel32_time.stub_GetVersionExA);
 
@@ -194,8 +194,8 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetStringTypeA", kernel32_locale.stub_GetStringTypeA);
     try environment.addBuiltinExportComptime(m, "CompareStringA", kernel32_locale.stub_CompareStringA);
     try environment.addBuiltinExportComptime(m, "CompareStringW", kernel32_locale.stub_CompareStringW);
-    try environment.addBuiltinExportComptime(m, "LCMapStringA", stub_args6);
-    try environment.addBuiltinExportComptime(m, "LCMapStringW", stub_args6);
+    try environment.addBuiltinExportComptime(m, "LCMapStringA", kernel32_locale.stub_LCMapStringA);
+    try environment.addBuiltinExportComptime(m, "LCMapStringW", kernel32_locale.stub_LCMapStringW);
     try environment.addBuiltinExportComptime(m, "GetSystemDefaultLCID", kernel32_locale.stub_GetSystemDefaultLCID);
     try environment.addBuiltinExportComptime(m, "GetUserDefaultLCID", kernel32_locale.stub_GetUserDefaultLCID);
     try environment.addBuiltinExportComptime(m, "GetLocaleInfoA", kernel32_locale.stub_GetLocaleInfoA);
@@ -279,7 +279,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "CreateProcessW", kernel32_process.stub_CreateProcessA);
     try environment.addBuiltinExportComptime(m, "ExpandEnvironmentStringsW", stub_args3);
     try environment.addBuiltinExportComptime(m, "CreateDirectoryW", kernel32_misc.stub_CreateDirectoryA);
-    try environment.addBuiltinExportComptime(m, "SetCurrentDirectoryW", kernel32_misc.stub_SetCurrentDirectoryA);
+    try environment.addBuiltinExportComptime(m, "SetCurrentDirectoryW", kernel32_misc.stub_SetCurrentDirectoryW);
     try environment.addBuiltinExportComptime(m, "GetCurrentDirectoryW", kernel32_misc.stub_GetCurrentDirectoryW);
     try environment.addBuiltinExportComptime(m, "GetShortPathNameW", stub_args3);
     try environment.addBuiltinExportComptime(m, "GetNumberFormatW", stub_args6);
@@ -338,6 +338,41 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GlobalGetAtomNameW", stub_args3);
     try environment.addBuiltinExportComptime(m, "EnumDateFormatsW", stub_args3);
     try environment.addBuiltinExportComptime(m, "EnumTimeFormatsW", stub_args3);
+
+    // --- Notepad2 KERNEL32 stubs ---
+    try environment.addBuiltinExportComptime(m, "InterlockedCompareExchange", kernel32_sync.stub_InterlockedCompareExchange);
+    try environment.addBuiltinExportComptime(m, "FreeResource", stub_args1);
+    try environment.addBuiltinExportComptime(m, "FindFirstChangeNotificationW", kernel32_sync.stub_FindFirstChangeNotificationW);
+    try environment.addBuiltinExportComptime(m, "FindNextChangeNotification", kernel32_sync.stub_FindNextChangeNotification);
+    try environment.addBuiltinExportComptime(m, "FindCloseChangeNotification", stub_args1);
+    try environment.addBuiltinExportComptime(m, "GetLongPathNameW", kernel32_misc.stub_GetLongPathNameW);
+    try environment.addBuiltinExportComptime(m, "GetPrivateProfileSectionW", stub_args4);
+    try environment.addBuiltinExportComptime(m, "WritePrivateProfileSectionW", stub_args3);
+
+    // --- hgb.exe KERNEL32 stubs ---
+    try environment.addBuiltinExportComptime(m, "TerminateThread", stub_args2);
+    try environment.addBuiltinExportComptime(m, "FileTimeToDosDateTime", stub_args3);
+
+    // --- DxWrapper / MSVC CRT stubs ---
+    try environment.addBuiltinExportComptime(m, "LoadLibraryExW", kernel32_process.stub_LoadLibraryExW);
+    try environment.addBuiltinExportComptime(m, "GetModuleHandleExW", kernel32_process.stub_GetModuleHandleExW);
+    try environment.addBuiltinExportComptime(m, "IsDebuggerPresent", kernel32_process.stub_IsDebuggerPresent);
+    try environment.addBuiltinExportComptime(m, "GetNativeSystemInfo", kernel32_misc.stub_GetNativeSystemInfo);
+    try environment.addBuiltinExportComptime(m, "InitializeSListHead", kernel32_sync.stub_InitializeSListHead);
+    try environment.addBuiltinExportComptime(m, "InterlockedFlushSList", kernel32_sync.stub_InterlockedFlushSList);
+    try environment.addBuiltinExportComptime(m, "InitializeCriticalSectionEx", kernel32_sync.stub_InitializeCriticalSectionEx);
+    try environment.addBuiltinExportComptime(m, "InitializeCriticalSectionAndSpinCount", kernel32_sync.stub_InitializeCriticalSectionAndSpinCount);
+    try environment.addBuiltinExportComptime(m, "EncodePointer", kernel32_sync.stub_EncodePointer);
+    try environment.addBuiltinExportComptime(m, "DecodePointer", kernel32_sync.stub_DecodePointer);
+    try environment.addBuiltinExportComptime(m, "FlsAlloc", kernel32_sync.stub_FlsAlloc);
+    try environment.addBuiltinExportComptime(m, "FlsGetValue", kernel32_sync.stub_FlsGetValue);
+    try environment.addBuiltinExportComptime(m, "FlsSetValue", kernel32_sync.stub_FlsSetValue);
+    try environment.addBuiltinExportComptime(m, "FlsFree", kernel32_sync.stub_FlsFree);
+    try environment.addBuiltinExportComptime(m, "GetFileSizeEx", kernel32_file.stub_GetFileSizeEx);
+    try environment.addBuiltinExportComptime(m, "SetFilePointerEx", kernel32_file.stub_SetFilePointerEx);
+    try environment.addBuiltinExportComptime(m, "FindFirstFileExW", kernel32_file.stub_FindFirstFileExW);
+    try environment.addBuiltinExportComptime(m, "LCMapStringEx", kernel32_locale.stub_LCMapStringEx);
+    try environment.addBuiltinExportComptime(m, "EnumSystemLocalesW", kernel32_locale.stub_EnumSystemLocalesW);
 }
 
 // Re-export generic stubs from stub_common for backward compatibility

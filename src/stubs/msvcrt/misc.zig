@@ -38,27 +38,114 @@ const TM = extern struct {
 };
 var localtime_result: TM = .{};
 
+fn fillTm(tm: *TM, ts: u64) void {
+    const epoch_secs = std.time.epoch.EpochSeconds{ .secs = ts };
+    const epoch_day = epoch_secs.getEpochDay();
+    const year_day = epoch_day.calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+    const day_secs = epoch_secs.getDaySeconds();
+    tm.* = .{
+        .tm_sec = @intCast(day_secs.getSecondsIntoMinute()),
+        .tm_min = @intCast(day_secs.getMinutesIntoHour()),
+        .tm_hour = @intCast(day_secs.getHoursIntoDay()),
+        .tm_mday = @intCast(month_day.day_index + 1),
+        .tm_mon = @intCast(@intFromEnum(month_day.month) - 1),
+        .tm_year = @as(i32, @intCast(year_day.year)) - 1900,
+        .tm_wday = @intCast((epoch_day.day + 4) % 7),
+        .tm_yday = @intCast(year_day.day),
+        .tm_isdst = 0,
+    };
+}
+
 pub fn stub_localtime(time_ptr: usize) callconv(.c) *TM {
     if (time_ptr != 0) {
         const ts: u64 = @intCast(@as(*const i32, @ptrFromInt(time_ptr)).*);
-        const epoch_secs = std.time.epoch.EpochSeconds{ .secs = ts };
-        const epoch_day = epoch_secs.getEpochDay();
-        const year_day = epoch_day.calculateYearDay();
-        const month_day = year_day.calculateMonthDay();
-        const day_secs = epoch_secs.getDaySeconds();
-        localtime_result = .{
-            .tm_sec = @intCast(day_secs.getSecondsIntoMinute()),
-            .tm_min = @intCast(day_secs.getMinutesIntoHour()),
-            .tm_hour = @intCast(day_secs.getHoursIntoDay()),
-            .tm_mday = @intCast(month_day.day_index + 1),
-            .tm_mon = @intCast(@intFromEnum(month_day.month) - 1),
-            .tm_year = @as(i32, @intCast(year_day.year)) - 1900,
-            .tm_wday = @intCast((epoch_day.day + 4) % 7),
-            .tm_yday = @intCast(year_day.day),
-            .tm_isdst = 0,
-        };
+        fillTm(&localtime_result, ts);
     }
     return &localtime_result;
+}
+
+// ctime returns a static string: "Day Mon DD HH:MM:SS YYYY\n\0"
+var ctime_buf: [26]u8 = undefined;
+const day_names = [_][]const u8{ "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+const mon_names = [_][]const u8{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+
+pub fn stub_ctime(time_ptr: usize) callconv(.c) [*]const u8 {
+    var tm: TM = .{};
+    if (time_ptr != 0) {
+        const raw = @as(*const i32, @ptrFromInt(time_ptr)).*;
+        const ts: u64 = if (raw >= 0) @intCast(raw) else 0;
+        fillTm(&tm, ts);
+    }
+    const wday: usize = @intCast(@mod(tm.tm_wday, 7));
+    const mon: usize = @intCast(@mod(tm.tm_mon, 12));
+    const result = std.fmt.bufPrint(&ctime_buf, "{s} {s} {d:0>2} {d:0>2}:{d:0>2}:{d:0>2} {d}\n", .{
+        day_names[wday],
+        mon_names[mon],
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec,
+        @as(i32, tm.tm_year + 1900),
+    }) catch {
+        @memcpy(ctime_buf[0..25], "Thu Jan 01 00:00:00 1970\n");
+        ctime_buf[25] = 0;
+        return &ctime_buf;
+    };
+    // Null-terminate (bufPrint doesn't)
+    if (result.len < ctime_buf.len) ctime_buf[result.len] = 0;
+    if (trace.enable_tracing) trace.print("MSVCRT: ctime -> '{s}'\n", .{result});
+    return &ctime_buf;
+}
+
+// --- rand / srand (MSVC LCG) ---
+var rand_seed: u32 = 1;
+
+pub fn stub_srand(seed: u32) callconv(.c) void {
+    rand_seed = seed;
+    if (trace.enable_tracing) trace.print("MSVCRT: srand({d})\n", .{seed});
+}
+
+pub fn stub_rand() callconv(.c) i32 {
+    rand_seed = rand_seed *% 214013 +% 2531011;
+    const result = @as(i32, @intCast((rand_seed >> 16) & 0x7fff));
+    if (trace.enable_tracing) trace.print("MSVCRT: rand() -> {d}\n", .{result});
+    return result;
+}
+
+pub fn stub_tzset() callconv(.c) void {
+    msvcrt.msvcrt_timezone = 0;
+    msvcrt.msvcrt_daylight = 0;
+    if (trace.enable_tracing) trace.print("MSVCRT: _tzset()\n", .{});
+}
+
+// struct _timeb { time_t time; unsigned short millitm; short timezone; short dstflag; }
+pub fn stub_ftime(timeb_ptr: usize) callconv(.c) void {
+    if (timeb_ptr == 0) return;
+    const ms = std.time.milliTimestamp();
+    const secs: i32 = @intCast(@divTrunc(ms, 1000));
+    const millitm: u16 = @intCast(@mod(@as(u64, @intCast(ms)), 1000));
+    const buf = @as([*]u8, @ptrFromInt(timeb_ptr));
+    @as(*align(1) i32, @ptrCast(buf[0..4])).* = secs; // time
+    @as(*align(1) u16, @ptrCast(buf[4..6])).* = millitm; // millitm
+    @as(*align(1) i16, @ptrCast(buf[6..8])).* = 0; // timezone
+    @as(*align(1) i16, @ptrCast(buf[8..10])).* = 0; // dstflag
+    if (trace.enable_tracing) trace.print("MSVCRT: _ftime(time={d}, ms={d})\n", .{ secs, millitm });
+}
+
+pub fn stub_utime(path_ptr: usize, times_ptr: usize) callconv(.c) i32 {
+    _ = times_ptr;
+    if (trace.enable_tracing) {
+        const path = if (path_ptr != 0) trace.c_span(path_ptr) else "<null>";
+        trace.print("MSVCRT: _utime('{s}') -> 0\n", .{path});
+    }
+    return 0;
+}
+
+pub fn stub_futime(fd: i32, times_ptr: usize) callconv(.c) i32 {
+    _ = times_ptr;
+    if (trace.enable_tracing) trace.print("MSVCRT: _futime(fd={d}) -> 0\n", .{fd});
+    return 0;
 }
 
 pub fn stub_ignore_i32() callconv(.c) i32 {
@@ -633,6 +720,19 @@ pub fn stub_open_osfhandle(osfhandle: isize, flags: i32) callconv(.c) i32 {
 
 // --- Char Type & Locale ---
 
+// Helper: convert C va_list to a raw usize address.
+// On x86, @cVaStart() yields a pointer; on x86_64 it yields a VaListX86_64 struct.
+// The callers below need `@intFromPtr(ap)` which only works on pointers.
+pub inline fn va_list_to_usize(ap: anytype) usize {
+    const T = @TypeOf(ap);
+    const info = @typeInfo(T);
+    if (info == .pointer) {
+        return @intFromPtr(ap);
+    } else {
+        return @intFromPtr(&ap);
+    }
+}
+
 pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: usize) usize {
     if (max == 0) return 0;
     const args = @as([*]const usize, @ptrFromInt(args_ptr));
@@ -745,12 +845,13 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
     return oi;
 }
 
-pub fn stub_printf(fmt_ptr: usize, a1: usize, a2: usize, a3: usize, a4: usize) callconv(.c) i32 {
+pub fn stub_printf(fmt_ptr: usize, ...) callconv(.c) i32 {
     if (fmt_ptr == 0) return 0;
     const fmt = @as([*:0]const u8, @ptrFromInt(fmt_ptr));
-    var args = [_]usize{ a1, a2, a3, a4 };
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
     var buf: [4096]u8 = undefined;
-    const len = x86_vsnprintf(&buf, 4096, fmt, @intFromPtr(&args));
+    const len = x86_vsnprintf(&buf, 4096, fmt, va_list_to_usize(ap));
     if (trace.enable_tracing) trace.print("MSVCRT: printf '{s}'\n", .{buf[0..len]});
     const out_file = std.fs.File{ .handle = 1 }; // stdout
     out_file.writeAll(buf[0..len]) catch return -1;
@@ -790,11 +891,12 @@ pub fn stub_vsnprintf(buf_ptr: usize, max: usize, fmt_ptr: usize, ap: usize) cal
     return @intCast(copy_len);
 }
 
-pub fn stub_snprintf(buf_ptr: usize, max: usize, fmt_ptr: usize, a1: usize, a2: usize, a3: usize) callconv(.c) i32 {
+pub fn stub_snprintf(buf_ptr: usize, max: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
     if (buf_ptr == 0 or max == 0 or fmt_ptr == 0) return 0;
-    var args = [_]usize{ a1, a2, a3 };
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
     var buf: [4096]u8 = undefined;
-    const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(fmt_ptr), @intFromPtr(&args));
+    const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(fmt_ptr), va_list_to_usize(ap));
     if (trace.enable_tracing) trace.print("MSVCRT: _snprintf '{s}'\n", .{buf[0..len]});
     const copy_len = @min(len, max - 1);
     const out_buf = @as([*]u8, @ptrFromInt(buf_ptr));
@@ -802,9 +904,10 @@ pub fn stub_snprintf(buf_ptr: usize, max: usize, fmt_ptr: usize, a1: usize, a2: 
     out_buf[copy_len] = 0;
     return @intCast(copy_len);
 }
-pub fn stub_swprintf(buf_ptr: usize, fmt_ptr: usize, a1: usize, a2: usize, a3: usize) callconv(.c) i32 {
+pub fn stub_swprintf(buf_ptr: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
     if (buf_ptr == 0 or fmt_ptr == 0) return 0;
-    var args = [_]usize{ a1, a2, a3 };
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
 
     // Convert wide format string to narrow
     var fmt_buf: [4096]u8 = undefined;
@@ -818,7 +921,7 @@ pub fn stub_swprintf(buf_ptr: usize, fmt_ptr: usize, a1: usize, a2: usize, a3: u
     const fmt_narrow = @as([*:0]const u8, @ptrCast(&fmt_buf));
 
     var buf: [4096]u8 = undefined;
-    const len = x86_vsnprintf(&buf, 4096, fmt_narrow, @intFromPtr(&args));
+    const len = x86_vsnprintf(&buf, 4096, fmt_narrow, va_list_to_usize(ap));
     if (trace.enable_tracing) trace.print("MSVCRT: swprintf '{s}' -> '{s}'\n", .{fmt_narrow, buf[0..len]});
 
     // Convert output back to wide
@@ -829,11 +932,12 @@ pub fn stub_swprintf(buf_ptr: usize, fmt_ptr: usize, a1: usize, a2: usize, a3: u
     out_buf[len] = 0;
     return @intCast(len);
 }
-pub fn stub_sprintf(buf_ptr: usize, fmt_ptr: usize, a1: usize, a2: usize, a3: usize) callconv(.c) i32 {
+pub fn stub_sprintf(buf_ptr: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
     if (buf_ptr == 0 or fmt_ptr == 0) return 0;
-    var args = [_]usize{ a1, a2, a3 };
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
     var buf: [4096]u8 = undefined;
-    const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(fmt_ptr), @intFromPtr(&args));
+    const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(fmt_ptr), va_list_to_usize(ap));
     if (trace.enable_tracing) trace.print("MSVCRT: sprintf '{s}'\n", .{buf[0..len]});
     const out_buf = @as([*]u8, @ptrFromInt(buf_ptr));
     @memcpy(out_buf[0..len], buf[0..len]);
@@ -1085,3 +1189,23 @@ pub fn stub_strupr(str_ptr: usize) callconv(.c) usize {
 }
 
 // --- Registration ---
+
+// --- Notepad2 stubs ---
+
+pub fn stub_abs(n: i32) callconv(.c) i32 {
+    return if (n < 0) -n else n;
+}
+
+pub fn stub_clock() callconv(.c) i32 {
+    return 0; // clock_t = 0 ticks
+}
+
+pub fn stub_noop0() callconv(.c) void {}
+pub fn stub_noop1(_: usize) callconv(.c) void {}
+pub fn stub_noop3(_: usize, _: usize, _: usize) callconv(.c) void {}
+
+pub fn stub_mktime(tm_ptr: usize) callconv(.c) i32 {
+    if (tm_ptr == 0) return -1;
+    // Return a dummy timestamp (epoch)
+    return 0;
+}

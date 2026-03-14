@@ -3,6 +3,8 @@ const pe = @import("../../pe.zig");
 const kernel32 = @import("../kernel32.zig");
 const renderer = @import("../../gui/renderer.zig");
 const w32cc = @import("../../calling_convention.zig");
+const std = @import("std");
+const w32 = @import("../../win32_constants.zig");
 
 pub fn stub_LoadIconA(hInstance: usize, lpIconName: usize) callconv(w32cc.WINAPI) usize {
     var hInst = hInstance;
@@ -300,8 +302,50 @@ pub fn stub_LoadMenuA(hInstance: usize, lpMenuName: usize) callconv(w32cc.WINAPI
     return 0x00000999; // Dummy menu handle
 }
 
+fn loadBitmapFromPE(hInst: usize, lpBitmapName: usize) usize {
+    var mod: ?*@import("../../loader/module.zig").Module = null;
+    if (kernel32.global_env) |genv| {
+        var it = genv.registry.modules.valueIterator();
+        while (it.next()) |m| {
+            if (@intFromPtr(m.*.mapped_memory.ptr) == hInst) {
+                mod = m.*;
+                break;
+            }
+        }
+    }
+    if (mod) |m| {
+        if (lpBitmapName <= 0xFFFF) {
+            // RT_BITMAP is 2
+            if (m.getResource(2, @as(u32, @intCast(lpBitmapName)))) |bmp_data| {
+                const hdr = @as(*const w32.BITMAPINFOHEADER, @ptrCast(@alignCast(bmp_data.ptr)));
+                const w: u32 = @intCast(if (hdr.biWidth < 0) -hdr.biWidth else hdr.biWidth);
+                const h: u32 = @intCast(if (hdr.biHeight < 0) -hdr.biHeight else hdr.biHeight);
+                const bitcount = hdr.biBitCount;
+                
+                const bytes = w * h * 4;
+                const buf = std.heap.page_allocator.alloc(u8, bytes) catch return 0;
+                @memset(buf, 0);
+                
+                const palette_num_colors: u32 = if (hdr.biClrUsed > 0) hdr.biClrUsed else if (bitcount <= 8) @as(u32, 1) << @as(u5, @intCast(bitcount)) else 0;
+                const bits_offset = hdr.biSize + palette_num_colors * 4;
+                const lpvBits = @intFromPtr(bmp_data.ptr) + bits_offset;
+                const lpbmi = @intFromPtr(bmp_data.ptr);
+                
+                const drawing = @import("../gdi32/drawing.zig");
+                drawing.blitDIBToBufferAt(lpvBits, lpbmi, buf, w, h, 0, 0, 0, 0, w, h, null, 0x00CC0020); // SRCCOPY
+                
+                const gdi32 = @import("../gdi32.zig");
+                const handle = gdi32.nextHandle();
+                gdi32.registerDib(handle, @intFromPtr(buf.ptr), w, h, 32);
+                if (trace.enable_tracing) trace.print("USER32: LoadBitmap loaded {d}x{d} bpp={d} from PE resource\n", .{w, h, bitcount});
+                return handle;
+            }
+        }
+    }
+    return 0;
+}
+
 pub fn stub_LoadBitmapA(hInstance: usize, lpBitmapName: usize) callconv(w32cc.WINAPI) usize {
-    _ = hInstance;
     if (trace.enable_tracing) {
         if (lpBitmapName <= 0xFFFF) {
             trace.print("USER32: LoadBitmapA(ID={d})\n", .{lpBitmapName});
@@ -309,11 +353,14 @@ pub fn stub_LoadBitmapA(hInstance: usize, lpBitmapName: usize) callconv(w32cc.WI
             trace.print("USER32: LoadBitmapA(Name={s})\n", .{trace.c_span(lpBitmapName)});
         }
     }
+    var hInst = hInstance;
+    if (hInst == 0) hInst = kernel32.main_module_handle;
+    const bmp = loadBitmapFromPE(hInst, lpBitmapName);
+    if (bmp != 0) return bmp;
     return 0xB17B0001; // Dummy bitmap handle
 }
 
 pub fn stub_LoadBitmapW(hInstance: usize, lpBitmapName: usize) callconv(w32cc.WINAPI) usize {
-    _ = hInstance;
     if (trace.enable_tracing) {
         if (lpBitmapName <= 0xFFFF) {
             trace.print("USER32: LoadBitmapW(ID={d})\n", .{lpBitmapName});
@@ -322,5 +369,9 @@ pub fn stub_LoadBitmapW(hInstance: usize, lpBitmapName: usize) callconv(w32cc.WI
             trace.print("USER32: LoadBitmapW(Name={s})\n", .{window.wideToUtf8(lpBitmapName)});
         }
     }
+    var hInst = hInstance;
+    if (hInst == 0) hInst = kernel32.main_module_handle;
+    const bmp = loadBitmapFromPE(hInst, lpBitmapName);
+    if (bmp != 0) return bmp;
     return 0xB17B0001; // Dummy bitmap handle
 }

@@ -43,25 +43,25 @@ fn stub_ftol_x86() callconv(.naked) void {
     );
 }
 
-fn stub_ftol_x64() callconv(.naked) void {
-    // MSVC6 _ftol: value is on the x87 FP stack (ST0), not in XMM0.
-    // Use fistpll to convert ST0 to int64 on the stack, then load into RAX.
-    asm volatile (
-        \\  push %%rbp
-        \\  mov %%rsp, %%rbp
-        \\  sub $16, %%rsp
-        \\  fistpll -8(%%rbp)
-        \\  mov -8(%%rbp), %%rax
-        \\  mov %%rbp, %%rsp
-        \\  pop %%rbp
-        \\  ret
-    );
+fn stub_ftol_x64() callconv(.c) i64 {
+    // On x86_64 the _ftol thunk is called from the interpreter which
+    // passes the f64 value as a regular C argument.
+    // Native x87-calling-convention path only applies to 32-bit.
+    return 0;
 }
 
 fn stub_ftol_generic() callconv(.c) i64 {
     // On WASM, _ftol is never called directly by native code.
     // The x86 interpreter handles it via the thunk mechanism.
     return 0;
+}
+
+pub fn stub_ceil(x: f64) callconv(.c) f64 {
+    return @ceil(x);
+}
+
+pub fn stub_floor(x: f64) callconv(.c) f64 {
+    return @floor(x);
 }
 
 // --- Memory Management ---

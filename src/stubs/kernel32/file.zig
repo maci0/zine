@@ -460,13 +460,48 @@ pub fn stub_SearchPathA(lpPath_ptr: usize, lpFileName_ptr: usize, lpExtension_pt
     return 0; // Not found
 }
 
-// Wildcard find state for FindFirstFileA/FindNextFileA
-var find_dir: ?std.fs.Dir = null;
-var find_iter: ?std.fs.Dir.Iterator = null;
-var find_pattern: [256]u8 = undefined;
-var find_pattern_len: usize = 0;
-var find_dir_path: [1024]u8 = undefined;
-var find_dir_path_len: usize = 0;
+// Pool of find handles for concurrent FindFirstFileA/FindNextFileA
+const MAX_FIND_HANDLES = 16;
+const FIND_HANDLE_BASE = 0xF1AD0000;
+
+const FindHandleState = struct {
+    in_use: bool = false,
+    dir: ?std.fs.Dir = null,
+    iter: ?std.fs.Dir.Iterator = null,
+    pattern: [256]u8 = undefined,
+    pattern_len: usize = 0,
+    dir_path: [1024]u8 = undefined,
+    dir_path_len: usize = 0,
+
+    fn close(self: *FindHandleState) void {
+        if (self.dir) |*d| {
+            d.close();
+        }
+        self.dir = null;
+        self.iter = null;
+        self.in_use = false;
+    }
+};
+
+var find_handles: [MAX_FIND_HANDLES]FindHandleState = [_]FindHandleState{.{}} ** MAX_FIND_HANDLES;
+
+fn allocFindHandle() ?usize {
+    for (0..MAX_FIND_HANDLES) |i| {
+        if (!find_handles[i].in_use) {
+            find_handles[i].in_use = true;
+            return FIND_HANDLE_BASE + i;
+        }
+    }
+    return null;
+}
+
+fn getFindHandle(handle: usize) ?*FindHandleState {
+    if (handle >= FIND_HANDLE_BASE and handle < FIND_HANDLE_BASE + MAX_FIND_HANDLES) {
+        const idx = handle - FIND_HANDLE_BASE;
+        if (find_handles[idx].in_use) return &find_handles[idx];
+    }
+    return null;
+}
 
 fn matchWildcard(name: []const u8, pattern: []const u8) bool {
     // Simple *.ext matching (case-insensitive)
@@ -516,16 +551,16 @@ pub fn stub_FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: usize) cal
     }
 
     if (has_wildcard) {
-        // Close previous find if any
-        if (find_dir) |*d| {
-            d.close();
-            find_dir = null;
-            find_iter = null;
-        }
+        // Allocate a find handle from the pool
+        const handle = allocFindHandle() orelse {
+            if (trace.enable_tracing) trace.print("  -> FindFirstFileA: no free find handles\n", .{});
+            return w32.INVALID_HANDLE_VALUE;
+        };
+        const state = getFindHandle(handle).?;
 
         // Store pattern for FindNextFileA
-        @memcpy(find_pattern[0..pattern.len], pattern);
-        find_pattern_len = pattern.len;
+        @memcpy(state.pattern[0..pattern.len], pattern);
+        state.pattern_len = pattern.len;
 
         // Try opening directory (with case-insensitive fallback)
         var resolved_dir = dir_path;
@@ -535,22 +570,25 @@ pub fn stub_FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: usize) cal
             // Try case-insensitive resolution
             resolved_dir = path_utils.tryCaseInsensitiveResolve(dir_path, &ci_buf) orelse {
                 if (trace.enable_tracing) trace.print("  -> FindFirstFileA: dir not found\n", .{});
+                state.close();
                 return w32.INVALID_HANDLE_VALUE;
             };
             break :blk std.fs.cwd().openDir(resolved_dir, .{ .iterate = true }) catch {
                 if (trace.enable_tracing) trace.print("  -> FindFirstFileA: resolved dir not found\n", .{});
+                state.close();
                 return w32.INVALID_HANDLE_VALUE;
             };
         };
 
-        @memcpy(find_dir_path[0..resolved_dir.len], resolved_dir);
-        find_dir_path_len = resolved_dir.len;
-        find_dir = d;
-        find_iter = d.iterate();
+        @memcpy(state.dir_path[0..resolved_dir.len], resolved_dir);
+        state.dir_path_len = resolved_dir.len;
+        state.dir = d;
+        state.iter = d.iterate();
 
         // Find first matching entry
-        const result = stub_FindNextFileA(1234, lpFindFileData_ptr);
-        if (result != 0) return 1234;
+        const result = stub_FindNextFileA(handle, lpFindFileData_ptr);
+        if (result != 0) return handle;
+        state.close();
         return w32.INVALID_HANDLE_VALUE;
     }
 
@@ -569,7 +607,8 @@ pub fn stub_FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: usize) cal
         @memcpy(find_data.cFileName[0..copy_len], fname[0..copy_len]);
         find_data.cFileName[copy_len] = 0;
 
-        return 1234;
+        // Allocate a dummy handle for literal matches
+        return allocFindHandle() orelse FIND_HANDLE_BASE;
     }
 
     if (trace.enable_tracing) trace.print("  -> FindFirstFileA: not found\n", .{});
@@ -577,12 +616,13 @@ pub fn stub_FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: usize) cal
 }
 
 pub fn stub_FindNextFileA(hFindFile: usize, lpFindFileData_ptr: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hFindFile;
     if (lpFindFileData_ptr == 0) return 0;
 
-    if (find_iter) |*iter| {
+    const state = getFindHandle(hFindFile) orelse return 0;
+
+    if (state.iter) |*iter| {
         while (iter.next() catch null) |entry| {
-            if (matchWildcard(entry.name, find_pattern[0..find_pattern_len])) {
+            if (matchWildcard(entry.name, state.pattern[0..state.pattern_len])) {
                 const find_data = @as(*w32.WIN32_FIND_DATAA, @ptrFromInt(lpFindFileData_ptr));
                 find_data.* = .{};
                 find_data.dwFileAttributes = if (entry.kind == .directory) w32.FILE_ATTRIBUTE_DIRECTORY else w32.FILE_ATTRIBUTE_NORMAL;
@@ -591,12 +631,20 @@ pub fn stub_FindNextFileA(hFindFile: usize, lpFindFileData_ptr: usize) callconv(
                 find_data.cFileName[copy_len] = 0;
 
                 if (trace.enable_tracing) trace.print("KERNEL32: FindNextFileA -> '{s}'\n", .{entry.name});
-                // Return as usize for FindFirstFileA compatibility, or i32 for FindNextFileA
                 return 1;
             }
         }
     }
     return 0; // No more files
+}
+
+pub fn stub_FindClose(hFindFile: usize) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("KERNEL32: FindClose({x})\n", .{hFindFile});
+    if (getFindHandle(hFindFile)) |state| {
+        state.close();
+        return 1; // TRUE
+    }
+    return 1; // Still return TRUE even if not found
 }
 
 pub fn stub_GetSystemDirectoryA(lpBuffer: usize, uSize: u32) callconv(w32cc.WINAPI) u32 {
@@ -687,4 +735,168 @@ pub fn stub_GetDiskFreeSpaceA(
     if (lpNumberOfFreeClusters != 0) @as(*u32, @ptrFromInt(lpNumberOfFreeClusters)).* = 1024 * 1024;
     if (lpTotalNumberOfClusters != 0) @as(*u32, @ptrFromInt(lpTotalNumberOfClusters)).* = 2 * 1024 * 1024;
     return 1; // TRUE = success
+}
+
+// --- DxWrapper / MSVC CRT stubs ---
+
+pub fn stub_GetFileSizeEx(hFile: usize, lpFileSize: usize) callconv(w32cc.WINAPI) i32 {
+    const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
+    if (trace.enable_tracing) trace.print("KERNEL32: GetFileSizeEx(hFile={d})\n", .{fd});
+
+    if (lpFileSize == 0) return 0;
+    const file = std.fs.File{ .handle = fd };
+    if (file.stat() catch null) |stat_result| {
+        // LARGE_INTEGER: 64-bit signed int
+        @as(*i64, @ptrFromInt(lpFileSize)).* = @intCast(stat_result.size);
+        return 1; // TRUE
+    }
+    return 0; // FALSE
+}
+
+pub fn stub_SetFilePointerEx(hFile: usize, liDistanceToMove_lo: u32, liDistanceToMove_hi: u32, lpNewFilePointer: usize, dwMoveMethod: u32) callconv(w32cc.WINAPI) i32 {
+    const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
+    const distance = @as(i64, @bitCast((@as(u64, liDistanceToMove_hi) << 32) | @as(u64, liDistanceToMove_lo)));
+    if (trace.enable_tracing) trace.print("KERNEL32: SetFilePointerEx(hFile={d}, dist={d}, method={d})\n", .{ fd, distance, dwMoveMethod });
+
+    const file = std.fs.File{ .handle = fd };
+
+    switch (dwMoveMethod) {
+        0 => { // FILE_BEGIN
+            if (distance < 0) return 0;
+            file.seekTo(@intCast(distance)) catch return 0;
+        },
+        1 => { // FILE_CURRENT
+            const pos = file.getPos() catch return 0;
+            const new_pos = @as(i64, @intCast(pos)) + distance;
+            if (new_pos < 0) return 0;
+            file.seekTo(@intCast(new_pos)) catch return 0;
+        },
+        2 => { // FILE_END
+            const end = file.getEndPos() catch return 0;
+            const new_pos = @as(i64, @intCast(end)) + distance;
+            if (new_pos < 0) return 0;
+            file.seekTo(@intCast(new_pos)) catch return 0;
+        },
+        else => return 0,
+    }
+
+    if (lpNewFilePointer != 0) {
+        const final_pos = file.getPos() catch return 0;
+        @as(*i64, @ptrFromInt(lpNewFilePointer)).* = @intCast(final_pos);
+    }
+    return 1; // TRUE
+}
+
+pub fn stub_FindFirstFileExW(lpFileName: usize, fInfoLevelId: u32, lpFindFileData: usize, fSearchOp: u32, lpSearchFilter: usize, dwAdditionalFlags: u32) callconv(w32cc.WINAPI) usize {
+    if (trace.enable_tracing) trace.print("KERNEL32: FindFirstFileExW(level={d}, op={d}, filter={X}, flags={X})\n", .{ fInfoLevelId, fSearchOp, lpSearchFilter, dwAdditionalFlags });
+    // Delegate to FindFirstFileW (ignoring extended parameters)
+    const process = @import("process.zig");
+    return process.stub_FindFirstFileW(lpFileName, lpFindFileData);
+}
+
+// --- Additional file stubs ---
+
+pub fn stub_SetFileAttributesA(lpFileName_ptr: usize, dwFileAttributes: u32) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) {
+        if (lpFileName_ptr != 0) {
+            trace.print("KERNEL32: SetFileAttributesA('{s}', {x})\n", .{ trace.c_span(lpFileName_ptr), dwFileAttributes });
+        }
+    }
+    return 1; // TRUE = success (no-op)
+}
+
+pub fn stub_FlushFileBuffers(hFile: usize) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("KERNEL32: FlushFileBuffers({x})\n", .{hFile});
+    // Actually flush the fd if possible
+    const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
+    const file = std.fs.File{ .handle = fd };
+    file.sync() catch {};
+    return 1; // TRUE
+}
+
+pub fn stub_GetFileTime(hFile: usize, lpCreationTime: usize, lpLastAccessTime: usize, lpLastWriteTime: usize) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("KERNEL32: GetFileTime({x})\n", .{hFile});
+
+    // Get current time as FILETIME
+    const unix_ns: u128 = @bitCast(std.time.nanoTimestamp());
+    const win_offset: u128 = 11644473600 * 10_000_000;
+    const filetime: u64 = @intCast(unix_ns / 100 + win_offset);
+    const low: u32 = @intCast(filetime & 0xFFFFFFFF);
+    const high: u32 = @intCast(filetime >> 32);
+
+    // Try to get actual file times from stat
+    const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
+    const file = std.fs.File{ .handle = fd };
+    var actual_low = low;
+    var actual_high = high;
+    if (file.stat() catch null) |st| {
+        const mtime_ns: u128 = @intCast(@as(u64, @bitCast(@as(i64, @intCast(st.mtime)))));
+        const mtime_ft: u64 = @intCast(mtime_ns / 100 + win_offset);
+        actual_low = @intCast(mtime_ft & 0xFFFFFFFF);
+        actual_high = @intCast(mtime_ft >> 32);
+    }
+
+    if (lpCreationTime != 0) {
+        const ft = @as(*w32.FILETIME, @ptrFromInt(lpCreationTime));
+        ft.dwLowDateTime = actual_low;
+        ft.dwHighDateTime = actual_high;
+    }
+    if (lpLastAccessTime != 0) {
+        const ft = @as(*w32.FILETIME, @ptrFromInt(lpLastAccessTime));
+        ft.dwLowDateTime = actual_low;
+        ft.dwHighDateTime = actual_high;
+    }
+    if (lpLastWriteTime != 0) {
+        const ft = @as(*w32.FILETIME, @ptrFromInt(lpLastWriteTime));
+        ft.dwLowDateTime = actual_low;
+        ft.dwHighDateTime = actual_high;
+    }
+    return 1; // TRUE
+}
+
+pub fn stub_SetFileTime(hFile: usize, lpCreationTime: usize, lpLastAccessTime: usize, lpLastWriteTime: usize) callconv(w32cc.WINAPI) i32 {
+    _ = lpCreationTime;
+    _ = lpLastAccessTime;
+    _ = lpLastWriteTime;
+    if (trace.enable_tracing) trace.print("KERNEL32: SetFileTime({x}) - no-op\n", .{hFile});
+    return 1; // TRUE = success (no-op)
+}
+
+pub fn stub_CopyFileA(lpExistingFileName: usize, lpNewFileName: usize, bFailIfExists: i32) callconv(w32cc.WINAPI) i32 {
+    _ = bFailIfExists;
+    if (lpExistingFileName == 0 or lpNewFileName == 0) return 0;
+    const src_name = trace.c_span(lpExistingFileName);
+    const dst_name = trace.c_span(lpNewFileName);
+    if (trace.enable_tracing) trace.print("KERNEL32: CopyFileA('{s}' -> '{s}')\n", .{ src_name, dst_name });
+
+    const path_utils = @import("../../path_utils.zig");
+    var src_buf: [1024]u8 = undefined;
+    const src_len = path_utils.win32ToPosix(src_name, &src_buf);
+    var dst_buf: [1024]u8 = undefined;
+    const dst_len = path_utils.win32ToPosix(dst_name, &dst_buf);
+
+    // Attempt actual copy via filesystem
+    const cwd = std.fs.cwd();
+    const src_file = cwd.openFile(src_buf[0..src_len], .{}) catch return 0;
+    defer src_file.close();
+    const dst_file = cwd.createFile(dst_buf[0..dst_len], .{}) catch return 0;
+    defer dst_file.close();
+
+    var buf: [4096]u8 = undefined;
+    while (true) {
+        const n = src_file.read(&buf) catch return 0;
+        if (n == 0) break;
+        dst_file.writeAll(buf[0..n]) catch return 0;
+    }
+    return 1; // TRUE
+}
+
+pub fn stub_SetStdHandle(nStdHandle: u32, hHandle: usize) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("KERNEL32: SetStdHandle({d}, {x})\n", .{ nStdHandle, hHandle });
+    return 1; // TRUE
+}
+
+pub fn stub_SetHandleCount(uNumber: u32) callconv(w32cc.WINAPI) u32 {
+    // Legacy API — just return the requested number
+    return uNumber;
 }

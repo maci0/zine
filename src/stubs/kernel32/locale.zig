@@ -152,22 +152,127 @@ pub fn stub_FormatMessageA(dwFlags: u32, lpSource: ?*anyopaque, dwMessageId: u32
 
 // --- String type/comparison functions ---
 
+// CT_CTYPE1 flags
+const C1_UPPER = 0x0001;
+const C1_LOWER = 0x0002;
+const C1_DIGIT = 0x0004;
+const C1_SPACE = 0x0008;
+const C1_PUNCT = 0x0010;
+const C1_CNTRL = 0x0020;
+const C1_BLANK = 0x0040;
+const C1_XDIGIT = 0x0080;
+const C1_ALPHA = 0x0100;
+const C1_DEFINED = 0x0200;
+
+fn getCharTypeW(ch: u16) u16 {
+    if (ch > 0xFF) return C1_ALPHA | C1_DEFINED; // Non-ASCII: assume alpha
+    const c: u8 = @intCast(ch & 0xFF);
+    var ct: u16 = C1_DEFINED;
+    if (c < 0x20 or c == 0x7F) ct |= C1_CNTRL;
+    if (c >= 'A' and c <= 'Z') ct |= C1_UPPER | C1_ALPHA;
+    if (c >= 'a' and c <= 'z') ct |= C1_LOWER | C1_ALPHA;
+    if (c >= '0' and c <= '9') ct |= C1_DIGIT;
+    if ((c >= '0' and c <= '9') or (c >= 'A' and c <= 'F') or (c >= 'a' and c <= 'f')) ct |= C1_XDIGIT;
+    if (c == ' ' or (c >= 0x09 and c <= 0x0D)) ct |= C1_SPACE;
+    if (c == ' ' or c == 0x09) ct |= C1_BLANK;
+    if ((c >= 0x21 and c <= 0x2F) or (c >= 0x3A and c <= 0x40) or
+        (c >= 0x5B and c <= 0x60) or (c >= 0x7B and c <= 0x7E)) ct |= C1_PUNCT;
+    return ct;
+}
+
 pub fn stub_GetStringTypeW(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpCharType: usize) callconv(w32cc.WINAPI) i32 {
-    _ = dwInfoType;
-    _ = lpSrcStr;
-    _ = cchSrc;
-    _ = lpCharType;
-    if (trace.enable_tracing) trace.print("KERNEL32: GetStringTypeW (stub, output not filled)\n", .{});
+    if (trace.enable_tracing) trace.print("KERNEL32: GetStringTypeW(type={d}, src={x}, len={d})\n", .{ dwInfoType, lpSrcStr, cchSrc });
+
+    if (lpCharType == 0 or lpSrcStr == 0) return 0;
+    const len: usize = if (cchSrc < 0) trace.c_span_w(lpSrcStr).len else @intCast(cchSrc);
+    if (len == 0) return 0;
+
+    const src = @as([*]const u16, @ptrFromInt(lpSrcStr));
+    const out = @as([*]u16, @ptrFromInt(lpCharType));
+
+    // CT_CTYPE1 = 1, CT_CTYPE2 = 2, CT_CTYPE3 = 4
+    if (dwInfoType == 1) {
+        for (0..len) |i| out[i] = getCharTypeW(src[i]);
+    } else {
+        // Types 2/3 are less commonly needed; zero-fill for now
+        for (0..len) |i| out[i] = 0;
+    }
     return 1;
 }
 
 pub fn stub_GetStringTypeA(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpCharType: usize) callconv(w32cc.WINAPI) i32 {
-    _ = dwInfoType;
-    _ = lpSrcStr;
-    _ = cchSrc;
-    _ = lpCharType;
-    if (trace.enable_tracing) trace.print("KERNEL32: GetStringTypeA (stub, output not filled)\n", .{});
+    if (trace.enable_tracing) trace.print("KERNEL32: GetStringTypeA(type={d}, src={x}, len={d})\n", .{ dwInfoType, lpSrcStr, cchSrc });
+
+    if (lpCharType == 0 or lpSrcStr == 0) return 0;
+    const len: usize = if (cchSrc < 0) trace.c_span(lpSrcStr).len else @intCast(cchSrc);
+    if (len == 0) return 0;
+
+    const src = @as([*]const u8, @ptrFromInt(lpSrcStr));
+    const out = @as([*]u16, @ptrFromInt(lpCharType));
+
+    if (dwInfoType == 1) {
+        for (0..len) |i| out[i] = getCharTypeW(src[i]);
+    } else {
+        for (0..len) |i| out[i] = 0;
+    }
     return 1;
+}
+
+// --- LCMapString functions ---
+
+pub fn stub_LCMapStringA(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, lpDestStr: usize, cchDest: i32) callconv(w32cc.WINAPI) i32 {
+    _ = Locale;
+    if (trace.enable_tracing) trace.print("KERNEL32: LCMapStringA(flags=0x{X})\n", .{dwMapFlags});
+
+    if (lpSrcStr == 0) return 0;
+    const src_len: usize = if (cchSrc < 0) trace.c_span(lpSrcStr).len + 1 else @intCast(cchSrc);
+    if (cchDest == 0 or lpDestStr == 0) return @intCast(src_len);
+
+    const src = @as([*]const u8, @ptrFromInt(lpSrcStr));
+    const dst = @as([*]u8, @ptrFromInt(lpDestStr));
+    const copy_len = @min(src_len, @as(usize, @intCast(cchDest)));
+
+    const LCMAP_UPPERCASE = 0x00000200;
+    const LCMAP_LOWERCASE = 0x00000100;
+
+    for (0..copy_len) |i| {
+        if ((dwMapFlags & LCMAP_UPPERCASE) != 0) {
+            dst[i] = std.ascii.toUpper(src[i]);
+        } else if ((dwMapFlags & LCMAP_LOWERCASE) != 0) {
+            dst[i] = std.ascii.toLower(src[i]);
+        } else {
+            dst[i] = src[i];
+        }
+    }
+    return @intCast(copy_len);
+}
+
+pub fn stub_LCMapStringW(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, lpDestStr: usize, cchDest: i32) callconv(w32cc.WINAPI) i32 {
+    _ = Locale;
+    if (trace.enable_tracing) trace.print("KERNEL32: LCMapStringW(flags=0x{X})\n", .{dwMapFlags});
+
+    if (lpSrcStr == 0) return 0;
+    const src_len: usize = if (cchSrc < 0) trace.c_span_w(lpSrcStr).len + 1 else @intCast(cchSrc);
+    if (cchDest == 0 or lpDestStr == 0) return @intCast(src_len);
+
+    const src = @as([*]const u16, @ptrFromInt(lpSrcStr));
+    const dst = @as([*]u16, @ptrFromInt(lpDestStr));
+    const copy_len = @min(src_len, @as(usize, @intCast(cchDest)));
+
+    const LCMAP_UPPERCASE = 0x00000200;
+    const LCMAP_LOWERCASE = 0x00000100;
+
+    for (0..copy_len) |i| {
+        const ch = src[i];
+        if ((dwMapFlags & LCMAP_UPPERCASE) != 0 and ch >= 'a' and ch <= 'z') {
+            dst[i] = ch - 0x20;
+        } else if ((dwMapFlags & LCMAP_LOWERCASE) != 0 and ch >= 'A' and ch <= 'Z') {
+            dst[i] = ch + 0x20;
+        } else {
+            dst[i] = ch;
+        }
+    }
+    return @intCast(copy_len);
 }
 
 pub fn stub_CompareStringA(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1: i32, lpString2: usize, cchCount2: i32) callconv(w32cc.WINAPI) i32 {
@@ -235,6 +340,35 @@ pub fn stub_EnumSystemLocalesA(lpLocaleEnumProc: usize, dwFlags: u32) callconv(w
         _ = cb(@intFromPtr(&buf));
     }
     return 1;
+}
+
+pub fn stub_EnumSystemLocalesW(lpLocaleEnumProc: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
+    _ = dwFlags;
+    if (lpLocaleEnumProc != 0) {
+        // Call callback with L"00000409" (English US)
+        var buf: [9]u16 = .{ '0', '0', '0', '0', '0', '4', '0', '9', 0 };
+        const cb = @as(*const fn (usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(lpLocaleEnumProc));
+        _ = cb(@intFromPtr(&buf));
+    }
+    return 1;
+}
+
+pub fn stub_LCMapStringEx(lpLocaleName: usize, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, lpDestStr: usize, cchDest: i32, lpVersionInformation: usize, lpReserved: usize, sortHandle: usize) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("KERNEL32: LCMapStringEx(flags=0x{X}, localeName={X}, ver={X}, reserved={X}, sort={X})\n", .{ dwMapFlags, lpLocaleName, lpVersionInformation, lpReserved, sortHandle });
+
+    if (lpSrcStr == 0) return 0;
+
+    const src_len: usize = if (cchSrc < 0) trace.c_span_w(lpSrcStr).len + 1 else @intCast(cchSrc);
+
+    // If output buffer is 0, return required size
+    if (cchDest == 0 or lpDestStr == 0) return @intCast(src_len);
+
+    // Simple identity copy (sufficient for MSVC CRT usage)
+    const src = @as([*]const u16, @ptrFromInt(lpSrcStr));
+    const dst = @as([*]u16, @ptrFromInt(lpDestStr));
+    const copy_len = @min(src_len, @as(usize, @intCast(cchDest)));
+    for (0..copy_len) |i| dst[i] = src[i];
+    return @intCast(copy_len);
 }
 
 pub fn stub_GetLocaleInfoA(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) callconv(w32cc.WINAPI) i32 {

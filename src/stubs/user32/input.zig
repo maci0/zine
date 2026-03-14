@@ -25,37 +25,85 @@ pub fn stub_SetCursor(hCursor: usize) callconv(w32cc.WINAPI) usize {
 pub fn stub_GetCursorPos(lpPoint: usize) callconv(w32cc.WINAPI) i32 {
     if (lpPoint != 0) {
         const pt = @as(*w32.POINT, @ptrFromInt(lpPoint));
-        pt.x = 0;
-        pt.y = 0;
+        pt.x = renderer.last_mouse_x;
+        pt.y = renderer.last_mouse_y;
     }
     return 1;
 }
 
+var capture_hwnd: usize = 0;
+
 pub fn stub_GetCapture() callconv(w32cc.WINAPI) usize {
-    return 0;
+    return capture_hwnd;
 }
 
 pub fn stub_SetCapture(hWnd: usize) callconv(w32cc.WINAPI) usize {
-    _ = hWnd;
-    return 0;
+    const prev = capture_hwnd;
+    capture_hwnd = hWnd;
+    return prev;
 }
 
 pub fn stub_ReleaseCapture() callconv(w32cc.WINAPI) i32 {
+    capture_hwnd = 0;
     return 1;
 }
 
+const std = @import("std");
+
+pub const TimerEntry = struct {
+    hwnd: usize,
+    id: usize,
+    elapse_ms: u32,
+    callback: usize, // lpTimerFunc (0 = post WM_TIMER)
+    last_fire: i64,  // millisecond timestamp of last fire
+    active: bool,
+};
+
+pub var timers: [16]TimerEntry = [_]TimerEntry{.{ .hwnd = 0, .id = 0, .elapse_ms = 0, .callback = 0, .last_fire = 0, .active = false }} ** 16;
+
 pub fn stub_SetTimer(hWnd: usize, nIDEvent: usize, uElapse: u32, lpTimerFunc: usize) callconv(w32cc.WINAPI) usize {
-    _ = hWnd;
-    _ = uElapse;
-    _ = lpTimerFunc;
-    if (trace.enable_tracing) trace.print("USER32: SetTimer(id={d})\n", .{nIDEvent});
+    _ = lpTimerFunc; // We don't call lpTimerFunc; we post WM_TIMER instead
+    if (trace.enable_tracing) trace.print("USER32: SetTimer(hwnd={x}, id={d}, elapse={d}ms)\n", .{ hWnd, nIDEvent, uElapse });
+
+    // Find existing timer with same id or a free slot
+    var slot: ?usize = null;
+    for (&timers, 0..) |*t, i| {
+        if (t.active and t.id == nIDEvent and t.hwnd == hWnd) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot == null) {
+        for (&timers, 0..) |*t, i| {
+            if (!t.active) {
+                slot = i;
+                break;
+            }
+        }
+    }
+
+    if (slot) |s| {
+        timers[s] = .{
+            .hwnd = hWnd,
+            .id = nIDEvent,
+            .elapse_ms = if (uElapse < 10) 10 else uElapse, // Win32 minimum is 10ms
+            .callback = 0,
+            .last_fire = std.time.milliTimestamp(),
+            .active = true,
+        };
+    }
     return nIDEvent;
 }
 
 pub fn stub_KillTimer(hWnd: usize, uIDEvent: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hWnd;
-    _ = uIDEvent;
-    return 1;
+    if (trace.enable_tracing) trace.print("USER32: KillTimer(hwnd={x}, id={d})\n", .{ hWnd, uIDEvent });
+    for (&timers) |*t| {
+        if (t.active and t.id == uIDEvent and t.hwnd == hWnd) {
+            t.active = false;
+            return 1;
+        }
+    }
+    return 0; // Timer not found
 }
 
 pub fn stub_GetQueueStatus(flags: u32) callconv(w32cc.WINAPI) u32 {

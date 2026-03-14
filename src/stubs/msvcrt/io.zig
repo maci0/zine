@@ -325,14 +325,16 @@ pub fn stub_putchar(c: i32) callconv(.c) i32 {
 
 const misc = @import("misc.zig");
 
-// Just prints the format string. We ignore varargs natively since x86 stack deals with it on return.
-pub fn stub_fprintf(f: ?*anyopaque, format_ptr: usize, a1: usize, a2: usize, a3: usize, a4: usize) callconv(.c) i32 {
+// Printf-family: use C varargs (...) so we read directly from the caller's stack.
+// On x86 cdecl, va_list is a stack pointer — x86_vsnprintf reads args contiguously.
+pub fn stub_fprintf(f: ?*anyopaque, format_ptr: usize, ...) callconv(.c) i32 {
     if (getFile(f)) |file| {
         if (format_ptr != 0) {
             const fmt = @as([*:0]const u8, @ptrFromInt(format_ptr));
-            var args = [_]usize{ a1, a2, a3, a4 };
+            var ap = @cVaStart();
+            defer @cVaEnd(&ap);
             var buf: [4096]u8 = undefined;
-            const len = misc.x86_vsnprintf(&buf, 4096, fmt, @intFromPtr(&args));
+            const len = misc.x86_vsnprintf(&buf, 4096, fmt, misc.va_list_to_usize(ap));
             file.writeAll(buf[0..len]) catch return -1;
             return @intCast(len);
         }

@@ -32,10 +32,19 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
 
     renderer.openFileDialog(filters_json, is_save);
 
+    // Register our callbacks so the web UI can signal us
+    const prev_file_cb = renderer.on_file_uploaded;
+    const prev_cancel_cb = renderer.on_cancel_dialog;
+    renderer.on_file_uploaded = &handleFileUploaded;
+    renderer.on_cancel_dialog = &handleCancelDialog;
+
     // Block the emulator thread until the user uploads a file or cancels
     while (pending_file_path == null and !dialog_cancelled) {
         std.Thread.sleep(10 * 1000 * 1000); // 10ms
     }
+
+    renderer.on_file_uploaded = prev_file_cb;
+    renderer.on_cancel_dialog = prev_cancel_cb;
 
     renderer.closeDialog();
 
@@ -141,10 +150,19 @@ fn commonFileDialogW(lpofn_ptr: usize, is_save: bool) i32 {
 
     renderer.openFileDialog(filters_json, is_save);
 
+    // Register our callbacks so the web UI can signal us
+    const prev_file_cb = renderer.on_file_uploaded;
+    const prev_cancel_cb = renderer.on_cancel_dialog;
+    renderer.on_file_uploaded = &handleFileUploaded;
+    renderer.on_cancel_dialog = &handleCancelDialog;
+
     // Block until the user uploads a file or cancels
     while (pending_file_path == null and !dialog_cancelled) {
         std.Thread.sleep(10 * 1000 * 1000); // 10ms
     }
+
+    renderer.on_file_uploaded = prev_file_cb;
+    renderer.on_cancel_dialog = prev_cancel_cb;
 
     renderer.closeDialog();
 

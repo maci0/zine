@@ -198,6 +198,7 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
         pushFrame();
         if (renderer.dynamic_menu_json) |json| pushMessage(json);
         if (renderer.icon_json) |json| pushMessage(json);
+        if (renderer.desktop_icons_json) |json| pushMessage(json);
         if (renderer.active_dialog) |json| pushMessage(json);
         if (renderer.last_window_pos_json) |json| pushMessage(json);
         if (renderer.last_title_json) |json| pushMessage(json);
@@ -241,7 +242,7 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                                     // Validate: reject path traversal
                                     if (std.mem.indexOf(u8, dir_path, "..") != null) continue;
 
-                                    const path = std.fmt.bufPrint(&selected_file_path, "{s}/{s}", .{ dir_path, file_val.string }) catch null;
+                                    const path = std.fmt.bufPrint(&selected_file_path, "drive_c/{s}/{s}", .{ dir_path, file_val.string }) catch null;
                                     if (path) |p| {
                                         if (renderer.on_file_uploaded) |cb| cb(p);
                                     }
@@ -255,6 +256,20 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                                     // Validate: reject path traversal
                                     if (std.mem.indexOf(u8, req_path, "..") == null) {
                                         renderer.listDirectory(req_path);
+                                    }
+                                }
+                            }
+                        } else if (std.mem.eql(u8, type_val.?.string, "launch")) {
+                            // Desktop icon double-click: launch a file from drive_c/
+                            if (root.object.get("path")) |path_val| {
+                                if (path_val == .string) {
+                                    const req_path = path_val.string;
+                                    // Validate: reject path traversal
+                                    if (std.mem.indexOf(u8, req_path, "..") == null) {
+                                        const path = std.fmt.bufPrint(&selected_file_path, "drive_c/{s}", .{req_path}) catch null;
+                                        if (path) |p| {
+                                            if (renderer.on_file_uploaded) |cb| cb(p);
+                                        }
                                     }
                                 }
                             }
@@ -345,6 +360,25 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                                         if (renderer.on_key_event) |cb| cb(vk_code, is_down);
                                     }
                                 }
+                            }
+                        } else if (std.mem.eql(u8, type_val.?.string, "mousedown") or
+                                   std.mem.eql(u8, type_val.?.string, "mouseup") or
+                                   std.mem.eql(u8, type_val.?.string, "mousemove")) {
+                            const x_val = root.object.get("x");
+                            const y_val = root.object.get("y");
+                            const btn_val = root.object.get("button");
+                            if (x_val != null and y_val != null and x_val.? == .integer and y_val.? == .integer) {
+                                const x: i32 = @intCast(x_val.?.integer);
+                                const y: i32 = @intCast(y_val.?.integer);
+                                const button: i32 = if (btn_val != null and btn_val.? == .integer) @intCast(btn_val.?.integer) else 0;
+                                const w32 = @import("../win32_constants.zig");
+                                var msg_id: u32 = w32.WM_MOUSEMOVE;
+                                if (std.mem.eql(u8, type_val.?.string, "mousedown")) {
+                                    msg_id = if (button == 2) w32.WM_RBUTTONDOWN else w32.WM_LBUTTONDOWN;
+                                } else if (std.mem.eql(u8, type_val.?.string, "mouseup")) {
+                                    msg_id = if (button == 2) w32.WM_RBUTTONUP else w32.WM_LBUTTONUP;
+                                }
+                                if (renderer.on_mouse_event) |cb| cb(msg_id, x, y);
                             }
                         }
                     }

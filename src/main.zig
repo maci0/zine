@@ -35,6 +35,8 @@ const stubs_cards = @import("stubs/cards.zig");
 const stubs_icmp = @import("stubs/icmp.zig");
 const stubs_vdmdbg = @import("stubs/vdmdbg.zig");
 const stubs_mag_hook = @import("stubs/mag_hook.zig");
+const stubs_shlwapi = @import("stubs/shlwapi.zig");
+const stubs_msvcp60 = @import("stubs/msvcp60.zig");
 const BatEnv = @import("bat.zig").BatEnv;
 const renderer = @import("gui/renderer.zig");
 const platform = @import("platform.zig");
@@ -53,7 +55,36 @@ fn not_implemented() callconv(.c) void {
     if (name) |func_name| {
         log.fatal("Unimplemented Win32 API: {s} (called from 0x{X})", .{ func_name, ra });
     } else {
-        log.fatal("Unimplemented Win32 API called from 0x{X}", .{ra});
+        // Also try to identify via E8→FF25 thunk chain: the caller did
+        // E8 rel32 → jmp [IAT], so RA-5 has `E8 rel32`. Resolve the E8
+        // target and check if that's a `FF 25 addr32` (jmp thunk).
+        var found_name: ?[]const u8 = null;
+        if (ra >= 5) {
+            const call_site: [*]const u8 = @ptrFromInt(ra - 5);
+            if (call_site[0] == 0xE8) {
+                const rel = @as(*align(1) const i32, @ptrCast(call_site + 1)).*;
+                const target: usize = @intCast(@as(isize, @intCast(ra)) + rel);
+                const thunk_ptr: [*]const u8 = @ptrFromInt(target);
+                if (thunk_ptr[0] == 0xFF and thunk_ptr[1] == 0x25) {
+                    const iat_slot = @as(*align(1) const u32, @ptrCast(thunk_ptr + 2)).*;
+                    found_name = x86_thunks.lookupUnresolvedName_bySlot(iat_slot);
+                }
+            }
+        }
+        if (found_name) |func_name| {
+            log.fatal("Unimplemented Win32 API: {s} (called from 0x{X})", .{ func_name, ra });
+        } else {
+            log.fatal("Unimplemented Win32 API called from 0x{X}", .{ra});
+            // Dump stack for diagnostics
+            const esp: usize = @frameAddress();
+            if (esp > 0x1000) {
+                const stack = @as([*]const u32, @ptrFromInt(esp));
+                log.fatal("  Stack context:", .{});
+                for (0..8) |i| {
+                    log.fatal("    [{d}] = 0x{X}", .{ i, stack[i] });
+                }
+            }
+        }
     }
     std.process.exit(1);
 }
@@ -168,13 +199,15 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         if (esp > 0x1000) {
             // Walk the stack to find the first valid code address
             // App code is in 0x401000-0x6B0000, zine code is in 0x100000-0x300000
+            // App code is in .text section: 0x401000-0x661000
+            // (.rdata starts at 0x662000 — must NOT jump there, it's data)
             const stack = @as([*]const u32, @ptrFromInt(esp));
             log.warn("AppCompat: EIP=0 fault. Stack walk:", .{});
             var found_ret: ?u32 = null;
             var found_idx: usize = 0;
             for (0..200) |si| {
                 const val = stack[si];
-                if (val >= 0x401000 and val <= 0x6B0000) {
+                if (val >= 0x401000 and val < 0x661000) {
                     if (found_ret == null) {
                         found_ret = val;
                         found_idx = si;
@@ -200,31 +233,39 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     if (fault_addr < 0x1000 and ip != 0) {
         const ptr = @as([*]u8, @ptrFromInt(ip));
 
-        // 8b 08 (mov ecx, [eax]) or 8b 10 (mov edx, [eax])
-        if ((ptr[0] == 0x8B and ptr[1] == 0x08) or (ptr[0] == 0x8B and ptr[1] == 0x10)) {
-            log.info("AppCompat: Skipped NULL pointer deref at 0x{X} ({X} {X})", .{ip, ptr[0], ptr[1]});
-            uctx.mcontext.gregs[reg_ip] += 2;
-            uctx.mcontext.gregs[reg_cx] = 0;
-            uctx.mcontext.gregs[reg_dx] = 0;
+        // F2 AE = repnz scasb (strlen pattern: ecx=-1, al=0, scan es:[edi])
+        // When EDI is in the NULL page, simulate scanning an empty string:
+        // one iteration finds the null terminator, so ecx goes -1 → -2.
+        if (ptr[0] == 0xF2 and ptr[1] == 0xAE) {
+            log.info("AppCompat: Skipped NULL repnz scasb at 0x{X} (edi=0x{X})", .{ ip, @as(usize, @bitCast(uctx.mcontext.gregs[reg_di])) });
+            uctx.mcontext.gregs[reg_cx] = @bitCast(@as(isize, -2)); // as if one byte scanned
+            uctx.mcontext.gregs[reg_di] = 1; // edi advanced past the "null terminator"
+            uctx.mcontext.gregs[reg_ip] += 2; // skip F2 AE
             return;
         }
-        // ff 51 48 (call [ecx+0x48]) or ff 52 08 (call [edx+0x8]) or ff 51 08 (call [ecx+0x8])
-        if ((ptr[0] == 0xFF and ptr[1] == 0x51 and ptr[2] == 0x48) or
-            (ptr[0] == 0xFF and ptr[1] == 0x52 and ptr[2] == 0x08) or
-            (ptr[0] == 0xFF and ptr[1] == 0x51 and ptr[2] == 0x08)) {
+
+        // ff 51 XX (call [ecx+disp8]) or ff 52 XX (call [edx+disp8])
+        if ((ptr[0] == 0xFF and (ptr[1] & 0xF8) == 0x50)) {
             log.info("AppCompat: Skipped NULL pointer call at 0x{X} ({X} {X} {X})", .{ip, ptr[0], ptr[1], ptr[2]});
             uctx.mcontext.gregs[reg_ip] += 3;
             uctx.mcontext.gregs[reg_sp] += if (native_arch == .x86) 4 else 8;
             return;
         }
-        // Generic x86 NULL-pointer write skip.  We decode just enough of the
-        // ModR/M byte to figure out how many bytes to skip.
+
+        // Generic x86 NULL-pointer read/write skip.  We decode the ModR/M
+        // (and optional SIB) byte to figure out how many bytes to skip.
         //
-        // Handles:  88/89/8A/8B (mov r/m↔reg, 8/32 bit)
-        //           C6 (mov r/m8, imm8)   C7 (mov r/m32, imm32)
-        //           and more via the generic fallback
+        // Reads:  8A (mov r8, [r/m])   8B (mov r32, [r/m])
+        //         3B (cmp r32, [r/m])
+        // Writes: 88/89 (mov [r/m], reg)  C6/C7 (mov [r/m], imm)
+        //         01/09/21/29/31 (alu [r/m], reg)
         const maybe_opcode = ptr[0];
-        // Check for common store opcodes (even opcodes = store direction)
+
+        const is_read = switch (maybe_opcode) {
+            0x8A, 0x8B => true, // mov reg, [r/m] (8/32 bit)
+            0x3B => true,       // cmp reg, [r/m]
+            else => false,
+        };
         const is_store = switch (maybe_opcode) {
             0x88, 0x89 => true, // mov [r/m], reg8/32
             0xC6, 0xC7 => true, // mov [r/m], imm8/imm32
@@ -235,10 +276,12 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
             0x31 => true,       // xor [r/m], reg
             else => false,
         };
-        if (is_store and ptr[1] & 0xC0 != 0xC0) { // Not reg-to-reg (mod != 11)
+
+        if ((is_read or is_store) and ptr[1] & 0xC0 != 0xC0) { // Not reg-to-reg (mod != 11)
             const modrm = ptr[1];
             const mod_field = (modrm >> 6) & 3;
             const rm_field = modrm & 7;
+            const reg_field = (modrm >> 3) & 7;
             // Base instruction length: opcode(1) + modrm(1)
             var skip: usize = 2;
             // SIB byte present when rm == 4 and mod != 3
@@ -255,7 +298,24 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
             if (maybe_opcode == 0xC6) skip += 1;
             if (maybe_opcode == 0xC7) skip += 4;
 
-            log.info("AppCompat: Skipped NULL pointer write at 0x{X}", .{ip});
+            if (is_read) {
+                // Zero the destination register (from reg field of ModR/M)
+                const dest_reg_idx: usize = switch (reg_field) {
+                    0 => reg_ax,
+                    1 => reg_cx,
+                    2 => reg_dx,
+                    3 => reg_bx,
+                    4 => reg_sp,
+                    5 => reg_bp,
+                    6 => reg_si,
+                    7 => reg_di,
+                    else => unreachable,
+                };
+                uctx.mcontext.gregs[dest_reg_idx] = 0;
+                log.info("AppCompat: Skipped NULL pointer read at 0x{X} (reg={d})", .{ip, reg_field});
+            } else {
+                log.info("AppCompat: Skipped NULL pointer write at 0x{X}", .{ip});
+            }
             uctx.mcontext.gregs[reg_ip] += @intCast(skip);
             return;
         }
@@ -477,6 +537,10 @@ pub fn main() !void {
             profiler.enabled = true;
             continue;
         }
+        if (!end_of_options and std.mem.eql(u8, arg, "--fltk")) {
+            renderer.active_backend = .fltk;
+            continue;
+        }
         if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
             std.fs.File.stdout().writeAll(
                 \\Usage: zine [options] [--] <target.exe> [args...]
@@ -489,6 +553,7 @@ pub fn main() !void {
                 \\      --trace-insn    Enable x86 instruction tracing only
                 \\      --profile       Enable profiling (hot code, opcodes, stubs)
                 \\  -i, --interpret     Use x86 software interpreter instead of native execution
+                \\      --fltk          Use native FLTK GUI instead of web UI
                 \\      --argv0 <name>  Override argv[0] passed to the target
                 \\  -h, --help          Show this help message
                 \\  -v, --version       Show version information
@@ -636,6 +701,8 @@ pub fn main() !void {
     try stubs_icmp.register(&environment);
     try stubs_vdmdbg.register(&environment);
     try stubs_mag_hook.register(&environment);
+    try stubs_shlwapi.register(&environment);
+    try stubs_msvcp60.register(&environment);
 
     // Allow loader to search current dir and the target exe's directory
     try environment.registry.addSearchPath(".");
@@ -725,6 +792,11 @@ pub fn main() !void {
         renderer.active_backend = .none;
     }
 
+    // Initialize Web GUI early so allocator is ready before we extract resources like menus.
+    if (is_gui) {
+        try renderer.init(allocator);
+    }
+
     // Extract dynamic menu (GUI apps only)
     if (is_gui) {
         if (main_module.getFirstResource(4)) |menu_data| { // RT_MENU = 4
@@ -781,11 +853,6 @@ pub fn main() !void {
             }
         }
         stubs_msvcrt.msvcrt_acmdln = @intFromPtr(cmdline_buf.ptr);
-    }
-
-    // Initialize Web GUI (only for GUI applications)
-    if (is_gui) {
-        try renderer.init(allocator);
     }
 
     // Dump arguments when tracing is active

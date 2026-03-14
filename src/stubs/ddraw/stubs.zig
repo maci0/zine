@@ -4,6 +4,7 @@ const trace = @import("../../trace.zig");
 const renderer = @import("../../gui/renderer.zig");
 const w32 = @import("../../win32_constants.zig");
 const w32cc = @import("../../calling_convention.zig");
+const d3d7 = @import("../d3d7/d3d7.zig");
 
 // --- COM VTables ---
 
@@ -40,7 +41,7 @@ const IDirectDrawVtbl = extern struct {
     Initialize: usize,
     RestoreDisplayMode: *const fn (*IDirectDraw) callconv(w32cc.WINAPI) i32,
     SetCooperativeLevel: *const fn (*IDirectDraw, usize, u32) callconv(w32cc.WINAPI) i32,
-    SetDisplayMode: *const fn (*IDirectDraw, u32, u32, u32) callconv(w32cc.WINAPI) i32,
+    SetDisplayMode: *const fn (*IDirectDraw, u32, u32, u32, u32, u32) callconv(w32cc.WINAPI) i32,
     WaitForVerticalBlank: *const fn (*IDirectDraw, u32, usize) callconv(w32cc.WINAPI) i32,
     // IDirectDraw7 additions (indices 23-29):
     GetAvailableVidMem: usize,
@@ -75,9 +76,9 @@ const IDirectDrawSurfaceVtbl = extern struct {
     Release: *const fn (*anyopaque) callconv(w32cc.WINAPI) u32,
     AddAttachedSurface: usize,
     AddOverlay: usize,
-    Blt: *const fn (*IDirectDrawSurface, usize, *IDirectDrawSurface, usize, u32, usize) callconv(w32cc.WINAPI) i32,
+    Blt: *const fn (*IDirectDrawSurface, usize, usize, usize, u32, usize) callconv(w32cc.WINAPI) i32,
     BltBatch: usize,
-    BltFast: usize,
+    BltFast: *const fn (*IDirectDrawSurface, u32, u32, usize, usize, u32) callconv(w32cc.WINAPI) i32,
     DeleteAttachedSurface: usize,
     EnumAttachedSurfaces: usize,
     EnumOverlayZOrders: usize,
@@ -87,16 +88,16 @@ const IDirectDrawSurfaceVtbl = extern struct {
     GetCaps: *const fn (*IDirectDrawSurface, usize) callconv(w32cc.WINAPI) i32,
     GetClipper: usize,
     GetColorKey: usize,
-    GetDC: usize,
+    GetDC: *const fn (*IDirectDrawSurface, *u32) callconv(w32cc.WINAPI) i32,
     GetFlipStatus: usize,
     GetOverlayPosition: usize,
     GetPalette: usize,
-    GetPixelFormat: usize,
+    GetPixelFormat: *const fn (*IDirectDrawSurface, usize) callconv(w32cc.WINAPI) i32,
     GetSurfaceDesc: *const fn (*IDirectDrawSurface, usize) callconv(w32cc.WINAPI) i32,
     Initialize: usize,
     IsLost: *const fn (*IDirectDrawSurface) callconv(w32cc.WINAPI) i32,
     Lock: *const fn (*IDirectDrawSurface, usize, usize, u32, usize) callconv(w32cc.WINAPI) i32,
-    ReleaseDC: usize,
+    ReleaseDC: *const fn (*IDirectDrawSurface, u32) callconv(w32cc.WINAPI) i32,
     Restore: *const fn (*IDirectDrawSurface) callconv(w32cc.WINAPI) i32,
     SetClipper: *const fn (*IDirectDrawSurface, usize) callconv(w32cc.WINAPI) i32,
     SetColorKey: usize,
@@ -128,19 +129,28 @@ var global_ddraw: IDirectDraw = undefined;
 var global_primary_surface: IDirectDrawSurface = undefined;
 var global_clipper: IDirectDrawClipper = undefined;
 
-var surface_buffer: []u8 = &[_]u8{};
+pub var surface_buffer: []u8 = &[_]u8{};
 
 // Current display mode (updated by SetDisplayMode)
-var display_mode_w: u32 = 640;
-var display_mode_h: u32 = 480;
-var display_mode_bpp: u32 = 32;
+pub var display_mode_w: u32 = 640;
+pub var display_mode_h: u32 = 480;
+pub var display_mode_bpp: u32 = 32;
 
-// Surface pool for offscreen surfaces (max 4)
-const MAX_SURFACES = 4;
+// Windows DirectDraw had no fixed surface count limit (bounded by VRAM/sysmem).
+// 256 is effectively unlimited for any real game.
+const MAX_SURFACES = 256;
 var surface_pool: [MAX_SURFACES]IDirectDrawSurface = undefined;
-var surface_widths: [MAX_SURFACES]u32 = .{ 0, 0, 0, 0 };
-var surface_heights: [MAX_SURFACES]u32 = .{ 0, 0, 0, 0 };
+var surface_widths: [MAX_SURFACES]u32 = [_]u32{0} ** MAX_SURFACES;
+var surface_heights: [MAX_SURFACES]u32 = [_]u32{0} ** MAX_SURFACES;
+
 var surface_count: u32 = 0;
+
+// Per-surface buffer map: keyed by `this` pointer address.
+// Works with dxwrapper (different `this` pointers) and native surfaces alike.
+const MAX_SURFACE_BUFS = 64;
+var sbuf_keys: [MAX_SURFACE_BUFS]usize = [_]usize{0} ** MAX_SURFACE_BUFS;
+var sbuf_ptrs: [MAX_SURFACE_BUFS]?[*]u8 = [_]?[*]u8{null} ** MAX_SURFACE_BUFS;
+var sbuf_count: u32 = 0;
 
 // The backbuffer surface (largest offscreen) — set during CreateSurface
 var backbuffer_surface: ?*IDirectDrawSurface = null;
@@ -157,11 +167,108 @@ fn getSurfaceDims(surf: *IDirectDrawSurface) struct { w: u32, h: u32 } {
     return .{ .w = renderer.global_width, .h = renderer.global_height };
 }
 
+/// Get or allocate a per-surface buffer keyed by `this` pointer address.
+fn getOrAllocSurfaceBuffer(this_addr: usize) ?[*]u8 {
+    // Look up existing entry
+    for (0..sbuf_count) |i| {
+        if (sbuf_keys[i] == this_addr) return sbuf_ptrs[i];
+    }
+    // Allocate new buffer
+    if (sbuf_count >= MAX_SURFACE_BUFS) return null;
+    const w = renderer.global_width;
+    const h = renderer.global_height;
+    const size = @as(usize, w) * @as(usize, h) * 4;
+    if (@import("../kernel32.zig").global_env) |genv| {
+        const buf = genv.allocator.alloc(u8, size) catch return null;
+        @memset(buf, 0);
+        sbuf_keys[sbuf_count] = this_addr;
+        sbuf_ptrs[sbuf_count] = buf.ptr;
+        sbuf_count += 1;
+        if (trace.enable_tracing) trace.print("DDRAW: Allocated surface buffer for 0x{x} ({d}x{d}) buf=0x{x} trunc=0x{x}\n", .{ this_addr, w, h, @intFromPtr(buf.ptr), @as(u32, @truncate(@intFromPtr(buf.ptr))) });
+        return buf.ptr;
+    }
+    return null;
+}
+
+/// IDirectDrawSurface::BltFast — fast blt from source surface to (dwX,dwY) on this surface
+fn surface_BltFast(this: *IDirectDrawSurface, dwX: u32, dwY: u32, lpDDSrcSurface_raw: usize, lpSrcRect: usize, dwTrans: u32) callconv(w32cc.WINAPI) i32 {
+    _ = dwTrans;
+    if (trace.enable_tracing) trace.print("DDRAW: IDirectDrawSurface::BltFast(dst=0x{x} x={d} y={d} src=0x{x})\n", .{ @intFromPtr(this), dwX, dwY, lpDDSrcSurface_raw });
+
+    if (lpDDSrcSurface_raw == 0) return w32.DD_OK;
+
+    // Get destination buffer
+    const dst_buf = getOrAllocSurfaceBuffer(@intFromPtr(this)) orelse return w32.DD_OK;
+    const dst_dims = getSurfaceDims(this);
+    const dst_w = dst_dims.w;
+    const dst_h = dst_dims.h;
+
+    // Get source buffer
+    const src_buf = getOrAllocSurfaceBuffer(lpDDSrcSurface_raw) orelse return w32.DD_OK;
+    const src_surf: *IDirectDrawSurface = @ptrFromInt(lpDDSrcSurface_raw);
+    const src_dims = getSurfaceDims(src_surf);
+    var src_w = src_dims.w;
+    var src_h = src_dims.h;
+
+    // Parse source rect if provided (RECT: left, top, right, bottom — each i32)
+    var src_left: u32 = 0;
+    var src_top: u32 = 0;
+    if (lpSrcRect != 0) {
+        const rect = @as(*const [4]i32, @ptrFromInt(lpSrcRect));
+        src_left = @intCast(@max(0, rect[0]));
+        src_top = @intCast(@max(0, rect[1]));
+        const right: u32 = @intCast(@max(0, rect[2]));
+        const bottom: u32 = @intCast(@max(0, rect[3]));
+        src_w = if (right > src_left) right - src_left else 0;
+        src_h = if (bottom > src_top) bottom - src_top else 0;
+    }
+
+    const bpp: u32 = if (display_mode_bpp == 16) 2 else 4;
+
+    // Copy pixels
+    const copy_w = @min(src_w, if (dst_w > dwX) dst_w - dwX else 0);
+    const copy_h = @min(src_h, if (dst_h > dwY) dst_h - dwY else 0);
+
+    const src_pitch = src_dims.w * bpp;
+    const dst_pitch = dst_w * bpp;
+
+    for (0..copy_h) |y| {
+        const src_off = (src_top + @as(u32, @intCast(y))) * src_pitch + src_left * bpp;
+        const dst_off = (dwY + @as(u32, @intCast(y))) * dst_pitch + dwX * bpp;
+        const row_bytes = copy_w * bpp;
+        @memcpy(dst_buf[dst_off..dst_off + row_bytes], src_buf[src_off..src_off + row_bytes]);
+    }
+
+    return w32.DD_OK;
+}
+
 // --- Implementations ---
 
 fn ddraw_QueryInterface(this: *anyopaque, riid: usize, ppvObj: *?*anyopaque) callconv(w32cc.WINAPI) i32 {
-    _ = riid;
-    if (trace.enable_tracing) trace.print("DDRAW: QueryInterface\n", .{});
+    // Check if IID looks like IDirect3D7 or another D3D interface.
+    // IID_IDirect3D7 = {f5049e77-4861-11d2-a407-00a0c90629a8}
+    // First DWORD = 0xF5049E77. We check the first 4 bytes of the GUID.
+    if (riid != 0) {
+        const first_dword = @as(*const u32, @ptrFromInt(riid)).*;
+        if (trace.enable_tracing) trace.print("DDRAW: QueryInterface(riid=0x{x}, guid_dword=0x{x:0>8})\n", .{ riid, first_dword });
+        if (first_dword == 0xBB223240) {    // IID_IDirect3D3
+            if (trace.enable_tracing) trace.print("DDRAW: QueryInterface -> IDirect3D3\n", .{});
+            ppvObj.* = @ptrCast(&d3d7.global_d3d3);
+            return w32.S_OK;
+        }
+        if (first_dword == 0xF5049E77 or  // IID_IDirect3D7
+            first_dword == 0x84E63dE0)    // IID_IDirect3D
+        {
+            if (trace.enable_tracing) trace.print("DDRAW: QueryInterface -> IDirect3D7\n", .{});
+            ppvObj.* = @ptrCast(&d3d7.global_d3d7);
+            return w32.S_OK;
+        }
+    } else {
+        if (trace.enable_tracing) trace.print("DDRAW: QueryInterface(riid=NULL)\n", .{});
+    }
+
+    // For IDirectDraw upgrades (IDirectDraw4, IDirectDraw7, etc.), return self
+    // since our DD vtable is a superset covering all DDraw versions
     ppvObj.* = this;
     return w32.S_OK;
 }
@@ -172,8 +279,7 @@ fn ddraw_Release(this: *anyopaque) callconv(w32cc.WINAPI) u32 {
 }
 
 fn ddraw_Dummy(this: *anyopaque) callconv(w32cc.WINAPI) i32 {
-    _ = this;
-    if (trace.enable_tracing) trace.print("DDRAW: Dummy\n", .{});
+    if (trace.enable_tracing) trace.print("DDRAW: Dummy(this=0x{x})\n", .{@intFromPtr(this)});
     return w32.DD_OK;
 }
 
@@ -185,8 +291,7 @@ fn ddraw_Dum2(a: usize, b: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 fn ddraw_Dum3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) i32 {
-    _ = a; _ = b; _ = c;
-    if (trace.enable_tracing) trace.print("DDRAW: Dummy3\n", .{});
+    if (trace.enable_tracing) trace.print("DDRAW: Dummy3(this=0x{x}, 0x{x}, 0x{x})\n", .{a, b, c});
     return w32.DD_OK;
 }
 
@@ -197,8 +302,7 @@ fn ddraw_Dum4(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) i32
 }
 
 fn ddraw_Dum5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) i32 {
-    _ = a; _ = b; _ = c; _ = d; _ = e;
-    if (trace.enable_tracing) trace.print("DDRAW: Dummy5\n", .{});
+    if (trace.enable_tracing) trace.print("DDRAW: Dummy5(this=0x{x}, 0x{x}, 0x{x}, 0x{x}, 0x{x})\n", .{a, b, c, d, e});
     return w32.DD_OK;
 }
 
@@ -206,6 +310,38 @@ fn ddraw_Dum6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callco
     _ = a; _ = b; _ = c; _ = d; _ = e; _ = f;
     if (trace.enable_tracing) trace.print("DDRAW: Dummy6\n", .{});
     return w32.DD_OK;
+}
+
+// Comptime-generic traced stubs for DDraw surface methods
+fn surf_tn1(comptime name: []const u8) fn (usize) callconv(w32cc.WINAPI) i32 {
+    return struct {
+        fn func(_: usize) callconv(w32cc.WINAPI) i32 { if (trace.enable_tracing) trace.print("DDRAW.Surf: " ++ name ++ "\n", .{}); return 0; }
+    }.func;
+}
+fn surf_tn2(comptime name: []const u8) fn (usize, usize) callconv(w32cc.WINAPI) i32 {
+    return struct {
+        fn func(_: usize, _: usize) callconv(w32cc.WINAPI) i32 { if (trace.enable_tracing) trace.print("DDRAW.Surf: " ++ name ++ "\n", .{}); return 0; }
+    }.func;
+}
+fn surf_tn3(comptime name: []const u8) fn (usize, usize, usize) callconv(w32cc.WINAPI) i32 {
+    return struct {
+        fn func(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) i32 { if (trace.enable_tracing) trace.print("DDRAW.Surf: " ++ name ++ "(0x{x}, 0x{x}, 0x{x})\n", .{a, b, c}); return 0; }
+    }.func;
+}
+fn surf_tn4(comptime name: []const u8) fn (usize, usize, usize, usize) callconv(w32cc.WINAPI) i32 {
+    return struct {
+        fn func(_: usize, _: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 { if (trace.enable_tracing) trace.print("DDRAW.Surf: " ++ name ++ "\n", .{}); return 0; }
+    }.func;
+}
+fn surf_tn5(comptime name: []const u8) fn (usize, usize, usize, usize, usize) callconv(w32cc.WINAPI) i32 {
+    return struct {
+        fn func(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) i32 { if (trace.enable_tracing) trace.print("DDRAW.Surf: " ++ name ++ "(0x{x}, 0x{x}, 0x{x}, 0x{x}, 0x{x})\n", .{a, b, c, d, e}); return 0; }
+    }.func;
+}
+fn surf_tn6(comptime name: []const u8) fn (usize, usize, usize, usize, usize, usize) callconv(w32cc.WINAPI) i32 {
+    return struct {
+        fn func(_: usize, _: usize, _: usize, _: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 { if (trace.enable_tracing) trace.print("DDRAW.Surf: " ++ name ++ "\n", .{}); return 0; }
+    }.func;
 }
 
 fn clipper_SetHWnd(this: *IDirectDrawClipper, dwFlags: u32, hWnd: usize) callconv(w32cc.WINAPI) i32 {
@@ -224,9 +360,11 @@ fn ddraw_CreateClipper(this: *IDirectDraw, dwFlags: u32, lplpDDClipper: *?*IDire
 fn ddraw_CreateSurface(this: *IDirectDraw, lpDDSurfaceDesc: usize, lplpDDSurface: *?*IDirectDrawSurface, pUnkOuter: usize) callconv(w32cc.WINAPI) i32 {
     _ = this; _ = pUnkOuter;
     
+    // Ensure shared surface buffer exists (fallback for shared operations)
     if (surface_buffer.len == 0) {
         if (@import("../kernel32.zig").global_env) |genv| {
-            surface_buffer = genv.allocator.alloc(u8, 1024 * 1024 * 4) catch unreachable;
+            surface_buffer = genv.allocator.alloc(u8, 2048 * 2048 * 4) catch unreachable;
+            @memset(surface_buffer, 0);
         }
     }
     
@@ -260,16 +398,13 @@ fn ddraw_CreateSurface(this: *IDirectDraw, lpDDSurfaceDesc: usize, lplpDDSurface
             surface_count += 1;
             lplpDDSurface.* = &surface_pool[idx];
 
-            // Track the largest as the backbuffer
-            const area = @as(u64, w) * @as(u64, h);
-            const bb_area = @as(u64, backbuffer_w) * @as(u64, backbuffer_h);
-            if (area > bb_area) {
+            // Track as backbuffer only if it matches the display mode dimensions
+            // (don't let offscreen sprite/texture surfaces override the resolution)
+            if (w == display_mode_w and h == display_mode_h and backbuffer_surface == null) {
                 backbuffer_surface = &surface_pool[idx];
                 backbuffer_w = w;
                 backbuffer_h = h;
             }
-            // Always update renderer resolution
-            renderer.setResolution(w, h);
         } else {
             lplpDDSurface.* = &global_primary_surface;
         }
@@ -277,11 +412,9 @@ fn ddraw_CreateSurface(this: *IDirectDraw, lpDDSurfaceDesc: usize, lplpDDSurface
         // Primary surface (no explicit dimensions)
         lplpDDSurface.* = &global_primary_surface;
         
-        // In fullscreen mode (display mode changed from default), create a backbuffer
-        // at the display mode dimensions so GetAttachedSurface works
+        // In fullscreen mode, set resolution and create implicit backbuffer
         const is_fullscreen = display_mode_bpp != 32 or display_mode_w != 640 or display_mode_h != 480;
         if (is_fullscreen or back_buffer_count > 0) {
-            // Set resolution to display mode dimensions
             renderer.setResolution(display_mode_w, display_mode_h);
             
             // Create an implicit backbuffer in the pool
@@ -306,12 +439,20 @@ fn ddraw_SetCooperativeLevel(this: *IDirectDraw, hWnd: usize, dwFlags: u32) call
     return w32.DD_OK;
 }
 
-fn ddraw_SetDisplayMode(this: *IDirectDraw, dwWidth: u32, dwHeight: u32, dwBPP: u32) callconv(w32cc.WINAPI) i32 {
-    _ = this;
+fn ddraw_SetDisplayMode(this: *IDirectDraw, dwWidth: u32, dwHeight: u32, dwBPP: u32, dwRefreshRate: u32, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
+    _ = this; _ = dwRefreshRate; _ = dwFlags;
     if (trace.enable_tracing) trace.print("DDRAW: IDirectDraw::SetDisplayMode({d}x{d} @ {d}bpp)\n", .{dwWidth, dwHeight, dwBPP});
     display_mode_w = dwWidth;
     display_mode_h = dwHeight;
     display_mode_bpp = dwBPP;
+
+    // In fullscreen DDraw mode, the window client area equals the display mode.
+    // This ensures GetClientRect returns correct dimensions if the game cached
+    // them during WM_CREATE (before SetWindowPos expanded the window).
+    const user32 = @import("../user32.zig");
+    user32.current_client_width = @intCast(dwWidth);
+    user32.current_client_height = @intCast(dwHeight);
+
     // Reset surface pool — app will create new surfaces
     surface_count = 0;
     backbuffer_surface = null;
@@ -414,17 +555,153 @@ fn ddraw_EnumDisplayModes(this: *IDirectDraw, dwFlags: u32, lpDDSurfaceDesc: usi
     return w32.DD_OK;
 }
 
-fn surface_Blt(this: *IDirectDrawSurface, lpDestRect: usize, lpDDSrcSurface: *IDirectDrawSurface, lpSrcRect: usize, dwFlags: u32, lpDDBltFx: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this; _ = lpDestRect; _ = lpDDSrcSurface; _ = lpSrcRect; _ = dwFlags; _ = lpDDBltFx;
-    if (trace.enable_tracing) trace.print("DDRAW: IDirectDrawSurface::Blt\n", .{});
-    
-    pushSurfaceFrame();
+fn surface_Blt(this: *IDirectDrawSurface, lpDestRect: usize, lpDDSrcSurface_raw: usize, lpSrcRect: usize, dwFlags: u32, lpDDBltFx: usize) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) {
+        trace.print("DDRAW: IDirectDrawSurface::Blt (dst=0x{x} src=0x{x} flags=0x{x})\n", .{ @intFromPtr(this), lpDDSrcSurface_raw, dwFlags });
+        if (lpDestRect != 0) {
+            const dr = @as(*const [4]i32, @ptrFromInt(lpDestRect));
+            trace.print("DDRAW:   dstRect=({d},{d})-({d},{d})\n", .{ dr[0], dr[1], dr[2], dr[3] });
+        }
+        if (lpSrcRect != 0) {
+            const sr = @as(*const [4]i32, @ptrFromInt(lpSrcRect));
+            trace.print("DDRAW:   srcRect=({d},{d})-({d},{d})\n", .{ sr[0], sr[1], sr[2], sr[3] });
+        }
+    }
+
+    const DDBLT_COLORFILL = 0x00000400;
+
+    // Color fill — write to the per-surface buffer for THIS surface
+    if (lpDDSrcSurface_raw == 0) {
+        if ((dwFlags & DDBLT_COLORFILL) != 0 and lpDDBltFx != 0) {
+            const fill_color = @as(*align(1) u32, @ptrFromInt(lpDDBltFx + 76)).*;
+            if (trace.enable_tracing) trace.print("DDRAW: Blt color fill = 0x{x:0>8}\n", .{fill_color});
+            const buf = getOrAllocSurfaceBuffer(@intFromPtr(this)) orelse return w32.DD_OK;
+            const w = renderer.global_width;
+            const h = renderer.global_height;
+            const pixels = @as(usize, w) * @as(usize, h);
+            if (display_mode_bpp == 16) {
+                // In 16bpp mode, fill_color is a raw 16-bit value
+                const fill16: u16 = @truncate(fill_color);
+                const lo: u8 = @truncate(fill16);
+                const hi: u8 = @truncate(fill16 >> 8);
+                for (0..pixels) |i| {
+                    buf[i * 2 + 0] = lo;
+                    buf[i * 2 + 1] = hi;
+                }
+            } else {
+                const b: u8 = @intCast(fill_color & 0xFF);
+                const g: u8 = @intCast((fill_color >> 8) & 0xFF);
+                const r: u8 = @intCast((fill_color >> 16) & 0xFF);
+                for (0..pixels) |i| {
+                    buf[i * 4 + 0] = b;
+                    buf[i * 4 + 1] = g;
+                    buf[i * 4 + 2] = r;
+                    buf[i * 4 + 3] = 255;
+                }
+            }
+            // Don't push frame here — the game will call Flip() to present.
+            // Pushing on every Blt color-fill causes flickering (black frames).
+        }
+        return w32.DD_OK;
+    }
+
+    // Blt with source to PRIMARY surface = windowed-mode present.
+    // Only push frame when blitting TO the primary surface (this == primary).
+    if (this == &global_primary_surface) {
+        const src_buf = getOrAllocSurfaceBuffer(lpDDSrcSurface_raw) orelse surface_buffer.ptr;
+        const src_surf: *IDirectDrawSurface = @ptrFromInt(lpDDSrcSurface_raw);
+        const src_dims = getSurfaceDims(src_surf);
+        pushSurfaceFrameFrom(src_buf, src_dims.w, src_dims.h);
+    } else {
+        // Blt between offscreen surfaces — just copy pixels, don't present
+        const src_buf = getOrAllocSurfaceBuffer(lpDDSrcSurface_raw) orelse return w32.DD_OK;
+        const dst_buf = getOrAllocSurfaceBuffer(@intFromPtr(this)) orelse return w32.DD_OK;
+        const src_surf: *IDirectDrawSurface = @ptrFromInt(lpDDSrcSurface_raw);
+        const src_dims = getSurfaceDims(src_surf);
+        const bpp: u32 = if (display_mode_bpp == 16) 2 else 4;
+        const size = @as(usize, src_dims.w) * @as(usize, src_dims.h) * bpp;
+        @memcpy(dst_buf[0..size], src_buf[0..size]);
+    }
+
     return w32.DD_OK;
+}
+
+/// Push frame from a specific source buffer (used for Blt to primary).
+/// Supports nearest-neighbor scaling when source dims differ from viewport.
+fn pushSurfaceFrameFrom(src: [*]u8, w: u32, h: u32) void {
+    const vw = renderer.global_width;
+    const vh = renderer.global_height;
+
+    if (renderer.global_framebuf.len < vw * vh * 4) return;
+    if (w == 0 or h == 0) return;
+
+    if (w == vw and h == vh) {
+        // Fast path: source matches viewport — direct pixel copy
+        if (display_mode_bpp == 16) {
+            for (0..@as(usize, vh)) |y| {
+                for (0..@as(usize, vw)) |x| {
+                    const si = y * @as(usize, w) + x;
+                    const di = y * @as(usize, vw) + x;
+                    const lo: u16 = src[si * 2];
+                    const hi: u16 = src[si * 2 + 1];
+                    const rgb565 = lo | (hi << 8);
+                    renderer.global_framebuf[di * 4 + 0] = @truncate((rgb565 >> 11) << 3);
+                    renderer.global_framebuf[di * 4 + 1] = @truncate(((rgb565 >> 5) & 0x3F) << 2);
+                    renderer.global_framebuf[di * 4 + 2] = @truncate((rgb565 & 0x1F) << 3);
+                    renderer.global_framebuf[di * 4 + 3] = 255;
+                }
+            }
+        } else {
+            for (0..@as(usize, vh)) |y| {
+                for (0..@as(usize, vw)) |x| {
+                    const si = (y * @as(usize, w) + x) * 4;
+                    const di = (y * @as(usize, vw) + x) * 4;
+                    renderer.global_framebuf[di + 0] = src[si + 2]; // R <- B
+                    renderer.global_framebuf[di + 1] = src[si + 1]; // G
+                    renderer.global_framebuf[di + 2] = src[si + 0]; // B <- R
+                    renderer.global_framebuf[di + 3] = 255;         // A
+                }
+            }
+        }
+    } else {
+        // Scaled path: nearest-neighbor resampling from source to viewport
+        if (display_mode_bpp == 16) {
+            for (0..@as(usize, vh)) |dy| {
+                const sy = (dy * @as(usize, h)) / @as(usize, vh);
+                for (0..@as(usize, vw)) |dx| {
+                    const sx = (dx * @as(usize, w)) / @as(usize, vw);
+                    const si = sy * @as(usize, w) + sx;
+                    const di = dy * @as(usize, vw) + dx;
+                    const lo: u16 = src[si * 2];
+                    const hi: u16 = src[si * 2 + 1];
+                    const rgb565 = lo | (hi << 8);
+                    renderer.global_framebuf[di * 4 + 0] = @truncate((rgb565 >> 11) << 3);
+                    renderer.global_framebuf[di * 4 + 1] = @truncate(((rgb565 >> 5) & 0x3F) << 2);
+                    renderer.global_framebuf[di * 4 + 2] = @truncate((rgb565 & 0x1F) << 3);
+                    renderer.global_framebuf[di * 4 + 3] = 255;
+                }
+            }
+        } else {
+            for (0..@as(usize, vh)) |dy| {
+                const sy = (dy * @as(usize, h)) / @as(usize, vh);
+                for (0..@as(usize, vw)) |dx| {
+                    const sx = (dx * @as(usize, w)) / @as(usize, vw);
+                    const si = (sy * @as(usize, w) + sx) * 4;
+                    const di = (dy * @as(usize, vw) + dx) * 4;
+                    renderer.global_framebuf[di + 0] = src[si + 2]; // R <- B
+                    renderer.global_framebuf[di + 1] = src[si + 1]; // G
+                    renderer.global_framebuf[di + 2] = src[si + 0]; // B <- R
+                    renderer.global_framebuf[di + 3] = 255;         // A
+                }
+            }
+        }
+    }
+    renderer.pushFrame();
 }
 
 /// Convert surface_buffer to RGBA in global_framebuf and push frame.
 /// Handles both 16bpp RGB565 and 32bpp BGRA based on current display mode.
-fn pushSurfaceFrame() void {
+pub fn pushSurfaceFrame() void {
     const vw = renderer.global_width;
     const vh = renderer.global_height;
     const pixels = vw * vh;
@@ -460,29 +737,95 @@ fn surface_Lock(this: *IDirectDrawSurface, lpDestRect: usize, lpDDSurfaceDesc: u
     _ = lpDestRect; _ = dwFlags; _ = hEvent;
     const bytes_per_pixel: u32 = if (display_mode_bpp == 16) 2 else 4;
     const dims = getSurfaceDims(this);
+    const w = dims.w;
+    const h = dims.h;
     if (trace.enable_tracing) {
-        trace.print("DDRAW: IDirectDrawSurface::Lock (this=0x{x} dims={d}x{d} pitch={d} bpp={d})\n", .{ @intFromPtr(this), dims.w, dims.h, dims.w * bytes_per_pixel, display_mode_bpp });
+        trace.print("DDRAW: IDirectDrawSurface::Lock (this=0x{x} dims={d}x{d} pitch={d} bpp={d})\n", .{ @intFromPtr(this), w, h, w * bytes_per_pixel, display_mode_bpp });
     }
     if (lpDDSurfaceDesc != 0) {
         const desc = @as(*w32.DDSURFACEDESC, @ptrFromInt(lpDDSurfaceDesc));
-        desc.lpSurface = @truncate(@intFromPtr(surface_buffer.ptr));
-        desc.lPitch = dims.w * bytes_per_pixel;
+        // Get or allocate per-surface buffer keyed by this pointer
+        const buf = getOrAllocSurfaceBuffer(@intFromPtr(this)) orelse surface_buffer.ptr;
+        desc.lpSurface = @truncate(@intFromPtr(buf));
+        desc.lPitch = w * bytes_per_pixel;
+        desc.dwWidth = w;
+        desc.dwHeight = h;
     }
+    return w32.DD_OK;
+}
+
+fn surface_GetDC(this: *IDirectDrawSurface, lphDC: *u32) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("DDRAW: IDirectDrawSurface::GetDC(this=0x{x})\n", .{@intFromPtr(this)});
+    // Return a dummy DC handle (non-zero so caller thinks it succeeded)
+    lphDC.* = 0xDC000001;
+    return w32.DD_OK;
+}
+
+fn surface_ReleaseDC(this: *IDirectDrawSurface, hDC: u32) callconv(w32cc.WINAPI) i32 {
+    _ = this;
+    if (trace.enable_tracing) trace.print("DDRAW: IDirectDrawSurface::ReleaseDC(hDC=0x{x})\n", .{hDC});
     return w32.DD_OK;
 }
 
 fn surface_Unlock(this: *IDirectDrawSurface, lpRect: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this; _ = lpRect;
-    if (trace.enable_tracing) trace.print("DDRAW: IDirectDrawSurface::Unlock\n", .{});
+    _ = lpRect;
+    if (trace.enable_tracing) {
+        // Check if the surface buffer has any non-zero data
+        if (getOrAllocSurfaceBuffer(@intFromPtr(this))) |buf| {
+            var non_zero: u32 = 0;
+            const check_len: usize = @min(1024 * 768 * 2, 4096); // check first 4KB
+            for (0..check_len) |i| {
+                if (buf[i] != 0) non_zero += 1;
+            }
+            trace.print("DDRAW: IDirectDrawSurface::Unlock (this=0x{x}, non-zero bytes in first 4KB: {d})\n", .{@intFromPtr(this), non_zero});
+        } else {
+            trace.print("DDRAW: IDirectDrawSurface::Unlock (no buffer)\n", .{});
+        }
+    }
+    // Don't push frame on Unlock — the game will call Flip() to present.
+    // Pushing on every Unlock causes flickering (partial frames).
     return w32.DD_OK;
 }
 
 fn surface_Flip(this: *IDirectDrawSurface, lpDDSurfaceTargetOverride: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
-    _ = this;
-    _ = lpDDSurfaceTargetOverride;
     _ = dwFlags;
+    if (trace.enable_tracing) trace.print("DDRAW: IDirectDrawSurface::Flip (this=0x{x} override=0x{x} bb=0x{x})\n", .{
+        @intFromPtr(this),
+        lpDDSurfaceTargetOverride,
+        if (backbuffer_surface) |bb| @intFromPtr(bb) else @as(usize, 0),
+    });
 
-    pushSurfaceFrame();
+    // In fullscreen mode, Flip presents the backbuffer.
+    // Try the explicit target override first, then the backbuffer surface.
+    var src_buf: ?[*]u8 = null;
+
+    if (lpDDSurfaceTargetOverride != 0) {
+        // Explicit target: look up its per-surface buffer
+        src_buf = getOrAllocSurfaceBuffer(lpDDSurfaceTargetOverride);
+    }
+
+    if (src_buf == null) {
+        // Try the backbuffer surface's pool address
+        if (backbuffer_surface) |bb| {
+            src_buf = getOrAllocSurfaceBuffer(@intFromPtr(bb));
+        }
+    }
+
+    if (src_buf == null) {
+        // Last resort: scan all allocated surface buffers for the first non-primary one
+        for (0..sbuf_count) |i| {
+            if (sbuf_keys[i] != @intFromPtr(&global_primary_surface)) {
+                src_buf = sbuf_ptrs[i];
+                break;
+            }
+        }
+    }
+
+    if (src_buf) |buf| {
+        pushSurfaceFrameFrom(buf, renderer.global_width, renderer.global_height);
+    } else {
+        pushSurfaceFrame();
+    }
     return w32.DD_OK;
 }
 
@@ -508,14 +851,59 @@ fn surface_GetCaps(this: *IDirectDrawSurface, lpDDSCaps: usize) callconv(w32cc.W
 }
 
 fn surface_GetSurfaceDesc(this: *IDirectDrawSurface, lpDDSurfaceDesc: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this;
+    const dims = getSurfaceDims(this);
+    const bytes_per_pixel: u32 = if (display_mode_bpp == 16) 2 else 4;
     if (lpDDSurfaceDesc != 0) {
         const desc = @as(*w32.DDSURFACEDESC, @ptrFromInt(lpDDSurfaceDesc));
         desc.dwSize = 108;
-        desc.dwFlags = w32.DDSD_WIDTH | w32.DDSD_HEIGHT | w32.DDSD_PITCH;
-        desc.dwHeight = renderer.global_height;
-        desc.dwWidth = renderer.global_width;
-        desc.lPitch = renderer.global_width * 4;
+        desc.dwFlags = w32.DDSD_WIDTH | w32.DDSD_HEIGHT | w32.DDSD_PITCH | w32.DDSD_PIXELFORMAT | w32.DDSD_CAPS;
+        desc.dwHeight = dims.h;
+        desc.dwWidth = dims.w;
+        desc.lPitch = dims.w * bytes_per_pixel;
+        // Pixel format
+        desc.ddpfPixelFormat.dwSize = 32;
+        if (display_mode_bpp == 16) {
+            desc.ddpfPixelFormat.dwFlags = 0x40; // DDPF_RGB
+            desc.ddpfPixelFormat.dwRGBBitCount = 16;
+            desc.ddpfPixelFormat.dwRBitMask = 0xF800;
+            desc.ddpfPixelFormat.dwGBitMask = 0x07E0;
+            desc.ddpfPixelFormat.dwBBitMask = 0x001F;
+            desc.ddpfPixelFormat.dwRGBAlphaBitMask = 0;
+        } else {
+            desc.ddpfPixelFormat.dwFlags = 0x40; // DDPF_RGB
+            desc.ddpfPixelFormat.dwRGBBitCount = 32;
+            desc.ddpfPixelFormat.dwRBitMask = 0x00FF0000;
+            desc.ddpfPixelFormat.dwGBitMask = 0x0000FF00;
+            desc.ddpfPixelFormat.dwBBitMask = 0x000000FF;
+            desc.ddpfPixelFormat.dwRGBAlphaBitMask = 0xFF000000;
+        }
+        // Caps
+        desc.ddsCaps.dwCaps = 0x40; // DDSCAPS_OFFSCREENPLAIN
+    }
+    return w32.DD_OK;
+}
+
+fn surface_GetPixelFormat(this: *IDirectDrawSurface, lpDDPixelFormat: usize) callconv(w32cc.WINAPI) i32 {
+    _ = this;
+    if (trace.enable_tracing) trace.print("DDRAW: IDirectDrawSurface::GetPixelFormat\n", .{});
+    if (lpDDPixelFormat != 0) {
+        const pf = @as(*w32.DDPIXELFORMAT, @ptrFromInt(lpDDPixelFormat));
+        pf.dwSize = 32;
+        if (display_mode_bpp == 16) {
+            pf.dwFlags = 0x40; // DDPF_RGB
+            pf.dwRGBBitCount = 16;
+            pf.dwRBitMask = 0xF800;
+            pf.dwGBitMask = 0x07E0;
+            pf.dwBBitMask = 0x001F;
+            pf.dwRGBAlphaBitMask = 0;
+        } else {
+            pf.dwFlags = 0x40; // DDPF_RGB
+            pf.dwRGBBitCount = 32;
+            pf.dwRBitMask = 0x00FF0000;
+            pf.dwGBitMask = 0x0000FF00;
+            pf.dwBBitMask = 0x000000FF;
+            pf.dwRGBAlphaBitMask = 0xFF000000;
+        }
     }
     return w32.DD_OK;
 }
@@ -547,7 +935,6 @@ pub fn register(environment: *env.Environment) !void {
     const D3 = @intFromPtr(&ddraw_Dum3);
     const D4 = @intFromPtr(&ddraw_Dum4);
     const D5 = @intFromPtr(&ddraw_Dum5);
-    const D6 = @intFromPtr(&ddraw_Dum6);
 
     clipper_vtbl = .{
         .QueryInterface = @ptrCast(&ddraw_QueryInterface),
@@ -597,55 +984,55 @@ pub fn register(environment: *env.Environment) !void {
 
     surface_vtbl = .{
         .QueryInterface = @ptrCast(&ddraw_QueryInterface),
-        .AddRef = D1,
+        .AddRef = @intFromPtr(&surf_tn1("AddRef")),
         .Release = ddraw_Release,
-        .AddAttachedSurface = D2,     // this,surf
-        .AddOverlay = D6,             // this,sr,ds,dr,f,ox
+        .AddAttachedSurface = @intFromPtr(&surf_tn2("AddAttachedSurface")),
+        .AddOverlay = @intFromPtr(&surf_tn6("AddOverlayDirtyRect")),  // IDirectDrawSurface has 2 args, but vtable uses D6
         .Blt = surface_Blt,
-        .BltBatch = D4,               // this,batch,count,flags
-        .BltFast = D6,                // this,x,y,surf,rect,flags
-        .DeleteAttachedSurface = D3,  // this,flags,surf
-        .EnumAttachedSurfaces = D3,   // this,ctx,cb
-        .EnumOverlayZOrders = D4,     // this,flags,ctx,cb
+        .BltBatch = @intFromPtr(&surf_tn4("BltBatch")),
+        .BltFast = surface_BltFast,
+        .DeleteAttachedSurface = @intFromPtr(&surf_tn3("DeleteAttachedSurface")),
+        .EnumAttachedSurfaces = @intFromPtr(&surf_tn3("EnumAttachedSurfaces")),
+        .EnumOverlayZOrders = @intFromPtr(&surf_tn4("EnumOverlayZOrders")),
         .Flip = surface_Flip,
         .GetAttachedSurface = surface_GetAttachedSurface,
-        .GetBltStatus = D2,           // this,flags
+        .GetBltStatus = @intFromPtr(&surf_tn2("GetBltStatus")),
         .GetCaps = @ptrCast(&surface_GetCaps),
-        .GetClipper = D2,             // this,clipper
-        .GetColorKey = D3,            // this,flags,ck
-        .GetDC = D2,                  // this,dc
-        .GetFlipStatus = D2,          // this,flags
-        .GetOverlayPosition = D3,     // this,x,y
-        .GetPalette = D2,             // this,pal
-        .GetPixelFormat = D2,         // this,pf
+        .GetClipper = @intFromPtr(&surf_tn2("GetClipper")),
+        .GetColorKey = @intFromPtr(&surf_tn3("GetColorKey")),
+        .GetDC = surface_GetDC,
+        .GetFlipStatus = @intFromPtr(&surf_tn2("GetFlipStatus")),
+        .GetOverlayPosition = @intFromPtr(&surf_tn3("GetOverlayPosition")),
+        .GetPalette = @intFromPtr(&surf_tn2("GetPalette")),
+        .GetPixelFormat = @ptrCast(&surface_GetPixelFormat),
         .GetSurfaceDesc = @ptrCast(&surface_GetSurfaceDesc),
-        .Initialize = D3,             // this,dd,desc
+        .Initialize = @intFromPtr(&surf_tn3("Initialize")),
         .IsLost = surface_IsLost,
         .Lock = surface_Lock,
-        .ReleaseDC = D2,              // this,dc
+        .ReleaseDC = surface_ReleaseDC,
         .Restore = surface_Restore,
         .SetClipper = surface_SetClipper,
-        .SetColorKey = D3,            // this,flags,ck
-        .SetOverlayPosition = D3,     // this,x,y
-        .SetPalette = D2,             // this,pal
+        .SetColorKey = @intFromPtr(&surf_tn3("SetColorKey")),
+        .SetOverlayPosition = @intFromPtr(&surf_tn3("SetOverlayPosition")),
+        .SetPalette = @intFromPtr(&surf_tn2("SetPalette")),
         .Unlock = surface_Unlock,
-        .UpdateOverlay = D6,          // this,sr,ds,dr,f,ox
-        .UpdateOverlayDisplay = D2,   // this,flags
-        .UpdateOverlayZOrder = D3,    // this,flags,surf
-        // IDirectDrawSurface7 extras:
-        .GetDDInterface = D2,         // this,dd
-        .PageLock = D2,               // this,flags
-        .PageUnlock = D2,             // this,flags
-        .SetSurfaceDesc = D3,         // this,desc,flags
-        .SetPrivateData = D5,         // this,guid,data,size,flags
-        .GetPrivateData = D4,         // this,guid,data,size
-        .FreePrivateData = D2,        // this,guid
-        .GetUniquenessValue = D2,     // this,val
-        .ChangeUniquenessValue = D1,
-        .SetPriority = D2,            // this,pri
-        .GetPriority = D2,            // this,pri
-        .SetLOD = D2,                 // this,lod
-        .GetLOD = D2,                 // this,lod
+        .UpdateOverlay = @intFromPtr(&surf_tn6("UpdateOverlay")),
+        .UpdateOverlayDisplay = @intFromPtr(&surf_tn2("UpdateOverlayDisplay")),
+        .UpdateOverlayZOrder = @intFromPtr(&surf_tn3("UpdateOverlayZOrder")),
+        // IDirectDrawSurface2+ extras:
+        .GetDDInterface = @intFromPtr(&surf_tn2("GetDDInterface")),
+        .PageLock = @intFromPtr(&surf_tn2("PageLock")),
+        .PageUnlock = @intFromPtr(&surf_tn2("PageUnlock")),
+        .SetSurfaceDesc = @intFromPtr(&surf_tn3("SetSurfaceDesc")),
+        .SetPrivateData = @intFromPtr(&surf_tn5("SetPrivateData")),
+        .GetPrivateData = @intFromPtr(&surf_tn4("GetPrivateData")),
+        .FreePrivateData = @intFromPtr(&surf_tn2("FreePrivateData")),
+        .GetUniquenessValue = @intFromPtr(&surf_tn2("GetUniquenessValue")),
+        .ChangeUniquenessValue = @intFromPtr(&surf_tn1("ChangeUniquenessValue")),
+        .SetPriority = @intFromPtr(&surf_tn2("SetPriority")),
+        .GetPriority = @intFromPtr(&surf_tn2("GetPriority")),
+        .SetLOD = @intFromPtr(&surf_tn2("SetLOD")),
+        .GetLOD = @intFromPtr(&surf_tn2("GetLOD")),
     };
 
     global_ddraw.lpVtbl = &ddraw_vtbl;
@@ -660,6 +1047,10 @@ pub fn register(environment: *env.Environment) !void {
     environment.addBuiltinVtableComptime(IDirectDrawVtbl, &ddraw_vtbl);
     environment.addBuiltinVtableComptime(IDirectDrawSurfaceVtbl, &surface_vtbl);
     environment.addBuiltinVtableComptime(IDirectDrawClipperVtbl, &clipper_vtbl);
+
+    // Initialize and register D3D7 vtables
+    d3d7.init();
+    d3d7.registerVtables(environment);
 }
 
 fn stub_DirectDrawCreate(lpGUID: usize, lplpDD: *?*IDirectDraw, pUnkOuter: usize) callconv(w32cc.WINAPI) i32 {

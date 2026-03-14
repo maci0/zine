@@ -18,6 +18,7 @@ pub fn register(environment: *env.Environment) !void {
     renderer.on_command = &handleCommand;
     renderer.on_resize = &handleExternalResize;
     renderer.on_key_event = &handleKeyEvent;
+    renderer.on_mouse_event = &handleMouseEvent;
     renderer.on_close = &handleClose;
 
     const m = "USER32.dll";
@@ -391,6 +392,40 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "OemToCharBuffA", stub_OemToCharBuffA);
     try environment.addBuiltinExportComptime(m, "SetWindowsHookExW", misc.stub_SetWindowsHookExA);
     try environment.addBuiltinExportComptime(m, "GetNextDlgTabItem", stub_ret0_3);
+
+    // --- Notepad2 USER32 stubs ---
+    try environment.addBuiltinExportComptime(m, "CharPrevW", misc.stub_CharPrevA);
+    try environment.addBuiltinExportComptime(m, "CharUpperBuffW", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "CreateIconIndirect", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "DialogBoxIndirectParamW", stub_ret0_5);
+    try environment.addBuiltinExportComptime(m, "DrawAnimatedRects", stub_ret0_4);
+    try environment.addBuiltinExportComptime(m, "GetMenuStringW", stub_ret0_5);
+    try environment.addBuiltinExportComptime(m, "InsertMenuW", menu.stub_InsertMenuA);
+    try environment.addBuiltinExportComptime(m, "IsCharAlphaNumericA", stub_IsCharFunc);
+    try environment.addBuiltinExportComptime(m, "IsCharAlphaNumericW", stub_IsCharFunc);
+    try environment.addBuiltinExportComptime(m, "IsCharLowerA", stub_IsCharFunc);
+    try environment.addBuiltinExportComptime(m, "IsCharLowerW", stub_IsCharFunc);
+    try environment.addBuiltinExportComptime(m, "IsCharUpperW", stub_IsCharFunc);
+    try environment.addBuiltinExportComptime(m, "IsWindowUnicode", stub_ret0_1);
+    try environment.addBuiltinExportComptime(m, "MessageBoxExW", stub_ret0_5);
+    try environment.addBuiltinExportComptime(m, "MessageBoxIndirectW", misc.stub_MessageBoxIndirectA);
+    try environment.addBuiltinExportComptime(m, "ShowOwnedPopups", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "UnregisterClassW", misc.stub_UnregisterClassA);
+
+    // --- hgb.exe USER32 stubs ---
+    try environment.addBuiltinExportComptime(m, "GetClassInfoA", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "CallWindowProcA", stub_CallWindowProcA);
+    try environment.addBuiltinExportComptime(m, "WaitMessage", stub_ret0_0);
+    try environment.addBuiltinExportComptime(m, "WaitForInputIdle", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "SetWindowRgn", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "SetPropA", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "RemovePropA", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "GetWindowRgn", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "GetPropA", stub_ret0_2);
+    try environment.addBuiltinExportComptime(m, "GetKeyNameTextA", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "GetCursor", stub_ret0_0);
+    try environment.addBuiltinExportComptime(m, "EnumThreadWindows", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "CreateIcon", stub_ret0_7);
 }
 
 // --- Generic stubs (imported from stub_common) ---
@@ -453,6 +488,9 @@ pub const WS_EX_STATICEDGE: u32 = 0x00020000;
 
 pub var global_wndproc: ?*const fn (usize, u32, usize, isize) callconv(w32cc.WINAPI) isize = null;
 pub var global_hwnd: usize = 0;
+pub var needs_paint: bool = false;
+pub var wndclass_bg_brush: u32 = 0; // hbrBackground from RegisterClass
+pub var bg_needs_erase: bool = true; // Set true on first paint / InvalidateRect
 
 // Per-hwnd WndProc lookup table (for dialogs, subclassed windows, etc.)
 const WndProcType = *const fn (usize, u32, usize, isize) callconv(w32cc.WINAPI) isize;
@@ -635,8 +673,15 @@ fn handleExternalResize(clientW: i32, clientH: i32, sizeType: usize) void {
 
 fn handleKeyEvent(vk_code: usize, is_down: bool) void {
     const renderer = @import("../gui/renderer.zig");
+    const dinput = @import("dinput/stubs.zig");
     const vk: u8 = @intCast(vk_code & 0xFF);
     renderer.keyboard_state[vk] = if (is_down) 0x80 else 0;
+
+    // Push into DirectInput keyboard event buffer (VK → DIK scancode)
+    const scancode = dinput.vkToDIK(vk_code);
+    if (scancode != 0) {
+        dinput.pushKeyEvent(scancode, is_down);
+    }
 
     // Alt key (VK_MENU=0x12) held → use WM_SYSKEYDOWN/WM_SYSKEYUP (0x0104/0x0105)
     // Alt key itself also gets WM_SYSKEYDOWN
@@ -654,6 +699,71 @@ fn handleKeyEvent(vk_code: usize, is_down: bool) void {
     if (!is_down) lp |= (1 << 31); // transition state
     if (is_sys and is_down) lp |= (1 << 29); // Alt context code
     postKeyboardMessage(msg_id, vk_code, @as(isize, @intCast(@as(i32, @bitCast(lp)))));
+}
+
+fn handleMouseEvent(msg_id: u32, x: i32, y: i32) void {
+    // Track last known mouse position for GetCursorPos
+    const rend = @import("../gui/renderer.zig");
+    const dinput = @import("dinput/stubs.zig");
+
+    // Compute movement deltas for DirectInput
+    const dx = x - rend.last_mouse_x;
+    const dy = y - rend.last_mouse_y;
+
+    // Accumulate for GetDeviceState
+    rend.mouse_dx += dx;
+    rend.mouse_dy += dy;
+
+    // Push deltas into DirectInput mouse event buffer for GetDeviceData
+    if (dx != 0) dinput.pushMouseEvent(0, @bitCast(dx));  // DIMOFS_X = 0
+    if (dy != 0) dinput.pushMouseEvent(4, @bitCast(dy));  // DIMOFS_Y = 4
+
+    rend.last_mouse_x = x;
+    rend.last_mouse_y = y;
+
+    // Track button state for DirectInput mouse (0x80 = pressed)
+    switch (msg_id) {
+        w32.WM_LBUTTONDOWN => {
+            rend.mouse_buttons[0] = 0x80;
+            dinput.pushMouseEvent(12, 0x80); // DIMOFS_BUTTON0
+        },
+        w32.WM_LBUTTONUP => {
+            rend.mouse_buttons[0] = 0;
+            dinput.pushMouseEvent(12, 0x00); // DIMOFS_BUTTON0
+        },
+        w32.WM_RBUTTONDOWN => {
+            rend.mouse_buttons[1] = 0x80;
+            dinput.pushMouseEvent(13, 0x80); // DIMOFS_BUTTON1
+        },
+        w32.WM_RBUTTONUP => {
+            rend.mouse_buttons[1] = 0;
+            dinput.pushMouseEvent(13, 0x00); // DIMOFS_BUTTON1
+        },
+        w32.WM_MBUTTONDOWN => {
+            rend.mouse_buttons[2] = 0x80;
+            dinput.pushMouseEvent(14, 0x80); // DIMOFS_BUTTON2
+        },
+        w32.WM_MBUTTONUP => {
+            rend.mouse_buttons[2] = 0;
+            dinput.pushMouseEvent(14, 0x00); // DIMOFS_BUTTON2
+        },
+        else => {},
+    }
+
+    // lParam = MAKELPARAM(x, y) = (y << 16) | (x & 0xFFFF)
+    const lx: u32 = @as(u32, @bitCast(x)) & 0xFFFF;
+    const ly: u32 = @as(u32, @bitCast(y)) & 0xFFFF;
+    const lParam: isize = @intCast(@as(i32, @bitCast((ly << 16) | lx)));
+
+    // wParam = key flags (MK_LBUTTON / MK_RBUTTON)
+    var wParam: usize = 0;
+    if (msg_id == w32.WM_LBUTTONDOWN or msg_id == w32.WM_MOUSEMOVE) {
+        // Set MK_LBUTTON if this is a down event or if left mouse is held during move
+        if (msg_id == w32.WM_LBUTTONDOWN) wParam |= w32.MK_LBUTTON;
+    }
+    if (msg_id == w32.WM_RBUTTONDOWN) wParam |= w32.MK_RBUTTON;
+
+    postGenericMessage(msg_id, wParam, lParam);
 }
 
 // --- SEH / WndProc Safe Call ---
@@ -727,13 +837,13 @@ comptime {
     }
 }
 
-pub const callWndProcSafe = callWndProcSafe_zig;
+pub const callWndProcSafe = if (native_arch == .x86) callWndProcSafe_extern else callWndProcSafe_zig;
 
 extern fn callWndProcSafe_extern(wndproc: usize, hwnd: usize, msg: u32, wParam: usize, lParam: isize, err_out: *u32) callconv(.c) isize;
 
 /// x86_64: direct call without SEH frame (no 32-bit SEH on x86_64)
 fn callWndProcSafe_zig(wndproc: usize, hwnd: usize, msg: u32, wParam: usize, lParam: isize, err_out: *u32) callconv(.c) isize {
-    err_out.* = 0; std.debug.print(">>> NATIVE CALLING GUEST WNDPROC AT {X}\n", .{wndproc});
+    err_out.* = 0;
     if (wndproc == 0) return 0;
     const WndProc = *const fn (usize, u32, usize, isize) callconv(w32cc.WINAPI) isize;
     const func = @as(WndProc, @ptrFromInt(wndproc));
@@ -909,4 +1019,18 @@ test "BeginDeferWindowPos returns non-zero" {
     try std.testing.expectEqual(handle, handle2);
     // EndDeferWindowPos returns TRUE
     try std.testing.expectEqual(@as(i32, 1), stub_EndDeferWindowPos(handle));
+}
+
+// IsCharAlphaNumericA/W, IsCharLowerA/W, IsCharUpperW: simple ascii check
+fn stub_IsCharFunc(c: usize) callconv(w32cc.WINAPI) i32 {
+    const ch = @as(u8, @intCast(c & 0xFF));
+    return if (std.ascii.isAlphanumeric(ch)) 1 else 0;
+}
+
+// CallWindowProcA: call a window procedure directly (used by subclassing)
+fn stub_CallWindowProcA(lpPrevWndFunc: usize, hWnd: usize, Msg: u32, wParam: usize, lParam: isize) callconv(w32cc.WINAPI) isize {
+    if (trace.enable_tracing) trace.print("USER32: CallWindowProcA(proc=0x{X}, hwnd=0x{X}, Msg=0x{X})\n", .{ lpPrevWndFunc, hWnd, Msg });
+    if (lpPrevWndFunc == 0) return 0;
+    var err_flag: u32 = 0;
+    return callWndProcSafe(lpPrevWndFunc, hWnd, Msg, wParam, lParam, &err_flag);
 }

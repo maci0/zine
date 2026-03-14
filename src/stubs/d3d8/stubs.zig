@@ -266,16 +266,117 @@ fn d3d8_GetDeviceCaps(this: *IDirect3D8, Adapter: u32, DeviceType: u32, pCaps: u
     _ = this; _ = Adapter; _ = DeviceType;
     if (trace.enable_tracing) trace.print("D3D8: IDirect3D8::GetDeviceCaps\n", .{});
     if (pCaps != 0) {
-        // D3DCAPS8 is 304 bytes. Zero it and fill key fields.
-        const caps = @as([*]u8, @ptrFromInt(pCaps));
-        @memset(caps[0..304], 0);
-        // Set DeviceType = D3DDEVTYPE_HAL
-        @as(*align(1) u32, @ptrFromInt(pCaps)).* = w32.D3DDEVTYPE_HAL;
-        // MaxTextureWidth/Height at offset 108/112
-        @as(*align(1) u32, @ptrFromInt(pCaps + 108)).* = 2048;
-        @as(*align(1) u32, @ptrFromInt(pCaps + 112)).* = 2048;
+        fillD3D8Caps(pCaps);
     }
     return w32.D3D_OK;
+}
+
+/// Fill D3DCAPS8 (304 bytes) with plausible hardware-accelerated device caps
+fn fillD3D8Caps(pCaps: usize) void {
+    const caps = @as([*]u8, @ptrFromInt(pCaps));
+    @memset(caps[0..304], 0);
+
+    // D3DCAPS8 layout (offsets in bytes):
+    //   0: DeviceType (4)
+    //   4: AdapterOrdinal (4)
+    //   8: Caps (4)
+    //  12: Caps2 (4)
+    //  16: Caps3 (4)
+    //  20: PresentationIntervals (4)
+    //  24: CursorCaps (4)
+    //  28: DevCaps (4)
+    //  32: PrimitiveMiscCaps (4)
+    //  36: RasterCaps (4)
+    //  40: ZCmpCaps (4)
+    //  44: SrcBlendCaps (4)
+    //  48: DestBlendCaps (4)
+    //  52: AlphaCmpCaps (4)
+    //  56: ShadeCaps (4)
+    //  60: TextureCaps (4)
+    //  64: TextureFilterCaps (4)
+    //  68: CubeTextureFilterCaps (4)
+    //  72: VolumeTextureFilterCaps (4)
+    //  76: TextureAddressCaps (4)
+    //  80: VolumeTextureAddressCaps (4)
+    //  84: LineCaps (4)
+    //  88: MaxTextureWidth (4)
+    //  92: MaxTextureHeight (4)
+    //  96: MaxVolumeExtent (4)
+    // 100: MaxTextureRepeat (4)
+    // 104: MaxTextureAspectRatio (4)
+    // 108: MaxAnisotropy (4)
+    // 112: MaxVertexW (4, float)
+    // 116: GuardBandLeft (4, float)
+    // 120: GuardBandTop (4, float)
+    // 124: GuardBandRight (4, float)
+    // 128: GuardBandBottom (4, float)
+    // 132: ExtentsAdjust (4, float)
+    // 136: StencilCaps (4)
+    // 140: FVFCaps (4)
+    // 144: TextureOpCaps (4)
+    // 148: MaxTextureBlendStages (4)
+    // 152: MaxSimultaneousTextures (4)
+    // 156: VertexProcessingCaps (4)
+    // 160: MaxActiveLights (4)
+    // 164: MaxUserClipPlanes (4)
+    // 168: MaxVertexBlendMatrices (4)
+    // 172: MaxVertexBlendMatrixIndex (4)
+    // 176: MaxPointSize (4, float)
+    // 180: MaxPrimitiveCount (4)
+    // 184: MaxVertexIndex (4)
+    // 188: MaxStreams (4)
+    // 192: MaxStreamStride (4)
+    // 196: VertexShaderVersion (4)
+    // 200: MaxVertexShaderConst (4)
+    // 204: PixelShaderVersion (4)
+    // 208: MaxPixelShaderValue (4, float)
+
+    const w = @as(*align(1) u32, @ptrFromInt(pCaps));
+    _ = w; // suppressed — using inline writes
+
+    @as(*align(1) u32, @ptrFromInt(pCaps + 0)).* = w32.D3DDEVTYPE_HAL; // DeviceType
+    @as(*align(1) u32, @ptrFromInt(pCaps + 4)).* = 0; // AdapterOrdinal
+    @as(*align(1) u32, @ptrFromInt(pCaps + 8)).* = 0x00020000; // Caps: D3DCAPS_READ_SCANLINE
+    @as(*align(1) u32, @ptrFromInt(pCaps + 12)).* = 0x00080000; // Caps2: D3DCAPS2_CANRENDERWINDOWED
+    @as(*align(1) u32, @ptrFromInt(pCaps + 20)).* = 0x00000001; // PresentationIntervals: D3DPRESENT_INTERVAL_ONE
+    @as(*align(1) u32, @ptrFromInt(pCaps + 28)).* = 0x001BBEF0; // DevCaps: HAL capabilities
+    @as(*align(1) u32, @ptrFromInt(pCaps + 32)).* = 0x000000B2; // PrimitiveMiscCaps
+    @as(*align(1) u32, @ptrFromInt(pCaps + 36)).* = 0x07672191; // RasterCaps
+    @as(*align(1) u32, @ptrFromInt(pCaps + 40)).* = 0xFF; // ZCmpCaps: all compare funcs
+    @as(*align(1) u32, @ptrFromInt(pCaps + 44)).* = 0x1FFF; // SrcBlendCaps
+    @as(*align(1) u32, @ptrFromInt(pCaps + 48)).* = 0x1FFF; // DestBlendCaps
+    @as(*align(1) u32, @ptrFromInt(pCaps + 52)).* = 0xFF; // AlphaCmpCaps
+    @as(*align(1) u32, @ptrFromInt(pCaps + 56)).* = 0x0207000E; // ShadeCaps
+    @as(*align(1) u32, @ptrFromInt(pCaps + 60)).* = 0x0001FC01; // TextureCaps
+    @as(*align(1) u32, @ptrFromInt(pCaps + 64)).* = 0x07030700; // TextureFilterCaps
+    @as(*align(1) u32, @ptrFromInt(pCaps + 76)).* = 0x3F; // TextureAddressCaps
+    @as(*align(1) u32, @ptrFromInt(pCaps + 84)).* = 0x1F; // LineCaps
+    @as(*align(1) u32, @ptrFromInt(pCaps + 88)).* = 2048; // MaxTextureWidth
+    @as(*align(1) u32, @ptrFromInt(pCaps + 92)).* = 2048; // MaxTextureHeight
+    @as(*align(1) u32, @ptrFromInt(pCaps + 96)).* = 256; // MaxVolumeExtent
+    @as(*align(1) u32, @ptrFromInt(pCaps + 100)).* = 8192; // MaxTextureRepeat
+    @as(*align(1) u32, @ptrFromInt(pCaps + 104)).* = 2048; // MaxTextureAspectRatio
+    @as(*align(1) u32, @ptrFromInt(pCaps + 108)).* = 16; // MaxAnisotropy
+    @as(*align(1) f32, @ptrFromInt(pCaps + 112)).* = 1.0e10; // MaxVertexW
+    @as(*align(1) u32, @ptrFromInt(pCaps + 136)).* = 0xFF; // StencilCaps
+    @as(*align(1) u32, @ptrFromInt(pCaps + 140)).* = 0x000F0008; // FVFCaps: 8 texcoords
+    @as(*align(1) u32, @ptrFromInt(pCaps + 144)).* = 0x03FFFFFF; // TextureOpCaps
+    @as(*align(1) u32, @ptrFromInt(pCaps + 148)).* = 8; // MaxTextureBlendStages
+    @as(*align(1) u32, @ptrFromInt(pCaps + 152)).* = 8; // MaxSimultaneousTextures
+    @as(*align(1) u32, @ptrFromInt(pCaps + 156)).* = 0x0000013F; // VertexProcessingCaps
+    @as(*align(1) u32, @ptrFromInt(pCaps + 160)).* = 8; // MaxActiveLights
+    @as(*align(1) u32, @ptrFromInt(pCaps + 164)).* = 6; // MaxUserClipPlanes
+    @as(*align(1) u32, @ptrFromInt(pCaps + 168)).* = 4; // MaxVertexBlendMatrices
+    @as(*align(1) u32, @ptrFromInt(pCaps + 172)).* = 0; // MaxVertexBlendMatrixIndex
+    @as(*align(1) f32, @ptrFromInt(pCaps + 176)).* = 256.0; // MaxPointSize
+    @as(*align(1) u32, @ptrFromInt(pCaps + 180)).* = 0x000FFFFF; // MaxPrimitiveCount
+    @as(*align(1) u32, @ptrFromInt(pCaps + 184)).* = 0x000FFFFF; // MaxVertexIndex
+    @as(*align(1) u32, @ptrFromInt(pCaps + 188)).* = 16; // MaxStreams
+    @as(*align(1) u32, @ptrFromInt(pCaps + 192)).* = 256; // MaxStreamStride
+    @as(*align(1) u32, @ptrFromInt(pCaps + 196)).* = 0; // VertexShaderVersion (0=fixed function)
+    @as(*align(1) u32, @ptrFromInt(pCaps + 200)).* = 96; // MaxVertexShaderConst
+    @as(*align(1) u32, @ptrFromInt(pCaps + 204)).* = 0; // PixelShaderVersion (0=fixed function)
+    @as(*align(1) f32, @ptrFromInt(pCaps + 208)).* = 1.0; // MaxPixelShaderValue
 }
 
 fn d3d8_GetAdapterMonitor(this: *IDirect3D8, Adapter: u32) callconv(w32cc.WINAPI) usize {
@@ -329,11 +430,7 @@ fn device_GetAvailableTextureMem(this: *IDirect3DDevice8) callconv(w32cc.WINAPI)
 fn device_GetDeviceCaps(this: *IDirect3DDevice8, pCaps: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
     if (pCaps != 0) {
-        const caps = @as([*]u8, @ptrFromInt(pCaps));
-        @memset(caps[0..304], 0);
-        @as(*align(1) u32, @ptrFromInt(pCaps)).* = w32.D3DDEVTYPE_HAL;
-        @as(*align(1) u32, @ptrFromInt(pCaps + 108)).* = 2048;
-        @as(*align(1) u32, @ptrFromInt(pCaps + 112)).* = 2048;
+        fillD3D8Caps(pCaps);
     }
     return 0;
 }
@@ -736,6 +833,10 @@ pub fn register(environment: *env.Environment) !void {
             thunks.registerNativeImport(@intCast(func_ptr.*), "COM", "D3D8ResourceMethod", 12);
         }
     }
+
+    // Finalize PE export directory so games that manually parse PE exports
+    // (e.g. Europa 1400 TL) can find Direct3DCreate8 in the fake header.
+    environment.finalizeExports("d3d8.dll");
 }
 
 fn stub_Direct3DCreate8(SDKVersion: u32) callconv(w32cc.WINAPI) usize {

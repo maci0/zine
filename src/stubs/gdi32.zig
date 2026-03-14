@@ -25,53 +25,148 @@ pub const DibInfo = struct {
     bpp: u16,         // bits per pixel
 };
 
-pub var dib_entries: [16]DibInfo = [_]DibInfo{.{ .handle = 0, .buffer = 0, .width = 0, .height = 0, .bpp = 0 }} ** 16;
-pub var dib_count: usize = 0;
+// --- Object Tracking ---
 
-pub fn registerDib(handle: usize, buffer: usize, width: u32, height: u32, bpp: u16) void {
-    if (dib_count < dib_entries.len) {
-        dib_entries[dib_count] = .{ .handle = handle, .buffer = buffer, .width = width, .height = height, .bpp = bpp };
-        dib_count += 1;
+pub const ObjectType = enum {
+    Bitmap,
+    Brush,
+    Pen,
+    Font,
+    Palette,
+    Region,
+};
+
+pub const BrushData = struct {
+    color: u32,
+    style: i32, // 0 = solid
+};
+
+pub const PenData = struct {
+    color: u32,
+    width: i32,
+    style: i32,
+};
+
+pub const GdiObject = struct {
+    handle: usize,
+    obj_type: ObjectType,
+    data: union {
+        bitmap: DibInfo,
+        brush: BrushData,
+        pen: PenData,
+        none: void,
+    },
+};
+
+pub var gdi_objects: [512]GdiObject = [_]GdiObject{.{ .handle = 0, .obj_type = .Bitmap, .data = .{ .none = {} } }} ** 512;
+pub var gdi_object_count: usize = 0;
+
+pub fn registerObject(obj: GdiObject) void {
+    if (gdi_object_count < gdi_objects.len) {
+        gdi_objects[gdi_object_count] = obj;
+        gdi_object_count += 1;
     }
 }
 
-pub fn findDib(handle: usize) ?*const DibInfo {
-    for (dib_entries[0..dib_count]) |*entry| {
-        if (entry.handle == handle) return entry;
+pub fn findObject(handle: usize) ?*const GdiObject {
+    for (gdi_objects[0..gdi_object_count]) |*obj| {
+        if (obj.handle == handle) return obj;
     }
     return null;
 }
 
-// --- DC → Bitmap binding ---
-// Tracks SelectObject(dc, bitmap) so BitBlt can resolve source DC to pixel data.
+pub fn registerDib(handle: usize, buffer: usize, width: u32, height: u32, bpp: u16) void {
+    registerObject(.{
+        .handle = handle,
+        .obj_type = .Bitmap,
+        .data = .{ .bitmap = .{
+            .handle = handle,
+            .buffer = buffer,
+            .width = width,
+            .height = height,
+            .bpp = bpp,
+        } },
+    });
+}
 
-const DcBinding = struct {
-    dc_handle: usize,
-    bmp_handle: usize,
-};
-
-var dc_bindings: [16]DcBinding = [_]DcBinding{.{ .dc_handle = 0, .bmp_handle = 0 }} ** 16;
-var dc_binding_count: usize = 0;
-
-pub fn bindDcBitmap(dc_handle: usize, bmp_handle: usize) void {
-    // Update existing binding or add new one
-    for (dc_bindings[0..dc_binding_count]) |*b| {
-        if (b.dc_handle == dc_handle) {
-            b.bmp_handle = bmp_handle;
-            return;
+pub fn findDib(handle: usize) ?*const DibInfo {
+    if (findObject(handle)) |obj| {
+        if (obj.obj_type == .Bitmap) {
+            return &obj.data.bitmap;
         }
     }
-    if (dc_binding_count < dc_bindings.len) {
-        dc_bindings[dc_binding_count] = .{ .dc_handle = dc_handle, .bmp_handle = bmp_handle };
-        dc_binding_count += 1;
+    return null;
+}
+
+// --- Device Context Tracking ---
+
+pub const DeviceContext = struct {
+    handle: usize,
+    bitmap: usize, // Selected bitmap handle
+    brush: usize,  // Selected brush handle
+    pen: usize,    // Selected pen handle
+    font: usize,   // Selected font handle
+    bk_mode: i32,  // 1 = TRANSPARENT, 2 = OPAQUE
+    bk_color: u32,
+    text_color: u32,
+    rop2: i32,     // R2_COPYPEN = 13 (default)
+    stretch_mode: i32, // BLACKONWHITE = 1 (default)
+    text_align: u32,   // TA_LEFT | TA_TOP = 0 (default)
+    map_mode: i32,     // MM_TEXT = 1 (default)
+};
+
+pub var dc_entries: [128]DeviceContext = [_]DeviceContext{.{
+    .handle = 0,
+    .bitmap = 0,
+    .brush = 0,
+    .pen = 0,
+    .font = 0,
+    .bk_mode = 2,
+    .bk_color = 0x00FFFFFF,
+    .text_color = 0x00000000,
+    .rop2 = 13,
+    .stretch_mode = 1,
+    .text_align = 0,
+    .map_mode = 1,
+}} ** 128;
+pub var dc_count: usize = 0;
+
+pub fn getDc(handle: usize) ?*DeviceContext {
+    for (dc_entries[0..dc_count]) |*dc_entry| {
+        if (dc_entry.handle == handle) return dc_entry;
+    }
+    return null;
+}
+
+pub fn registerDc(handle: usize) void {
+    if (dc_count < dc_entries.len) {
+        dc_entries[dc_count] = .{
+            .handle = handle,
+            .bitmap = 0,
+            .brush = 0,
+            .pen = 0,
+            .font = 0,
+            .bk_mode = 2,
+            .bk_color = 0x00FFFFFF,
+            .text_color = 0x00000000,
+            .rop2 = 13,
+            .stretch_mode = 1,
+            .text_align = 0,
+            .map_mode = 1,
+        };
+        dc_count += 1;
+    }
+}
+
+pub fn bindDcBitmap(dc_handle: usize, bmp_handle: usize) void {
+    if (getDc(dc_handle)) |dc_entry| {
+        dc_entry.bitmap = bmp_handle;
     }
 }
 
 pub fn getDcDib(dc_handle: usize) ?*const DibInfo {
-    for (dc_bindings[0..dc_binding_count]) |*b| {
-        if (b.dc_handle == dc_handle) {
-            return findDib(b.bmp_handle);
-        }
+    if (getDc(dc_handle)) |dc_entry| {
+        return findDib(dc_entry.bitmap);
     }
     return null;
 }
@@ -217,4 +312,14 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "SetLayout", stub.stub_args2);
     try environment.addBuiltinExportComptime(m, "DPtoLP", stub.stub_args3);
     try environment.addBuiltinExportComptime(m, "ScaleWindowExtEx", stub.stub_args6);
+
+    // --- Notepad2 GDI32 stubs ---
+    try environment.addBuiltinExportComptime(m, "GetTextExtentExPointW", dc.stub_GetTextExtentExPointA);
+    try environment.addBuiltinExportComptime(m, "CreateFontW", object.stub_CreateFontA);
+
+    // --- hgb.exe GDI32 stubs ---
+    try environment.addBuiltinExportComptime(m, "GetWindowOrgEx", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "GetSystemPaletteEntries", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "GetCurrentPositionEx", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "EnumFontsA", stub.stub_args4);
 }

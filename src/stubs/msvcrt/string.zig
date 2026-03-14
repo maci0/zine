@@ -681,3 +681,11 @@ pub fn log_wcs(prefix: []const u8, str_ptr: usize) void {
 }
 
 // --- Generic Stubs ---
+
+pub fn stub_iscntrl(c: i32) callconv(.c) i32 {
+    if (c >= -1 and c <= 255) {
+        const index = @as(usize, @intCast(c + 1));
+        return msvcrt.msvcrt_pctype[index] & 0x0020; // _CONTROL
+    }
+    return 0;
+}

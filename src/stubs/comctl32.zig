@@ -31,4 +31,18 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "ImageList_LoadImageW", kernel32.stub_args7);
     try environment.addBuiltinExportComptime(m, "ImageList_SetIconSize", kernel32.stub_args3);
     try environment.addBuiltinExportComptime(m, "ImageList_Remove", kernel32.stub_args2);
+
+    // --- Notepad2 COMCTL32 stubs ---
+    try environment.addBuiltinExportComptime(m, "ordinal_8", kernel32.stub_args4);
+    try environment.addBuiltinExportComptime(m, "ImageList_AddMasked", kernel32.stub_args3);
+
+    // --- hgb.exe COMCTL32 stubs (ImageList drag) ---
+    try environment.addBuiltinExportComptime(m, "ImageList_GetDragImage", kernel32.stub_args2);
+    try environment.addBuiltinExportComptime(m, "ImageList_DragShowNolock", kernel32.stub_args1);
+    try environment.addBuiltinExportComptime(m, "ImageList_SetDragCursorImage", kernel32.stub_args4);
+    try environment.addBuiltinExportComptime(m, "ImageList_DragMove", kernel32.stub_args2);
+    try environment.addBuiltinExportComptime(m, "ImageList_DragLeave", kernel32.stub_args1);
+    try environment.addBuiltinExportComptime(m, "ImageList_DragEnter", kernel32.stub_args3);
+    try environment.addBuiltinExportComptime(m, "ImageList_EndDrag", kernel32.stub_args0);
+    try environment.addBuiltinExportComptime(m, "ImageList_BeginDrag", kernel32.stub_args4);
 }

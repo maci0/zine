@@ -210,6 +210,11 @@ pub fn stub_GetSystemInfo(lpSystemInfo_ptr: usize) callconv(w32cc.WINAPI) void {
     }
 }
 
+pub fn stub_GetNativeSystemInfo(lpSystemInfo_ptr: usize) callconv(w32cc.WINAPI) void {
+    // On x86, GetNativeSystemInfo returns the same as GetSystemInfo
+    stub_GetSystemInfo(lpSystemInfo_ptr);
+}
+
 pub fn stub_SetErrorMode(uMode: u32) callconv(w32cc.WINAPI) u32 {
     _ = uMode;
     return 0; // Return old mode
@@ -614,36 +619,67 @@ pub fn stub_GetDriveTypeA(lpRootPathName: usize) callconv(w32cc.WINAPI) u32 {
 }
 
 pub fn stub_FindResourceA(hModule: usize, lpName: usize, lpType: usize) callconv(w32cc.WINAPI) usize {
-    _ = hModule;
     if (trace.enable_tracing) {
         const name_s = if (lpName > 0xFFFF) trace.c_span(lpName) else "INTRESOURCE";
         const type_s = if (lpType > 0xFFFF) trace.c_span(lpType) else "INTRESOURCE";
-        trace.print("KERNEL32: FindResourceA(name={s}, type={s})\n", .{ name_s, type_s });
+        trace.print("KERNEL32: FindResourceA(hMod={x}, name={s}({x}), type={s}({x}))\n", .{ hModule, name_s, lpName, type_s, lpType });
     }
-    return 0; // Not found
+    return findResourceImpl(hModule, lpName, lpType);
 }
 
 pub fn stub_FindResourceW(hModule: usize, lpName: usize, lpType: usize) callconv(w32cc.WINAPI) usize {
-    _ = hModule;
-    _ = lpName;
-    _ = lpType;
-    return 0; // Not found
+    if (trace.enable_tracing) {
+        trace.print("KERNEL32: FindResourceW(hMod={x}, name={x}, type={x})\n", .{ hModule, lpName, lpType });
+    }
+    return findResourceImpl(hModule, lpName, lpType);
+}
+
+fn findResourceImpl(hModule: usize, lpName: usize, lpType: usize) usize {
+    // Only support MAKEINTRESOURCE (integer IDs <= 0xFFFF) for now
+    if (lpType > 0xFFFF or lpName > 0xFFFF) return 0;
+
+    const resource_type: u32 = @intCast(lpType & 0xFFFF);
+    const resource_id: u32 = @intCast(lpName & 0xFFFF);
+
+    // Find the module to get its resource data
+    if (kernel32.global_env) |genv| {
+        var mod_handle = hModule;
+        if (mod_handle == 0) mod_handle = kernel32.main_module_handle;
+
+        var it = genv.registry.modules.valueIterator();
+        while (it.next()) |m| {
+            if (@intFromPtr(m.*.mapped_memory.ptr) == mod_handle) {
+                if (m.*.getResource(resource_type, resource_id)) |data| {
+                    if (trace.enable_tracing) trace.print("KERNEL32: FindResource -> {x} (size={d})\n", .{ @intFromPtr(data.ptr), data.len });
+                    return @intFromPtr(data.ptr);
+                }
+                break;
+            }
+        }
+    }
+    if (trace.enable_tracing) trace.print("KERNEL32: FindResource -> 0 (not found)\n", .{});
+    return 0;
 }
 
 pub fn stub_LoadResource(hModule: usize, hResInfo: usize) callconv(w32cc.WINAPI) usize {
     _ = hModule;
-    _ = hResInfo;
-    return 0;
+    // In Win32, LoadResource just returns the HGLOBAL handle.
+    // Since our FindResource already returns a direct pointer to the data, just pass it through.
+    return hResInfo;
 }
 
 pub fn stub_SizeofResource(hModule: usize, hResInfo: usize) callconv(w32cc.WINAPI) u32 {
     _ = hModule;
+    // We need to find the size. Since FindResource returned the data pointer,
+    // we need to look up the resource again. For now, return 0 — most apps
+    // don't need SizeofResource if they know the format.
     _ = hResInfo;
     return 0;
 }
 
 pub fn stub_LockResource(hResData: usize) callconv(w32cc.WINAPI) usize {
-    return hResData; // In Win32, LockResource just returns the pointer
+    // In Win32, LockResource just returns the pointer.
+    return hResData;
 }
 
 pub fn stub_GetModuleFileNameA(hModule: usize, lpFilename: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
@@ -758,4 +794,36 @@ pub fn stub_GetDriveTypeW(lpRootPathName: usize) callconv(w32cc.WINAPI) u32 {
 // GetConsoleOutputCP: returns console output code page
 pub fn stub_GetConsoleOutputCP() callconv(w32cc.WINAPI) u32 {
     return 437; // OEM United States
+}
+
+// GetLongPathNameW: just copies the input to the output (identity mapping)
+pub fn stub_GetLongPathNameW(lpszShortPath: usize, lpszLongPath: usize, cchBuffer: u32) callconv(w32cc.WINAPI) u32 {
+    if (lpszShortPath == 0) return 0;
+    const src = @as([*]const u16, @ptrFromInt(lpszShortPath));
+    var len: usize = 0;
+    while (len < 4096 and src[len] != 0) len += 1;
+    if (lpszLongPath != 0 and cchBuffer > len) {
+        const dst = @as([*]u16, @ptrFromInt(lpszLongPath));
+        for (0..len) |i| dst[i] = src[i];
+        dst[len] = 0;
+    }
+    return @intCast(len);
+}
+
+// SetCurrentDirectoryW: properly handle wide string paths
+pub fn stub_SetCurrentDirectoryW(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
+    if (lpPathName == 0) return 0;
+    const wstr = @as([*]const u16, @ptrFromInt(lpPathName));
+    // Convert wide to narrow
+    var narrow: [1024]u8 = undefined;
+    var i: usize = 0;
+    while (i < 1023 and wstr[i] != 0) : (i += 1) {
+        narrow[i] = @intCast(wstr[i] & 0xFF);
+    }
+    narrow[i] = 0;
+    if (trace.enable_tracing) trace.print("KERNEL32: SetCurrentDirectoryW('{s}')\n", .{narrow[0..i]});
+    @memcpy(current_directory[0..i], narrow[0..i]);
+    current_directory_len = i;
+    current_directory[i] = 0;
+    return 1;
 }

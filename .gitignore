@@ -4,3 +4,5 @@ zig-out/
 .claude/
 tests/
 .zig-cache/
+winmine_trace.txt
+hello.c

@@ -655,6 +655,9 @@ function connect() {
                     canvas.width = currentRenderWidth;
                     canvas.height = currentRenderHeight;
 
+                } else if (msg.type === "audio_format") {
+                    setupAudio(msg.sampleRate, msg.channels, msg.bitsPerSample);
+
                 } else if (msg.type === "menu") {
                     renderMenu(msg.menu);
 
@@ -1374,6 +1377,63 @@ function connect() {
                         document.getElementsByTagName('head')[0].appendChild(link);
                     }
                     link.href = iconUrl;
+                } else if (msg.type === "desktop_icons") {
+                    const desktop = document.getElementById('desktop-area');
+                    desktop.innerHTML = '';
+                    const folderSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><path d="M2 6h12l2 3h14v19H2z" fill="#FEC64F" stroke="#996515" stroke-width="0.5"/><path d="M2 9h28v16H2z" fill="#FEC64F"/></svg>`;
+                    const docSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><path d="M6 2h14l6 6v22H6z" fill="#fff" stroke="#888" stroke-width="0.8"/><path d="M20 2l6 6h-6z" fill="#ccc" stroke="#888" stroke-width="0.5"/><line x1="10" y1="14" x2="22" y2="14" stroke="#999" stroke-width="0.8"/><line x1="10" y1="17" x2="22" y2="17" stroke="#999" stroke-width="0.8"/><line x1="10" y1="20" x2="18" y2="20" stroke="#999" stroke-width="0.8"/></svg>`;
+                    const exeSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><rect x="4" y="2" width="24" height="28" rx="2" fill="#ddd" stroke="#666" stroke-width="0.8"/><rect x="7" y="5" width="18" height="12" fill="#000080"/><rect x="9" y="8" width="4" height="2" fill="#0f0"/><rect x="15" y="8" width="6" height="2" fill="#0ff"/><rect x="9" y="11" width="8" height="2" fill="#ff0"/><rect x="8" y="20" width="7" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/><rect x="17" y="20" width="7" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/><rect x="8" y="25" width="16" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/></svg>`;
+                    const gbSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><rect x="6" y="1" width="20" height="30" rx="3" fill="#c0b8a0" stroke="#888" stroke-width="0.8"/><rect x="9" y="4" width="14" height="12" rx="1" fill="#8bac0f" stroke="#666" stroke-width="0.5"/><circle cx="22" cy="21" r="3" fill="#a00050"/><circle cx="18" cy="24" r="2" fill="#a00050"/><rect x="9" y="21" width="5" height="1.5" rx="0.5" fill="#444"/><rect x="10.5" y="19.5" width="1.5" height="5" rx="0.5" fill="#444"/></svg>`;
+
+                    let selectedIcon = null;
+                    (msg.items || []).forEach(item => {
+                        const iconEl = document.createElement('div');
+                        iconEl.className = 'win2k-desktop-icon';
+
+                        const imgContainer = document.createElement('div');
+                        if (item.icon) {
+                            const img = document.createElement('img');
+                            img.src = 'data:image/x-icon;base64,' + item.icon;
+                            img.width = 32; img.height = 32;
+                            img.style.imageRendering = 'pixelated';
+                            imgContainer.appendChild(img);
+                        } else if (item.is_dir) {
+                            imgContainer.innerHTML = folderSvg;
+                        } else {
+                            const ext = (item.ext || '').toLowerCase();
+                            if (ext === 'exe') imgContainer.innerHTML = exeSvg;
+                            else if (ext === 'gb' || ext === 'gbc' || ext === 'mgb') imgContainer.innerHTML = gbSvg;
+                            else imgContainer.innerHTML = docSvg;
+                        }
+                        iconEl.appendChild(imgContainer);
+
+                        const lbl = document.createElement('div');
+                        lbl.className = 'win2k-desktop-icon-label';
+                        lbl.textContent = item.name;
+                        iconEl.appendChild(lbl);
+
+                        // Click to select
+                        iconEl.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            if (selectedIcon) selectedIcon.classList.remove('selected');
+                            iconEl.classList.add('selected');
+                            selectedIcon = iconEl;
+                        });
+
+                        // Double-click to launch
+                        iconEl.addEventListener('dblclick', () => {
+                            if (ws && ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({type:'launch', path: 'Desktop/' + item.name}));
+                            }
+                        });
+
+                        desktop.appendChild(iconEl);
+                    });
+
+                    // Click empty area to deselect
+                    desktop.addEventListener('click', () => {
+                        if (selectedIcon) { selectedIcon.classList.remove('selected'); selectedIcon = null; }
+                    });
                 }
             } catch (e) {
                 console.error("Failed to parse JSON", e);
@@ -1418,6 +1478,43 @@ window.addEventListener('keyup', (e) => {
         ws.send(JSON.stringify({ type: 'keyup', key: e.code }));
     }
 });
+
+// --- Mouse Input (forwarded to emulator) ---
+function getCanvasCoords(e) {
+    const rect = canvas.getBoundingClientRect();
+    // Scale from CSS pixels to actual canvas (framebuffer) pixels
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+        x: Math.round((e.clientX - rect.left) * scaleX),
+        y: Math.round((e.clientY - rect.top) * scaleY)
+    };
+}
+
+canvas.addEventListener('mousedown', (e) => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        const c = getCanvasCoords(e);
+        ws.send(JSON.stringify({ type: 'mousedown', x: c.x, y: c.y, button: e.button }));
+    }
+    e.preventDefault();
+});
+
+canvas.addEventListener('mouseup', (e) => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        const c = getCanvasCoords(e);
+        ws.send(JSON.stringify({ type: 'mouseup', x: c.x, y: c.y, button: e.button }));
+    }
+    e.preventDefault();
+});
+
+canvas.addEventListener('mousemove', (e) => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        const c = getCanvasCoords(e);
+        ws.send(JSON.stringify({ type: 'mousemove', x: c.x, y: c.y, button: e.button }));
+    }
+});
+
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // --- Initialize ---
 connect();

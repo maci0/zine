@@ -51,10 +51,48 @@ pub fn stub_AppendMenuA(hMenu: usize, uFlags: u32, uIDNewItem: usize, lpNewItem:
     return 1;
 }
 
+// Menu item state tracking: key = (hMenu << 16) | uId, value = MF_* flags
+const MenuItemState = struct {
+    key: u64 = 0,
+    flags: u32 = 0,
+    used: bool = false,
+};
+var menu_item_states: [64]MenuItemState = .{MenuItemState{}} ** 64;
+
+fn menuItemKey(hMenu: usize, uId: u32) u64 {
+    return (@as(u64, hMenu) << 16) | @as(u64, uId);
+}
+
+fn findOrAllocMenuSlot(key: u64) *MenuItemState {
+    // Find existing
+    for (&menu_item_states) |*s| {
+        if (s.used and s.key == key) return s;
+    }
+    // Allocate new
+    for (&menu_item_states) |*s| {
+        if (!s.used) {
+            s.key = key;
+            s.flags = 0;
+            s.used = true;
+            return s;
+        }
+    }
+    // Full — reuse last slot
+    return &menu_item_states[63];
+}
+
 pub fn stub_CheckMenuItem(hMenu: usize, uIDCheckItem: u32, uCheck: u32) callconv(w32cc.WINAPI) u32 {
-    _ = uCheck;
-    if (trace.enable_tracing) trace.print("USER32: CheckMenuItem(menu={X}, item={d})\n", .{hMenu, uIDCheckItem});
-    return 0;
+    if (trace.enable_tracing) trace.print("USER32: CheckMenuItem(menu={X}, item={d}, check={x})\n", .{ hMenu, uIDCheckItem, uCheck });
+    const MF_CHECKED: u32 = 0x0008;
+    const key = menuItemKey(hMenu, uIDCheckItem);
+    const slot = findOrAllocMenuSlot(key);
+    const prev = slot.flags & MF_CHECKED;
+    if ((uCheck & MF_CHECKED) != 0) {
+        slot.flags |= MF_CHECKED;
+    } else {
+        slot.flags &= ~MF_CHECKED;
+    }
+    return prev;
 }
 
 var next_menu_handle: usize = 0x00001000;
@@ -74,10 +112,15 @@ pub fn stub_CreatePopupMenu() callconv(w32cc.WINAPI) usize {
 }
 
 pub fn stub_EnableMenuItem(hMenu: usize, uIDEnableItem: u32, uEnable: u32) callconv(w32cc.WINAPI) i32 {
-    _ = hMenu;
-    _ = uIDEnableItem;
-    _ = uEnable;
-    return 0;
+    const MF_GRAYED: u32 = 0x0001;
+    const MF_DISABLED: u32 = 0x0002;
+    const key = menuItemKey(hMenu, uIDEnableItem);
+    const slot = findOrAllocMenuSlot(key);
+    const prev: i32 = @bitCast(slot.flags & (MF_GRAYED | MF_DISABLED));
+    // Clear old enable state, set new
+    slot.flags &= ~(MF_GRAYED | MF_DISABLED);
+    slot.flags |= uEnable & (MF_GRAYED | MF_DISABLED);
+    return prev;
 }
 
 pub fn stub_InsertMenuA(hMenu: usize, uPosition: u32, uFlags: u32, uIDNewItem: usize, lpNewItem: usize) callconv(w32cc.WINAPI) i32 {
@@ -110,9 +153,11 @@ pub fn stub_GetMenuItemCount(hMenu: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 pub fn stub_GetMenuState(hMenu: usize, uId: u32, uFlags: u32) callconv(w32cc.WINAPI) u32 {
-    _ = hMenu;
-    _ = uId;
     _ = uFlags;
+    const key = menuItemKey(hMenu, uId);
+    for (&menu_item_states) |*s| {
+        if (s.used and s.key == key) return s.flags;
+    }
     return 0;
 }
 

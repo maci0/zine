@@ -118,3 +118,84 @@ pub fn stub_CompareFileTime(lpft1: usize, lpft2: usize) callconv(w32cc.WINAPI) i
     if (t1 > t2) return 1;
     return 0;
 }
+
+pub fn stub_GetSystemTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
+    if (trace.enable_tracing) trace.print("KERNEL32: GetSystemTime({x})\n", .{lpSystemTime});
+    // Use GetLocalTime for simplicity (close enough for gaming)
+    stub_GetLocalTime(lpSystemTime);
+}
+
+pub fn stub_FindClose(hFindFile: usize) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("KERNEL32: FindClose({x})\n", .{hFindFile});
+    return 1; // TRUE = success
+}
+
+// --- Time conversion stubs ---
+
+pub fn stub_SystemTimeToFileTime(lpSystemTime: usize, lpFileTime: usize) callconv(w32cc.WINAPI) i32 {
+    if (lpSystemTime == 0 or lpFileTime == 0) return 0;
+    const st = @as(*const w32.SYSTEMTIME, @ptrFromInt(lpSystemTime));
+    const ft = @as(*w32.FILETIME, @ptrFromInt(lpFileTime));
+
+    // Convert SYSTEMTIME to days since epoch (1601-01-01)
+    // Simplified: use year/month/day to compute days, then add time
+    var year: i64 = st.wYear;
+    var month: i64 = st.wMonth;
+    if (month <= 2) {
+        year -= 1;
+        month += 12;
+    }
+    // Days from 1601-01-01 to the given date (approximate Gregory)
+    const days: i64 = 365 * (year - 1601) + @divTrunc(year - 1601, 4) - @divTrunc(year - 1601, 100) + @divTrunc(year - 1601, 400) + @divTrunc(153 * (month - 3) + 2, 5) + st.wDay - 1;
+
+    const total_100ns: u64 = @intCast(
+        days * 24 * 60 * 60 * 10_000_000 +
+            @as(i64, st.wHour) * 60 * 60 * 10_000_000 +
+            @as(i64, st.wMinute) * 60 * 10_000_000 +
+            @as(i64, st.wSecond) * 10_000_000 +
+            @as(i64, st.wMilliseconds) * 10_000,
+    );
+
+    ft.dwLowDateTime = @intCast(total_100ns & 0xFFFFFFFF);
+    ft.dwHighDateTime = @intCast(total_100ns >> 32);
+    return 1; // TRUE
+}
+
+pub fn stub_FileTimeToSystemTime(lpFileTime: usize, lpSystemTime: usize) callconv(w32cc.WINAPI) i32 {
+    if (lpFileTime == 0 or lpSystemTime == 0) return 0;
+    const ft = @as(*const w32.FILETIME, @ptrFromInt(lpFileTime));
+    const st = @as(*w32.SYSTEMTIME, @ptrFromInt(lpSystemTime));
+
+    const total_100ns: u64 = (@as(u64, ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+    const total_secs = total_100ns / 10_000_000;
+    const remaining_100ns = total_100ns % 10_000_000;
+
+    // Convert seconds since 1601-01-01 to Unix timestamp
+    const win_to_unix: u64 = 11644473600;
+    const unix_secs: u64 = if (total_secs >= win_to_unix) total_secs - win_to_unix else 0;
+
+    const epoch_secs = std.time.epoch.EpochSeconds{ .secs = unix_secs };
+    const epoch_day = epoch_secs.getEpochDay();
+    const year_day = epoch_day.calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+    const day_secs = epoch_secs.getDaySeconds();
+
+    st.wYear = @intCast(year_day.year);
+    st.wMonth = @intFromEnum(month_day.month);
+    st.wDayOfWeek = @intCast((epoch_day.day + 4) % 7);
+    st.wDay = month_day.day_index + 1;
+    st.wHour = @intCast(day_secs.getHoursIntoDay());
+    st.wMinute = @intCast(day_secs.getMinutesIntoHour());
+    st.wSecond = @intCast(day_secs.getSecondsIntoMinute());
+    st.wMilliseconds = @intCast(remaining_100ns / 10_000);
+    return 1; // TRUE
+}
+
+pub fn stub_FileTimeToLocalFileTime(lpFileTime: usize, lpLocalFileTime: usize) callconv(w32cc.WINAPI) i32 {
+    if (lpFileTime == 0 or lpLocalFileTime == 0) return 0;
+    // We don't do timezone conversion — just copy
+    const src = @as(*const w32.FILETIME, @ptrFromInt(lpFileTime));
+    const dst = @as(*w32.FILETIME, @ptrFromInt(lpLocalFileTime));
+    dst.* = src.*;
+    return 1; // TRUE
+}

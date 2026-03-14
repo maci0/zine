@@ -85,6 +85,10 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "waveInPrepareHeader", kernel32.stub_args3);
     try environment.addBuiltinExportComptime(m, "waveInUnprepareHeader", kernel32.stub_args3);
 
+    // --- hgb.exe WINMM stubs (joystick) ---
+    try environment.addBuiltinExportComptime(m, "joyGetPosEx", kernel32.stub_args2);
+    try environment.addBuiltinExportComptime(m, "joyGetDevCapsA", kernel32.stub_args3);
+
     renderer.on_volume_change = &handleVolumeFromUI;
 }
 
