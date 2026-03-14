@@ -281,12 +281,27 @@ pub fn stub_GetModuleHandleA(lpModuleName_ptr: usize) callconv(w32cc.WINAPI) usi
 
 var cmdline_buf: [4096]u8 = undefined;
 var cmdline_initialized: bool = false;
-var cmdline_guest_addr: usize = 0; // Guest virtual address for WASM
+var cmdline_result_addr: usize = 0; // Final address to return (host or guest)
 
 pub fn stub_GetCommandLineA() callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineA\n", .{});
 
     if (!cmdline_initialized) {
+        // Determine working buffer: guest memory if available, else host static buf.
+        const kernel32_mem_mod = @import("mem.zig");
+        var buf: []u8 = &cmdline_buf;
+        if (kernel32_mem_mod.guest_memory) |gmem| {
+            const guest_va = gmem.guestAlloc(4096);
+            if (guest_va != 0) {
+                const host_ptr = @as([*]u8, @ptrFromInt(trace.addr(guest_va)));
+                buf = host_ptr[0..4096];
+                cmdline_result_addr = guest_va;
+            }
+        }
+        if (cmdline_result_addr == 0) {
+            cmdline_result_addr = @intFromPtr(&cmdline_buf);
+        }
+
         const msvcrt = @import("../msvcrt.zig");
         var pos: usize = 0;
         if (msvcrt.global_argc > 0) {
@@ -294,11 +309,11 @@ pub fn stub_GetCommandLineA() callconv(w32cc.WINAPI) usize {
             if (msvcrt.global_argv[0]) |argv0| {
                 const span = trace.c_span(@intFromPtr(argv0));
                 const copy_len = @min(span.len, 4094);
-                @memcpy(cmdline_buf[0..copy_len], span[0..copy_len]);
+                @memcpy(buf[0..copy_len], span[0..copy_len]);
                 pos = copy_len;
             } else {
                 const exe_stub = "C:\\program.exe";
-                @memcpy(cmdline_buf[0..exe_stub.len], exe_stub);
+                @memcpy(buf[0..exe_stub.len], exe_stub);
                 pos = exe_stub.len;
             }
 
@@ -308,7 +323,7 @@ pub fn stub_GetCommandLineA() callconv(w32cc.WINAPI) usize {
                     const arg = trace.c_span(@intFromPtr(arg_ptr));
 
                     if (pos < 4094) {
-                        cmdline_buf[pos] = ' ';
+                        buf[pos] = ' ';
                         pos += 1;
                     }
 
@@ -324,54 +339,32 @@ pub fn stub_GetCommandLineA() callconv(w32cc.WINAPI) usize {
                     }
 
                     if (needs_quotes and pos < 4094) {
-                        cmdline_buf[pos] = '"';
+                        buf[pos] = '"';
                         pos += 1;
                     }
 
                     const copy_len = @min(write_arg.len, 4094 - pos);
-                    @memcpy(cmdline_buf[pos .. pos + copy_len], write_arg[0..copy_len]);
+                    @memcpy(buf[pos .. pos + copy_len], write_arg[0..copy_len]);
                     pos += copy_len;
 
                     if (needs_quotes and pos < 4094) {
-                        cmdline_buf[pos] = '"';
+                        buf[pos] = '"';
                         pos += 1;
                     }
                 }
             }
         } else {
             const dummy = "C:\\program.exe";
-            @memcpy(cmdline_buf[0..dummy.len], dummy);
+            @memcpy(buf[0..dummy.len], dummy);
             pos = dummy.len;
         }
-        cmdline_buf[pos] = 0;
-
-        // On WASM, copy cmdline to guest memory so the returned pointer
-        // is a guest virtual address readable by the x86 interpreter.
-        if (comptime !platform.is_native) {
-            const kernel32_mem_mod = @import("mem.zig");
-            if (kernel32_mem_mod.guest_memory) |gmem| {
-                const guest_va = gmem.guestAlloc(4096);
-                if (guest_va != 0) {
-                    const host_ptr = @as([*]u8, @ptrFromInt(trace.addr(guest_va)));
-                    @memcpy(host_ptr[0 .. pos + 1], cmdline_buf[0 .. pos + 1]);
-                    cmdline_guest_addr = guest_va;
-                }
-            }
-        }
+        buf[pos] = 0;
 
         cmdline_initialized = true;
     }
 
-    // On WASM, return the guest virtual address
-    if (comptime !platform.is_native) {
-        if (cmdline_guest_addr != 0) {
-            if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineA -> '{s}' (guest addr 0x{x})\n", .{ trace.c_span(cmdline_guest_addr), cmdline_guest_addr });
-            return cmdline_guest_addr;
-        }
-    }
-
-    if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineA -> '{s}'\n", .{trace.c_span(@intFromPtr(@as([*:0]const u8, @ptrCast(&cmdline_buf))))});
-    return @intFromPtr(&cmdline_buf);
+    if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineA -> '{s}'\n", .{trace.c_span(cmdline_result_addr)});
+    return cmdline_result_addr;
 }
 
 pub fn stub_GetCurrentProcess() callconv(w32cc.WINAPI) usize {

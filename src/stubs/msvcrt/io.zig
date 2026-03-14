@@ -44,27 +44,24 @@ pub fn getFile(ptr: ?*anyopaque) ?std.fs.File {
     if (ptr) |p| {
         const ptr_val = @intFromPtr(p);
 
-        // Check if it's one of the standard streams (host address)
-        const iob_start = @intFromPtr(&msvcrt_iob);
-        if (ptr_val >= iob_start and ptr_val < iob_start + @sizeOf(@TypeOf(msvcrt_iob))) {
-            const idx = (ptr_val - iob_start) / @sizeOf(MSVCRT_FILE);
-            if (idx == 0) return std.fs.File{ .handle = 0 }; // stdin
-            if (idx == 1) return std.fs.File{ .handle = 1 }; // stdout
-            if (idx == 2) return std.fs.File{ .handle = 2 }; // stderr
-        }
-
-        // On WASM, also check guest-memory _iob addresses
-        if (comptime !@import("../../platform.zig").is_native) {
-            if (iob_guest_addr != 0) {
-                const translated = trace.addr(ptr_val);
-                const iob_host = trace.addr(iob_guest_addr);
-                const iob_end = iob_host + @sizeOf(@TypeOf(msvcrt_iob));
-                if (translated >= iob_host and translated < iob_end) {
-                    const idx = (translated - iob_host) / @sizeOf(MSVCRT_FILE);
-                    if (idx == 0) return std.fs.File{ .handle = 0 };
-                    if (idx == 1) return std.fs.File{ .handle = 1 };
-                    if (idx == 2) return std.fs.File{ .handle = 2 };
-                }
+        // Check standard streams: on WASM iob_guest_addr is set and we
+        // translate via trace.addr(); on native it's 0 so we use the
+        // host-address msvcrt_iob directly.  Single code path, no
+        // comptime platform branch.
+        if (iob_guest_addr != 0) {
+            // Guest-memory _iob (WASM): translate both pointer and
+            // iob base to host addresses, then compare.
+            const translated = trace.addr(ptr_val);
+            const iob_host = trace.addr(iob_guest_addr);
+            const iob_end = iob_host + @sizeOf(@TypeOf(msvcrt_iob));
+            if (translated >= iob_host and translated < iob_end) {
+                return stdFileFromIobIndex((translated - iob_host) / @sizeOf(MSVCRT_FILE));
+            }
+        } else {
+            // Host-address _iob (native / interpret)
+            const iob_start = @intFromPtr(&msvcrt_iob);
+            if (ptr_val >= iob_start and ptr_val < iob_start + @sizeOf(@TypeOf(msvcrt_iob))) {
+                return stdFileFromIobIndex((ptr_val - iob_start) / @sizeOf(MSVCRT_FILE));
             }
         }
 
@@ -78,6 +75,16 @@ pub fn getFile(ptr: ?*anyopaque) ?std.fs.File {
     return null;
 }
 
+/// Map _iob index (0=stdin, 1=stdout, 2=stderr) to a std.fs.File.
+fn stdFileFromIobIndex(idx: usize) ?std.fs.File {
+    return switch (idx) {
+        0 => std.fs.File{ .handle = 0 },
+        1 => std.fs.File{ .handle = 1 },
+        2 => std.fs.File{ .handle = 2 },
+        else => null,
+    };
+}
+
 fn allocateFileSlot() ?usize {
     for (0..MAX_FILES) |i| {
         if (file_handles[i] == null) {
@@ -89,6 +96,44 @@ fn allocateFileSlot() ?usize {
 
 pub fn stub_p_iob() callconv(.c) *anyopaque {
     return &msvcrt_iob;
+}
+
+/// Initialize guest-memory _iob with pre-allocated stdout/stderr buffers.
+/// Called by wasm_main.zig after relocateDataExports() has placed _iob in
+/// guest memory.  Allocates CRT-style I/O buffers and sets FILE flags so
+/// that the CRT's _flsbuf / _write path works without running _ioinit.
+pub fn initGuestIob(gmem: anytype, combined_buf: []u8, base_addr: u32, guest_va: u32) void {
+    iob_guest_addr = guest_va;
+    const iob_offset = guest_va - base_addr;
+
+    // MSVC6 CRT BUFSIZ
+    const BUFSIZ: u32 = 4096;
+    const stdout_buf_va = gmem.guestAlloc(BUFSIZ);
+    const stderr_buf_va = gmem.guestAlloc(BUFSIZ);
+
+    // _iob[1] = stdout: buffered write
+    if (stdout_buf_va != 0) {
+        const stdout_iob = @as(*MSVCRT_FILE, @ptrCast(@alignCast(
+            combined_buf[iob_offset + @sizeOf(MSVCRT_FILE) ..].ptr,
+        )));
+        stdout_iob._base = stdout_buf_va;
+        stdout_iob._ptr = stdout_buf_va;
+        stdout_iob._cnt = @intCast(BUFSIZ);
+        stdout_iob._bufsiz = @intCast(BUFSIZ);
+        stdout_iob._flag = 0x0082; // _IOWRT | _IOFLRTN
+    }
+
+    // _iob[2] = stderr: unbuffered write
+    if (stderr_buf_va != 0) {
+        const stderr_iob = @as(*MSVCRT_FILE, @ptrCast(@alignCast(
+            combined_buf[iob_offset + 2 * @sizeOf(MSVCRT_FILE) ..].ptr,
+        )));
+        stderr_iob._base = stderr_buf_va;
+        stderr_iob._ptr = stderr_buf_va;
+        stderr_iob._cnt = @intCast(BUFSIZ);
+        stderr_iob._bufsiz = @intCast(BUFSIZ);
+        stderr_iob._flag = 0x0006; // _IOWRT | _IONBF
+    }
 }
 
 pub fn stub_setmode(fd: i32, mode: i32) callconv(.c) i32 {

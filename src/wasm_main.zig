@@ -261,30 +261,7 @@ pub fn main() !void {
         // _iob: pre-allocate stdout/stderr buffers and set FILE* flags
         const io_mod = @import("stubs/msvcrt/io.zig");
         if (environment.resolveExport("MSVCRT.dll", "_iob")) |iob_exp| {
-            const iob_guest_va: u32 = @intCast(iob_exp.addr);
-            const iob_offset = iob_guest_va - preferred_base;
-            io_mod.iob_guest_addr = iob_guest_va;
-
-            const BUFSIZ: u32 = 4096;
-            const stdout_buf_va = thunk_guest_mem.guestAlloc(BUFSIZ);
-            const stderr_buf_va = thunk_guest_mem.guestAlloc(BUFSIZ);
-
-            if (stdout_buf_va != 0) {
-                const stdout_iob = @as(*io_mod.MSVCRT_FILE, @ptrCast(@alignCast(combined_buf[iob_offset + @sizeOf(io_mod.MSVCRT_FILE) ..].ptr)));
-                stdout_iob._base = stdout_buf_va;
-                stdout_iob._ptr = stdout_buf_va;
-                stdout_iob._cnt = @intCast(BUFSIZ);
-                stdout_iob._bufsiz = @intCast(BUFSIZ);
-                stdout_iob._flag = 0x0082; // _IOWRT | _IOFLRTN
-            }
-            if (stderr_buf_va != 0) {
-                const stderr_iob = @as(*io_mod.MSVCRT_FILE, @ptrCast(@alignCast(combined_buf[iob_offset + 2 * @sizeOf(io_mod.MSVCRT_FILE) ..].ptr)));
-                stderr_iob._base = stderr_buf_va;
-                stderr_iob._ptr = stderr_buf_va;
-                stderr_iob._cnt = @intCast(BUFSIZ);
-                stderr_iob._bufsiz = @intCast(BUFSIZ);
-                stderr_iob._flag = 0x0006; // _IOWRT | _IONBF
-            }
+            io_mod.initGuestIob(&thunk_guest_mem, combined_buf, preferred_base, @intCast(iob_exp.addr));
         }
 
         // _acmdln: track guest VA for ensureGuestArgs
