@@ -71,6 +71,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "HeapAlloc", kernel32_mem.stub_HeapAlloc);
     try environment.addBuiltinExportComptime(m, "HeapReAlloc", kernel32_mem.stub_HeapReAlloc);
     try environment.addBuiltinExportComptime(m, "HeapFree", kernel32_mem.stub_HeapFree);
+    try environment.addBuiltinExportComptime(m, "HeapSetInformation", stub_args4); // no-op, returns nonzero (TRUE)
     try environment.addBuiltinExportComptime(m, "HeapSize", kernel32_misc.stub_HeapSize);
     try environment.addBuiltinExportComptime(m, "HeapValidate", kernel32_misc.stub_HeapValidate);
     try environment.addBuiltinExportComptime(m, "GetProcessHeap", kernel32_mem.stub_GetProcessHeap);
@@ -125,6 +126,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "DebugBreak", stub_args0);
     try environment.addBuiltinExportComptime(m, "SetHandleInformation", kernel32_process.stub_SetHandleInformation);
     try environment.addBuiltinExportComptime(m, "CreatePipe", kernel32_process.stub_CreatePipe);
+    try environment.addBuiltinExportComptime(m, "PeekNamedPipe", stub_args6); // stub — returns 0 (no data)
     try environment.addBuiltinExportComptime(m, "DuplicateHandle", kernel32_sync.stub_DuplicateHandle);
     try environment.addBuiltinExportComptime(m, "ReadProcessMemory", stub_args5);
     try environment.addBuiltinExportComptime(m, "GenerateConsoleCtrlEvent", stub_args2);
@@ -242,6 +244,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "Beep", kernel32_misc.stub_Beep);
     try environment.addBuiltinExportComptime(m, "OutputDebugStringA", kernel32_misc.stub_OutputDebugStringA);
     try environment.addBuiltinExportComptime(m, "GetConsoleMode", kernel32_misc.stub_GetConsoleMode);
+    try environment.addBuiltinExportComptime(m, "GetConsoleCP", kernel32_locale.stub_GetACP); // same as ANSI codepage
     try environment.addBuiltinExportComptime(m, "GetConsoleScreenBufferInfo", kernel32_misc.stub_GetConsoleScreenBufferInfo);
     try environment.addBuiltinExportComptime(m, "SetConsoleTitleA", stub_args1);
     try environment.addBuiltinExportComptime(m, "FreeConsole", stub_args0);
