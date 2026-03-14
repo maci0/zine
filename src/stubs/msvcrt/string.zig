@@ -462,10 +462,8 @@ pub fn stub_wtoi(str_ptr: usize) callconv(.c) i32 {
     return val * sign;
 }
 
-// --- Low-level File I/O ---
 
-const max_fds = 64;
-var fd_handles: [max_fds]?std.fs.File = [_]?std.fs.File{null} ** max_fds;
+
 
 pub fn init_pctype() void {
     const pctype_data = [_]u16{

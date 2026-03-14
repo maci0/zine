@@ -387,7 +387,7 @@ pub fn stub_putchar(c: i32) callconv(.c) i32 {
     return buf[0];
 }
 
-const misc = @import("misc.zig");
+const fmt_mod = @import("fmt.zig");
 
 const platform_mod = @import("../../platform.zig");
 
@@ -400,7 +400,7 @@ fn stub_fprintf_wasm(f: ?*anyopaque, format_ptr: usize, ap: usize) callconv(.c) 
 fn stub_fprintf_native(f: ?*anyopaque, format_ptr: usize, ...) callconv(.c) i32 {
     var ap = @cVaStart();
     defer @cVaEnd(&ap);
-    return fprintf_impl(f, format_ptr, misc.va_list_to_usize(ap));
+    return fprintf_impl(f, format_ptr, fmt_mod.va_list_to_usize(ap));
 }
 
 fn fprintf_impl(f: ?*anyopaque, format_ptr: usize, ap: usize) i32 {
@@ -408,7 +408,7 @@ fn fprintf_impl(f: ?*anyopaque, format_ptr: usize, ap: usize) i32 {
         if (format_ptr != 0) {
             const fmt = @as([*:0]const u8, @ptrFromInt(trace.addr(format_ptr)));
             var buf: [4096]u8 = undefined;
-            const len = misc.x86_vsnprintf(&buf, 4096, fmt, ap);
+            const len = fmt_mod.x86_vsnprintf(&buf, 4096, fmt, ap);
             file.writeAll(buf[0..len]) catch return -1;
             return @intCast(len);
         }

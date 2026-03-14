@@ -42,6 +42,9 @@ const process = @import("msvcrt/process.zig");
 const mem = @import("msvcrt/mem.zig");
 const math = @import("msvcrt/math.zig");
 const misc = @import("msvcrt/misc.zig");
+const time_mod = @import("msvcrt/time.zig");
+const file = @import("msvcrt/file.zig");
+const fmt = @import("msvcrt/fmt.zig");
 
 pub fn register(environment: *env.Environment) !void {
     string.init_pctype();
@@ -147,22 +150,22 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "_wtoi", string.stub_wtoi);
     try environment.addBuiltinExportComptime(m, "_wtol", string.stub_wtoi);
 
-    // File I/O
-    try environment.addBuiltinExportComptime(m, "_access", misc.stub_access);
+    // File I/O (fd-based)
+    try environment.addBuiltinExportComptime(m, "_access", file.stub_access);
     try environment.addBuiltinExportComptime(m, "_getcwd", misc.stub_getcwd);
-    try environment.addBuiltinExportComptime(m, "_sopen", misc.stub_sopen);
-    try environment.addBuiltinExportComptime(m, "_read", misc.stub_read);
-    try environment.addBuiltinExportComptime(m, "_write", misc.stub_write);
-    try environment.addBuiltinExportComptime(m, "_lseek", misc.stub_lseek);
-    try environment.addBuiltinExportComptime(m, "_close", misc.stub_close);
-    try environment.addBuiltinExportComptime(m, "_tell", misc.stub_tell);
-    try environment.addBuiltinExportComptime(m, "_chsize", misc.stub_chsize);
-    try environment.addBuiltinExportComptime(m, "_filelength", misc.stub_filelength);
-    try environment.addBuiltinExportComptime(m, "_fstat", misc.stub_fstat);
+    try environment.addBuiltinExportComptime(m, "_sopen", file.stub_sopen);
+    try environment.addBuiltinExportComptime(m, "_read", file.stub_read);
+    try environment.addBuiltinExportComptime(m, "_write", file.stub_write);
+    try environment.addBuiltinExportComptime(m, "_lseek", file.stub_lseek);
+    try environment.addBuiltinExportComptime(m, "_close", file.stub_close);
+    try environment.addBuiltinExportComptime(m, "_tell", file.stub_tell);
+    try environment.addBuiltinExportComptime(m, "_chsize", file.stub_chsize);
+    try environment.addBuiltinExportComptime(m, "_filelength", file.stub_filelength);
+    try environment.addBuiltinExportComptime(m, "_fstat", file.stub_fstat);
     try environment.addBuiltinExportComptime(m, "_getch", misc.stub_ignore_i32);
-    try environment.addBuiltinExportComptime(m, "_stat", misc.stub_stat);
-    try environment.addBuiltinExportComptime(m, "_get_osfhandle", misc.stub_get_osfhandle);
-    try environment.addBuiltinExportComptime(m, "_open_osfhandle", misc.stub_open_osfhandle);
+    try environment.addBuiltinExportComptime(m, "_stat", file.stub_stat);
+    try environment.addBuiltinExportComptime(m, "_get_osfhandle", file.stub_get_osfhandle);
+    try environment.addBuiltinExportComptime(m, "_open_osfhandle", file.stub_open_osfhandle);
     try environment.addBuiltinExportComptime(m, "_isatty", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "_unlink", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "_dup", misc.stub_ignore_i32);
@@ -187,8 +190,8 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "putchar", io.stub_putchar);
     try environment.addBuiltinExportComptime(m, "fputc", io.stub_fputc);
     try environment.addBuiltinExportComptime(m, "putc", io.stub_fputc);
-    try environment.addBuiltinExportComptime(m, "puts", misc.stub_puts);
-    try environment.addBuiltinExportComptime(m, "fputs", misc.stub_fputs);
+    try environment.addBuiltinExportComptime(m, "puts", fmt.stub_puts);
+    try environment.addBuiltinExportComptime(m, "fputs", fmt.stub_fputs);
     try environment.addBuiltinExportComptime(m, "ungetc", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "fflush", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "_flushall", misc.stub_ignore_i32);
@@ -202,16 +205,16 @@ pub fn register(environment: *env.Environment) !void {
 
     // Formatted I/O — variadic functions use addBuiltinExportComptimeVA
     // which passes a translated guest stack va_list as the last argument.
-    try environment.addBuiltinExportComptimeVA(m, "printf", misc.stub_printf, 1);
-    try environment.addBuiltinExportComptime(m, "vprintf", misc.stub_vprintf);
+    try environment.addBuiltinExportComptimeVA(m, "printf", fmt.stub_printf, 1);
+    try environment.addBuiltinExportComptime(m, "vprintf", fmt.stub_vprintf);
     try environment.addBuiltinExportComptimeVA(m, "fprintf", io.stub_fprintf, 2);
     try environment.addBuiltinExportComptime(m, "fwprintf", io.stub_fwprintf);
-    try environment.addBuiltinExportComptime(m, "vfprintf", misc.stub_vfprintf);
-    try environment.addBuiltinExportComptime(m, "_vsnprintf", misc.stub_vsnprintf);
-    try environment.addBuiltinExportComptimeVA(m, "_snprintf", misc.stub_snprintf, 3);
-    try environment.addBuiltinExportComptimeVA(m, "sprintf", misc.stub_sprintf, 2);
-    try environment.addBuiltinExportComptimeVA(m, "swprintf", misc.stub_swprintf, 2);
-    try environment.addBuiltinExportComptimeVA(m, "sscanf", misc.stub_sscanf, 2);
+    try environment.addBuiltinExportComptime(m, "vfprintf", fmt.stub_vfprintf);
+    try environment.addBuiltinExportComptime(m, "_vsnprintf", fmt.stub_vsnprintf);
+    try environment.addBuiltinExportComptimeVA(m, "_snprintf", fmt.stub_snprintf, 3);
+    try environment.addBuiltinExportComptimeVA(m, "sprintf", fmt.stub_sprintf, 2);
+    try environment.addBuiltinExportComptimeVA(m, "swprintf", fmt.stub_swprintf, 2);
+    try environment.addBuiltinExportComptimeVA(m, "sscanf", fmt.stub_sscanf, 2);
     try environment.addBuiltinExportComptime(m, "_tempnam", misc.stub_tempnam);
     try environment.addBuiltinExportComptime(m, "tmpfile", misc.stub_ignore_ptr);
 
@@ -227,7 +230,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "ispunct", string.stub_ispunct);
     try environment.addBuiltinExportComptime(m, "isupper", string.stub_isupper);
     try environment.addBuiltinExportComptime(m, "islower", string.stub_islower);
-    try environment.addBuiltinExportComptime(m, "_open", misc.stub_sopen); // _open is basically _sopen with 0 shflags
+    try environment.addBuiltinExportComptime(m, "_open", file.stub_sopen); // _open is basically _sopen with 0 shflags
     try environment.addBuiltinExportComptime(m, "tolower", string.stub_tolower);
     try environment.addBuiltinExportComptime(m, "toupper", string.stub_toupper);
     try environment.addBuiltinExportComptime(m, "iswctype", string.stub_iswctype);
@@ -289,11 +292,11 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "_errno", misc.stub_errno);
     try environment.addBuiltinExportComptime(m, "__doserrno", misc.stub_errno);
     try environment.addBuiltinExportComptime(m, "_except_handler3", misc.stub_except_handler3);
-    try environment.addBuiltinExportComptime(m, "_ftime", misc.stub_ftime);
-    try environment.addBuiltinExportComptime(m, "time", misc.stub_time);
-    try environment.addBuiltinExportComptime(m, "localtime", misc.stub_localtime);
-    try environment.addBuiltinExportComptime(m, "_tzset", misc.stub_tzset);
-    try environment.addBuiltinExportComptime(m, "ctime", misc.stub_ctime);
+    try environment.addBuiltinExportComptime(m, "_ftime", time_mod.stub_ftime);
+    try environment.addBuiltinExportComptime(m, "time", time_mod.stub_time);
+    try environment.addBuiltinExportComptime(m, "localtime", time_mod.stub_localtime);
+    try environment.addBuiltinExportComptime(m, "_tzset", time_mod.stub_tzset);
+    try environment.addBuiltinExportComptime(m, "ctime", time_mod.stub_ctime);
     try environment.addBuiltinExportComptime(m, "rand", misc.stub_rand);
     try environment.addBuiltinExportComptime(m, "srand", misc.stub_srand);
     try environment.addBuiltinExportComptime(m, "ceil", math.stub_ceil);
@@ -301,14 +304,14 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExport(m, "_ftol", @intFromPtr(math.stub_ftol));
     try environment.addBuiltinExportComptime(m, "_flsbuf", io.stub_fputc);
     try environment.addBuiltinExportComptime(m, "_filbuf", io.stub_fgetc);
-    try environment.addBuiltinExportComptime(m, "_utime", misc.stub_utime);
-    try environment.addBuiltinExportComptime(m, "_futime", misc.stub_futime);
+    try environment.addBuiltinExportComptime(m, "_utime", time_mod.stub_utime);
+    try environment.addBuiltinExportComptime(m, "_futime", time_mod.stub_futime);
     try environment.addBuiltinExportComptime(m, "_osver", misc.stub_ignore_ptr);
     try environment.addBuiltinExportComptime(m, "__unDName", misc.stub_ignore_ptr);
     try environment.addBuiltinExportComptime(m, "_atoldbl", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "_adj_fdiv_r", misc.stub_ignore_i32);
-    try environment.addBuiltinExportComptime(m, "_findfirst", misc.stub_findfirst);
-    try environment.addBuiltinExportComptime(m, "_findnext", misc.stub_findnext);
+    try environment.addBuiltinExportComptime(m, "_findfirst", file.stub_findfirst);
+    try environment.addBuiltinExportComptime(m, "_findnext", file.stub_findnext);
     try environment.addBuiltinExportComptime(m, "_findclose", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "__p___wargv", misc.stub_ignore_ptr);
     try environment.addBuiltinExportComptime(m, "__p__wpgmptr", misc.stub_ignore_ptr);
@@ -319,7 +322,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "?terminate@@YAXXZ", stub_terminate);
     try environment.addBuiltinExportComptime(m, "_wcsrev", misc.stub_ignore_ptr);
     try environment.addBuiltinExportComptime(m, "wcsspn", misc.stub_ignore_i32);
-    try environment.addBuiltinExportComptime(m, "_snwprintf", misc.stub_snprintf);
+    try environment.addBuiltinExportComptime(m, "_snwprintf", fmt.stub_snprintf);
     try environment.addBuiltinExportComptime(m, "_pclose", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "_popen", misc.stub_ignore_ptr);
     try environment.addBuiltinExportComptime(m, "iswspace", string.stub_iswctype);
@@ -329,9 +332,9 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "wcstoul", string.stub_wcstol);
     try environment.addBuiltinExportComptime(m, "iswxdigit", string.stub_iswctype);
     try environment.addBuiltinExportComptime(m, "_pipe", misc.stub_ignore_i32);
-    try environment.addBuiltinExportComptime(m, "swscanf", misc.stub_sscanf);
+    try environment.addBuiltinExportComptime(m, "swscanf", fmt.stub_sscanf);
     try environment.addBuiltinExportComptime(m, "wcsstr", string.stub_wcsstr);
-    try environment.addBuiltinExportComptime(m, "_vsnwprintf", misc.stub_vsnprintf);
+    try environment.addBuiltinExportComptime(m, "_vsnwprintf", fmt.stub_vsnprintf);
     try environment.addBuiltinExportComptime(m, "_wcslwr", misc.stub_ignore_ptr);
     try environment.addBuiltinExportComptime(m, "_getdcwd", misc.stub_getcwd);
     try environment.addBuiltinExportComptime(m, "_itow", string.stub_itoa);
@@ -343,14 +346,14 @@ pub fn register(environment: *env.Environment) !void {
 
     // --- Notepad2 MSVCRT stubs ---
     try environment.addBuiltinExportComptime(m, "abs", misc.stub_abs);
-    try environment.addBuiltinExportComptime(m, "clock", misc.stub_clock);
+    try environment.addBuiltinExportComptime(m, "clock", time_mod.stub_clock);
     try environment.addBuiltinExportComptime(m, "_lock", misc.stub_noop1);
     try environment.addBuiltinExportComptime(m, "_unlock", misc.stub_noop1);
     try environment.addBuiltinExportComptime(m, "iscntrl", string.stub_iscntrl);
     try environment.addBuiltinExportComptime(m, "_cexit", misc.stub_noop0);
     try environment.addBuiltinExportComptime(m, "_amsg_exit", misc.stub_noop1);
     try environment.addBuiltinExportComptime(m, "_swab", misc.stub_noop3);
-    try environment.addBuiltinExportComptime(m, "mktime", misc.stub_mktime);
+    try environment.addBuiltinExportComptime(m, "mktime", time_mod.stub_mktime);
     try environment.addBuiltinExportComptime(m, "wcsftime", misc.stub_ignore_i32);
 }
 
