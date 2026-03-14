@@ -3,11 +3,12 @@ const trace = @import("../../trace.zig");
 const w32 = @import("../../win32_constants.zig");
 const w32cc = @import("../../calling_convention.zig");
 const x86_memory = @import("../../x86/memory.zig");
+pub const stub_common = @import("../stub_common.zig");
 
-/// Set by wasm_main.zig to enable guest-side allocation.
-/// When non-null, all memory allocations go through the guest heap
-/// bump allocator so addresses stay within the GuestMemory range.
-pub var guest_memory: ?*x86_memory.GuestMemory = null;
+/// Access the shared guest memory global from stub_common.
+pub inline fn guest_memory() ?*x86_memory.GuestMemory {
+    return stub_common.guest_memory;
+}
 
 // Bump allocator for guest-accessible memory.
 // On x86-64, page_allocator returns addresses above 4GB which the guest
@@ -40,7 +41,7 @@ pub fn raw_alloc(size: usize) ?*anyopaque {
     const actual_size = if (size == 0) @as(usize, 64) else size;
 
     // On WASM: use guest heap allocator to keep addresses in range
-    if (guest_memory) |gmem| {
+    if (guest_memory()) |gmem| {
         const alloc_size: u32 = @intCast(@min(actual_size + 16, 0xFFFFFFFF));
         const addr = gmem.guestAlloc(alloc_size);
         if (addr == 0) return null;
@@ -65,7 +66,7 @@ pub fn raw_realloc(old_ptr: ?*anyopaque, new_size: usize) ?*anyopaque {
     if (old_ptr == null) return raw_alloc(new_size);
 
     // On WASM with guest heap: simple alloc + copy (we don't free)
-    if (guest_memory) |_| {
+    if (guest_memory()) |_| {
         const old_u8 = @as([*]u8, @ptrCast(old_ptr.?));
         // Read old size from header (8 bytes before the data pointer)
         const old_header_ptr = old_u8 - 8;
@@ -125,7 +126,7 @@ pub fn stub_VirtualAlloc(lpAddress: usize, dwSize: usize, flAllocationType: u32,
     if (dwSize == 0) return 0;
 
     // On WASM: use guest heap allocator
-    if (guest_memory) |gmem| {
+    if (guest_memory()) |gmem| {
         const alloc_size: u32 = @intCast(@min(dwSize, 0xFFFFFFFF));
         const addr = gmem.guestAlloc(alloc_size);
         if (trace.enable_tracing) trace.print("KERNEL32: VirtualAlloc -> {x}\n", .{addr});

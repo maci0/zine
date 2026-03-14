@@ -363,9 +363,9 @@ pub fn main() !void {
     };
     cpu.eip = preferred_base +% ep_rva;
 
-    // Wire up guest heap for kernel32 memory stubs (VirtualAlloc, HeapAlloc, etc.)
-    const kernel32_mem = @import("stubs/kernel32/mem.zig");
-    kernel32_mem.guest_memory = &cpu.memory;
+    // Wire up guest heap for all stubs (VirtualAlloc, HeapAlloc, malloc, etc.)
+    const stub_common = @import("stubs/stub_common.zig");
+    stub_common.guest_memory = &cpu.memory;
 
     // Stack occupies the region between the PE image and the thunk area.
     // ESP starts near the top of the stack region (just below thunks).

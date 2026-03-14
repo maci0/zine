@@ -290,7 +290,7 @@ pub fn stub_GetCommandLineA() callconv(w32cc.WINAPI) usize {
         // Determine working buffer: guest memory if available, else host static buf.
         const kernel32_mem_mod = @import("mem.zig");
         var buf: []u8 = &cmdline_buf;
-        if (kernel32_mem_mod.guest_memory) |gmem| {
+        if (kernel32_mem_mod.guest_memory()) |gmem| {
             const guest_va = gmem.guestAlloc(4096);
             if (guest_va != 0) {
                 const host_ptr = @as([*]u8, @ptrFromInt(trace.addr(guest_va)));

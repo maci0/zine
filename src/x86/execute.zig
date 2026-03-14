@@ -219,8 +219,8 @@ fn buildInittermTrampoline(cpu: *Cpu, _: u32) void {
 
     // Find a location in guest memory for the trampoline.
     // Use guestAlloc from the heap to get guest-addressable memory.
-    const kernel32_mem = @import("../stubs/kernel32/mem.zig");
-    const gmem = kernel32_mem.guest_memory orelse return;
+    const stub_common = @import("../stubs/stub_common.zig");
+    const gmem = stub_common.guest_memory orelse return;
 
     // Each CALL rel32 = 5 bytes, final RET = 1 byte
     const trampoline_size: u32 = @intCast(count * 5 + 1);

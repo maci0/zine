@@ -42,9 +42,8 @@ pub fn c_span_w(ptr: usize) []const u16 {
 pub fn addr(guest_addr: usize) usize {
     if (comptime !platform.is_native) {
         if (guest_addr == 0) return 0;
-        const x86_memory = @import("x86/memory.zig");
-        const kernel32_mem = @import("stubs/kernel32/mem.zig");
-        if (kernel32_mem.guest_memory) |gmem| {
+        const stub_common = @import("stubs/stub_common.zig");
+        if (stub_common.guest_memory) |gmem| {
             const base_addr: usize = gmem.base_addr;
             const base_end = base_addr + gmem.base.len;
             if (guest_addr >= base_addr and guest_addr < base_end) {
@@ -52,9 +51,6 @@ pub fn addr(guest_addr: usize) usize {
                 return @intFromPtr(gmem.base.ptr) + offset;
             }
         }
-        // Outside guest memory range — could be a host pointer already
-        // (e.g., from malloc). Pass through.
-        _ = x86_memory;
     }
     return guest_addr;
 }

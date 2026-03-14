@@ -30,8 +30,8 @@ var guest_globals_addr: u32 = 0; // guest virtual address of globals block
 
 fn ensureGuestGlobals() u32 {
     if (guest_globals_addr != 0) return guest_globals_addr;
-    const kernel32_mem = @import("../kernel32/mem.zig");
-    if (kernel32_mem.guest_memory) |gmem| {
+    const stub_common = @import("../stub_common.zig");
+    if (stub_common.guest_memory) |gmem| {
         const addr = gmem.guestAlloc(GUEST_GLOBALS_SIZE);
         if (addr == 0) return 0;
         guest_globals_addr = addr;
@@ -54,8 +54,8 @@ fn ensureGuestGlobals() u32 {
 /// Update guest globals after argv/envp are built
 pub fn updateGuestGlobals() void {
     if (guest_globals_addr == 0) return;
-    const kernel32_mem = @import("../kernel32/mem.zig");
-    if (kernel32_mem.guest_memory) |gmem| {
+    const stub_common = @import("../stub_common.zig");
+    if (stub_common.guest_memory) |gmem| {
         gmem.write32(guest_globals_addr + G_ARGC, @bitCast(msvcrt.global_argc));
         gmem.write32(guest_globals_addr + G_ARGV, guest_argv_addr);
         gmem.write32(guest_globals_addr + G_ENVP, guest_envp_addr);
@@ -105,13 +105,13 @@ fn ensureGuestArgs() void {
     if (guest_args_buf != null) return;
 
     const plt = @import("../../platform.zig");
-    const kernel32_mem = @import("../kernel32/mem.zig");
+    const stub_common = @import("../stub_common.zig");
 
     var base_addr: u32 = GUEST_ARGS_BASE;
     const buf_size: usize = 256 * 1024; // 256KB
 
     // On WASM, allocate from the guest heap so addresses are within GuestMemory range
-    if (kernel32_mem.guest_memory) |gmem| {
+    if (stub_common.guest_memory) |gmem| {
         const alloc_addr = gmem.guestAlloc(@intCast(buf_size));
         if (alloc_addr == 0) return;
         base_addr = alloc_addr;
@@ -445,8 +445,8 @@ pub fn stub_p_pgmptr() callconv(.c) usize {
         // Make sure argv[0] is available in guest memory for pgmptr
         ensureGuestArgs();
         // pgmptr = argv[0]
-        const kernel32_mem = @import("../kernel32/mem.zig");
-        if (kernel32_mem.guest_memory) |gmem| {
+        const stub_common = @import("../stub_common.zig");
+        if (stub_common.guest_memory) |gmem| {
             if (guest_argv_addr != 0) {
                 const first_arg = gmem.read32(guest_argv_addr);
                 gmem.write32(g + G_PGMPTR, first_arg);

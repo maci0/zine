@@ -7,6 +7,13 @@
 const std = @import("std");
 const trace = @import("../trace.zig");
 const w32cc = @import("../calling_convention.zig");
+const x86_memory = @import("../x86/memory.zig");
+
+/// Shared guest memory reference. Set by wasm_main.zig at startup.
+/// When non-null, stubs use guest-heap allocation so addresses stay
+/// within the GuestMemory range.  All DLL stubs access this through
+/// stub_common instead of reaching into kernel32/mem.zig.
+pub var guest_memory: ?*x86_memory.GuestMemory = null;
 
 /// Shared tracing logic for all stubs. Must be `inline` so that
 /// `@returnAddress()` resolves to the caller of the stub, not this helper.
