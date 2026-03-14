@@ -271,7 +271,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "DeviceIoControl", stub_args8);
 
     // W variants needed by win2k apps
-    try environment.addBuiltinExportComptime(m, "GetModuleHandleW", kernel32_process.stub_GetModuleHandleA);
+    try environment.addBuiltinExportComptime(m, "GetModuleHandleW", kernel32_process.stub_GetModuleHandleW);
     try environment.addBuiltinExportComptime(m, "CreateEventW", kernel32_sync.stub_CreateEventA);
     try environment.addBuiltinExportComptime(m, "GetStartupInfoW", kernel32_process.stub_GetStartupInfoA);
     try environment.addBuiltinExportComptime(m, "GlobalReAlloc", kernel32_mem.stub_GlobalReAlloc);

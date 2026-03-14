@@ -595,7 +595,7 @@ pub fn stub_FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: usize) cal
     // No wildcard — literal file lookup
     const posix_fs = @import("../msvcrt/posix_fs.zig");
     if (posix_fs.stat(@as([*:0]const u8, @ptrCast(&fixed_buf)))) |st| {
-        const find_data = @as(*w32.WIN32_FIND_DATAA, @ptrFromInt(lpFindFileData_ptr));
+        const find_data = @as(*align(1) w32.WIN32_FIND_DATAA, @ptrFromInt(lpFindFileData_ptr));
         find_data.* = .{};
 
         find_data.dwFileAttributes = if (st.kind == .directory) w32.FILE_ATTRIBUTE_DIRECTORY else w32.FILE_ATTRIBUTE_NORMAL;
@@ -623,7 +623,7 @@ pub fn stub_FindNextFileA(hFindFile: usize, lpFindFileData_ptr: usize) callconv(
     if (state.iter) |*iter| {
         while (iter.next() catch null) |entry| {
             if (matchWildcard(entry.name, state.pattern[0..state.pattern_len])) {
-                const find_data = @as(*w32.WIN32_FIND_DATAA, @ptrFromInt(lpFindFileData_ptr));
+                const find_data = @as(*align(1) w32.WIN32_FIND_DATAA, @ptrFromInt(lpFindFileData_ptr));
                 find_data.* = .{};
                 find_data.dwFileAttributes = if (entry.kind == .directory) w32.FILE_ATTRIBUTE_DIRECTORY else w32.FILE_ATTRIBUTE_NORMAL;
                 const copy_len = @min(entry.name.len, 259);

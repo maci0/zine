@@ -279,6 +279,23 @@ pub fn stub_GetModuleHandleA(lpModuleName_ptr: usize) callconv(w32cc.WINAPI) usi
     return 0;
 }
 
+pub fn stub_GetModuleHandleW(lpModuleName_ptr: usize) callconv(w32cc.WINAPI) usize {
+    if (lpModuleName_ptr == 0) {
+        return kernel32.main_module_handle;
+    }
+    // Convert wide string to narrow, then delegate to the A version
+    const wstr = trace.c_span_w(lpModuleName_ptr);
+    var narrow_buf: [256]u8 = undefined;
+    const copy_len = @min(wstr.len, 255);
+    for (0..copy_len) |i| {
+        narrow_buf[i] = @intCast(wstr[i] & 0xFF);
+    }
+    narrow_buf[copy_len] = 0;
+    if (trace.enable_tracing) trace.print("KERNEL32: GetModuleHandleW('{s}')\n", .{narrow_buf[0..copy_len]});
+    return stub_GetModuleHandleA(@intFromPtr(&narrow_buf));
+}
+
+
 var cmdline_buf: [4096]u8 = undefined;
 var cmdline_initialized: bool = false;
 var cmdline_result_addr: usize = 0; // Final address to return (host or guest)
