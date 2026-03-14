@@ -4,39 +4,39 @@ const teb = @import("teb.zig");
 const Module = @import("loader/module.zig").Module;
 const Environment = @import("loader/env.zig").Environment;
 const loader = @import("loader/loader.zig");
-const stubs_msvcrt = @import("stubs/msvcrt.zig");
-const stubs_advapi32 = @import("stubs/advapi32.zig");
-const stubs_imagehlp = @import("stubs/imagehlp.zig");
-const stubs_kernel32 = @import("stubs/kernel32.zig");
-const stubs_user32 = @import("stubs/user32.zig");
-const stubs_rpcrt4 = @import("stubs/rpcrt4.zig");
-const stubs_comdlg32 = @import("stubs/comdlg32.zig");
-const stubs_ntdll = @import("stubs/ntdll.zig");
-const stubs_mfc42 = @import("stubs/mfc42.zig");
-const stubs_winmm = @import("stubs/winmm.zig");
-const stubs_ddraw = @import("stubs/ddraw.zig");
-const stubs_gdi32 = @import("stubs/gdi32.zig");
-const stubs_dinput = @import("stubs/dinput.zig");
-const stubs_dinput8 = @import("stubs/dinput8.zig");
-const stubs_dsound = @import("stubs/dsound.zig");
-const stubs_d3d8 = @import("stubs/d3d8.zig");
-const stubs_mss32 = @import("stubs/mss32.zig");
-const stubs_shell32 = @import("stubs/shell32.zig");
-const stubs_comctl32 = @import("stubs/comctl32.zig");
-const stubs_ole32 = @import("stubs/ole32.zig");
-const stubs_oleaut32 = @import("stubs/oleaut32.zig");
-const stubs_imm32 = @import("stubs/imm32.zig");
-const stubs_version = @import("stubs/version.zig");
-const stubs_wsock32 = @import("stubs/wsock32.zig");
-const stubs_ws2_32 = @import("stubs/ws2_32.zig");
-const stubs_winspool = @import("stubs/winspool.zig");
-const stubs_nddeapi = @import("stubs/nddeapi.zig");
-const stubs_cards = @import("stubs/cards.zig");
-const stubs_icmp = @import("stubs/icmp.zig");
-const stubs_vdmdbg = @import("stubs/vdmdbg.zig");
-const stubs_mag_hook = @import("stubs/mag_hook.zig");
-const stubs_shlwapi = @import("stubs/shlwapi.zig");
-const stubs_msvcp60 = @import("stubs/msvcp60.zig");
+const stubs_msvcrt = @import("win32/msvcrt.zig");
+const stubs_advapi32 = @import("win32/advapi32.zig");
+const stubs_imagehlp = @import("win32/imagehlp.zig");
+const stubs_kernel32 = @import("win32/kernel32.zig");
+const stubs_user32 = @import("win32/user32.zig");
+const stubs_rpcrt4 = @import("win32/rpcrt4.zig");
+const stubs_comdlg32 = @import("win32/comdlg32.zig");
+const stubs_ntdll = @import("win32/ntdll.zig");
+const stubs_mfc42 = @import("win32/mfc42.zig");
+const stubs_winmm = @import("win32/winmm.zig");
+const stubs_ddraw = @import("win32/ddraw.zig");
+const stubs_gdi32 = @import("win32/gdi32.zig");
+const stubs_dinput = @import("win32/dinput.zig");
+const stubs_dinput8 = @import("win32/dinput8.zig");
+const stubs_dsound = @import("win32/dsound.zig");
+const stubs_d3d8 = @import("win32/d3d8.zig");
+const stubs_mss32 = @import("win32/mss32.zig");
+const stubs_shell32 = @import("win32/shell32.zig");
+const stubs_comctl32 = @import("win32/comctl32.zig");
+const stubs_ole32 = @import("win32/ole32.zig");
+const stubs_oleaut32 = @import("win32/oleaut32.zig");
+const stubs_imm32 = @import("win32/imm32.zig");
+const stubs_version = @import("win32/version.zig");
+const stubs_wsock32 = @import("win32/wsock32.zig");
+const stubs_ws2_32 = @import("win32/ws2_32.zig");
+const stubs_winspool = @import("win32/winspool.zig");
+const stubs_nddeapi = @import("win32/nddeapi.zig");
+const stubs_cards = @import("win32/cards.zig");
+const stubs_icmp = @import("win32/icmp.zig");
+const stubs_vdmdbg = @import("win32/vdmdbg.zig");
+const stubs_mag_hook = @import("win32/mag_hook.zig");
+const stubs_shlwapi = @import("win32/shlwapi.zig");
+const stubs_msvcp60 = @import("win32/msvcp60.zig");
 const BatEnv = @import("bat.zig").BatEnv;
 const renderer = @import("gui/renderer.zig");
 const platform = @import("platform.zig");
@@ -417,7 +417,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
 
     // All SEH handlers returned ExceptionContinueSearch.
     // Try the top-level exception filter set via SetUnhandledExceptionFilter.
-    const kernel32_misc = @import("stubs/kernel32/misc.zig");
+    const kernel32_misc = @import("win32/kernel32/misc.zig");
     if (kernel32_misc.unhandled_exception_filter != 0) {
         // Build EXCEPTION_POINTERS on the stack
         var exc_ptrs: extern struct {
@@ -754,7 +754,7 @@ pub fn main() !void {
     // Store the exe's directory as a Windows-style path for GetModuleFileNameA
     {
         const path_utils = @import("path_utils.zig");
-        const kernel32_misc = @import("stubs/kernel32/misc.zig");
+        const kernel32_misc = @import("win32/kernel32/misc.zig");
         const fixed_exe = try allocator.dupe(u8, target_exe);
         defer allocator.free(fixed_exe);
         std.mem.replaceScalar(u8, fixed_exe, '\\', '/');
@@ -942,7 +942,7 @@ pub fn main() !void {
     // Environment field is a 32-bit pointer read by guest x86 code.
     const env_byte_size = env_total_chars * 2;
     const env_block: [*]u16 = if (use_interpreter) blk: {
-        const kernel32_mem = @import("stubs/kernel32/mem.zig");
+        const kernel32_mem = @import("win32/kernel32/mem.zig");
         const ptr = kernel32_mem.raw_alloc(env_byte_size) orelse {
             log.fatal("Failed to allocate environment block", .{});
             std.process.exit(1);

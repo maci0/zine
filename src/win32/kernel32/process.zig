@@ -487,13 +487,13 @@ pub fn stub_GetModuleFileNameA(hModule: usize, lpFilename: usize, nSize: u32) ca
 const max_child_procs = 16;
 pub const ChildProc = struct {
     handle: usize = 0,
-    child: ?std.process.Child = null,
+    child: if (platform.is_native) ?std.process.Child else ?void = null,
     exit_code: ?u32 = null,
 };
 var child_procs: [max_child_procs]ChildProc = [_]ChildProc{.{}} ** max_child_procs;
 var next_process_handle: usize = 0xCA000001;
 
-fn allocChildProc(child: std.process.Child) ?usize {
+fn allocChildProc(child: if (platform.is_native) std.process.Child else void) ?usize {
     for (&child_procs) |*cp| {
         if (cp.handle == 0) {
             const h = next_process_handle;
@@ -538,6 +538,18 @@ pub fn stub_CreateProcessA(
     const cmd_line: []const u8 = if (lpCommandLine != 0) trace.c_span(lpCommandLine) else "";
 
     if (trace.enable_tracing) trace.print("KERNEL32: CreateProcessA(app='{s}', cmd='{s}')\n", .{ app_name, cmd_line });
+
+    if (comptime !platform.is_native) {
+        // WASM: can't spawn processes, return fake handles
+        if (lpProcessInformation != 0) {
+            const pi = @as(*align(1) w32.PROCESS_INFORMATION, @ptrFromInt(lpProcessInformation));
+            pi.hProcess = 0x1234;
+            pi.hThread = 0x5678;
+            pi.dwProcessId = 1337;
+            pi.dwThreadId = 1338;
+        }
+        return 1;
+    }
 
     // Determine the target PE path from either app_name or cmd_line
     var target_path_buf: [1024]u8 = undefined;

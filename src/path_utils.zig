@@ -296,7 +296,7 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
     }
 
     // Step 6: Relative path — resolve against virtual CWD
-    const kernel32_misc = @import("stubs/kernel32/misc.zig");
+    const kernel32_misc = @import("win32/kernel32/misc.zig");
     if (kernel32_misc.current_directory_len > 0) {
         const cwd_win = kernel32_misc.current_directory[0..kernel32_misc.current_directory_len];
         var cwd_posix: [1024]u8 = undefined;

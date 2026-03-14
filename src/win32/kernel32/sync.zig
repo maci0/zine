@@ -62,19 +62,21 @@ pub fn stub_WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w3
     // Check if this is a child process handle
     const process = @import("process.zig");
     if (process.getChildProc(hHandle)) |cp| {
-        if (cp.child) |*child| {
-            if (cp.exit_code == null) {
-                // Actually wait for the child process
-                const result = child.wait() catch {
-                    cp.exit_code = 1;
-                    return 0; // WAIT_OBJECT_0
-                };
-                cp.exit_code = switch (result) {
-                    .Exited => |code| @as(u32, code),
-                    else => 1,
-                };
+        if (comptime @import("../../platform.zig").is_native) {
+            if (cp.child) |*child| {
+                if (cp.exit_code == null) {
+                    // Actually wait for the child process
+                    const result = child.wait() catch {
+                        cp.exit_code = 1;
+                        return 0; // WAIT_OBJECT_0
+                    };
+                    cp.exit_code = switch (result) {
+                        .Exited => |code| @as(u32, code),
+                        else => 1,
+                    };
+                }
+                return 0; // WAIT_OBJECT_0
             }
-            return 0; // WAIT_OBJECT_0
         }
     }
 

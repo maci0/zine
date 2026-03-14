@@ -42,7 +42,7 @@ pub fn c_span_w(ptr: usize) []const u16 {
 pub fn addr(guest_addr: usize) usize {
     if (comptime !platform.is_native) {
         if (guest_addr == 0) return 0;
-        const stub_common = @import("stubs/stub_common.zig");
+        const stub_common = @import("win32/stub_common.zig");
         if (stub_common.guest_memory) |gmem| {
             const base_addr: usize = gmem.base_addr;
             const base_end = base_addr + gmem.base.len;

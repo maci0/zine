@@ -110,7 +110,7 @@ pub fn initTEB(allocator: std.mem.Allocator) !*TEB {
     // PEB and ProcessParameters must be in the low 32-bit memory range
     // because guest x86 code reads them via fs:[0x30] and follows the pointer
     // chain.  The arena allocator can return addresses above 4GB on x86-64.
-    const kernel32_mem = @import("stubs/kernel32/mem.zig");
+    const kernel32_mem = @import("win32/kernel32/mem.zig");
     const peb = blk: {
         const raw = kernel32_mem.raw_alloc(@sizeOf(PEB)) orelse return error.OutOfMemory;
         break :blk @as(*PEB, @ptrCast(@alignCast(raw)));

@@ -23,36 +23,36 @@ const trace = @import("trace.zig");
 const log = @import("log.zig");
 
 // Stub DLL modules
-const stubs_msvcrt = @import("stubs/msvcrt.zig");
-const stubs_kernel32 = @import("stubs/kernel32.zig");
-const stubs_advapi32 = @import("stubs/advapi32.zig");
-const stubs_imagehlp = @import("stubs/imagehlp.zig");
-const stubs_user32 = @import("stubs/user32.zig");
-const stubs_rpcrt4 = @import("stubs/rpcrt4.zig");
-const stubs_comdlg32 = @import("stubs/comdlg32.zig");
-const stubs_ntdll = @import("stubs/ntdll.zig");
-const stubs_mfc42 = @import("stubs/mfc42.zig");
-const stubs_winmm = @import("stubs/winmm.zig");
-const stubs_ddraw = @import("stubs/ddraw.zig");
-const stubs_gdi32 = @import("stubs/gdi32.zig");
-const stubs_dinput = @import("stubs/dinput.zig");
-const stubs_dinput8 = @import("stubs/dinput8.zig");
-const stubs_dsound = @import("stubs/dsound.zig");
-const stubs_d3d8 = @import("stubs/d3d8.zig");
-const stubs_mss32 = @import("stubs/mss32.zig");
-const stubs_shell32 = @import("stubs/shell32.zig");
-const stubs_comctl32 = @import("stubs/comctl32.zig");
-const stubs_ole32 = @import("stubs/ole32.zig");
-const stubs_imm32 = @import("stubs/imm32.zig");
-const stubs_version = @import("stubs/version.zig");
-const stubs_wsock32 = @import("stubs/wsock32.zig");
-const stubs_ws2_32 = @import("stubs/ws2_32.zig");
-const stubs_winspool = @import("stubs/winspool.zig");
-const stubs_nddeapi = @import("stubs/nddeapi.zig");
-const stubs_cards = @import("stubs/cards.zig");
-const stubs_icmp = @import("stubs/icmp.zig");
-const stubs_vdmdbg = @import("stubs/vdmdbg.zig");
-const stubs_mag_hook = @import("stubs/mag_hook.zig");
+const stubs_msvcrt = @import("win32/msvcrt.zig");
+const stubs_kernel32 = @import("win32/kernel32.zig");
+const stubs_advapi32 = @import("win32/advapi32.zig");
+const stubs_imagehlp = @import("win32/imagehlp.zig");
+const stubs_user32 = @import("win32/user32.zig");
+const stubs_rpcrt4 = @import("win32/rpcrt4.zig");
+const stubs_comdlg32 = @import("win32/comdlg32.zig");
+const stubs_ntdll = @import("win32/ntdll.zig");
+const stubs_mfc42 = @import("win32/mfc42.zig");
+const stubs_winmm = @import("win32/winmm.zig");
+const stubs_ddraw = @import("win32/ddraw.zig");
+const stubs_gdi32 = @import("win32/gdi32.zig");
+const stubs_dinput = @import("win32/dinput.zig");
+const stubs_dinput8 = @import("win32/dinput8.zig");
+const stubs_dsound = @import("win32/dsound.zig");
+const stubs_d3d8 = @import("win32/d3d8.zig");
+const stubs_mss32 = @import("win32/mss32.zig");
+const stubs_shell32 = @import("win32/shell32.zig");
+const stubs_comctl32 = @import("win32/comctl32.zig");
+const stubs_ole32 = @import("win32/ole32.zig");
+const stubs_imm32 = @import("win32/imm32.zig");
+const stubs_version = @import("win32/version.zig");
+const stubs_wsock32 = @import("win32/wsock32.zig");
+const stubs_ws2_32 = @import("win32/ws2_32.zig");
+const stubs_winspool = @import("win32/winspool.zig");
+const stubs_nddeapi = @import("win32/nddeapi.zig");
+const stubs_cards = @import("win32/cards.zig");
+const stubs_icmp = @import("win32/icmp.zig");
+const stubs_vdmdbg = @import("win32/vdmdbg.zig");
+const stubs_mag_hook = @import("win32/mag_hook.zig");
 
 // Re-export platform to ensure WASM imports are declared
 comptime {
@@ -259,7 +259,7 @@ pub fn main() !void {
         // Post-relocation fixups for exports that need extra initialization:
 
         // _iob: pre-allocate stdout/stderr buffers and set FILE* flags
-        const io_mod = @import("stubs/msvcrt/io.zig");
+        const io_mod = @import("win32/msvcrt/io.zig");
         if (environment.resolveExport("MSVCRT.dll", "_iob")) |iob_exp| {
             io_mod.initGuestIob(&thunk_guest_mem, combined_buf, preferred_base, @intCast(iob_exp.addr));
         }
@@ -325,7 +325,7 @@ pub fn main() !void {
     // Set virtual CWD so file opens resolve correctly
     // On WASI, realpath is not available, so we just use \".\" as the CWD.
     {
-        const kernel32_misc = @import("stubs/kernel32/misc.zig");
+        const kernel32_misc = @import("win32/kernel32/misc.zig");
         const cwd_str = ".";
         @memcpy(kernel32_misc.current_directory[0..cwd_str.len], cwd_str);
         kernel32_misc.current_directory_len = cwd_str.len;
@@ -364,7 +364,7 @@ pub fn main() !void {
     cpu.eip = preferred_base +% ep_rva;
 
     // Wire up guest heap for all stubs (VirtualAlloc, HeapAlloc, malloc, etc.)
-    const stub_common = @import("stubs/stub_common.zig");
+    const stub_common = @import("win32/stub_common.zig");
     stub_common.guest_memory = &cpu.memory;
 
     // Stack occupies the region between the PE image and the thunk area.

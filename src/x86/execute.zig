@@ -138,7 +138,7 @@ fn dispatchNativeCall(cpu: *Cpu) void {
 
     // Special case: _ftol reads from x87 FPU stack (ST0), but in interpreter
     // mode the FPU state is emulated — the real x87 stack is empty.
-    const msvcrt_math = @import("../stubs/msvcrt/math.zig");
+    const msvcrt_math = @import("../win32/msvcrt/math.zig");
     if (target_addr == @intFromPtr(msvcrt_math.stub_ftol)) {
         const fval = cpu.fpu.pop();
         const ival = safeFloatToInt(i64, fval);
@@ -201,7 +201,7 @@ fn dispatchNativeCall(cpu: *Cpu) void {
     // On WASM, check if _initterm enqueued any guest init functions.
     // If so, build an x86 trampoline in guest memory to execute them.
     if (comptime !@import("../platform.zig").is_native) {
-        const sc = @import("../stubs/stub_common.zig");
+        const sc = @import("../win32/stub_common.zig");
         if (sc.pending_initterm_count > 0) {
             buildInittermTrampoline(cpu, ret_addr);
         }
@@ -213,7 +213,7 @@ fn dispatchNativeCall(cpu: *Cpu) void {
 /// The current EIP (CRT return address) is pushed onto the guest stack so the
 /// trampoline's RET returns control to the CRT startup code.
 fn buildInittermTrampoline(cpu: *Cpu, _: u32) void {
-    const stub_common = @import("../stubs/stub_common.zig");
+    const stub_common = @import("../win32/stub_common.zig");
     const count = stub_common.pending_initterm_count;
     if (count == 0) return;
 
