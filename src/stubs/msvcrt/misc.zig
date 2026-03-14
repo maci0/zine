@@ -3,14 +3,9 @@ const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
 const io = @import("io.zig");
 
-const string = @import("string.zig");
-const process = @import("process.zig");
-const mem = @import("mem.zig");
-const math = @import("math.zig");
-const misc = @import("misc.zig");
 
-const MAX_FDS = 64;
-var fd_handles: [MAX_FDS]?std.fs.File = [_]?std.fs.File{null} ** MAX_FDS;
+const max_fds = 64;
+var fd_handles: [max_fds]?std.fs.File = [_]?std.fs.File{null} ** max_fds;
 
 pub fn log_call(comptime name: []const u8) void {
     if (trace.enable_tracing) trace.print("MSVCRT: {s}\n", .{name});
@@ -434,7 +429,7 @@ pub fn stub_errno() callconv(.c) *i32 {
 // --- Formatted I/O Helpers ---
 
 pub fn alloc_fd() ?i32 {
-    for (3..MAX_FDS) |i| if (fd_handles[i] == null) return @intCast(i);
+    for (3..max_fds) |i| if (fd_handles[i] == null) return @intCast(i);
     return null;
 }
 
@@ -442,7 +437,7 @@ pub fn get_fd_file(fd: i32) ?std.fs.File {
     if (fd == 0) return std.fs.File{ .handle = 0 };
     if (fd == 1) return std.fs.File{ .handle = 1 };
     if (fd == 2) return std.fs.File{ .handle = 2 };
-    return if (fd >= 3 and fd < MAX_FDS) fd_handles[@intCast(fd)] else null;
+    return if (fd >= 3 and fd < max_fds) fd_handles[@intCast(fd)] else null;
 }
 
 pub fn stub_access(path_ptr: usize, mode: i32) callconv(.c) i32 {
@@ -464,7 +459,7 @@ pub fn stub_searchenv(filename_ptr: usize, varname_ptr: usize, result_ptr: usize
     const result_buf = @as([*]u8, @ptrFromInt(result_ptr));
     result_buf[0] = 0; // default to empty
 
-    const env_val_ptr = process.stub_getenv(varname_ptr);
+    const env_val_ptr = @import("process.zig").stub_getenv(varname_ptr);
     if (env_val_ptr == null) return;
     const env_val = trace.c_span(@intFromPtr(env_val_ptr.?));
 
@@ -1044,13 +1039,13 @@ fn sscanf_impl(buf_ptr: usize, fmt_ptr: usize, ap: usize) i32 {
     // Super hacky sscanf for single %d/%i/%x
     if (std.mem.eql(u8, fmt, "%d") or std.mem.eql(u8, fmt, "%i") or std.mem.eql(u8, fmt, "%ld")) {
         if (a1 != 0) {
-            const val = string.stub_strtol(trace.addr(buf_ptr), 0, 10);
+            const val = @import("string.zig").stub_strtol(trace.addr(buf_ptr), 0, 10);
             @as(*i32, @ptrFromInt(a1)).* = val;
             return 1;
         }
     } else if (std.mem.eql(u8, fmt, "%x") or std.mem.eql(u8, fmt, "%X")) {
         if (a1 != 0) {
-            const val = string.stub_strtoul(trace.addr(buf_ptr), 0, 16);
+            const val = @import("string.zig").stub_strtoul(trace.addr(buf_ptr), 0, 16);
             @as(*u32, @ptrFromInt(a1)).* = val;
             return 1;
         }

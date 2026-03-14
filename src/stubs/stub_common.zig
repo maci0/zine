@@ -23,7 +23,7 @@ pub var guest_memory: ?*x86_memory.GuestMemory = null;
 // the guest heap bump allocator; on native x86-64, we pre-allocate large
 // chunks at low addresses so guest 32-bit code can address them.
 
-const HEAP_CHUNK_SIZE: usize = 16 * 1024 * 1024; // 16 MB per chunk
+const heap_chunk_size: usize = 16 * 1024 * 1024; // 16 MB per chunk
 var heap_base: ?[*]u8 = null;
 var heap_pos: usize = 0;
 var heap_cap: usize = 0;
@@ -42,7 +42,7 @@ fn heapAlloc(size: usize) ?[*]u8 {
     const aligned = (size + 7) & ~@as(usize, 7); // 8-byte align
     if (heap_base == null or heap_pos + aligned > heap_cap) {
         const plt = @import("../platform.zig");
-        const chunk_size = @max(aligned + 4096, HEAP_CHUNK_SIZE);
+        const chunk_size = @max(aligned + 4096, heap_chunk_size);
         const hint = get_aligned_hint(chunk_size);
         const mem = plt.mmap(@ptrFromInt(hint), chunk_size, false, -1, 0, false, false) catch return null;
         @memset(mem, 0);

@@ -3,11 +3,6 @@ const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
 const io = @import("io.zig");
 
-const string = @import("string.zig");
-const process = @import("process.zig");
-const mem = @import("mem.zig");
-const math = @import("math.zig");
-const misc = @import("misc.zig");
 
 pub fn stub_strlen(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
@@ -294,7 +289,7 @@ pub fn stub_wcsupr(str_ptr: usize) callconv(.c) usize {
 }
 
 pub fn stub_wcscpy(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
-    string.log_wcs("wcscpy src: ", src_ptr);
+    log_wcs("wcscpy src: ", src_ptr);
     if (dst_ptr == 0 or src_ptr == 0) return dst_ptr;
     const dst = @as([*]u16, @ptrFromInt(dst_ptr));
     const src = @as([*]const u16, @ptrFromInt(src_ptr));
@@ -469,8 +464,8 @@ pub fn stub_wtoi(str_ptr: usize) callconv(.c) i32 {
 
 // --- Low-level File I/O ---
 
-const MAX_FDS = 64;
-var fd_handles: [MAX_FDS]?std.fs.File = [_]?std.fs.File{null} ** MAX_FDS;
+const max_fds = 64;
+var fd_handles: [max_fds]?std.fs.File = [_]?std.fs.File{null} ** max_fds;
 
 pub fn init_pctype() void {
     const pctype_data = [_]u16{

@@ -4,27 +4,22 @@ const msvcrt = @import("../msvcrt.zig");
 const platform = @import("../../platform.zig");
 const io = @import("io.zig");
 
-const string = @import("string.zig");
-const process = @import("process.zig");
-const mem = @import("mem.zig");
-const math = @import("math.zig");
-const misc = @import("misc.zig");
 
 // --- Guest-accessible MSVCRT globals (WASM) ---
 // On WASM, the x86 interpreter can only read guest memory. The `__p_xxx`
 // stubs return pointers to globals, which must be guest virtual addresses.
 // We allocate a small block in guest memory and mirror the globals there.
-const GUEST_GLOBALS_SIZE: u32 = 256;
+const guest_globals_size: u32 = 256;
 
 // Offsets within the guest globals block
-const G_ARGC: u32 = 0; // i32
-const G_ARGV: u32 = 4; // u32 (pointer to argv array)
-const G_ENVP: u32 = 8; // u32 (pointer to envp array)
-const G_FMODE: u32 = 12; // u32
-const G_COMMODE: u32 = 16; // u16 padded to u32
-const G_INITENV: u32 = 20; // u32
-const G_PGMPTR: u32 = 24; // u32
-const G_ACMDLN: u32 = 28; // u32 (pointer to acmdln string)
+const g_argc: u32 = 0; // i32
+const g_argv: u32 = 4; // u32 (pointer to argv array)
+const g_envp: u32 = 8; // u32 (pointer to envp array)
+const g_fmode: u32 = 12; // u32
+const g_commode: u32 = 16; // u16 padded to u32
+const g_initenv: u32 = 20; // u32
+const g_pgmptr: u32 = 24; // u32
+const g_acmdln: u32 = 28; // u32 (pointer to acmdln string)
 
 var guest_globals_addr: u32 = 0; // guest virtual address of globals block
 
@@ -32,20 +27,20 @@ fn ensureGuestGlobals() u32 {
     if (guest_globals_addr != 0) return guest_globals_addr;
     const stub_common = @import("../stub_common.zig");
     if (stub_common.guest_memory) |gmem| {
-        const addr = gmem.guestAlloc(GUEST_GLOBALS_SIZE);
+        const addr = gmem.guestAlloc(guest_globals_size);
         if (addr == 0) return 0;
         guest_globals_addr = addr;
 
         // Initialize with current global values
-        gmem.write32(addr + G_ARGC, @bitCast(msvcrt.global_argc));
+        gmem.write32(addr + g_argc, @bitCast(msvcrt.global_argc));
         // argv/envp will be filled by ensureGuestArgs → stub_getmainargs
-        gmem.write32(addr + G_ARGV, guest_argv_addr);
-        gmem.write32(addr + G_ENVP, guest_envp_addr);
-        gmem.write32(addr + G_FMODE, msvcrt.msvcrt_fmode);
-        gmem.write32(addr + G_COMMODE, msvcrt.msvcrt_commode);
-        gmem.write32(addr + G_INITENV, 0); // null
-        gmem.write32(addr + G_PGMPTR, 0); // null
-        gmem.write32(addr + G_ACMDLN, @truncate(msvcrt.msvcrt_acmdln));
+        gmem.write32(addr + g_argv, guest_argv_addr);
+        gmem.write32(addr + g_envp, guest_envp_addr);
+        gmem.write32(addr + g_fmode, msvcrt.msvcrt_fmode);
+        gmem.write32(addr + g_commode, msvcrt.msvcrt_commode);
+        gmem.write32(addr + g_initenv, 0); // null
+        gmem.write32(addr + g_pgmptr, 0); // null
+        gmem.write32(addr + g_acmdln, @truncate(msvcrt.msvcrt_acmdln));
         return addr;
     }
     return 0;
@@ -56,15 +51,15 @@ pub fn updateGuestGlobals() void {
     if (guest_globals_addr == 0) return;
     const stub_common = @import("../stub_common.zig");
     if (stub_common.guest_memory) |gmem| {
-        gmem.write32(guest_globals_addr + G_ARGC, @bitCast(msvcrt.global_argc));
-        gmem.write32(guest_globals_addr + G_ARGV, guest_argv_addr);
-        gmem.write32(guest_globals_addr + G_ENVP, guest_envp_addr);
+        gmem.write32(guest_globals_addr + g_argc, @bitCast(msvcrt.global_argc));
+        gmem.write32(guest_globals_addr + g_argv, guest_argv_addr);
+        gmem.write32(guest_globals_addr + g_envp, guest_envp_addr);
     }
 }
 
 pub fn stub_p_argc() callconv(.c) usize {
     const g = ensureGuestGlobals();
-    if (g != 0) return g + G_ARGC;
+    if (g != 0) return g + g_argc;
     return @intFromPtr(&msvcrt.global_argc);
 }
 
@@ -74,7 +69,7 @@ pub fn stub_p_argv() callconv(.c) usize {
         // Make sure guest args are built first
         ensureGuestArgs();
         updateGuestGlobals();
-        return g + G_ARGV;
+        return g + g_argv;
     }
     return @intFromPtr(&msvcrt.global_argv);
 }
@@ -84,7 +79,7 @@ pub fn stub_p_environ() callconv(.c) usize {
     if (g != 0) {
         ensureGuestArgs();
         updateGuestGlobals();
-        return g + G_ENVP;
+        return g + g_envp;
     }
     const static_p = struct {
         var p: [*]const ?[*:0]const u8 = undefined;
@@ -99,7 +94,7 @@ pub fn stub_p_environ() callconv(.c) usize {
 var guest_args_buf: ?[]u8 = null;
 var guest_argv_addr: u32 = 0;
 var guest_envp_addr: u32 = 0;
-const GUEST_ARGS_BASE: u32 = 0x50000000;
+const guest_args_base: u32 = 0x50000000;
 
 fn ensureGuestArgs() void {
     if (guest_args_buf != null) return;
@@ -107,7 +102,7 @@ fn ensureGuestArgs() void {
     const plt = @import("../../platform.zig");
     const stub_common = @import("../stub_common.zig");
 
-    var base_addr: u32 = GUEST_ARGS_BASE;
+    var base_addr: u32 = guest_args_base;
     const buf_size: usize = 256 * 1024; // 256KB
 
     // On WASM, allocate from the guest heap so addresses are within GuestMemory range
@@ -119,7 +114,7 @@ fn ensureGuestArgs() void {
         guest_args_buf = gmem.base[offset .. offset + buf_size];
     } else {
         const block = plt.mmap(
-            @ptrFromInt(GUEST_ARGS_BASE),
+            @ptrFromInt(guest_args_base),
             buf_size,
             false, -1, 0, false, false,
         ) catch return;
@@ -449,10 +444,10 @@ pub fn stub_p_pgmptr() callconv(.c) usize {
         if (stub_common.guest_memory) |gmem| {
             if (guest_argv_addr != 0) {
                 const first_arg = gmem.read32(guest_argv_addr);
-                gmem.write32(g + G_PGMPTR, first_arg);
+                gmem.write32(g + g_pgmptr, first_arg);
             }
         }
-        return g + G_PGMPTR;
+        return g + g_pgmptr;
     }
     if (msvcrt.msvcrt_pgmptr == null and msvcrt.global_argc > 0) {
         if (msvcrt.global_argv[0]) |first| {
@@ -507,19 +502,19 @@ pub fn stub_initterm(pfbegin: [*]const ?*const fn () callconv(.c) void, pfend: [
 
 pub fn stub_p_fmode() callconv(.c) usize {
     const g = ensureGuestGlobals();
-    if (g != 0) return g + G_FMODE;
+    if (g != 0) return g + g_fmode;
     return @intFromPtr(&msvcrt.msvcrt_fmode);
 }
 
 pub fn stub_p_commode() callconv(.c) usize {
     const g = ensureGuestGlobals();
-    if (g != 0) return g + G_COMMODE;
+    if (g != 0) return g + g_commode;
     return @intFromPtr(&msvcrt.msvcrt_commode);
 }
 
 pub fn stub_p_initenv() callconv(.c) usize {
     const g = ensureGuestGlobals();
-    if (g != 0) return g + G_INITENV;
+    if (g != 0) return g + g_initenv;
     const static_p = struct {
         var p: [*]const ?[*:0]const u8 = undefined;
     };

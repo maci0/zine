@@ -36,9 +36,9 @@ pub var iob_guest_addr: usize = 0;
 
 // We need a way to map MSVCRT_FILE pointers to Zig File handles.
 // Since we don't want to use malloc/free for everything, we can keep a simple array of open files.
-const MAX_FILES = 64;
-var file_handles: [MAX_FILES]?std.fs.File = [_]?std.fs.File{null} ** MAX_FILES;
-var file_structs: [MAX_FILES]MSVCRT_FILE = [_]MSVCRT_FILE{std.mem.zeroes(MSVCRT_FILE)} ** MAX_FILES;
+const max_files = 64;
+var file_handles: [max_files]?std.fs.File = [_]?std.fs.File{null} ** max_files;
+var file_structs: [max_files]MSVCRT_FILE = [_]MSVCRT_FILE{std.mem.zeroes(MSVCRT_FILE)} ** max_files;
 
 pub fn getFile(ptr: ?*anyopaque) ?std.fs.File {
     if (ptr) |p| {
@@ -86,7 +86,7 @@ fn stdFileFromIobIndex(idx: usize) ?std.fs.File {
 }
 
 fn allocateFileSlot() ?usize {
-    for (0..MAX_FILES) |i| {
+    for (0..max_files) |i| {
         if (file_handles[i] == null) {
             return i;
         }

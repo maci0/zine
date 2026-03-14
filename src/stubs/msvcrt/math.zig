@@ -3,11 +3,6 @@ const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
 const io = @import("io.zig");
 
-const string = @import("string.zig");
-const process = @import("process.zig");
-const mem = @import("mem.zig");
-const math = @import("math.zig");
-const misc = @import("misc.zig");
 
 pub fn stub_controlfp(new: u32, mask: u32) callconv(.c) u32 {
     _ = new;
