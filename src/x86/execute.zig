@@ -197,6 +197,66 @@ fn dispatchNativeCall(cpu: *Cpu) void {
     if (!is_cdecl) {
         cpu.esp +%= cleanup;
     }
+
+    // On WASM, check if _initterm enqueued any guest init functions.
+    // If so, build an x86 trampoline in guest memory to execute them.
+    if (comptime !@import("../platform.zig").is_native) {
+        const process = @import("../stubs/msvcrt/process.zig");
+        if (process.pending_initterm_count > 0) {
+            buildInittermTrampoline(cpu, ret_addr);
+        }
+    }
+}
+
+/// Build an x86 trampoline in guest memory to execute pending _initterm callbacks.
+/// Each callback is a CALL rel32 to a guest function address, followed by a final RET.
+/// The current EIP (CRT return address) is pushed onto the guest stack so the
+/// trampoline's RET returns control to the CRT startup code.
+fn buildInittermTrampoline(cpu: *Cpu, _: u32) void {
+    const process = @import("../stubs/msvcrt/process.zig");
+    const count = process.pending_initterm_count;
+    if (count == 0) return;
+
+    // Find a location in guest memory for the trampoline.
+    // Use guestAlloc from the heap to get guest-addressable memory.
+    const kernel32_mem = @import("../stubs/kernel32/mem.zig");
+    const gmem = kernel32_mem.guest_memory orelse return;
+
+    // Each CALL rel32 = 5 bytes, final RET = 1 byte
+    const trampoline_size: u32 = @intCast(count * 5 + 1);
+    const trampoline_va = gmem.guestAlloc(trampoline_size);
+    if (trampoline_va == 0) return;
+
+    // Write the trampoline x86 code
+    var offset: u32 = 0;
+    for (0..count) |i| {
+        const func_va = process.pending_initterm_callbacks[i];
+        // CALL rel32 (E8 xx xx xx xx)
+        // rel32 = target - (trampoline_va + offset + 5)
+        const call_end: u32 = trampoline_va + offset + 5;
+        const rel32: i32 = @as(i32, @bitCast(func_va)) -% @as(i32, @bitCast(call_end));
+        cpu.memory.write8(trampoline_va + offset, 0xE8);
+        cpu.memory.write32(trampoline_va + offset + 1, @bitCast(rel32));
+        offset += 5;
+
+        if (trace.enable_tracing) {
+            trace.print("_initterm trampoline: CALL {x} (rel32={x}) at {x}\n", .{ func_va, @as(u32, @bitCast(rel32)), trampoline_va + offset - 5 });
+        }
+    }
+    // Final RET (C3)
+    cpu.memory.write8(trampoline_va + offset, 0xC3);
+
+    // Clear pending callbacks
+    process.pending_initterm_count = 0;
+
+    // Push the current return address (where CRT code resumes)
+    // and redirect EIP to the trampoline
+    cpu.push32(cpu.eip);
+    cpu.eip = trampoline_va;
+
+    if (trace.enable_tracing) {
+        trace.print("_initterm trampoline: {d} funcs at {x}, return to {x}\n", .{ count, trampoline_va, cpu.memory.read32(cpu.esp) });
+    }
 }
 
 /// Execute an x87 FPU instruction.

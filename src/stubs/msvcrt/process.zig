@@ -468,12 +468,32 @@ pub fn stub_XcptFilter(xcptnum: u32, pxcptinfoptrs: *anyopaque) callconv(.c) i32
     return 0;
 }
 
+/// Pending init function callbacks for WASM — guest virtual addresses of x86
+/// functions that need to be executed by the interpreter after _initterm returns.
+pub var pending_initterm_callbacks: [64]u32 = [_]u32{0} ** 64;
+pub var pending_initterm_count: usize = 0;
+
 pub fn stub_initterm(pfbegin: [*]const ?*const fn () callconv(.c) void, pfend: [*]const ?*const fn () callconv(.c) void) callconv(.c) void {
     if (comptime !platform.is_native) {
-        // On WASM, we can't call guest x86 code from stubs — the function
-        // pointers are PE virtual addresses, not WASM function references.
-        // Our stubs already provide all CRT init functionality.
-        if (trace.enable_tracing) trace.print("MSVCRT: _initterm({x}, {x}) [WASM no-op]\n", .{ @intFromPtr(pfbegin), @intFromPtr(pfend) });
+        // On WASM, the function pointers are guest x86 addresses stored as
+        // u32 values in the PE's .CRT section. We read them and enqueue for
+        // the interpreter to execute after this stub returns.
+        const begin_addr = @intFromPtr(pfbegin);
+        const end_addr = @intFromPtr(pfend);
+        if (trace.enable_tracing) trace.print("MSVCRT: _initterm({x}, {x}) [WASM collect]\n", .{ begin_addr, end_addr });
+
+        // Each entry is a 4-byte guest function pointer
+        var current = begin_addr;
+        while (current < end_addr) : (current += 4) {
+            const func_ptr = @as(*const u32, @ptrFromInt(current)).*;
+            if (func_ptr != 0) {
+                if (trace.enable_tracing) trace.print("  -> enqueuing init func at guest {x}\n", .{func_ptr});
+                if (pending_initterm_count < 64) {
+                    pending_initterm_callbacks[pending_initterm_count] = func_ptr;
+                    pending_initterm_count += 1;
+                }
+            }
+        }
         return;
     }
     var p = pfbegin;

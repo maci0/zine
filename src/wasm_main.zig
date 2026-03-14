@@ -245,68 +245,51 @@ pub fn main() !void {
     loader.setThunkMemory(&thunk_guest_mem, thunk_base_addr);
 
     // On WASM, data exports like _iob must be in guest memory (32-bit virtual
-    // addresses) so the x86 interpreter can dereference them. We allocate from
-    // the heap region of combined_buf BEFORE import resolution so the IAT gets
-    // patched with correct guest VAs.
+    // addresses) so the x86 interpreter can dereference them. relocateDataExports
+    // iterates all is_data=true exports, allocates guest memory, copies data, and
+    // updates export addresses — driven entirely by registered exports.
     {
         // Set up guest heap early so we can guestAlloc
         thunk_guest_mem.heap_start = image_size + STACK_SIZE + THUNK_RESERVE;
         thunk_guest_mem.heap_cursor = thunk_guest_mem.heap_start;
 
-        const io_mod = @import("stubs/msvcrt/io.zig");
-        const iob_size: u32 = @sizeOf(@TypeOf(io_mod.msvcrt_iob));
-        const iob_guest_va = thunk_guest_mem.guestAlloc(iob_size);
-        if (iob_guest_va != 0) {
-            // Copy initial _iob data to guest memory
-            const offset = iob_guest_va - preferred_base;
-            const host_ptr = combined_buf[offset .. offset + iob_size];
-            @memcpy(host_ptr, std.mem.asBytes(&io_mod.msvcrt_iob));
+        // Relocate ALL data exports into guest memory in one call
+        environment.relocateDataExports(&thunk_guest_mem, combined_buf, preferred_base);
 
-            // Pre-allocate stdout/stderr buffers in guest memory.
-            // _initterm is a no-op on WASM, so CRT init functions that
-            // would normally allocate these buffers never run.
+        // Post-relocation fixups for exports that need extra initialization:
+
+        // _iob: pre-allocate stdout/stderr buffers and set FILE* flags
+        const io_mod = @import("stubs/msvcrt/io.zig");
+        if (environment.resolveExport("MSVCRT.dll", "_iob")) |iob_exp| {
+            const iob_guest_va: u32 = @intCast(iob_exp.addr);
+            const iob_offset = iob_guest_va - preferred_base;
+            io_mod.iob_guest_addr = iob_guest_va;
+
             const BUFSIZ: u32 = 4096;
             const stdout_buf_va = thunk_guest_mem.guestAlloc(BUFSIZ);
             const stderr_buf_va = thunk_guest_mem.guestAlloc(BUFSIZ);
 
-            // Patch _iob[1] (stdout) in guest memory
             if (stdout_buf_va != 0) {
-                const stdout_offset = offset + @sizeOf(io_mod.MSVCRT_FILE); // _iob[1]
-                const stdout_iob = @as(*io_mod.MSVCRT_FILE, @ptrCast(@alignCast(combined_buf[stdout_offset..].ptr)));
+                const stdout_iob = @as(*io_mod.MSVCRT_FILE, @ptrCast(@alignCast(combined_buf[iob_offset + @sizeOf(io_mod.MSVCRT_FILE) ..].ptr)));
                 stdout_iob._base = stdout_buf_va;
                 stdout_iob._ptr = stdout_buf_va;
                 stdout_iob._cnt = @intCast(BUFSIZ);
                 stdout_iob._bufsiz = @intCast(BUFSIZ);
-                stdout_iob._flag = 0x0082; // _IOWRT | _IOFLRTN (write mode, flush on return)
+                stdout_iob._flag = 0x0082; // _IOWRT | _IOFLRTN
             }
-
-            // Patch _iob[2] (stderr) in guest memory - unbuffered
             if (stderr_buf_va != 0) {
-                const stderr_offset = offset + 2 * @sizeOf(io_mod.MSVCRT_FILE); // _iob[2]
-                const stderr_iob = @as(*io_mod.MSVCRT_FILE, @ptrCast(@alignCast(combined_buf[stderr_offset..].ptr)));
+                const stderr_iob = @as(*io_mod.MSVCRT_FILE, @ptrCast(@alignCast(combined_buf[iob_offset + 2 * @sizeOf(io_mod.MSVCRT_FILE) ..].ptr)));
                 stderr_iob._base = stderr_buf_va;
                 stderr_iob._ptr = stderr_buf_va;
                 stderr_iob._cnt = @intCast(BUFSIZ);
                 stderr_iob._bufsiz = @intCast(BUFSIZ);
-                stderr_iob._flag = 0x0044; // _IOREAD | _IOWRT  ... actually stderr uses _IONBF
-                // stderr is typically unbuffered: _flag = _IOWRT | _IONBF (0x0002 | 0x0004 = 0x0006)
-                // But some CRTs ignore _IONBF if _base is set, so set small buffer
                 stderr_iob._flag = 0x0006; // _IOWRT | _IONBF
             }
-
-            // Update the export address to point to guest memory
-            environment.updateExport("MSVCRT.dll", "_iob", iob_guest_va);
-
-            // Store for getFile() to use on WASM
-            io_mod.iob_guest_addr = iob_guest_va;
         }
 
-        // Also allocate _acmdln in guest memory
-        const acmdln_guest_va = thunk_guest_mem.guestAlloc(4096);
-        if (acmdln_guest_va != 0) {
-            @memset(combined_buf[acmdln_guest_va - preferred_base .. acmdln_guest_va - preferred_base + 4096], 0);
-            environment.updateExport("MSVCRT.dll", "_acmdln", acmdln_guest_va);
-            stubs_msvcrt.msvcrt_acmdln_guest = acmdln_guest_va;
+        // _acmdln: track guest VA for ensureGuestArgs
+        if (environment.resolveExport("MSVCRT.dll", "_acmdln")) |acmdln_exp| {
+            stubs_msvcrt.msvcrt_acmdln_guest = acmdln_exp.addr;
         }
     }
 

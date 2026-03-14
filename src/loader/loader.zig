@@ -37,29 +37,49 @@ fn patchImport(
     func_name: []const u8,
 ) void {
     if (comptime platform.is_wasm) {
-        // On WASM: register a thunk handler and write INT 0xFE code into guest memory
-        const thunk_id = if (exp.thunk_handler) |handler| blk: {
+        if (exp.is_data) {
+            // Data export (e.g., _iob, _adjust_fdiv) —
+            // write the data address directly to the IAT. Do NOT create
+            // a thunk; the PE code dereferences this address as data.
+            first_thunk.* = @intCast(exp.addr);
+            if (trace.enable_tracing) {
+                trace.print("loader: {s} -> {s} at {X} (data export)\n", .{ dll_name, func_name, exp.addr });
+            }
+        } else if (exp.thunk_handler) |handler| {
             // Use the comptime-generated handler that calls the stub with
             // the exact correct signature (avoids WASM type mismatch)
-            break :blk x86_thunks.registerThunk(.{
+            const thunk_id = x86_thunks.registerThunk(.{
                 .name = func_name,
                 .param_count = null, // handler manages ESP itself
                 .handler = handler,
             });
-        } else blk: {
-            // Fallback for addBuiltinExport (non-comptime) — register generic thunk
-            break :blk x86_thunks.registerNativeThunk(func_name, exp.addr, exp.param_bytes, false);
-        };
-        if (thunk_memory) |mem| {
-            const guest_addr = allocThunkCode(mem, thunk_id);
-            first_thunk.* = guest_addr;
-            if (trace.enable_tracing) {
-                trace.print("loader: {s} -> {s} at thunk {X} (id={d})\n", .{ dll_name, func_name, guest_addr, thunk_id });
+            if (thunk_memory) |mem| {
+                const guest_addr = allocThunkCode(mem, thunk_id);
+                first_thunk.* = guest_addr;
+                if (trace.enable_tracing) {
+                    trace.print("loader: {s} -> {s} at thunk {X} (id={d})\n", .{ dll_name, func_name, guest_addr, thunk_id });
+                }
+            } else {
+                first_thunk.* = @intCast(exp.addr);
+                if (trace.enable_tracing) {
+                    trace.print("loader: {s} -> {s} at {X} (no thunk mem!)\n", .{ dll_name, func_name, exp.addr });
+                }
             }
         } else {
-            first_thunk.* = @intCast(exp.addr);
-            if (trace.enable_tracing) {
-                trace.print("loader: {s} -> {s} at {X} (no thunk mem!)\n", .{ dll_name, func_name, exp.addr });
+            // Non-comptime function export (e.g., _EH_prolog, _ftol) —
+            // create a generic thunk to dispatch to the native function.
+            const thunk_id = x86_thunks.registerNativeThunk(func_name, exp.addr, exp.param_bytes, false);
+            if (thunk_memory) |mem| {
+                const guest_addr = allocThunkCode(mem, thunk_id);
+                first_thunk.* = guest_addr;
+                if (trace.enable_tracing) {
+                    trace.print("loader: {s} -> {s} at thunk {X} (id={d})\n", .{ dll_name, func_name, guest_addr, thunk_id });
+                }
+            } else {
+                first_thunk.* = @intCast(exp.addr);
+                if (trace.enable_tracing) {
+                    trace.print("loader: {s} -> {s} at {X} (no thunk mem!)\n", .{ dll_name, func_name, exp.addr });
+                }
             }
         }
     } else {

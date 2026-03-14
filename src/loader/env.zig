@@ -16,6 +16,12 @@ pub const BuiltinExport = struct {
     /// Null on native (where we can use @ptrFromInt to call directly).
     thunk_handler: ?*const fn (*Cpu) void = null,
     is_native: bool = true,
+    /// True if this is a data export (e.g., _iob, _adjust_fdiv) as opposed to
+    /// a function export. On WASM, data exports are written directly to the IAT
+    /// as data addresses, while function exports get thunk code.
+    is_data: bool = false,
+    /// Size in bytes of the data export (only meaningful when is_data == true).
+    data_size: u32 = 0,
 };
 
 pub const BuiltinModule = struct {
@@ -85,6 +91,36 @@ pub const Environment = struct {
     pub fn addBuiltinExport(self: *Environment, dll: []const u8, name: []const u8, addr: usize) !void {
         const builtin = try self.getOrCreateModule(dll);
         try builtin.exports.put(name, .{ .addr = addr, .param_bytes = 0 });
+    }
+
+    /// Register a data export (e.g., _iob, _adjust_fdiv). On WASM, these are
+    /// written directly to the IAT as data addresses, not wrapped in thunks.
+    pub fn addBuiltinDataExport(self: *Environment, dll: []const u8, name: []const u8, addr: usize, size: u32) !void {
+        const builtin = try self.getOrCreateModule(dll);
+        try builtin.exports.put(name, .{ .addr = addr, .param_bytes = 0, .is_data = true, .data_size = size });
+    }
+
+    /// Relocate all data exports into guest memory. Call this on WASM before
+    /// import resolution so that IAT entries point to guest-addressable data.
+    /// Iterates all builtin modules, finds is_data exports, allocates guest
+    /// memory, copies the host data, and updates the export address.
+    pub fn relocateDataExports(self: *Environment, gmem: anytype, combined_buf: []u8, base_addr: u32) void {
+        var mod_it = self.builtins.iterator();
+        while (mod_it.next()) |mod_entry| {
+            var exp_it = mod_entry.value_ptr.exports.iterator();
+            while (exp_it.next()) |exp_entry| {
+                const exp = exp_entry.value_ptr;
+                if (!exp.is_data or exp.data_size == 0) continue;
+
+                const guest_va = gmem.guestAlloc(exp.data_size);
+                if (guest_va == 0) continue;
+
+                const off = guest_va - base_addr;
+                const src = @as([*]const u8, @ptrFromInt(exp.addr))[0..exp.data_size];
+                @memcpy(combined_buf[off .. off + exp.data_size], src);
+                exp.addr = guest_va;
+            }
+        }
     }
 
     /// Update an existing builtin export address (e.g., to relocate data into guest memory).
