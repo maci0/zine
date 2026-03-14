@@ -102,7 +102,7 @@ function makeDraggable(titlebar, windowElement) {
     let dragOffsetY = 0;
 
     titlebar.addEventListener('mousedown', (e) => {
-        if (e.target.classList.contains('win2k-titlebar-btn')) return;
+        if (e.target.closest('.win2k-titlebar-btn')) return;
         isDragging = true;
 
         const rect = windowElement.getBoundingClientRect();
@@ -331,8 +331,10 @@ function PopupItem(sub, onAfterClick) {
         return div({class: 'popup-separator'});
     }
     const isChecked = (sub.flags & 0x0008) !== 0; // MF_CHECKED
-    return div({class: 'popup-item' + (isChecked ? ' checked' : ''), 'data-cmd-id': sub.id, onclick: (e) => {
+    const isDisabled = (sub.flags & 0x0003) !== 0; // MF_GRAYED | MF_DISABLED
+    return div({class: 'popup-item' + (isChecked ? ' checked' : '') + (isDisabled ? ' disabled' : ''), 'data-cmd-id': sub.id, onclick: (e) => {
         e.stopPropagation();
+        if (isDisabled) return;
         sendCommand(sub.id);
         if (onAfterClick) onAfterClick();
     }}, menuLabel(sub.name));
@@ -602,8 +604,10 @@ function connect() {
         }
 
         // Clear in-place controls container
-        const controlsContainer = document.getElementById('dialog-content');
-        if (controlsContainer) controlsContainer.innerHTML = '';
+        const controlsContainer = document.getElementById('controls-container');
+        if (controlsContainer) controlsContainer.remove();
+        const dialogContent = document.getElementById('dialog-content');
+        if (dialogContent) dialogContent.innerHTML = '';
 
         // Reset canvas inset sizing
         const inset = document.querySelector('.canvas-inset');
@@ -1263,6 +1267,7 @@ function connect() {
 
                     const menuDiv = document.createElement('div');
                     menuDiv.className = 'popup-menu';
+                    menuDiv.style.display = 'block';
                     menuDiv.style.position = 'absolute';
                     menuDiv.style.left = msg.x + 'px';
                     menuDiv.style.top = msg.y + 'px';
@@ -1327,9 +1332,6 @@ function connect() {
                     document.getElementById('volume-slider').value = msg.volume || 0;
                     applyVolume();
 
-                } else if (msg.type === "audio_format") {
-                    setupAudio(msg.sampleRate, msg.channels, msg.bitsPerSample);
-
                 } else if (msg.type === "show_edit_control") {
                     hasEditControl.val = true;
                     const editEl = document.getElementById('edit-control');
@@ -1379,7 +1381,9 @@ function connect() {
                     link.href = iconUrl;
                 } else if (msg.type === "desktop_icons") {
                     const desktop = document.getElementById('desktop-area');
-                    desktop.innerHTML = '';
+                    // Replace the element to remove all old event listeners
+                    const newDesktop = desktop.cloneNode(false);
+                    desktop.parentNode.replaceChild(newDesktop, desktop);
                     const folderSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><path d="M2 6h12l2 3h14v19H2z" fill="#FEC64F" stroke="#996515" stroke-width="0.5"/><path d="M2 9h28v16H2z" fill="#FEC64F"/></svg>`;
                     const docSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><path d="M6 2h14l6 6v22H6z" fill="#fff" stroke="#888" stroke-width="0.8"/><path d="M20 2l6 6h-6z" fill="#ccc" stroke="#888" stroke-width="0.5"/><line x1="10" y1="14" x2="22" y2="14" stroke="#999" stroke-width="0.8"/><line x1="10" y1="17" x2="22" y2="17" stroke="#999" stroke-width="0.8"/><line x1="10" y1="20" x2="18" y2="20" stroke="#999" stroke-width="0.8"/></svg>`;
                     const exeSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><rect x="4" y="2" width="24" height="28" rx="2" fill="#ddd" stroke="#666" stroke-width="0.8"/><rect x="7" y="5" width="18" height="12" fill="#000080"/><rect x="9" y="8" width="4" height="2" fill="#0f0"/><rect x="15" y="8" width="6" height="2" fill="#0ff"/><rect x="9" y="11" width="8" height="2" fill="#ff0"/><rect x="8" y="20" width="7" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/><rect x="17" y="20" width="7" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/><rect x="8" y="25" width="16" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/></svg>`;
@@ -1427,11 +1431,11 @@ function connect() {
                             }
                         });
 
-                        desktop.appendChild(iconEl);
+                        newDesktop.appendChild(iconEl);
                     });
 
                     // Click empty area to deselect
-                    desktop.addEventListener('click', () => {
+                    newDesktop.addEventListener('click', () => {
                         if (selectedIcon) { selectedIcon.classList.remove('selected'); selectedIcon = null; }
                     });
                 }

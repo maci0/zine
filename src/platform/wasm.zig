@@ -1,9 +1,8 @@
 // Platform backend: WASM (wasm32-wasi / wasm32-freestanding)
 //
 // Stubs and lightweight implementations for running inside a browser or
-// WASI runtime.  Real JS-interop implementations will be added in Phase 3;
-// for now these are functional enough to let the codebase compile and run
-// with the WASM target.
+// WASI runtime.  Some operations (file-backed mmap, real timestamps) are
+// not yet supported.
 
 const std = @import("std");
 
@@ -68,7 +67,7 @@ pub fn mmap(
     _ = fixed;
 
     // On WASM, use the page allocator for aligned allocations.
-    // File-backed mappings are not supported yet (Phase 3).
+    // File-backed mappings are not supported.
     const mem = try std.heap.page_allocator.alignedAlloc(u8, null, size);
     @memset(mem, 0);
     return @alignCast(mem[0..size]);
@@ -89,13 +88,11 @@ pub fn getProcessId() u32 {
 }
 
 pub fn exitProcess(code: u8) noreturn {
-    _ = code;
-    @trap();
+    std.process.exit(code);
 }
 
 pub fn timestamp() i64 {
-    // TODO Phase 3: call performance.now() via JS import
-    return 0;
+    return 0; // No clock available in WASM
 }
 
 // -------------------------------------------------------------------------

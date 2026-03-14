@@ -3,6 +3,7 @@ const trace = @import("../../trace.zig");
 const kernel32_mem = @import("mem.zig");
 const w32 = @import("../../win32_constants.zig");
 const w32cc = @import("../../calling_convention.zig");
+const platform = @import("../../platform.zig");
 
 pub fn stub_GetFileAttributesA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) u32 {
     if (lpFileName_ptr == 0) return w32.INVALID_FILE_ATTRIBUTES;
@@ -196,7 +197,6 @@ pub fn stub_MapViewOfFileEx(hFileMappingObject: usize, dwDesiredAccess: u32, dwF
                 const is_write = (dwDesiredAccess & 2) != 0 or dwDesiredAccess == 0xF001F;
 
                 var memory: []align(4096) u8 = undefined;
-                const platform = @import("../../platform.zig");
                 if (lpBaseAddress != 0) {
                     memory = platform.mmap(@ptrFromInt(lpBaseAddress), map_size, false, fd, offset, is_write, true) catch |err| {
                         if (trace.enable_tracing) trace.print("KERNEL32: MapViewOfFileEx FIXED mmap failed: {}\n", .{err});
@@ -807,10 +807,12 @@ pub fn stub_SetFileAttributesA(lpFileName_ptr: usize, dwFileAttributes: u32) cal
 
 pub fn stub_FlushFileBuffers(hFile: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: FlushFileBuffers({x})\n", .{hFile});
-    // Actually flush the fd if possible
-    const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
-    const file = std.fs.File{ .handle = fd };
-    file.sync() catch {};
+    // Actually flush the fd if possible (not available on WASM/WASI)
+    if (comptime platform.is_native) {
+        const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
+        const file = std.fs.File{ .handle = fd };
+        file.sync() catch {};
+    }
     return 1; // TRUE
 }
 

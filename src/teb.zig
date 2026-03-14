@@ -101,16 +101,27 @@ pub const TEB = extern struct {
 };
 
 pub fn initTEB(allocator: std.mem.Allocator) !*TEB {
+    _ = allocator; // PEB/params now use raw_alloc for 32-bit address range
     // Use page_allocator directly to ensure page alignment for TEB
     const slice = try std.heap.page_allocator.alloc(u8, @sizeOf(TEB));
     const teb_val = @as(*TEB, @ptrCast(@alignCast(slice.ptr)));
     @memset(slice, 0);
 
-    const peb = try allocator.create(PEB);
+    // PEB and ProcessParameters must be in the low 32-bit memory range
+    // because guest x86 code reads them via fs:[0x30] and follows the pointer
+    // chain.  The arena allocator can return addresses above 4GB on x86-64.
+    const kernel32_mem = @import("stubs/kernel32/mem.zig");
+    const peb = blk: {
+        const raw = kernel32_mem.raw_alloc(@sizeOf(PEB)) orelse return error.OutOfMemory;
+        break :blk @as(*PEB, @ptrCast(@alignCast(raw)));
+    };
     peb.* = .{};
     peb.ProcessHeap = 0xDEADC0DE;
 
-    const params = try allocator.create(RTL_USER_PROCESS_PARAMETERS);
+    const params = blk: {
+        const raw = kernel32_mem.raw_alloc(@sizeOf(RTL_USER_PROCESS_PARAMETERS)) orelse return error.OutOfMemory;
+        break :blk @as(*RTL_USER_PROCESS_PARAMETERS, @ptrCast(@alignCast(raw)));
+    };
     params.* = .{};
     peb.ProcessParameters = @truncate(@intFromPtr(params));
 

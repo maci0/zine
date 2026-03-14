@@ -64,6 +64,11 @@ pub fn build(b: *std.Build) void {
         wasm_lib.max_memory = 2 * 1024 * 1024 * 1024;
         wasm_lib.export_memory = true;
 
+        // Pass build options to WASM build (FLTK is never used on WASM)
+        const wasm_options = b.addOptions();
+        wasm_options.addOption(bool, "use_fltk", false);
+        wasm_lib.root_module.addOptions("build_options", wasm_options);
+
         b.installArtifact(wasm_lib);
     } else {
         // Native build: produce an executable

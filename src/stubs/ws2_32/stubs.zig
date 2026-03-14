@@ -33,7 +33,8 @@ inline fn socketToFd(s: usize) if (platform.is_native) std.posix.socket_t else v
     return @intCast(@as(isize, @bitCast(s)));
 }
 
-inline fn fdToSocket(fd: std.posix.socket_t) usize {
+inline fn fdToSocket(fd: if (platform.is_native) std.posix.socket_t else void) usize {
+    if (comptime !platform.is_native) return 0;
     return @as(usize, @bitCast(@as(isize, fd)));
 }
 
@@ -141,7 +142,7 @@ pub fn stub_accept(s: usize, addr: usize, addrlen: usize) callconv(w32cc.WINAPI)
     if (trace.enable_tracing) trace.print("WS2_32: accept(s={d})\n", .{s});
     if (comptime platform.is_native) {
         var address: std.net.Address = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
-        var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
+        var addr_len: std.posix.socklen_t = 16; // sizeof(sockaddr_in)
         const new_fd = std.posix.accept(socketToFd(s), &address.any, &addr_len, 0) catch |err| {
             if (trace.enable_tracing) trace.print("WS2_32: accept failed: {}\n", .{err});
             return INVALID_SOCKET;
@@ -230,7 +231,7 @@ pub fn stub_recvfrom(s: usize, buf: usize, len: i32, flags: i32, from: usize, fr
         if (buf == 0 or len <= 0) return SOCKET_ERROR;
         const buffer = @as([*]u8, @ptrFromInt(buf))[0..@intCast(@as(u32, @bitCast(len)))];
         var src_addr: std.net.Address = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
-        var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
+        var addr_len: std.posix.socklen_t = 16; // sizeof(sockaddr_in)
         const received = std.posix.recvfrom(
             socketToFd(s),
             buffer,
@@ -483,7 +484,7 @@ pub fn stub_ioctlsocket(s: usize, cmd: i32, argp: usize) callconv(w32cc.WINAPI) 
 pub fn stub_getpeername(s: usize, name: usize, namelen: usize) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
         var addr: std.net.Address = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
-        var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
+        var addr_len: std.posix.socklen_t = 16; // sizeof(sockaddr_in)
         std.posix.getpeername(socketToFd(s), &addr.any, &addr_len) catch {
             return SOCKET_ERROR;
         };
@@ -496,7 +497,7 @@ pub fn stub_getpeername(s: usize, name: usize, namelen: usize) callconv(w32cc.WI
 pub fn stub_getsockname(s: usize, name: usize, namelen: usize) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
         var addr: std.net.Address = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
-        var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
+        var addr_len: std.posix.socklen_t = 16; // sizeof(sockaddr_in)
         std.posix.getsockname(socketToFd(s), &addr.any, &addr_len) catch {
             return SOCKET_ERROR;
         };
@@ -527,17 +528,41 @@ pub fn stub_ntohs(netshort: u16) callconv(w32cc.WINAPI) u16 {
 }
 
 // ============================================================
-// Address conversion (uses std.net, works everywhere)
+// Address conversion (manual parsing to avoid std.net on WASI)
 // ============================================================
+
+/// Parse a dotted-decimal IPv4 address string into 4 octets.
+/// Returns null if the string is not a valid IPv4 address.
+fn parseIp4Manual(ip_str: []const u8) ?[4]u8 {
+    var octets: [4]u8 = undefined;
+    var octet_idx: usize = 0;
+    var cur: u16 = 0;
+    var digit_count: usize = 0;
+    for (ip_str) |ch| {
+        if (ch == '.') {
+            if (digit_count == 0 or octet_idx >= 3 or cur > 255) return null;
+            octets[octet_idx] = @intCast(cur);
+            octet_idx += 1;
+            cur = 0;
+            digit_count = 0;
+        } else if (ch >= '0' and ch <= '9') {
+            cur = cur * 10 + (ch - '0');
+            digit_count += 1;
+            if (cur > 255) return null;
+        } else return null;
+    }
+    if (digit_count == 0 or octet_idx != 3 or cur > 255) return null;
+    octets[3] = @intCast(cur);
+    return octets;
+}
 
 pub fn stub_inet_addr(cp: usize) callconv(w32cc.WINAPI) u32 {
     if (cp == 0) return 0xFFFFFFFF;
     const str = @as([*]const u8, @ptrFromInt(cp));
     const len = std.mem.indexOfScalar(u8, str[0..256], 0) orelse return 0xFFFFFFFF;
     const ip_str = str[0..len];
-    // Use std.net.Address for parsing — works everywhere
-    const addr = std.net.Address.parseIp4(ip_str, 0) catch return 0xFFFFFFFF;
-    return @bitCast(addr.in.sa.addr);
+    const octets = parseIp4Manual(ip_str) orelse return 0xFFFFFFFF;
+    return @bitCast(octets);
 }
 
 var inet_ntoa_buf: [16]u8 = undefined;
@@ -600,9 +625,10 @@ pub fn stub_gethostbyname(name: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("WS2_32: gethostbyname(\"{s}\")\n", .{name_str});
 
     // Try parsing as a dotted IP address first (works on all platforms)
-    if (std.net.Address.parseIp4(name_str, 0)) |addr| {
-        return fillHostent(name_str, @bitCast(addr.in.sa.addr));
-    } else |_| {}
+    const parsed_ip = parseIp4Manual(name_str);
+    if (parsed_ip) |octets| {
+        return fillHostent(name_str, octets);
+    }
 
     // Handle "localhost" without DNS
     if (std.mem.eql(u8, name_str, "localhost")) {

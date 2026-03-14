@@ -95,6 +95,15 @@ pub fn stub_RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberO
         current_node = node.Next;
     }
 
+    // If we get here, no SEH handler handled the exception.
+    // Software exceptions (bit 29 set, e.g. 0xE0005031 from MSVC CRT longjmp)
+    // are non-fatal control flow mechanisms.  Return gracefully instead of
+    // crashing — the guest code may be able to continue.
+    if (dwExceptionCode & 0x20000000 != 0) {
+        if (trace.enable_tracing) trace.print("KERNEL32: RaiseException(code={x}) — software exception, returning\n", .{dwExceptionCode});
+        return;
+    }
+
     if (trace.enable_tracing) trace.print("KERNEL32: Unhandled exception! Terminating.\n", .{});
     platform.exitProcess(1);
 }

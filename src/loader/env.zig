@@ -15,6 +15,7 @@ pub const BuiltinExport = struct {
     /// stack and calls the actual stub function with the correct signature.
     /// Null on native (where we can use @ptrFromInt to call directly).
     thunk_handler: ?*const fn (*Cpu) void = null,
+    is_native: bool = true,
 };
 
 pub const BuiltinModule = struct {
@@ -89,14 +90,28 @@ pub const Environment = struct {
     /// Register a typed Zig function as a built-in export.
     /// On WASM, this generates an intelligent thunk handler that unwraps
     /// guest arguments into the native function signature safely.
-    pub fn addBuiltinExportComptime(self: *Environment, dll: []const u8, name: []const u8, comptime func: anytype) !void {
+    pub fn addBuiltinExportComptime(self: *Environment, comptime dll: []const u8, name: []const u8, comptime func: anytype) !void {
+        // Detect cdecl vs stdcall from the DLL name:
+        // MSVCRT/MSVCP* functions use cdecl, everything else is stdcall.
+        const comptime_is_cdecl = comptime blk: {
+            break :blk std.ascii.eqlIgnoreCase(dll, "MSVCRT.dll") or
+                std.ascii.startsWithIgnoreCase(dll, "MSVCP");
+        };
+        return self.addBuiltinExportComptimeCC(dll, name, func, comptime_is_cdecl);
+    }
+
+    /// Register a typed Zig function as a built-in export with explicit calling convention.
+    fn addBuiltinExportComptimeCC(self: *Environment, dll: []const u8, name: []const u8, comptime func: anytype, comptime is_cdecl: bool) !void {
         const info = @typeInfo(@TypeOf(func));
         comptime var param_len: usize = 0;
         comptime var is_bare_fn = false;
+        comptime var is_variadic = false;
         if (info == .pointer and @typeInfo(info.pointer.child) == .@"fn") {
             param_len = @typeInfo(info.pointer.child).@"fn".params.len;
+            is_variadic = @typeInfo(info.pointer.child).@"fn".is_var_args;
         } else if (info == .@"fn") {
             param_len = info.@"fn".params.len;
+            is_variadic = info.@"fn".is_var_args;
             is_bare_fn = true;
         } else {
             @compileError("addBuiltinExportComptime requires a function or function pointer");
@@ -107,7 +122,8 @@ pub const Environment = struct {
         // On WASM, generate a comptime thunk handler that reads args from the
         // guest stack and calls the function with the exact correct signature.
         // On native, the thunk_handler is null (dispatchNativeCall handles it).
-        const handler: ?*const fn (*Cpu) void = if (comptime platform.is_wasm)
+        // Variadic functions can't have ArgsTuple created, so skip thunk generation for them.
+        const handler: ?*const fn (*Cpu) void = if (comptime platform.is_wasm and !is_variadic)
             &(struct {
                 // Convert any return value to u32 for EAX
                 fn toU32(val: anytype) u32 {
@@ -133,7 +149,7 @@ pub const Environment = struct {
                     };
                 }
 
-                fn callAndConvert(fptr: anytype, args: [16]u32) u32 {
+                fn callAndConvert(fptr: anytype, args: [16]u32, cpu: *Cpu) u32 {
                     // Get the actual function type info to know each parameter's type
                     const FnType = if (is_bare_fn) @TypeOf(func) else @typeInfo(@TypeOf(func)).pointer.child;
                     const fn_info = @typeInfo(FnType).@"fn";
@@ -142,20 +158,38 @@ pub const Environment = struct {
                     var call_args: std.meta.ArgsTuple(FnType) = undefined;
                     inline for (0..param_len) |i| {
                         const ParamType = fn_info.params[i].type.?;
-                        call_args[i] = castArg(ParamType, args[i]);
+                        call_args[i] = castArg(ParamType, args[i], cpu);
                     }
 
                     const result = @call(.auto, fptr, call_args);
                     return toU32(result);
                 }
 
-                fn castArg(comptime T: type, val: u32) T {
+                fn translateGuestAddr(val: u32, cpu: *Cpu) usize {
+                    if (val == 0) return 0;
+                    // On WASM, guest virtual addresses must be translated
+                    // to host addresses using the GuestMemory mapping.
+                    const plat = @import("../platform.zig");
+                    if (comptime plat.is_native) {
+                        return val; // On native, guest = host addresses
+                    }
+                    const offset = val -% cpu.memory.base_addr;
+                    if (offset >= cpu.memory.base.len) {
+                        // Address outside the combined buffer — might be a
+                        // host-returned pointer from a previous stub call
+                        // (e.g. malloc). Pass it through as-is.
+                        return val;
+                    }
+                    return @intFromPtr(cpu.memory.base.ptr) + offset;
+                }
+
+                fn castArg(comptime T: type, val: u32, cpu: *Cpu) T {
                     const ti = @typeInfo(T);
                     return switch (ti) {
-                        .pointer => @ptrFromInt(val),
+                        .pointer => @ptrFromInt(translateGuestAddr(val, cpu)),
                         .optional => |opt| blk: {
                             if (@typeInfo(opt.child) == .pointer) {
-                                break :blk if (val == 0) null else @as(T, @ptrFromInt(val));
+                                break :blk if (val == 0) null else @as(T, @ptrFromInt(translateGuestAddr(val, cpu)));
                             }
                             break :blk @bitCast(val);
                         },
@@ -171,7 +205,20 @@ pub const Environment = struct {
                         },
                         .bool => val != 0,
                         .@"enum" => @enumFromInt(val),
-                        else => @bitCast(val),
+                        else => blk: {
+                            // Only @bitCast when sizes match (both 32 bits)
+                            if (@sizeOf(T) == @sizeOf(u32)) {
+                                break :blk @bitCast(val);
+                            } else if (T == f32) {
+                                break :blk @bitCast(val);
+                            } else if (T == f64) {
+                                // f64 is 64 bits — we only have 32 bits; treat as f32 then widen
+                                break :blk @as(f64, @as(f32, @bitCast(val)));
+                            } else {
+                                // Unsupported type — return zero-initialized
+                                break :blk std.mem.zeroes(T);
+                            }
+                        },
                     };
                 }
 
@@ -189,10 +236,13 @@ pub const Environment = struct {
                     const FnPtr = if (is_bare_fn) *const @TypeOf(func) else @TypeOf(func);
                     const fptr: FnPtr = if (is_bare_fn) &func else func;
 
-                    cpu.eax = callAndConvert(fptr, args);
+                    cpu.eax = callAndConvert(fptr, args, cpu);
 
-                    // Stdcall: callee pops parameters
-                    cpu.esp +%= @as(u32, param_len * 4);
+                    // Stdcall (WINAPI): callee pops parameters.
+                    // cdecl (.c, e.g. MSVCRT): caller pops, so we leave ESP alone.
+                    if (!is_cdecl) {
+                        cpu.esp +%= @as(u32, param_len * 4);
+                    }
 
                     cpu.eip = ret_addr;
                 }
@@ -204,6 +254,161 @@ pub const Environment = struct {
         try builtin.exports.put(name, .{
             .addr = addr,
             .param_bytes = param_bytes,
+            .thunk_handler = handler,
+        });
+    }
+
+    /// Register a variadic C function (printf, sprintf, etc.) as a built-in export.
+    ///
+    /// The Zig stub must NOT be declared as variadic (`...`). Instead, it takes
+    /// its fixed parameters followed by a final `ap: usize` parameter which will
+    /// receive a host pointer to the variadic arguments on the guest x86 stack.
+    ///
+    /// Example: `stub_printf(fmt_ptr: usize, ap: usize)` — `ap` points to the
+    /// first variadic arg on the guest stack, translated to a host address.
+    ///
+    /// `fixed_params` is the number of guest-visible parameters BEFORE the varargs
+    /// (e.g., 1 for printf, 2 for sprintf, 3 for snprintf).
+    pub fn addBuiltinExportComptimeVA(
+        self: *Environment,
+        comptime dll: []const u8,
+        name: []const u8,
+        comptime func: anytype,
+        comptime fixed_params: usize,
+    ) !void {
+        const info = @typeInfo(@TypeOf(func));
+        comptime var stub_param_len: usize = 0;
+        comptime var is_bare_fn = false;
+        if (info == .pointer and @typeInfo(info.pointer.child) == .@"fn") {
+            stub_param_len = @typeInfo(info.pointer.child).@"fn".params.len;
+        } else if (info == .@"fn") {
+            stub_param_len = info.@"fn".params.len;
+            is_bare_fn = true;
+        } else {
+            @compileError("addBuiltinExportComptimeVA requires a function or function pointer");
+        }
+
+        // On WASM, the stub must have fixed_params + 1 params (last is va_list).
+        // On native, the stub is variadic with @cVaStart — different param count.
+        if (comptime platform.is_wasm and stub_param_len != fixed_params + 1) {
+            @compileError("Variadic stub must have exactly fixed_params + 1 parameters (last is va_list)");
+        }
+
+        const addr = if (is_bare_fn) @intFromPtr(&func) else @intFromPtr(func);
+
+        // On WASM, generate a variadic thunk handler that reads fixed params
+        // from the guest stack and passes a translated va_list as the last arg.
+        // On native, thunk_handler is null — the stubs use @cVaStart directly.
+        const handler: ?*const fn (*Cpu) void = if (comptime platform.is_wasm)
+            &(struct {
+                fn toU32(val: anytype) u32 {
+                    const T = @TypeOf(val);
+                    const ti = @typeInfo(T);
+                    return switch (ti) {
+                        .void, .noreturn => 0,
+                        .pointer => @as(u32, @truncate(@intFromPtr(val))),
+                        .optional => if (val) |v| toU32(v) else 0,
+                        .int => |int_info| blk: {
+                            if (int_info.bits <= 32) {
+                                if (int_info.signedness == .signed) {
+                                    break :blk @bitCast(@as(i32, val));
+                                } else {
+                                    break :blk @intCast(val);
+                                }
+                            } else {
+                                break :blk @truncate(val);
+                            }
+                        },
+                        .bool => @intFromBool(val),
+                        else => 0,
+                    };
+                }
+
+                fn translateGuestAddr(val: u32, cpu: *Cpu) usize {
+                    if (val == 0) return 0;
+                    const plat = @import("../platform.zig");
+                    if (comptime plat.is_native) return val;
+                    const offset = val -% cpu.memory.base_addr;
+                    if (offset >= cpu.memory.base.len) return val;
+                    return @intFromPtr(cpu.memory.base.ptr) + offset;
+                }
+
+                fn castArg(comptime T: type, val: u32, cpu: *Cpu) T {
+                    const ti = @typeInfo(T);
+                    return switch (ti) {
+                        .pointer => @ptrFromInt(translateGuestAddr(val, cpu)),
+                        .optional => |opt| blk: {
+                            if (@typeInfo(opt.child) == .pointer) {
+                                break :blk if (val == 0) null else @as(T, @ptrFromInt(translateGuestAddr(val, cpu)));
+                            }
+                            break :blk @bitCast(val);
+                        },
+                        .int => |int_info| blk: {
+                            if (int_info.signedness == .signed) {
+                                if (int_info.bits <= 32) {
+                                    break :blk @truncate(@as(i32, @bitCast(val)));
+                                }
+                                break :blk @as(T, @as(i32, @bitCast(val)));
+                            } else {
+                                break :blk @truncate(val);
+                            }
+                        },
+                        .bool => val != 0,
+                        .@"enum" => @enumFromInt(val),
+                        else => blk: {
+                            if (@sizeOf(T) == @sizeOf(u32)) {
+                                break :blk @bitCast(val);
+                            } else {
+                                break :blk std.mem.zeroes(T);
+                            }
+                        },
+                    };
+                }
+
+                fn thunkHandler(cpu: *Cpu) void {
+                    const ret_addr = cpu.pop32();
+
+                    // Read fixed parameters from guest stack
+                    var args: [16]u32 = undefined;
+                    inline for (0..16) |i| {
+                        args[i] = cpu.memory.read32(cpu.esp +% @as(u32, @intCast(i * 4)));
+                    }
+
+                    // Build call args: fixed params + translated va_list
+                    const FnType = if (is_bare_fn) @TypeOf(func) else @typeInfo(@TypeOf(func)).pointer.child;
+                    const fn_info = @typeInfo(FnType).@"fn";
+
+                    var call_args: std.meta.ArgsTuple(FnType) = undefined;
+
+                    // Fill fixed params (all except the last, which is va_list)
+                    inline for (0..fixed_params) |i| {
+                        const ParamType = fn_info.params[i].type.?;
+                        call_args[i] = castArg(ParamType, args[i], cpu);
+                    }
+
+                    // Last param is the va_list: translated host pointer to
+                    // the guest stack location of the first variadic argument
+                    const va_guest_addr = cpu.esp +% @as(u32, fixed_params * 4);
+                    call_args[fixed_params] = translateGuestAddr(va_guest_addr, cpu);
+
+                    const FnPtr = if (is_bare_fn) *const @TypeOf(func) else @TypeOf(func);
+                    const fptr: FnPtr = if (is_bare_fn) &func else func;
+
+                    cpu.eax = toU32(@call(.auto, fptr, call_args));
+
+                    // cdecl: caller pops, so we don't adjust ESP
+                    cpu.eip = ret_addr;
+                }
+            }.thunkHandler)
+        else
+            null;
+
+        const builtin = try self.getOrCreateModule(dll);
+        // For variadic functions, param_bytes is just the fixed params
+        // (cdecl — caller cleans up, so exact byte count doesn't matter for ESP adjustment)
+        try builtin.exports.put(name, .{
+            .addr = addr,
+            .param_bytes = fixed_params * 4,
             .thunk_handler = handler,
         });
     }
@@ -444,7 +649,7 @@ pub const Environment = struct {
         // Fallback: check PE DLLs loaded from disk
         if (self.registry.modules.get(search_dll)) |mod| {
             if (mod.getExport(func_name)) |exported_addr| {
-                return .{ .addr = exported_addr, .param_bytes = 0 };
+                return .{ .addr = exported_addr, .param_bytes = 0, .is_native = false };
             }
         }
 

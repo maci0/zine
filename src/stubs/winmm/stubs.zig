@@ -90,7 +90,7 @@ pub const MmTimer = struct {
     user_data: usize = 0,
     periodic: bool = false,
     pending_fire: bool align(4) = false,
-    thread: ?std.Thread = null,
+    thread: if (platform.is_native) ?std.Thread else void = if (platform.is_native) null else {},
 };
 
 pub var mm_timers: [MAX_MM_TIMERS]MmTimer = [_]MmTimer{.{}} ** MAX_MM_TIMERS;
@@ -399,14 +399,19 @@ pub fn stub_timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usi
         .callback = fptc,
         .user_data = dwUser,
         .periodic = (fuEvent & TIME_PERIODIC) != 0,
-        .thread = null,
+        .thread = if (platform.is_native) null else {},
     };
 
-    // Spawn timer thread
-    mm_timers[idx].thread = std.Thread.spawn(.{}, mmTimerThread, .{idx}) catch {
-        mm_timers[idx].active = false;
-        return 0;
-    };
+    // Spawn timer thread (only on native — WASM is single-threaded)
+    if (comptime platform.is_native) {
+        mm_timers[idx].thread = std.Thread.spawn(.{}, mmTimerThread, .{idx}) catch {
+            mm_timers[idx].active = false;
+            return 0;
+        };
+    } else {
+        // On WASM, just mark as pending — we can't spawn threads
+        mm_timers[idx].pending_fire = true;
+    }
 
     return id;
 }
@@ -415,10 +420,12 @@ pub fn stub_timeKillEvent(uTimerID: u32) callconv(w32cc.WINAPI) u32 {
     for (&mm_timers) |*t| {
         if (t.active and t.id == uTimerID) {
             t.active = false;
-            if (t.thread) |thread| {
-                thread.detach();
+            if (comptime platform.is_native) {
+                if (t.thread) |thread| {
+                    thread.detach();
+                }
+                t.thread = null;
             }
-            t.thread = null;
             break;
         }
     }

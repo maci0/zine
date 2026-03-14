@@ -64,6 +64,11 @@ pub fn registerThunk(entry: ThunkEntry) u32 {
 ///   CD FE     INT 0xFE
 ///   xx xx xx xx  (little-endian thunk_id)
 pub fn writeThunkCode(memory: *cpu_mod.GuestMemory, addr: u32, thunk_id: u32) u32 {
+    if (addr == 0x01005A68) {
+        if (@import("../trace.zig").enable_tracing) {
+            @import("../trace.zig").print("WATCHPOINT: writeThunkCode to {X} (thunk {d})\n", .{ addr, thunk_id });
+        }
+    }
     memory.write8(addr, 0xCD); // INT
     memory.write8(addr +% 1, 0xFE); // 0xFE
     memory.write32(addr +% 2, thunk_id);
@@ -71,12 +76,9 @@ pub fn writeThunkCode(memory: *cpu_mod.GuestMemory, addr: u32, thunk_id: u32) u3
 }
 
 /// Dispatch a thunk call from the interpreter.
-/// Called when INT 0xFE is executed.  The thunk_id follows the INT
-/// instruction in the code stream (already consumed by the decoder
-/// as the immediate; we read it from the instruction's imm field).
-///
-/// The CPU's EIP is already past the INT instruction.  We need to
-/// read the 4-byte thunk ID that follows it.
+/// Called when INT 0xFE is executed.  EIP points past the INT 0xFE
+/// opcode (2 bytes) to the 4-byte thunk ID that follows it.
+/// We read the thunk ID from EIP and advance past it.
 pub fn dispatch(cpu: *Cpu) void {
     // Read thunk_id from code stream (4 bytes after INT 0xFE)
     const thunk_id = cpu.memory.read32(cpu.eip);
@@ -147,30 +149,36 @@ fn dispatchNativeThunk(cpu: *Cpu) void {
     const entry = thunk_entries[thunk_id] orelse return;
     const target_addr = entry.native_addr;
 
+    // The CALL instruction pushed a return address.
+    const ret_addr = cpu.pop32();
+
     if (target_addr == 0) {
         log.warn("x86 thunks: null native address for thunk {d} ({s})", .{ thunk_id, entry.name });
         cpu.eax = 0;
+        cpu.eip = ret_addr;
         return;
     }
 
-    // The CALL instruction pushed a return address. The INT 0xFE thunk
-    // consumed it conceptually — we need to pop it and restore EIP.
-    // Actually, the x86 code did: CALL [IAT] → pushes ret_addr, jumps to
-    // thunk. The thunk is: INT 0xFE (2 bytes) + thunk_id (4 bytes).
-    // After dispatch(), EIP is past the thunk_id. We need to set EIP
-    // to the return address that was pushed by CALL.
-    const ret_addr = cpu.pop32();
+    const platform = @import("../platform.zig");
+    if (comptime platform.is_native) {
+        // Read up to 16 dword arguments from guest stack
+        var args: [16]u32 = undefined;
+        for (0..16) |i| {
+            args[i] = cpu.memory.read32(cpu.esp +% @as(u32, @intCast(i * 4)));
+        }
 
-    // Read up to 16 dword arguments from guest stack
-    var args: [16]u32 = undefined;
-    for (0..16) |i| {
-        args[i] = cpu.memory.read32(cpu.esp +% @as(u32, @intCast(i * 4)));
+        cpu.eax = if (entry.native_is_cdecl)
+            callNativeCdecl(target_addr, args)
+        else
+            callNativeByArity(target_addr, entry.native_param_bytes, args);
+    } else {
+        // On WASM, we cannot use indirect function calls through computed
+        // pointers (WASM enforces type-checked indirect calls). Stubs that
+        // need to work on WASM should use addBuiltinExportComptime which
+        // generates a proper thunk handler. This fallback just returns 0.
+        log.warn("x86 thunks: native dispatch unsupported on WASM for {s} (addr=0x{X})", .{ entry.name, target_addr });
+        cpu.eax = 0;
     }
-
-    cpu.eax = if (entry.native_is_cdecl)
-        callNativeCdecl(target_addr, args)
-    else
-        callNativeByArity(target_addr, entry.native_param_bytes, args);
 
     // For stdcall, callee pops parameters
     if (!entry.native_is_cdecl) {

@@ -9,6 +9,33 @@ const x86_memory = @import("../../x86/memory.zig");
 /// bump allocator so addresses stay within the GuestMemory range.
 pub var guest_memory: ?*x86_memory.GuestMemory = null;
 
+// Bump allocator for guest-accessible memory.
+// On x86-64, page_allocator returns addresses above 4GB which the guest
+// x86 interpreter can't address.  We pre-allocate a large region at a
+// fixed low address and bump-allocate from it.
+const HEAP_CHUNK_SIZE: usize = 16 * 1024 * 1024; // 16 MB per chunk
+var heap_base: ?[*]u8 = null;
+var heap_pos: usize = 0;
+var heap_cap: usize = 0;
+
+fn heapAlloc(size: usize) ?[*]u8 {
+    const aligned = (size + 7) & ~@as(usize, 7); // 8-byte align
+    if (heap_base == null or heap_pos + aligned > heap_cap) {
+        // Allocate a new chunk
+        const plt = @import("../../platform.zig");
+        const chunk_size = @max(aligned + 4096, HEAP_CHUNK_SIZE);
+        const hint = get_aligned_hint(chunk_size);
+        const mem = plt.mmap(@ptrFromInt(hint), chunk_size, false, -1, 0, false, false) catch return null;
+        @memset(mem, 0);
+        heap_base = mem.ptr;
+        heap_pos = 0;
+        heap_cap = chunk_size;
+    }
+    const ptr = heap_base.? + heap_pos;
+    heap_pos += aligned;
+    return ptr;
+}
+
 pub fn raw_alloc(size: usize) ?*anyopaque {
     const actual_size = if (size == 0) @as(usize, 64) else size;
 
@@ -25,11 +52,12 @@ pub fn raw_alloc(size: usize) ?*anyopaque {
         return @ptrCast(gmem.base.ptr + buf_offset + 8);
     }
 
-    const ptr = std.heap.page_allocator.alloc(u8, actual_size + 8) catch return null;
-    @memset(ptr, 0);
-    const header = @as(*usize, @ptrCast(@alignCast(ptr.ptr)));
+    // Native: bump-allocate from low-address heap
+    const total = actual_size + 8;
+    const ptr = heapAlloc(total) orelse return null;
+    const header = @as(*usize, @ptrCast(@alignCast(ptr)));
     header.* = actual_size;
-    return @ptrCast(ptr.ptr + 8);
+    return @ptrCast(ptr + 8);
 }
 
 pub fn raw_realloc(old_ptr: ?*anyopaque, new_size: usize) ?*anyopaque {
@@ -56,20 +84,18 @@ pub fn raw_realloc(old_ptr: ?*anyopaque, new_size: usize) ?*anyopaque {
     const old_header = @as(*usize, @ptrCast(@alignCast(old_u8_ptr)));
     const old_size = old_header.*;
 
-    const new_mem = std.heap.page_allocator.alloc(u8, new_size + 8) catch return null;
-    @memset(new_mem, 0);
+    const new_mem = heapAlloc(new_size + 8) orelse return null;
 
-    const new_header = @as(*usize, @ptrCast(@alignCast(new_mem.ptr)));
+    const new_header = @as(*usize, @ptrCast(@alignCast(new_mem)));
     new_header.* = new_size;
 
     const copy_len = @min(old_size, new_size);
     const old_data = @as([*]u8, @ptrCast(old_ptr.?));
-    const new_data = new_mem.ptr + 8;
+    const new_data = new_mem + 8;
     @memcpy(new_data[0..copy_len], old_data[0..copy_len]);
 
-    // Free old allocation
-    const old_total = old_size + 8;
-    std.heap.page_allocator.free(old_u8_ptr[0..old_total]);
+    // Bump allocator doesn't support individual frees — old memory is leaked.
+    // This matches Windows process behavior where heaps are reclaimed at exit.
 
     return @ptrCast(new_data);
 }

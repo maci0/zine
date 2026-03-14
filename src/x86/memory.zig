@@ -12,9 +12,9 @@ pub const GuestMemory = struct {
     base: []u8,
 
     /// The virtual address that maps to base[0].
-    /// For WASM/testing: 0 (addresses are buffer indices directly).
-    /// For native --interpret: the mmap'd address (image_base), so that
-    /// absolute x86 addresses (e.g. 0x01006420) translate correctly.
+    /// For WASM: the PE's preferred ImageBase (e.g. 0x00400000).
+    /// For native --interpret: the mmap'd address (image_base).
+    /// For unit tests: 0 (addresses are buffer indices directly).
     base_addr: u32 = 0,
     native_linear: bool = false,
 

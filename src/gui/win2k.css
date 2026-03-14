@@ -60,21 +60,8 @@ html                        { cursor: url("data:image/svg+xml,%3Csvg xmlns='http
 
 /* Global cursor overrides using Win2K system cursors */
 
-/* pointer → Win2K hand */
-:any-link,
-[role="button"],
-button,
-.win2k-button,
-.win2k-titlebar-btn,
-.taskbar-start,
-.taskbar-window-btn,
-.tray-volume,
-.volume-mute-label,
-input[type="file"]::file-selector-button,
-[onclick],
-[style*="cursor: pointer"],
-.menu-item,
-.popup-item { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cpath d='M8,1 L8,8 L5,8 L5,9 L4,9 L4,11 L3,11 L3,13 L4,13 L4,14 L5,14 L5,15 L4,15 L4,21 L14,21 L14,15 L15,15 L15,13 L16,13 L16,11 L14,11 L14,8 L11,8 L11,6 L10,6 L10,1 Z' fill='black'/%3E%3Cpath d='M9,2 L9,9 L6,9 L6,10 L5,10 L5,12 L4,12 L4,13 L5,13 L5,14 L6,14 L6,15 L5,15 L5,20 L13,20 L13,15 L14,15 L14,13 L15,13 L15,12 L13,12 L13,9 L11,9 L11,6 L10,6 L10,9 L9,9 Z' fill='white'/%3E%3C/svg%3E") 9 1, pointer !important; }
+/* pointer → Win2K hand (links only — Win2K uses the arrow cursor for buttons/controls) */
+:any-link { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cpath d='M8,1 L8,8 L5,8 L5,9 L4,9 L4,11 L3,11 L3,13 L4,13 L4,14 L5,14 L5,15 L4,15 L4,21 L14,21 L14,15 L15,15 L15,13 L16,13 L16,11 L14,11 L14,8 L11,8 L11,6 L10,6 L10,1 Z' fill='black'/%3E%3Cpath d='M9,2 L9,9 L6,9 L6,10 L5,10 L5,12 L4,12 L4,13 L5,13 L5,14 L6,14 L6,15 L5,15 L5,20 L13,20 L13,15 L14,15 L14,13 L15,13 L15,12 L13,12 L13,9 L11,9 L11,6 L10,6 L10,9 L9,9 Z' fill='white'/%3E%3C/svg%3E") 9 1, pointer !important; }
 
 /* text → Win2K I-beam */
 [contenteditable="true"],
@@ -91,7 +78,9 @@ textarea,
 
 /* move → Win2K 4-way arrow */
 .move-cursor,
-[style*="cursor: move"] { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cpath d='M7,0 L15,0 L15,1 L12,1 L12,5 L15,5 L15,7 L21,7 L21,5 L18,5 L18,1 L15,1 L15,0 L7,0 Z' fill='black'/%3E%3Cpath d='M11,1 L11,6 L8,6 L8,7 L0,7 L0,15 L8,15 L8,14 L11,14 L11,18 L8,18 L8,15 L0,15 L0,7 Z' fill='black'/%3E%3Cpath d='M0,7 L0,15 L1,15 L1,8 L7,8 L7,7 Z' fill='black'/%3E%3Cpath d='M8,1 L8,6 L5,6 L5,7 L0,7 L0,15 L5,15 L5,16 L8,16 L8,21 L14,21 L14,16 L17,16 L17,15 L22,15 L22,7 L17,7 L17,6 L14,6 L14,1 Z' fill='black'/%3E%3Cpath d='M9,2 L13,2 L13,7 L17,7 L17,8 L21,8 L21,14 L17,14 L17,15 L13,15 L13,20 L9,20 L9,15 L5,15 L5,14 L1,14 L1,8 L5,8 L5,7 L9,7 Z' fill='white'/%3E%3Cpath d='M11,1 L11,3 L10,3 L10,7 L7,7 L7,8 L3,8 L3,10 L1,10 L1,12 L3,12 L3,14 L7,14 L7,15 L10,15 L10,19 L11,19 L11,21 L11,20 L9,20 L9,15 L5,15 L5,14 L1,14 L1,8 L5,8 L5,7 L9,7 L9,2 Z' fill='%23808080'/%3E%3Cpath d='M11,2 L11,7 L7,7 L7,8 L2,8 L2,14 L7,14 L7,15 L11,15 L11,20 L11,21 L8,21 L11,21 L14,21 Z' fill='white'/%3E%3Cpolygon points='11,1 11,7 5,7 5,8 1,8 1,14 5,14 5,15 11,15 11,21' fill='white' fill-opacity='0'/%3E%3Cpath d='M10,2 L10,7 L6,7 L6,8 L1,8 L1,14 L6,14 L6,15 L10,15 L10,20 L12,20 L12,15 L16,15 L16,14 L21,14 L21,8 L16,8 L16,7 L12,7 L12,2 Z' fill='white'/%3E%3Cpath d='M11,3 L11,7 L8,7 L8,8 L3,8 L3,11 L1,11 L3,11 L3,14 L8,14 L8,15 L11,15 L11,19 L11,20 L12,20 L12,15 L16,15 L16,14 L21,14 L21,8 L16,8 L16,7 L12,7 L12,2 L11,2 Z' fill='white'/%3E%3C/svg%3E") 11 11, move !important; }
+.win2k-toolbar-gripper,
+.win2k-rebar-gripper,
+[style*="cursor: move"] { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cpath d='M10,2 L10,7 L6,7 L6,8 L1,8 L1,14 L6,14 L6,15 L10,15 L10,20 L12,20 L12,15 L16,15 L16,14 L21,14 L21,8 L16,8 L16,7 L12,7 L12,2 Z' fill='white'/%3E%3Cpath d='M11,0 L11,7 L7,7 L7,8 L0,8 L0,14 L7,14 L7,15 L11,15 L11,22 L11,20 L13,20 L13,15 L17,15 L17,14 L22,14 L22,8 L17,8 L17,7 L13,7 L13,0 Z' fill='black'/%3E%3Cpath d='M10,2 L10,7 L6,7 L6,8 L1,8 L1,14 L6,14 L6,15 L10,15 L10,20 L12,20 L12,15 L16,15 L16,14 L21,14 L21,8 L16,8 L16,7 L12,7 L12,2 Z' fill='white'/%3E%3C/svg%3E") 11 11, move !important; }
 
 /* resize: n-s → Win2K vertical double arrow */
 .resize-n,
@@ -103,7 +92,8 @@ textarea,
 
 /* resize: nw-se → Win2K diagonal double arrow */
 .resize-nw,
-.resize-se { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cpath d='M0,0 L8,0 L8,2 L4,2 L13,11 L15,11 L15,7 L17,7 L17,15 L15,15 L9,15 L9,13 L13,13 L4,4 L2,4 L2,8 L0,8 Z' fill='white' stroke='black' stroke-width='1' stroke-linejoin='miter' transform='translate(4,4)'/%3E%3C/svg%3E") 12 12, nwse-resize !important; }
+.resize-se,
+.win2k-statusbar-grip { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cpath d='M0,0 L8,0 L8,2 L4,2 L13,11 L15,11 L15,7 L17,7 L17,15 L15,15 L9,15 L9,13 L13,13 L4,4 L2,4 L2,8 L0,8 Z' fill='white' stroke='black' stroke-width='1' stroke-linejoin='miter' transform='translate(4,4)'/%3E%3C/svg%3E") 12 12, nwse-resize !important; }
 
 /* resize: ne-sw → Win2K diagonal double arrow */
 .resize-ne,
@@ -111,6 +101,9 @@ textarea,
 
 /* Fullscreen games render their own cursor; hide the browser one */
 canvas                      { cursor: none; }
+
+/* crosshair → Win2K precision select */
+.colordlg-gradient { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cline x1='15' y1='0' x2='15' y2='12' stroke='black' stroke-width='1'/%3E%3Cline x1='15' y1='18' x2='15' y2='30' stroke='black' stroke-width='1'/%3E%3Cline x1='0' y1='15' x2='12' y2='15' stroke='black' stroke-width='1'/%3E%3Cline x1='18' y1='15' x2='30' y2='15' stroke='black' stroke-width='1'/%3E%3C/svg%3E") 15 15, crosshair !important; }
 
 /* wait → Win2K hourglass */
 .wait-cursor,
@@ -223,7 +216,6 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    cursor: default;
     height: 18px;
     min-height: 18px;
 }
@@ -258,7 +250,6 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
     padding: 0;
     position: relative;
 }
@@ -338,7 +329,6 @@ body {
 .menu-item {
     position: relative;
     padding: 2px 6px;     /* 6px horizontal padding per spec */
-    cursor: default;
 }
 
 .menu-item:hover {
@@ -413,7 +403,6 @@ body {
     border-color: var(--sys-hilight) var(--sys-dk-shadow) var(--sys-dk-shadow) var(--sys-hilight);
     box-shadow: inset -1px -1px var(--sys-shadow), inset 1px 1px var(--sys-light);
     padding: 4px 12px;
-    cursor: pointer;
     font-family: inherit;
     font-size: 11px;
     min-width: 75px;
@@ -602,7 +591,6 @@ canvas {
     padding: 2px 5px 2px 3px;
     font-weight: bold;
     font-size: 11px;
-    cursor: pointer;
     display: flex;
     align-items: center;
     gap: 4px;
@@ -629,7 +617,6 @@ canvas {
     box-shadow: inset -1px -1px 0 var(--sys-shadow), inset 1px 1px 0 var(--sys-light);
     padding: 1px 8px;
     font-size: 11px;
-    cursor: pointer;
     height: 22px;
     max-width: 160px;
     overflow: hidden;
@@ -658,7 +645,6 @@ canvas {
 .tray-volume {
     width: 16px;
     height: 16px;
-    cursor: pointer;
     color: var(--sys-text);
     display: flex;
     align-items: center;
@@ -750,7 +736,6 @@ canvas {
     border: 1px solid;
     border-color: var(--sys-hilight) var(--sys-dk-shadow) var(--sys-dk-shadow) var(--sys-hilight);
     box-shadow: inset -1px -1px 0 var(--sys-shadow), inset 1px 1px 0 var(--sys-light);
-    cursor: pointer;
 }
 
 .volume-range::-moz-range-thumb {
@@ -760,7 +745,6 @@ canvas {
     border: 1px solid;
     border-color: var(--sys-hilight) var(--sys-dk-shadow) var(--sys-dk-shadow) var(--sys-hilight);
     box-shadow: inset -1px -1px 0 var(--sys-shadow), inset 1px 1px 0 var(--sys-light);
-    cursor: pointer;
     border-radius: 0;
 }
 
@@ -769,7 +753,6 @@ canvas {
     display: flex;
     align-items: center;
     gap: 3px;
-    cursor: pointer;
     color: var(--sys-text);
 }
 
@@ -868,7 +851,6 @@ input[type="radio"] {
     align-items: center;
     justify-content: center;
     vertical-align: middle;
-    cursor: default;
 }
 
 input[type="radio"] {
@@ -907,7 +889,6 @@ input[type="file"]::file-selector-button {
     border-color: var(--sys-hilight) var(--sys-dk-shadow) var(--sys-dk-shadow) var(--sys-hilight);
     box-shadow: inset -1px -1px var(--sys-shadow), inset 1px 1px var(--sys-light);
     padding: 2px 6px;
-    cursor: pointer;
     font-family: inherit;
     font-size: 11px;
     color: var(--sys-text);
@@ -941,7 +922,6 @@ input[type="file"]::file-selector-button:active {
     padding: 2px 20px;
     color: var(--sys-menu-text);
     white-space: nowrap;
-    cursor: default;
 }
 
 .taskbar-context-menu .popup-item:hover {
@@ -961,7 +941,6 @@ input[type="file"]::file-selector-button:active {
     color: var(--sys-gray-text);
     font-size: 10px;
     font-weight: bold;
-    cursor: default;
 }
 
 /* ===================================================================
@@ -1022,7 +1001,6 @@ select.win2k-edit:disabled {
     border-bottom: none;
     border-color: var(--sys-hilight) var(--sys-dk-shadow) transparent var(--sys-hilight);
     background-color: var(--sys-face);
-    cursor: default;
     font-size: 11px;
     display: flex;
     align-items: center;
@@ -1060,7 +1038,6 @@ select.win2k-edit:disabled {
 
 .win2k-listview-item {
     padding: 1px 4px;
-    cursor: default;
     display: flex;
     align-items: center;
     gap: 4px;
@@ -1100,7 +1077,6 @@ select.win2k-edit:disabled {
 
 .win2k-treeview-item {
     padding: 1px 2px;
-    cursor: default;
     display: flex;
     align-items: center;
     gap: 3px;
@@ -1142,7 +1118,6 @@ select.win2k-edit:disabled {
     background-color: var(--sys-face);
     border-top: 1px solid var(--sys-hilight);
     box-shadow: inset 0 1px 0 var(--sys-light);
-    cursor: default;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1254,7 +1229,6 @@ select.win2k-edit:disabled {
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
     flex: 1;
     min-height: 8px;
     padding: 0;
@@ -1349,7 +1323,6 @@ select.win2k-edit:disabled {
     height: 16px;
     border: 1px solid;
     border-color: var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow);
-    cursor: pointer;
 }
 
 .colordlg-swatch.selected {
@@ -1381,7 +1354,6 @@ select.win2k-edit:disabled {
     border-color: var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow);
     box-shadow: inset 1px 1px var(--sys-dk-shadow);
     position: relative;
-    cursor: pointer;
 }
 
 .colordlg-input-row {
@@ -1444,7 +1416,6 @@ select.win2k-edit:disabled {
 
 .fontdlg-list-item {
     padding: 1px 4px;
-    cursor: default;
 }
 
 .fontdlg-list-item:hover,
@@ -1568,7 +1539,6 @@ select.win2k-edit:disabled {
     align-items: center;
     gap: 4px;
     font-size: 11px;
-    cursor: default;
 }
 
 /* ===================================================================
@@ -1654,7 +1624,6 @@ select.win2k-edit:disabled {
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
     padding: 0;
 }
 
@@ -1714,7 +1683,6 @@ select.win2k-edit:disabled {
     gap: 1px;
     padding: 4px 2px 3px;
     width: 72px;
-    cursor: pointer;
     color: #FFFFFF;
     font-size: 8px;
     text-align: center;
@@ -1757,7 +1725,6 @@ select.win2k-edit:disabled {
 
 .comdlg-file-list .file-item {
     padding: 2px 4px;
-    cursor: default;
     width: 100%;
     box-sizing: border-box;
     font-size: 11px;
@@ -1840,7 +1807,6 @@ select.win2k-edit:disabled {
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
     padding: 0;
 }
 
@@ -1865,7 +1831,6 @@ select.win2k-edit:disabled {
     color: var(--sys-gray-text);
     border-color: var(--sys-face);
     box-shadow: none;
-    cursor: default;
 }
 
 .win2k-toolbar-btn svg {
@@ -1890,7 +1855,6 @@ select.win2k-edit:disabled {
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
     padding: 0;
 }
 
@@ -1999,7 +1963,6 @@ select.win2k-edit:disabled {
     border: 1px solid;
     border-color: var(--sys-hilight) var(--sys-dk-shadow) var(--sys-dk-shadow) var(--sys-hilight);
     box-shadow: inset -1px -1px 0 var(--sys-shadow), inset 1px 1px 0 var(--sys-light);
-    cursor: pointer;
 }
 
 .win2k-trackbar-ticks {
@@ -2034,7 +1997,6 @@ select.win2k-edit:disabled {
 
 .win2k-listbox-item {
     padding: 1px 4px;
-    cursor: default;
     white-space: nowrap;
 }
 
@@ -2115,7 +2077,6 @@ select.win2k-edit:disabled {
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
     flex-shrink: 0;
 }
 
@@ -2168,7 +2129,6 @@ select.win2k-edit:disabled {
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
     font-size: 8px;
     color: var(--sys-text);
 }
@@ -2196,7 +2156,6 @@ select.win2k-edit:disabled {
 
 .win2k-monthcal-day {
     padding: 1px;
-    cursor: default;
     font-size: 11px;
     line-height: 1.3;
 }
@@ -2304,7 +2263,7 @@ select.win2k-edit:disabled {
 .win2k-link {
     color: var(--sys-hot);
     text-decoration: underline;
-    cursor: pointer;
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cpath d='M8,1 L8,8 L5,8 L5,9 L4,9 L4,11 L3,11 L3,13 L4,13 L4,14 L5,14 L5,15 L4,15 L4,21 L14,21 L14,15 L15,15 L15,13 L16,13 L16,11 L14,11 L14,8 L11,8 L11,6 L10,6 L10,1 Z' fill='black'/%3E%3Cpath d='M9,2 L9,9 L6,9 L6,10 L5,10 L5,12 L4,12 L4,13 L5,13 L5,14 L6,14 L6,15 L5,15 L5,20 L13,20 L13,15 L14,15 L14,13 L15,13 L15,12 L13,12 L13,9 L11,9 L11,6 L10,6 L10,9 L9,9 Z' fill='white'/%3E%3C/svg%3E") 9 1, pointer;
     font-size: 11px;
 }
 
@@ -2338,7 +2297,6 @@ select.win2k-edit:disabled {
     border-bottom: none;
     border-color: var(--sys-hilight) var(--sys-dk-shadow) transparent var(--sys-hilight);
     background-color: var(--sys-face);
-    cursor: default;
     font-size: 11px;
     height: 20px;
     display: flex;
@@ -2543,7 +2501,6 @@ select.win2k-edit:disabled {
     align-items: center;
     gap: 6px;
     padding: 4px 20px 4px 4px;
-    cursor: default;
     font-size: 11px;
     color: var(--sys-menu-text);
     white-space: nowrap;
@@ -2665,7 +2622,6 @@ select.win2k-edit:disabled {
     align-items: center;
     gap: 2px;
     padding: 4px 2px;
-    cursor: default;
 }
 
 .win2k-desktop-icon svg,
@@ -2731,7 +2687,6 @@ select.win2k-edit:disabled {
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
     flex-shrink: 0;
 }
 
@@ -2758,7 +2713,6 @@ select.win2k-edit:disabled {
     align-items: center;
     height: 21px;
     font-size: 11px;
-    cursor: default;
 }
 
 .win2k-comboboxex-display {
@@ -2788,7 +2742,6 @@ select.win2k-edit:disabled {
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
     flex-shrink: 0;
 }
 
@@ -2815,7 +2768,6 @@ select.win2k-edit:disabled {
     align-items: center;
     gap: 4px;
     padding: 1px 4px;
-    cursor: default;
     font-size: 11px;
 }
 
@@ -2871,7 +2823,6 @@ select.win2k-edit:disabled {
     display: flex;
     align-items: center;
     min-height: 16px;
-    cursor: default;
 }
 
 .win2k-detailsview-row:hover {

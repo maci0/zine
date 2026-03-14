@@ -79,6 +79,7 @@ pub fn main() !void {
     _ = args.next(); // Skip executable name (zine.wasm)
 
     var target_exe_opt: ?[]const u8 = null;
+    var app_args: std.ArrayListUnmanaged(?[*:0]u8) = .{};
     var end_of_options = false;
     while (args.next()) |arg| {
         if (!end_of_options and std.mem.eql(u8, arg, "--")) {
@@ -99,8 +100,8 @@ pub fn main() !void {
             continue;
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
-            std.io.getStdErr().writeAll(
-                \\Usage: zine.wasm [options] [--] <target.exe>
+            log.info(
+                \\Usage: zine.wasm [options] [--] <target.exe> [args...]
                 \\
                 \\Run a Win32 PE executable in a WebAssembly environment.
                 \\
@@ -112,11 +113,11 @@ pub fn main() !void {
                 \\  -v, --version       Show version information
                 \\  --                  Stop processing options
                 \\
-            ) catch {};
+            , .{});
             return;
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
-            std.io.getStdErr().writeAll("zine.wasm 0.1.0\n") catch {};
+            log.info("zine.wasm 0.1.0", .{});
             return;
         }
         if (!end_of_options and target_exe_opt == null and arg.len > 1 and arg[0] == '-') {
@@ -126,9 +127,11 @@ pub fn main() !void {
 
         if (target_exe_opt == null) {
             target_exe_opt = arg;
+            // First positional arg is the target exe — also push as argv[0]
+            try app_args.append(allocator, try allocator.dupeZ(u8, arg));
         } else {
-            log.err("Unexpected argument '{s}'. Try 'zine.wasm --help' for more information.", .{arg});
-            return error.InvalidArguments;
+            // All subsequent positional args are guest PE arguments
+            try app_args.append(allocator, try allocator.dupeZ(u8, arg));
         }
     }
 
@@ -258,14 +261,40 @@ pub fn main() !void {
     @memcpy(combined_buf[0..image_size], main_module.mapped_memory[0..image_size]);
 
     // --- Initialize MSVCRT globals ---
-    // Minimal argv: just the program name
-    const argv0 = try allocator.dupeZ(u8, target_exe);
-    var argv_storage = [_]?[*:0]u8{ argv0, null };
-    stubs_msvcrt.global_argc = 1;
-    stubs_msvcrt.global_argv = &argv_storage;
+    // Build proper argv and _acmdln from collected guest arguments
+    try app_args.append(allocator, null); // null-terminate the argv array
 
-    // Build _acmdln
-    stubs_msvcrt.msvcrt_acmdln = @intFromPtr(argv0.ptr);
+    stubs_msvcrt.global_argc = @intCast(app_args.items.len - 1);
+    stubs_msvcrt.global_argv = app_args.items.ptr;
+
+    // Build _acmdln string (space-joined command line)
+    {
+        var cmdline_buf = try allocator.alloc(u8, 4096);
+        @memset(cmdline_buf, 0);
+        var pos: usize = 0;
+        for (app_args.items) |arg_opt| {
+            if (arg_opt) |arg| {
+                const span = std.mem.span(arg);
+                if (pos > 0 and pos < 4095) {
+                    cmdline_buf[pos] = ' ';
+                    pos += 1;
+                }
+                const copy_len = @min(span.len, 4095 - pos);
+                @memcpy(cmdline_buf[pos .. pos + copy_len], span[0..copy_len]);
+                pos += copy_len;
+            }
+        }
+        stubs_msvcrt.msvcrt_acmdln = @intFromPtr(cmdline_buf.ptr);
+    }
+
+    // Set virtual CWD so file opens resolve correctly
+    // On WASI, realpath is not available, so we just use \".\" as the CWD.
+    {
+        const kernel32_misc = @import("stubs/kernel32/misc.zig");
+        const cwd_str = ".";
+        @memcpy(kernel32_misc.current_directory[0..cwd_str.len], cwd_str);
+        kernel32_misc.current_directory_len = cwd_str.len;
+    }
 
     // Minimal environment
     var env_storage = [_]?[*:0]u8{null};
@@ -303,9 +332,8 @@ pub fn main() !void {
     const kernel32_mem = @import("stubs/kernel32/mem.zig");
     kernel32_mem.guest_memory = &cpu.memory;
 
-    // Stack goes between the PE image end and the thunk region.
-    // The combined buffer layout is: [PE image | stack space | thunks]
-    // ESP points to image_size - 16 (just below the thunk area, within the buffer)
+    // Stack occupies the region between the PE image and the thunk area.
+    // ESP starts near the top of the stack region (just below thunks).
     cpu.esp = thunk_base_addr -% 16;
     cpu.ebp = cpu.esp;
 
@@ -321,4 +349,7 @@ pub fn main() !void {
     x86_execute.run(&cpu);
 
     log.info("wasm: interpreter halted, EAX=0x{X}", .{cpu.eax});
+
+    // Propagate the guest process exit code to the WASM host
+    std.process.exit(@truncate(cpu.eax));
 }

@@ -415,8 +415,9 @@ pub fn stub_fullpath(abs: usize, rel: usize, max: usize) callconv(.c) usize {
     var dp = abs;
     if (dp == 0) {
         const alloc_size = if (max > 0) max else 4096;
-        const p = std.heap.page_allocator.alloc(u8, alloc_size) catch return 0;
-        dp = @intFromPtr(p.ptr);
+        const kernel32_mem = @import("../kernel32/mem.zig");
+        const p = kernel32_mem.raw_alloc(alloc_size) orelse return 0;
+        dp = @intFromPtr(p);
     }
     const buf_size = if (max > 0) max else 4096;
     const cl = @min(s.len, buf_size - 1);
@@ -506,11 +507,13 @@ pub fn stub_getcwd(buffer_ptr: usize, maxlen: i32) callconv(.c) ?*anyopaque {
         buf[path.len] = 0;
         return @ptrFromInt(buffer_ptr);
     } else {
-        const ptr = std.heap.page_allocator.alloc(u8, path.len + 1) catch return null;
+        const kernel32_mem = @import("../kernel32/mem.zig");
+        const raw = kernel32_mem.raw_alloc(path.len + 1) orelse return null;
+        const ptr = @as([*]u8, @ptrCast(raw));
         @memcpy(ptr[0..path.len], path);
         std.mem.replaceScalar(u8, ptr[0..path.len], '/', '\\');
         ptr[path.len] = 0;
-        return ptr.ptr;
+        return raw;
     }
 }
 
@@ -758,7 +761,7 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
             const c = format[ii];
             if (c == 's') {
                 if (args[ai] >= 0x10000) {
-                    const s = @as([*:0]const u8, @ptrFromInt(args[ai]));
+                    const s = @as([*:0]const u8, @ptrFromInt(trace.addr(args[ai])));
                     const len = std.mem.indexOfScalar(u8, s[0..4096], 0) orelse 0;
                     
                     while (len < width and oi < max - 1) : (width -= 1) {
@@ -845,13 +848,30 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
     return oi;
 }
 
-pub fn stub_printf(fmt_ptr: usize, ...) callconv(.c) i32 {
-    if (fmt_ptr == 0) return 0;
-    const fmt = @as([*:0]const u8, @ptrFromInt(fmt_ptr));
+
+/// printf — dual implementation:
+/// On WASM: takes (fmt_ptr, ap: usize) where ap is computed by the variadic thunk handler.
+/// On native: uses @cVaStart() for real x86 cdecl varargs.
+pub const stub_printf = if (platform.is_wasm)
+    stub_printf_wasm
+else
+    stub_printf_native;
+
+fn stub_printf_wasm(fmt_ptr: usize, ap: usize) callconv(.c) i32 {
+    return printf_impl(fmt_ptr, ap);
+}
+
+fn stub_printf_native(fmt_ptr: usize, ...) callconv(.c) i32 {
     var ap = @cVaStart();
     defer @cVaEnd(&ap);
+    return printf_impl(fmt_ptr, va_list_to_usize(ap));
+}
+
+fn printf_impl(fmt_ptr: usize, ap: usize) i32 {
+    if (fmt_ptr == 0) return 0;
+    const fmt = @as([*:0]const u8, @ptrFromInt(trace.addr(fmt_ptr)));
     var buf: [4096]u8 = undefined;
-    const len = x86_vsnprintf(&buf, 4096, fmt, va_list_to_usize(ap));
+    const len = x86_vsnprintf(&buf, 4096, fmt, ap);
     if (trace.enable_tracing) trace.print("MSVCRT: printf '{s}'\n", .{buf[0..len]});
     const out_file = std.fs.File{ .handle = 1 }; // stdout
     out_file.writeAll(buf[0..len]) catch return -1;
@@ -861,7 +881,7 @@ pub fn stub_printf(fmt_ptr: usize, ...) callconv(.c) i32 {
 pub fn stub_vprintf(fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     if (fmt_ptr == 0) return 0;
     var buf: [4096]u8 = undefined;
-    const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(fmt_ptr), ap);
+    const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(trace.addr(fmt_ptr)), trace.addr(ap));
     if (trace.enable_tracing) trace.print("MSVCRT: vprintf '{s}'\n", .{buf[0..len]});
     const out_file = std.fs.File{ .handle = 1 }; // stdout
     out_file.writeAll(buf[0..len]) catch return -1;
@@ -871,10 +891,10 @@ pub fn stub_vprintf(fmt_ptr: usize, ap: usize) callconv(.c) i32 {
 pub fn stub_vfprintf(stream: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     if (fmt_ptr == 0) return 0;
     var buf: [4096]u8 = undefined;
-    const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(fmt_ptr), ap);
+    const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(trace.addr(fmt_ptr)), trace.addr(ap));
     if (trace.enable_tracing) trace.print("MSVCRT: vfprintf '{s}'\n", .{buf[0..len]});
 
-    const out_file = if (stream != 0) io.getFile(@ptrFromInt(stream)) orelse std.fs.File{ .handle = 1 } else std.fs.File{ .handle = 1 };
+    const out_file = if (stream != 0) io.getFile(@ptrFromInt(trace.addr(stream))) orelse std.fs.File{ .handle = 1 } else std.fs.File{ .handle = 1 };
     out_file.writeAll(buf[0..len]) catch return -1;
     return @intCast(len);
 }
@@ -882,37 +902,57 @@ pub fn stub_vfprintf(stream: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 
 pub fn stub_vsnprintf(buf_ptr: usize, max: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     if (buf_ptr == 0 or max == 0 or fmt_ptr == 0) return 0;
     var buf: [4096]u8 = undefined;
-    const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(fmt_ptr), ap);
+    const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(trace.addr(fmt_ptr)), trace.addr(ap));
     if (trace.enable_tracing) trace.print("MSVCRT: _vsnprintf '{s}'\n", .{buf[0..len]});
     const copy_len = @min(len, max - 1);
-    const out_buf = @as([*]u8, @ptrFromInt(buf_ptr));
+    const out_buf = @as([*]u8, @ptrFromInt(trace.addr(buf_ptr)));
     @memcpy(out_buf[0..copy_len], buf[0..copy_len]);
     out_buf[copy_len] = 0;
     return @intCast(copy_len);
 }
 
-pub fn stub_snprintf(buf_ptr: usize, max: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
-    if (buf_ptr == 0 or max == 0 or fmt_ptr == 0) return 0;
+pub const stub_snprintf = if (platform.is_wasm) stub_snprintf_wasm else stub_snprintf_native;
+
+fn stub_snprintf_wasm(buf_ptr: usize, max: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
+    return snprintf_impl(buf_ptr, max, fmt_ptr, ap);
+}
+
+fn stub_snprintf_native(buf_ptr: usize, max: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
     var ap = @cVaStart();
     defer @cVaEnd(&ap);
+    return snprintf_impl(buf_ptr, max, fmt_ptr, va_list_to_usize(ap));
+}
+
+fn snprintf_impl(buf_ptr: usize, max: usize, fmt_ptr: usize, ap: usize) i32 {
+    if (buf_ptr == 0 or max == 0 or fmt_ptr == 0) return 0;
+    const fmt = @as([*:0]const u8, @ptrFromInt(trace.addr(fmt_ptr)));
     var buf: [4096]u8 = undefined;
-    const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(fmt_ptr), va_list_to_usize(ap));
+    const len = x86_vsnprintf(&buf, 4096, fmt, ap);
     if (trace.enable_tracing) trace.print("MSVCRT: _snprintf '{s}'\n", .{buf[0..len]});
     const copy_len = @min(len, max - 1);
-    const out_buf = @as([*]u8, @ptrFromInt(buf_ptr));
+    const out_buf = @as([*]u8, @ptrFromInt(trace.addr(buf_ptr)));
     @memcpy(out_buf[0..copy_len], buf[0..copy_len]);
     out_buf[copy_len] = 0;
     return @intCast(copy_len);
 }
-pub fn stub_swprintf(buf_ptr: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
-    if (buf_ptr == 0 or fmt_ptr == 0) return 0;
+pub const stub_swprintf = if (platform.is_wasm) stub_swprintf_wasm else stub_swprintf_native;
+
+fn stub_swprintf_wasm(buf_ptr: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
+    return swprintf_impl(buf_ptr, fmt_ptr, ap);
+}
+
+fn stub_swprintf_native(buf_ptr: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
     var ap = @cVaStart();
     defer @cVaEnd(&ap);
+    return swprintf_impl(buf_ptr, fmt_ptr, va_list_to_usize(ap));
+}
 
-    // Convert wide format string to narrow
+fn swprintf_impl(buf_ptr: usize, fmt_ptr: usize, ap: usize) i32 {
+    if (buf_ptr == 0 or fmt_ptr == 0) return 0;
+
     var fmt_buf: [4096]u8 = undefined;
     const fmt_w_len = trace.c_span_w(fmt_ptr).len;
-    const fmt_w = @as([*]const u16, @ptrFromInt(fmt_ptr));
+    const fmt_w = @as([*]const u16, @ptrFromInt(trace.addr(fmt_ptr)));
     const copy_len = @min(fmt_w_len, 4095);
     for (0..copy_len) |i| {
         fmt_buf[i] = @intCast(fmt_w[i] & 0xFF);
@@ -921,25 +961,35 @@ pub fn stub_swprintf(buf_ptr: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
     const fmt_narrow = @as([*:0]const u8, @ptrCast(&fmt_buf));
 
     var buf: [4096]u8 = undefined;
-    const len = x86_vsnprintf(&buf, 4096, fmt_narrow, va_list_to_usize(ap));
+    const len = x86_vsnprintf(&buf, 4096, fmt_narrow, ap);
     if (trace.enable_tracing) trace.print("MSVCRT: swprintf '{s}' -> '{s}'\n", .{fmt_narrow, buf[0..len]});
 
-    // Convert output back to wide
-    const out_buf = @as([*]u16, @ptrFromInt(buf_ptr));
+    const out_buf = @as([*]u16, @ptrFromInt(trace.addr(buf_ptr)));
     for (0..len) |i| {
         out_buf[i] = buf[i];
     }
     out_buf[len] = 0;
     return @intCast(len);
 }
-pub fn stub_sprintf(buf_ptr: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
-    if (buf_ptr == 0 or fmt_ptr == 0) return 0;
+pub const stub_sprintf = if (platform.is_wasm) stub_sprintf_wasm else stub_sprintf_native;
+
+fn stub_sprintf_wasm(buf_ptr: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
+    return sprintf_impl(buf_ptr, fmt_ptr, ap);
+}
+
+fn stub_sprintf_native(buf_ptr: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
     var ap = @cVaStart();
     defer @cVaEnd(&ap);
+    return sprintf_impl(buf_ptr, fmt_ptr, va_list_to_usize(ap));
+}
+
+fn sprintf_impl(buf_ptr: usize, fmt_ptr: usize, ap: usize) i32 {
+    if (buf_ptr == 0 or fmt_ptr == 0) return 0;
+    const fmt = @as([*:0]const u8, @ptrFromInt(trace.addr(fmt_ptr)));
     var buf: [4096]u8 = undefined;
-    const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(fmt_ptr), va_list_to_usize(ap));
+    const len = x86_vsnprintf(&buf, 4096, fmt, ap);
     if (trace.enable_tracing) trace.print("MSVCRT: sprintf '{s}'\n", .{buf[0..len]});
-    const out_buf = @as([*]u8, @ptrFromInt(buf_ptr));
+    const out_buf = @as([*]u8, @ptrFromInt(trace.addr(buf_ptr)));
     @memcpy(out_buf[0..len], buf[0..len]);
     out_buf[len] = 0;
     return @intCast(len);
@@ -947,7 +997,7 @@ pub fn stub_sprintf(buf_ptr: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
 
 pub fn stub_puts(str_ptr: usize) callconv(.c) i32 {
     if (str_ptr >= 0x10000) {
-        const s = std.mem.span(@as([*:0]const u8, @ptrFromInt(str_ptr)));
+        const s = std.mem.span(@as([*:0]const u8, @ptrFromInt(trace.addr(str_ptr))));
         const f = std.fs.File{ .handle = 1 };
         _ = f.writeAll(s) catch {};
         _ = f.writeAll("\n") catch {};
@@ -958,9 +1008,9 @@ pub fn stub_puts(str_ptr: usize) callconv(.c) i32 {
 
 pub fn stub_fputs(str_ptr: usize, file_ptr: usize) callconv(.c) i32 {
     if (str_ptr >= 0x10000) {
-        const s = std.mem.span(@as([*:0]const u8, @ptrFromInt(str_ptr)));
+        const s = std.mem.span(@as([*:0]const u8, @ptrFromInt(trace.addr(str_ptr))));
         if (trace.enable_tracing) trace.print("MSVCRT: fputs '{s}'\n", .{s});
-        if (io.getFile(@ptrFromInt(file_ptr))) |file| {
+        if (io.getFile(@ptrFromInt(trace.addr(file_ptr)))) |file| {
             file.writeAll(s) catch return -1;
             return 0;
         }
@@ -969,24 +1019,38 @@ pub fn stub_fputs(str_ptr: usize, file_ptr: usize) callconv(.c) i32 {
     return -1;
 }
 
-pub fn stub_sscanf(buf_ptr: usize, fmt_ptr: usize, a1: usize, a2: usize) callconv(.c) i32 {
-    _ = a2;
+pub const stub_sscanf = if (platform.is_wasm) stub_sscanf_wasm else stub_sscanf_native;
+
+fn stub_sscanf_wasm(buf_ptr: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
+    return sscanf_impl(buf_ptr, fmt_ptr, ap);
+}
+
+fn stub_sscanf_native(buf_ptr: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
+    return sscanf_impl(buf_ptr, fmt_ptr, va_list_to_usize(ap));
+}
+
+fn sscanf_impl(buf_ptr: usize, fmt_ptr: usize, ap: usize) i32 {
     if (buf_ptr < 0x10000 or fmt_ptr < 0x10000) return 0;
-    const buf = std.mem.span(@as([*:0]const u8, @ptrFromInt(buf_ptr)));
-    const fmt = std.mem.span(@as([*:0]const u8, @ptrFromInt(fmt_ptr)));
+    const buf = std.mem.span(@as([*:0]const u8, @ptrFromInt(trace.addr(buf_ptr))));
+    const fmt = std.mem.span(@as([*:0]const u8, @ptrFromInt(trace.addr(fmt_ptr))));
     if (trace.enable_tracing) trace.print("MSVCRT: sscanf('{s}', '{s}')\n", .{buf, fmt});
+
+    // Read output pointer addresses from va_list
+    const args = @as([*]const u32, @ptrFromInt(ap));
+    const a1 = trace.addr(args[0]);
 
     // Super hacky sscanf for single %d/%i/%x
     if (std.mem.eql(u8, fmt, "%d") or std.mem.eql(u8, fmt, "%i") or std.mem.eql(u8, fmt, "%ld")) {
-        // use strtol
         if (a1 != 0) {
-            const val = string.stub_strtol(buf_ptr, 0, 10);
+            const val = string.stub_strtol(trace.addr(buf_ptr), 0, 10);
             @as(*i32, @ptrFromInt(a1)).* = val;
-            return 1; // 1 item matched
+            return 1;
         }
     } else if (std.mem.eql(u8, fmt, "%x") or std.mem.eql(u8, fmt, "%X")) {
         if (a1 != 0) {
-            const val = string.stub_strtoul(buf_ptr, 0, 16);
+            const val = string.stub_strtoul(trace.addr(buf_ptr), 0, 16);
             @as(*u32, @ptrFromInt(a1)).* = val;
             return 1;
         }

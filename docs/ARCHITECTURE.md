@@ -59,6 +59,8 @@ The native entry point handles:
   - `-i`, `--interpret` — use x86 software interpreter
   - `--profile` — enable profiling (hot code pages, opcodes, stub calls)
   - `--argv0 <name>` — override argv[0] passed to the target
+  - `--fltk` — use native FLTK GUI instead of web UI
+  - `--no-gui` — disable GUI (no web server), even for GUI subsystem apps
   - `-h`, `--help` — show help
   - `-V`, `--version` — show version
   - `--` — end of zine options (allows target names starting with `-`)
@@ -72,7 +74,7 @@ The native entry point handles:
 
 **WASM** — [`src/wasm_main.zig`](../src/wasm_main.zig)
 
-The WASM entry point runs under a WASI runtime (e.g. wasmtime). It always uses the software interpreter since there is no way to directly execute x86 machine code in WebAssembly. It allocates a combined memory buffer laid out as `[PE image] [stack (64 KB)] [thunks (32 KB)]`, keeping thunks in a separate region beyond the PE's `SizeOfImage` so they don't overwrite import tables or data sections.
+The WASM entry point runs under a WASI runtime (e.g. wasmtime). It always uses the software interpreter since there is no way to directly execute x86 machine code in WebAssembly. It allocates a combined memory buffer laid out as `[PE image] [stack (64 KB)] [thunks (32 KB)] [heap (32 MB)]`, keeping thunks in a separate region beyond the PE's `SizeOfImage` so they don't overwrite import tables or data sections.
 
 ---
 
@@ -128,7 +130,7 @@ The software interpreter is used on WASM (always) and optionally on native (`--i
 |--------|---------------|
 | [cpu.zig](../src/x86/cpu.zig) | CPU state: 8 GPRs (General Purpose Registers: EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI), EIP (Extended Instruction Pointer), segment registers, lazy EFLAGS (CPU status flags register), FPU (Floating Point Unit) state, and guest memory reference. Provides typed accessors for 8/16/32-bit register operations and stack push/pop. |
 | [decoder.zig](../src/x86/decoder.zig) | Instruction decoder. Reads opcode bytes, prefixes, ModR/M (addressing mode byte), SIB (Scale-Index-Base byte), displacement, and immediates from the code stream. |
-| [execute.zig](../src/x86/execute.zig) | The main interpreter loop. Fetches, decodes, and executes x86 instructions. Dispatches `INT 0xFE` to the thunk table. Includes partial x87 FPU support (FNINIT, FNSTCW, FLDCW). |
+| [execute.zig](../src/x86/execute.zig) | The main interpreter loop. Fetches, decodes, and executes x86 instructions. Dispatches `INT 0xFE` to the thunk table. Delegates FPU operations to `fpu.zig`. |
 | [flags.zig](../src/x86/flags.zig) | Lazy EFLAGS computation. Defers CF (Carry), ZF (Zero), SF (Sign), OF (Overflow), PF (Parity) flag calculations until read, recording the operation type and operands. |
 | [fpu.zig](../src/x86/fpu.zig) | x87 FPU state (ST(0)–ST(7) floating-point register stack, control/status words). |
 | [memory.zig](../src/x86/memory.zig) | `GuestMemory` struct — translates guest virtual addresses to host buffer offsets. Provides `read8/16/32`, `write8/16/32`, and `readSlice`/`writeSlice`. Supports `native_linear` mode for direct host memory access when using `--interpret` on native targets. |
@@ -226,7 +228,7 @@ A comptime-selected backend that abstracts OS-specific functionality:
 | `installSegfaultHandler` | `sigaction(SIGSEGV, SIGFPE)` | No-op |
 | `mapNullPage` | `mmap` at address 0 | No-op |
 | `raiseStackLimit` | Sets `RLIMIT_STACK` to 64 MB | No-op |
-| `exitProcess` | `std.process.exit` | `@trap()` |
+| `exitProcess` | `std.process.exit` | `std.process.exit` |
 | `timestamp` | `std.time.timestamp` | Returns 0 |
 
 ---
@@ -247,7 +249,7 @@ The GUI subsystem presents Win32 GUI applications in a web browser.
             │ writes to
             ▼
 ┌─────────────────────────┐
-│    renderer.zig          │   Framebuffer (RGBA — Red/Green/Blue/Alpha)
+│    renderer.zig          │   Framebuffer (BGRA — Blue/Green/Red/Alpha)
 │    Shared API surface    │   Up to 1024×1024 pixels
 │                          │   State caching (menu, title, dialogs, audio)
 └───────────┬─────────────┘
@@ -269,7 +271,7 @@ The GUI subsystem presents Win32 GUI applications in a web browser.
 └─────────────────────────┘
 ```
 
-- **Framebuffer**: The renderer maintains a shared RGBA framebuffer. DirectDraw/D3D8 surface locks write pixel data here. Frames are pushed to connected browsers at ~60 FPS (frames per second) over WebSocket binary messages.
+- **Framebuffer**: The renderer maintains a shared BGRA framebuffer (Blue, Green, Red, Alpha byte order). DirectDraw/D3D8 surface locks write pixel data here. Frames are pushed to connected browsers at ~60 FPS (frames per second) over WebSocket binary messages.
 - **JSON Messages**: Window chrome (title, menus, dialogs, status bar, controls) is sent as JSON text messages. The frontend renders them using a Windows 2000 CSS (Cascading Style Sheets) theme.
 - **Input**: Browser keyboard/mouse events are sent back as JSON and dispatched to Win32 stub callbacks.
 - **Audio**: Audio samples are pushed as binary WebSocket messages with an `AUD` prefix. The browser plays them via the Web Audio API.
@@ -333,6 +335,8 @@ preferred_base
      │ Stack (64 KB)        │ ← ESP starts near the top of this region
      ├──────────────────────┤
      │ Thunks (32 KB)       │ ← INT 0xFE stubs (CD FE + 4-byte ID), filled with 0xCC
+     ├──────────────────────┤
+     │ Heap (32 MB)         │ ← Guest heap for VirtualAlloc, HeapAlloc, malloc, etc.
      └──────────────────────┘
 ```
 
@@ -519,7 +523,7 @@ zine/
 | **OLE** | Object Linking and Embedding — Windows COM-based framework (`ole32.dll`) |
 | **PE** | Portable Executable — the Windows executable format (`.exe`, `.dll`) |
 | **PEB** | Process Environment Block — per-process Windows structure with heap, image base, and parameters |
-| **RGBA** | Red, Green, Blue, Alpha — pixel format for the framebuffer (4 bytes per pixel) |
+| **BGRA** | Blue, Green, Red, Alpha — pixel format for the framebuffer (4 bytes per pixel) |
 | **RPC** | Remote Procedure Call — inter-process communication mechanism (`rpcrt4.dll`) |
 | **RVA** | Relative Virtual Address — an offset from the PE image base, used throughout PE headers |
 | **SEH** | Structured Exception Handling — Windows mechanism for try/catch at the OS level |

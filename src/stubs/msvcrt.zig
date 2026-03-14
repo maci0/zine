@@ -199,17 +199,18 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "_fcloseall", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "__p__iob", io.stub_p_iob);
 
-    // Formatted I/O
-    try environment.addBuiltinExportComptime(m, "printf", misc.stub_printf);
+    // Formatted I/O — variadic functions use addBuiltinExportComptimeVA
+    // which passes a translated guest stack va_list as the last argument.
+    try environment.addBuiltinExportComptimeVA(m, "printf", misc.stub_printf, 1);
     try environment.addBuiltinExportComptime(m, "vprintf", misc.stub_vprintf);
-    try environment.addBuiltinExportComptime(m, "fprintf", io.stub_fprintf);
+    try environment.addBuiltinExportComptimeVA(m, "fprintf", io.stub_fprintf, 2);
     try environment.addBuiltinExportComptime(m, "fwprintf", io.stub_fwprintf);
     try environment.addBuiltinExportComptime(m, "vfprintf", misc.stub_vfprintf);
     try environment.addBuiltinExportComptime(m, "_vsnprintf", misc.stub_vsnprintf);
-    try environment.addBuiltinExportComptime(m, "_snprintf", misc.stub_snprintf);
-    try environment.addBuiltinExportComptime(m, "sprintf", misc.stub_sprintf);
-    try environment.addBuiltinExportComptime(m, "swprintf", misc.stub_swprintf);
-    try environment.addBuiltinExportComptime(m, "sscanf", misc.stub_sscanf);
+    try environment.addBuiltinExportComptimeVA(m, "_snprintf", misc.stub_snprintf, 3);
+    try environment.addBuiltinExportComptimeVA(m, "sprintf", misc.stub_sprintf, 2);
+    try environment.addBuiltinExportComptimeVA(m, "swprintf", misc.stub_swprintf, 2);
+    try environment.addBuiltinExportComptimeVA(m, "sscanf", misc.stub_sscanf, 2);
     try environment.addBuiltinExportComptime(m, "_tempnam", misc.stub_tempnam);
     try environment.addBuiltinExportComptime(m, "tmpfile", misc.stub_ignore_ptr);
 

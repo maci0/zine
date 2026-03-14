@@ -142,7 +142,7 @@ pub var context_menu_result: u32 = 0;
 pub fn init(allocator: std.mem.Allocator) !void {
     g_allocator = allocator;
     global_framebuf = try allocator.alloc(u8, 1024 * 1024 * 4);
-    // Initialize to COLOR_BTNFACE gray (0xC0C0C0) with full alpha.
+    // Initialize to COLOR_BTNFACE gray (0xC0C0C0) with full alpha (BGRA pixel order).
     // This ensures any unpainted areas default to the correct Win32
     // button face background color instead of black.
     var i: usize = 0;
@@ -188,8 +188,8 @@ pub fn setResolution(w: u32, h: u32) void {
     global_height = h;
     resolution_set = true;
 
-    // Re-initialize visible framebuffer area to gray when resolution changes
-    // to prevent stale pixels from a previous stride causing stagger artifacts.
+    // Re-initialize visible framebuffer area to gray (BGRA) when resolution
+    // changes to prevent stale pixels from a previous stride causing stagger artifacts.
     const area = w * h * 4;
     if (area <= global_framebuf.len) {
         var i: usize = 0;

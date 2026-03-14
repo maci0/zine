@@ -325,16 +325,26 @@ pub fn stub_putchar(c: i32) callconv(.c) i32 {
 
 const misc = @import("misc.zig");
 
-// Printf-family: use C varargs (...) so we read directly from the caller's stack.
-// On x86 cdecl, va_list is a stack pointer — x86_vsnprintf reads args contiguously.
-pub fn stub_fprintf(f: ?*anyopaque, format_ptr: usize, ...) callconv(.c) i32 {
+const platform_mod = @import("../../platform.zig");
+
+pub const stub_fprintf = if (platform_mod.is_wasm) stub_fprintf_wasm else stub_fprintf_native;
+
+fn stub_fprintf_wasm(f: ?*anyopaque, format_ptr: usize, ap: usize) callconv(.c) i32 {
+    return fprintf_impl(f, format_ptr, ap);
+}
+
+fn stub_fprintf_native(f: ?*anyopaque, format_ptr: usize, ...) callconv(.c) i32 {
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
+    return fprintf_impl(f, format_ptr, misc.va_list_to_usize(ap));
+}
+
+fn fprintf_impl(f: ?*anyopaque, format_ptr: usize, ap: usize) i32 {
     if (getFile(f)) |file| {
         if (format_ptr != 0) {
-            const fmt = @as([*:0]const u8, @ptrFromInt(format_ptr));
-            var ap = @cVaStart();
-            defer @cVaEnd(&ap);
+            const fmt = @as([*:0]const u8, @ptrFromInt(trace.addr(format_ptr)));
             var buf: [4096]u8 = undefined;
-            const len = misc.x86_vsnprintf(&buf, 4096, fmt, misc.va_list_to_usize(ap));
+            const len = misc.x86_vsnprintf(&buf, 4096, fmt, ap);
             file.writeAll(buf[0..len]) catch return -1;
             return @intCast(len);
         }

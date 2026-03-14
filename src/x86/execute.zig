@@ -723,30 +723,65 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         },
         0xA6, 0xA7 => { // CMPSB/CMPSD
             const sz: u32 = if (insn.opcode == 0xA6) 1 else 4;
-            const a = if (sz == 1) @as(u32, cpu.memory.read8(cpu.esi)) else cpu.memory.read32(cpu.esi);
-            const b = if (sz == 1) @as(u32, cpu.memory.read8(cpu.edi)) else cpu.memory.read32(cpu.edi);
-            const result = a -% b;
             const os: OpSize = if (sz == 1) .byte else .dword;
-            cpu.flags.update(.sub, os, result, a, b);
-            if (cpu.flags.toEflags() & flags_mod.FLAG_DF != 0) {
-                cpu.esi -%= sz;
-                cpu.edi -%= sz;
+            const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
+            if (insn.prefixes.rep or insn.prefixes.repne) {
+                // REPZ CMPS: loop while ECX > 0 AND ZF=1 (bytes equal)
+                // REPNZ CMPS: loop while ECX > 0 AND ZF=0 (bytes not equal)
+                const stop_on_zf = insn.prefixes.repne; // REPNZ stops when ZF=1
+                while (cpu.ecx > 0) {
+                    const a = if (sz == 1) @as(u32, cpu.memory.read8(cpu.esi)) else cpu.memory.read32(cpu.esi);
+                    const b = if (sz == 1) @as(u32, cpu.memory.read8(cpu.edi)) else cpu.memory.read32(cpu.edi);
+                    cpu.flags.update(.sub, os, a -% b, a, b);
+                    cpu.ecx -= 1;
+                    if (df) {
+                        cpu.esi -%= sz;
+                        cpu.edi -%= sz;
+                    } else {
+                        cpu.esi +%= sz;
+                        cpu.edi +%= sz;
+                    }
+                    const zf = cpu.flags.toEflags() & flags_mod.FLAG_ZF != 0;
+                    if (stop_on_zf and zf) break;  // REPNZ: stop when equal
+                    if (!stop_on_zf and !zf) break; // REPZ: stop when not equal
+                }
             } else {
-                cpu.esi +%= sz;
-                cpu.edi +%= sz;
+                const a = if (sz == 1) @as(u32, cpu.memory.read8(cpu.esi)) else cpu.memory.read32(cpu.esi);
+                const b = if (sz == 1) @as(u32, cpu.memory.read8(cpu.edi)) else cpu.memory.read32(cpu.edi);
+                cpu.flags.update(.sub, os, a -% b, a, b);
+                if (df) {
+                    cpu.esi -%= sz;
+                    cpu.edi -%= sz;
+                } else {
+                    cpu.esi +%= sz;
+                    cpu.edi +%= sz;
+                }
             }
         },
-        0xAE => { // SCASB
-            const a: u32 = cpu.getReg8(0);
-            const b: u32 = cpu.memory.read8(cpu.edi);
-            cpu.flags.update(.sub, .byte, a -% b, a, b);
-            if (cpu.flags.toEflags() & flags_mod.FLAG_DF != 0) cpu.edi -%= 1 else cpu.edi +%= 1;
-        },
-        0xAF => { // SCASD
-            const a = cpu.eax;
-            const b = cpu.memory.read32(cpu.edi);
-            cpu.flags.update(.sub, .dword, a -% b, a, b);
-            if (cpu.flags.toEflags() & flags_mod.FLAG_DF != 0) cpu.edi -%= 4 else cpu.edi +%= 4;
+        0xAE, 0xAF => { // SCASB / SCASD
+            const sz: u32 = if (insn.opcode == 0xAE) 1 else 4;
+            const os: OpSize = if (sz == 1) .byte else .dword;
+            const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
+            if (insn.prefixes.rep or insn.prefixes.repne) {
+                // REPNZ SCAS: scan until AL/EAX matches [EDI] or ECX=0
+                // REPZ SCAS: scan until AL/EAX differs from [EDI] or ECX=0
+                const stop_on_zf = insn.prefixes.repne; // REPNZ stops when ZF=1
+                while (cpu.ecx > 0) {
+                    const a = if (sz == 1) @as(u32, cpu.getReg8(0)) else cpu.eax;
+                    const b = if (sz == 1) @as(u32, cpu.memory.read8(cpu.edi)) else cpu.memory.read32(cpu.edi);
+                    cpu.flags.update(.sub, os, a -% b, a, b);
+                    cpu.ecx -= 1;
+                    if (df) cpu.edi -%= sz else cpu.edi +%= sz;
+                    const zf = cpu.flags.toEflags() & flags_mod.FLAG_ZF != 0;
+                    if (stop_on_zf and zf) break;  // REPNZ: found match
+                    if (!stop_on_zf and !zf) break; // REPZ: found mismatch
+                }
+            } else {
+                const a = if (sz == 1) @as(u32, cpu.getReg8(0)) else cpu.eax;
+                const b = if (sz == 1) @as(u32, cpu.memory.read8(cpu.edi)) else cpu.memory.read32(cpu.edi);
+                cpu.flags.update(.sub, os, a -% b, a, b);
+                if (df) cpu.edi -%= sz else cpu.edi +%= sz;
+            }
         },
 
         // RET (C3)
@@ -868,21 +903,20 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             cpu.setReg(@enumFromInt(insn.modrm.?.reg), cpu_mod.signExtend16to32(val));
         },
 
-        // IMUL r32, r/m32 (0F AF)
         0x0FAF => {
             const a: i32 = @bitCast(cpu.getReg(@enumFromInt(insn.modrm.?.reg)));
             const b: i32 = @bitCast(readOperand(cpu, insn, 1));
             const result: i64 = @as(i64, a) * @as(i64, b);
             const r32: u32 = @truncate(@as(u64, @bitCast(result)));
             cpu.setReg(@enumFromInt(insn.modrm.?.reg), r32);
-            // OF=CF=1 if result doesn't fit in 32 bits
-            const fits = (result == @as(i64, @as(i32, @bitCast(r32))));
-            cpu.flags.update(.logic, .dword, r32, 0, 0);
-            if (!fits) {
-                var ef = cpu.flags.toEflags();
+            var ef = cpu.flags.toEflags();
+            const sext: i64 = @as(i32, @bitCast(r32));
+            if (result != sext) {
                 ef |= flags_mod.FLAG_CF | flags_mod.FLAG_OF;
-                cpu.flags.fromEflags(ef);
+            } else {
+                ef &= ~(flags_mod.FLAG_CF | flags_mod.FLAG_OF);
             }
+            cpu.flags.fromEflags(ef);
         },
 
         // CMOVcc (0F 40-4F)
@@ -925,19 +959,52 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // BT/BTS/BTR/BTC (0F A3/AB/B3/BB)
         0x0FA3, 0x0FAB, 0x0FB3, 0x0FBB => {
-            const val = readOperand(cpu, insn, 0);
-            const bit: u5 = @truncate(readOperand(cpu, insn, 1));
-            var ef = cpu.flags.toEflags();
-            if ((val >> bit) & 1 != 0) ef |= flags_mod.FLAG_CF else ef &= ~flags_mod.FLAG_CF;
-            cpu.flags.fromEflags(ef);
-            const new_val = switch (insn.opcode) {
-                0x0FA3 => val, // BT — test only
-                0x0FAB => val | (@as(u32, 1) << bit), // BTS
-                0x0FB3 => val & ~(@as(u32, 1) << bit), // BTR
-                0x0FBB => val ^ (@as(u32, 1) << bit), // BTC
-                else => unreachable,
-            };
-            if (insn.opcode != 0x0FA3) writeOperand(cpu, insn, 0, new_val);
+            if (insn.operands[0] == .mem) {
+                // If base is memory and index is a register, indexing spans arbitrary bytes!
+                const orig_addr = computeEffectiveAddress(cpu, &insn.operands[0].mem);
+                const bit_index_raw = readOperand(cpu, insn, 1);
+                // Index is a signed offset for memory bit ops
+                const bit_index: i32 = if (insn.op_size == .word)
+                    @as(i32, @bitCast(cpu_mod.signExtend16to32(@truncate(bit_index_raw))))
+                else
+                    @as(i32, @bitCast(bit_index_raw));
+
+                const byte_offset: i32 = @divFloor(bit_index, 8);
+                const bit_in_byte: u3 = @intCast(@mod(bit_index, 8));
+                
+                const target_addr = orig_addr +% @as(u32, @bitCast(byte_offset));
+                const val = cpu.memory.read8(target_addr);
+                
+                var ef = cpu.flags.toEflags();
+                if ((val >> bit_in_byte) & 1 != 0) ef |= flags_mod.FLAG_CF else ef &= ~flags_mod.FLAG_CF;
+                cpu.flags.fromEflags(ef);
+                
+                const new_val: u8 = switch (insn.opcode) {
+                    0x0FA3 => val,
+                    0x0FAB => val | (@as(u8, 1) << bit_in_byte),
+                    0x0FB3 => val & ~(@as(u8, 1) << bit_in_byte),
+                    0x0FBB => val ^ (@as(u8, 1) << bit_in_byte),
+                    else => unreachable,
+                };
+                if (insn.opcode != 0x0FA3) cpu.memory.write8(target_addr, new_val);
+            } else {
+                const val = readOperand(cpu, insn, 0);
+                const raw_bit = readOperand(cpu, insn, 1);
+                // For register base, index is wrapped to operand size
+                const bit: u5 = if (insn.op_size == .word) @truncate(raw_bit & 15) else @truncate(raw_bit);
+                var ef = cpu.flags.toEflags();
+                if ((val >> bit) & 1 != 0) ef |= flags_mod.FLAG_CF else ef &= ~flags_mod.FLAG_CF;
+                cpu.flags.fromEflags(ef);
+
+                const new_val: u32 = switch (insn.opcode) {
+                    0x0FA3 => val, // BT — test only
+                    0x0FAB => val | (@as(u32, 1) << bit), // BTS
+                    0x0FB3 => val & ~(@as(u32, 1) << bit), // BTR
+                    0x0FBB => val ^ (@as(u32, 1) << bit), // BTC
+                    else => unreachable,
+                };
+                if (insn.opcode != 0x0FA3) writeOperand(cpu, insn, 0, new_val);
+            }
         },
 
         // BSWAP (0F C8-CF)
@@ -981,7 +1048,14 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             const result: i64 = @as(i64, src) * @as(i64, imm);
             const r32: u32 = @truncate(@as(u64, @bitCast(result)));
             cpu.setReg(@enumFromInt(insn.modrm.?.reg), r32);
-            cpu.flags.update(.logic, .dword, r32, 0, 0);
+            var ef = cpu.flags.toEflags();
+            const sext: i64 = @as(i32, @bitCast(r32));
+            if (result != sext) {
+                ef |= flags_mod.FLAG_CF | flags_mod.FLAG_OF;
+            } else {
+                ef &= ~(flags_mod.FLAG_CF | flags_mod.FLAG_OF);
+            }
+            cpu.flags.fromEflags(ef);
         },
 
         // --- Legacy segment PUSH/POP ---
@@ -1264,13 +1338,19 @@ fn execAlu(cpu: *Cpu, insn: *const Instruction) void {
         7 => a -% b, // CMP (same as SUB but don't store)
     };
 
-    const flag_op: FlagOp = switch (group) {
-        0, 2 => .add,
-        1, 4, 6 => .logic,
-        3, 5, 7 => .sub,
-    };
-
-    cpu.flags.update(flag_op, insn.op_size, result, a, b);
+    if (group == 2) {
+        cpu.flags.updateCarry(.adc, insn.op_size, result, a, b, cf);
+    } else if (group == 3) {
+        cpu.flags.updateCarry(.sbb, insn.op_size, result, a, b, cf);
+    } else {
+        const flag_op: FlagOp = switch (group) {
+            0 => .add,
+            1, 4, 6 => .logic,
+            5, 7 => .sub,
+            else => unreachable,
+        };
+        cpu.flags.update(flag_op, insn.op_size, result, a, b);
+    }
 
     // Don't store result for CMP (group 7)
     if (group != 7) {
@@ -1300,13 +1380,19 @@ fn execGroup1(cpu: *Cpu, insn: *const Instruction) void {
         7 => val -% imm, // CMP
     };
 
-    const flag_op: FlagOp = switch (sub_op) {
-        0, 2 => .add,
-        1, 4, 6 => .logic,
-        3, 5, 7 => .sub,
-    };
-
-    cpu.flags.update(flag_op, insn.op_size, result, val, imm);
+    if (sub_op == 2) {
+        cpu.flags.updateCarry(.adc, insn.op_size, result, val, imm, cf);
+    } else if (sub_op == 3) {
+        cpu.flags.updateCarry(.sbb, insn.op_size, result, val, imm, cf);
+    } else {
+        const flag_op: FlagOp = switch (sub_op) {
+            0 => .add,
+            1, 4, 6 => .logic,
+            5, 7 => .sub,
+            else => unreachable,
+        };
+        cpu.flags.update(flag_op, insn.op_size, result, val, imm);
+    }
 
     if (sub_op != 7) { // Don't store for CMP
         if (insn.op_size == .byte) {
@@ -1342,10 +1428,24 @@ fn execGroup3(cpu: *Cpu, insn: *const Instruction) void {
             if (is_byte) {
                 const result: u16 = @as(u16, @truncate(cpu.eax & 0xFF)) * @as(u16, @truncate(val));
                 cpu.eax = (cpu.eax & 0xFFFF0000) | result;
+                var ef = cpu.flags.toEflags();
+                if ((result & 0xFF00) != 0) {
+                    ef |= flags_mod.FLAG_CF | flags_mod.FLAG_OF;
+                } else {
+                    ef &= ~(flags_mod.FLAG_CF | flags_mod.FLAG_OF);
+                }
+                cpu.flags.fromEflags(ef);
             } else {
                 const result: u64 = @as(u64, cpu.eax) * @as(u64, val);
                 cpu.eax = @truncate(result);
                 cpu.edx = @truncate(result >> 32);
+                var ef = cpu.flags.toEflags();
+                if ((result >> 32) != 0) {
+                    ef |= flags_mod.FLAG_CF | flags_mod.FLAG_OF;
+                } else {
+                    ef &= ~(flags_mod.FLAG_CF | flags_mod.FLAG_OF);
+                }
+                cpu.flags.fromEflags(ef);
             }
         },
         5 => { // IMUL (one-operand form)
@@ -1354,12 +1454,28 @@ fn execGroup3(cpu: *Cpu, insn: *const Instruction) void {
                 const b: i16 = @as(i8, @bitCast(@as(u8, @truncate(val))));
                 const result: u16 = @bitCast(a * b);
                 cpu.eax = (cpu.eax & 0xFFFF0000) | result;
+                var ef = cpu.flags.toEflags();
+                const sext: i16 = @as(i8, @bitCast(@as(u8, @truncate(result))));
+                if (result != @as(u16, @bitCast(sext))) {
+                    ef |= flags_mod.FLAG_CF | flags_mod.FLAG_OF;
+                } else {
+                    ef &= ~(flags_mod.FLAG_CF | flags_mod.FLAG_OF);
+                }
+                cpu.flags.fromEflags(ef);
             } else {
                 const a: i64 = @as(i32, @bitCast(cpu.eax));
                 const b: i64 = @as(i32, @bitCast(val));
                 const result: u64 = @bitCast(a * b);
                 cpu.eax = @truncate(result);
                 cpu.edx = @truncate(result >> 32);
+                var ef = cpu.flags.toEflags();
+                const sext: i64 = @as(i32, @bitCast(@as(u32, @truncate(result))));
+                if (result != @as(u64, @bitCast(sext))) {
+                    ef |= flags_mod.FLAG_CF | flags_mod.FLAG_OF;
+                } else {
+                    ef &= ~(flags_mod.FLAG_CF | flags_mod.FLAG_OF);
+                }
+                cpu.flags.fromEflags(ef);
             }
         },
         6 => { // DIV

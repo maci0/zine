@@ -71,6 +71,9 @@ pub fn mmap(
         if (executable) prot |= std.posix.PROT.EXEC;
 
         var flags: std.posix.MAP = if (shared) .{ .TYPE = .SHARED } else .{ .TYPE = .PRIVATE };
+        if (comptime is_x86_64 and builtin.os.tag == .linux) {
+            flags.@"32BIT" = true;
+        }
         if (file_fd == -1) {
             flags.ANONYMOUS = true;
         }

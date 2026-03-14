@@ -8,6 +8,8 @@
 pub const FlagOp = enum {
     add,
     sub,
+    adc,
+    sbb,
     logic, // AND, OR, XOR, TEST — CF=0, OF=0
     inc,
     dec,
@@ -56,6 +58,7 @@ pub const LazyFlags = struct {
     result: u32 = 0,
     operand1: u32 = 0,
     operand2: u32 = 0,
+    carry_in: u32 = 0,
     size: OpSize = .dword,
 
     // When op == .none, these hold the raw EFLAGS bits
@@ -78,8 +81,10 @@ pub const LazyFlags = struct {
         if (self.op == .none) return (self.raw_flags & FLAG_CF) != 0;
         const m = self.size.mask();
         return switch (self.op) {
-            .add => (self.result & m) < (self.operand1 & m),
-            .sub => (self.operand1 & m) < (self.operand2 & m),
+            .add => (@as(u64, self.operand1 & m) + @as(u64, self.operand2 & m)) > m,
+            .sub => (@as(u64, self.operand1 & m)) < (@as(u64, self.operand2 & m)),
+            .adc => (@as(u64, self.operand1 & m) + @as(u64, self.operand2 & m) + self.carry_in) > m,
+            .sbb => (@as(u64, self.operand1 & m)) < (@as(u64, self.operand2 & m) + self.carry_in),
             .neg => (self.result & m) != 0,
             .shl => blk: {
                 // Carry is the last bit shifted out
@@ -104,8 +109,8 @@ pub const LazyFlags = struct {
         if (self.op == .none) return (self.raw_flags & FLAG_OF) != 0;
         const sb = self.size.signBit();
         return switch (self.op) {
-            .add => ((~(self.operand1 ^ self.operand2)) & (self.operand1 ^ self.result) & sb) != 0,
-            .sub => (((self.operand1 ^ self.operand2)) & (self.operand1 ^ self.result) & sb) != 0,
+            .add, .adc => ((~(self.operand1 ^ self.operand2)) & (self.operand1 ^ self.result) & sb) != 0,
+            .sub, .sbb => (((self.operand1 ^ self.operand2)) & (self.operand1 ^ self.result) & sb) != 0,
             .neg => (self.result & self.operand1 & sb) != 0,
             .inc => self.result == sb,
             .dec => (self.result & self.size.mask()) == (sb -% 1),
@@ -126,7 +131,7 @@ pub const LazyFlags = struct {
     pub fn getAF(self: *const LazyFlags) bool {
         if (self.op == .none) return (self.raw_flags & FLAG_AF) != 0;
         return switch (self.op) {
-            .add, .sub, .inc, .dec, .neg => ((self.operand1 ^ self.operand2 ^ self.result) & 0x10) != 0,
+            .add, .sub, .adc, .sbb, .inc, .dec, .neg => ((self.operand1 ^ self.operand2 ^ self.result) & 0x10) != 0,
             .logic => false,
             .shl, .shr, .sar => false,
             .none => unreachable,
@@ -183,6 +188,17 @@ pub const LazyFlags = struct {
         self.result = result;
         self.operand1 = op1;
         self.operand2 = op2;
+        self.carry_in = 0;
+    }
+
+    /// Set flags after an ALU operation with carry/borrow input.
+    pub fn updateCarry(self: *LazyFlags, op: FlagOp, size: OpSize, result: u32, op1: u32, op2: u32, carry_in: u32) void {
+        self.op = op;
+        self.size = size;
+        self.result = result;
+        self.operand1 = op1;
+        self.operand2 = op2;
+        self.carry_in = carry_in;
     }
 
     /// Clear a single flag bit.

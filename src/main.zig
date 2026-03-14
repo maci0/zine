@@ -499,6 +499,7 @@ pub fn main() !void {
     var argv0_opt: ?[]const u8 = null;
     var app_args: std.ArrayListUnmanaged(?[*:0]u8) = .{};
     var use_interpreter = false;
+    var no_gui = false;
 
     if (std.process.hasEnvVarConstant("ZINE_TRACE")) {
         trace.enable_tracing = true;
@@ -541,6 +542,10 @@ pub fn main() !void {
             renderer.active_backend = .fltk;
             continue;
         }
+        if (!end_of_options and std.mem.eql(u8, arg, "--no-gui")) {
+            no_gui = true;
+            continue;
+        }
         if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
             std.fs.File.stdout().writeAll(
                 \\Usage: zine [options] [--] <target.exe> [args...]
@@ -554,6 +559,7 @@ pub fn main() !void {
                 \\      --profile       Enable profiling (hot code, opcodes, stubs)
                 \\  -i, --interpret     Use x86 software interpreter instead of native execution
                 \\      --fltk          Use native FLTK GUI instead of web UI
+                \\      --no-gui        Disable GUI (no web server), even for GUI apps
                 \\      --argv0 <name>  Override argv[0] passed to the target
                 \\  -h, --help          Show this help message
                 \\  -v, --version       Show version information
@@ -792,8 +798,13 @@ pub fn main() !void {
         renderer.active_backend = .none;
     }
 
+    // --no-gui overrides the subsystem check
+    if (no_gui) {
+        renderer.active_backend = .none;
+    }
+
     // Initialize Web GUI early so allocator is ready before we extract resources like menus.
-    if (is_gui) {
+    if (renderer.active_backend != .none) {
         try renderer.init(allocator);
     }
 
@@ -855,7 +866,7 @@ pub fn main() !void {
         stubs_msvcrt.msvcrt_acmdln = @intFromPtr(cmdline_buf.ptr);
     }
 
-    // Dump arguments when tracing is active
+    // Dump arguments
     if (trace.enable_tracing) {
         trace.print("ZINE ARGS:\n", .{});
         for (app_args.items) |arg_opt| {
@@ -874,6 +885,12 @@ pub fn main() !void {
             }
         }
     }
+
+    log.info("Executing {s}...", .{exe_name});
+    if (trace.enable_tracing) {
+        log.info("Execution tracing enabled", .{});
+    }
+
     if (final_envp) |envp| {
         stubs_msvcrt.global_envp = @ptrCast(envp);
     } else {
@@ -920,7 +937,21 @@ pub fn main() !void {
             env_total_chars += span.len + 1;
         }
     }
-    const env_block = try allocator.alloc(u16, env_total_chars);
+    // Allocate wide env block.
+    // In interpreter mode, must be in low 32-bit memory since the PEB's
+    // Environment field is a 32-bit pointer read by guest x86 code.
+    const env_byte_size = env_total_chars * 2;
+    const env_block: [*]u16 = if (use_interpreter) blk: {
+        const kernel32_mem = @import("stubs/kernel32/mem.zig");
+        const ptr = kernel32_mem.raw_alloc(env_byte_size) orelse {
+            log.fatal("Failed to allocate environment block", .{});
+            std.process.exit(1);
+        };
+        break :blk @ptrCast(@alignCast(ptr));
+    } else blk: {
+        const mem = try allocator.alloc(u16, env_total_chars);
+        break :blk mem.ptr;
+    };
     var env_pos: usize = 0;
     if (stubs_msvcrt.global_env_initialized) {
         var i: usize = 0;
@@ -938,7 +969,7 @@ pub fn main() !void {
     
     const peb = @as(*teb.PEB, @ptrFromInt(thread_env.ProcessEnvironmentBlock));
     const params = @as(*teb.RTL_USER_PROCESS_PARAMETERS, @ptrFromInt(peb.ProcessParameters));
-    params.Environment = @truncate(@intFromPtr(env_block.ptr));
+    params.Environment = @truncate(@intFromPtr(env_block));
 
     try teb.setupFS(thread_env);
 
@@ -951,16 +982,21 @@ pub fn main() !void {
             std.process.exit(1);
         };
         const base: u32 = @truncate(main_module.image_base);
+        // Allocate a dedicated 1MB stack for the interpreter
+        const stack_size = 1024 * 1024;
+        const stack_mem = try platform.mmap(null, stack_size, true, -1, 0, false, false);
+
         var cpu = x86_cpu.Cpu{};
         cpu.memory = x86_memory.GuestMemory{
             .base = main_module.mapped_memory,
             .base_addr = base,
-            .native_linear = true,
+            .native_linear = true, // allow any virtual address to pass through to host memory
         };
         cpu.eip = @truncate(ep);
-        cpu.esp = base +% @as(u32, @truncate(main_module.mapped_memory.len)) -% 16;
+        cpu.esp = @intCast(@intFromPtr(stack_mem.ptr) + stack_size - 16);
         cpu.ebp = cpu.esp;
-        trace.print("Interpreter: EIP=0x{X} ESP=0x{X} (image base=0x{X})\n", .{ cpu.eip, cpu.esp, base });
+        trace.print("Interpreter: EIP=0x{X} ESP=0x{X} (image base=0x{X}, stack base=0x{X})\n", .{ cpu.eip, cpu.esp, base, @intFromPtr(stack_mem.ptr) });
+
         x86_execute.run(&cpu);
         profiler.dump();
         trace.print("*** Interpreter halted, EAX=0x{X} ***\n", .{cpu.eax});

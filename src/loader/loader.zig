@@ -63,11 +63,19 @@ fn patchImport(
             }
         }
     } else {
-        // On native: write the native address directly and register for dispatchNativeCall
+        // On native: write the address directly.
         first_thunk.* = @intCast(exp.addr);
-        x86_thunks.registerNativeImport(@intCast(exp.addr), dll_name, func_name, exp.param_bytes);
-        if (trace.enable_tracing) {
-            trace.print("loader: {s} -> {s} at {X} (IAT=0x{x})\n", .{ dll_name, func_name, exp.addr, @intFromPtr(first_thunk) });
+        if (exp.is_native) {
+            // Register for dispatchNativeCall
+            x86_thunks.registerNativeImport(@intCast(exp.addr), dll_name, func_name, exp.param_bytes);
+            if (trace.enable_tracing) {
+                trace.print("loader: {s} -> {s} at {X} (native IAT=0x{x})\n", .{ dll_name, func_name, exp.addr, @intFromPtr(first_thunk) });
+            }
+        } else {
+            // Guest export
+            if (trace.enable_tracing) {
+                trace.print("loader: {s} -> {s} at {X} (guest IAT=0x{x})\n", .{ dll_name, func_name, exp.addr, @intFromPtr(first_thunk) });
+            }
         }
     }
 }
@@ -109,6 +117,10 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
             const first_thunk = @as(*u32, @ptrCast(@alignCast(&mod.mapped_memory[import_desc.FirstThunk + thunk_offset])));
 
             if (orig_thunk.u1.AddressOfData == 0) break;
+
+            if (import_desc.FirstThunk + thunk_offset == 0x5A68) {
+                if (trace.enable_tracing) trace.print("WATCHPOINT: IAT overwrite detected! dll={s} orig_thunk_u1={x}\n", .{ dll_name, orig_thunk.u1.Ordinal });
+            }
 
             if ((orig_thunk.u1.Ordinal & 0x80000000) != 0) {
                 const ordinal = orig_thunk.u1.Ordinal & 0xFFFF;
