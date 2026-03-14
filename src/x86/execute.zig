@@ -201,8 +201,8 @@ fn dispatchNativeCall(cpu: *Cpu) void {
     // On WASM, check if _initterm enqueued any guest init functions.
     // If so, build an x86 trampoline in guest memory to execute them.
     if (comptime !@import("../platform.zig").is_native) {
-        const process = @import("../stubs/msvcrt/process.zig");
-        if (process.pending_initterm_count > 0) {
+        const sc = @import("../stubs/stub_common.zig");
+        if (sc.pending_initterm_count > 0) {
             buildInittermTrampoline(cpu, ret_addr);
         }
     }
@@ -213,13 +213,12 @@ fn dispatchNativeCall(cpu: *Cpu) void {
 /// The current EIP (CRT return address) is pushed onto the guest stack so the
 /// trampoline's RET returns control to the CRT startup code.
 fn buildInittermTrampoline(cpu: *Cpu, _: u32) void {
-    const process = @import("../stubs/msvcrt/process.zig");
-    const count = process.pending_initterm_count;
+    const stub_common = @import("../stubs/stub_common.zig");
+    const count = stub_common.pending_initterm_count;
     if (count == 0) return;
 
     // Find a location in guest memory for the trampoline.
     // Use guestAlloc from the heap to get guest-addressable memory.
-    const stub_common = @import("../stubs/stub_common.zig");
     const gmem = stub_common.guest_memory orelse return;
 
     // Each CALL rel32 = 5 bytes, final RET = 1 byte
@@ -230,7 +229,7 @@ fn buildInittermTrampoline(cpu: *Cpu, _: u32) void {
     // Write the trampoline x86 code
     var offset: u32 = 0;
     for (0..count) |i| {
-        const func_va = process.pending_initterm_callbacks[i];
+        const func_va = stub_common.pending_initterm_callbacks[i];
         // CALL rel32 (E8 xx xx xx xx)
         // rel32 = target - (trampoline_va + offset + 5)
         const call_end: u32 = trampoline_va + offset + 5;
@@ -247,7 +246,7 @@ fn buildInittermTrampoline(cpu: *Cpu, _: u32) void {
     cpu.memory.write8(trampoline_va + offset, 0xC3);
 
     // Clear pending callbacks
-    process.pending_initterm_count = 0;
+    stub_common.pending_initterm_count = 0;
 
     // Push the current return address (where CRT code resumes)
     // and redirect EIP to the trampoline

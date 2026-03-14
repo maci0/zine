@@ -415,8 +415,8 @@ pub fn stub_fullpath(abs: usize, rel: usize, max: usize) callconv(.c) usize {
     var dp = abs;
     if (dp == 0) {
         const alloc_size = if (max > 0) max else 4096;
-        const kernel32_mem = @import("../kernel32/mem.zig");
-        const p = kernel32_mem.raw_alloc(alloc_size) orelse return 0;
+        const stub_common = @import("../stub_common.zig");
+        const p = stub_common.raw_alloc(alloc_size) orelse return 0;
         dp = @intFromPtr(p);
     }
     const buf_size = if (max > 0) max else 4096;
@@ -507,8 +507,8 @@ pub fn stub_getcwd(buffer_ptr: usize, maxlen: i32) callconv(.c) ?*anyopaque {
         buf[path.len] = 0;
         return @ptrFromInt(buffer_ptr);
     } else {
-        const kernel32_mem = @import("../kernel32/mem.zig");
-        const raw = kernel32_mem.raw_alloc(path.len + 1) orelse return null;
+        const stub_common = @import("../stub_common.zig");
+        const raw = stub_common.raw_alloc(path.len + 1) orelse return null;
         const ptr = @as([*]u8, @ptrCast(raw));
         @memcpy(ptr[0..path.len], path);
         std.mem.replaceScalar(u8, ptr[0..path.len], '/', '\\');

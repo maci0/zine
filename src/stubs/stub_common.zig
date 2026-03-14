@@ -15,6 +15,112 @@ const x86_memory = @import("../x86/memory.zig");
 /// stub_common instead of reaching into kernel32/mem.zig.
 pub var guest_memory: ?*x86_memory.GuestMemory = null;
 
+// -----------------------------------------------------------------------
+// Shared heap allocator
+// -----------------------------------------------------------------------
+// Used by both MSVCRT (malloc, strdup, getenv) and kernel32 (HeapAlloc,
+// GlobalAlloc, VirtualAlloc) stubs.  On WASM, all allocations go through
+// the guest heap bump allocator; on native x86-64, we pre-allocate large
+// chunks at low addresses so guest 32-bit code can address them.
+
+const HEAP_CHUNK_SIZE: usize = 16 * 1024 * 1024; // 16 MB per chunk
+var heap_base: ?[*]u8 = null;
+var heap_pos: usize = 0;
+var heap_cap: usize = 0;
+
+// Keep a rolling hint for 64KB aligned allocations to satisfy Windows memory assumptions
+var next_alloc_hint: usize = 0x60000000;
+
+pub fn get_aligned_hint(size: usize) usize {
+    const hint = next_alloc_hint;
+    const aligned_size = (size + 0xFFFF) & ~@as(usize, 0xFFFF);
+    next_alloc_hint += aligned_size;
+    return hint;
+}
+
+fn heapAlloc(size: usize) ?[*]u8 {
+    const aligned = (size + 7) & ~@as(usize, 7); // 8-byte align
+    if (heap_base == null or heap_pos + aligned > heap_cap) {
+        const plt = @import("../platform.zig");
+        const chunk_size = @max(aligned + 4096, HEAP_CHUNK_SIZE);
+        const hint = get_aligned_hint(chunk_size);
+        const mem = plt.mmap(@ptrFromInt(hint), chunk_size, false, -1, 0, false, false) catch return null;
+        @memset(mem, 0);
+        heap_base = mem.ptr;
+        heap_pos = 0;
+        heap_cap = chunk_size;
+    }
+    const ptr = heap_base.? + heap_pos;
+    heap_pos += aligned;
+    return ptr;
+}
+
+pub fn raw_alloc(size: usize) ?*anyopaque {
+    const actual_size = if (size == 0) @as(usize, 64) else size;
+
+    // On WASM: use guest heap allocator to keep addresses in range
+    if (guest_memory) |gmem| {
+        const alloc_size: u32 = @intCast(@min(actual_size + 16, 0xFFFFFFFF));
+        const addr = gmem.guestAlloc(alloc_size);
+        if (addr == 0) return null;
+        gmem.write32(addr, @intCast(actual_size));
+        gmem.write32(addr +% 4, 0);
+        const buf_offset = addr -% gmem.base_addr;
+        return @ptrCast(gmem.base.ptr + buf_offset + 8);
+    }
+
+    // Native: bump-allocate from low-address heap
+    const total = actual_size + 8;
+    const ptr = heapAlloc(total) orelse return null;
+    const header = @as(*usize, @ptrCast(@alignCast(ptr)));
+    header.* = actual_size;
+    return @ptrCast(ptr + 8);
+}
+
+pub fn raw_realloc(old_ptr: ?*anyopaque, new_size: usize) ?*anyopaque {
+    if (new_size == 0) return null;
+    if (old_ptr == null) return raw_alloc(new_size);
+
+    // On WASM with guest heap: simple alloc + copy (we don't free)
+    if (guest_memory) |_| {
+        const old_u8 = @as([*]u8, @ptrCast(old_ptr.?));
+        const old_header_ptr = old_u8 - 8;
+        const old_size_32 = @as(*align(1) const u32, @ptrCast(old_header_ptr)).*;
+        const old_size: usize = old_size_32;
+
+        const new_mem = raw_alloc(new_size) orelse return null;
+        const copy_len = @min(old_size, new_size);
+        const new_u8 = @as([*]u8, @ptrCast(new_mem));
+        @memcpy(new_u8[0..copy_len], old_u8[0..copy_len]);
+        return new_mem;
+    }
+
+    const old_u8_ptr = @as([*]u8, @ptrCast(old_ptr.?)) - 8;
+    const old_header = @as(*usize, @ptrCast(@alignCast(old_u8_ptr)));
+    const old_size = old_header.*;
+
+    const new_mem = heapAlloc(new_size + 8) orelse return null;
+    const new_header = @as(*usize, @ptrCast(@alignCast(new_mem)));
+    new_header.* = new_size;
+
+    const copy_len = @min(old_size, new_size);
+    const old_data = @as([*]u8, @ptrCast(old_ptr.?));
+    const new_data = new_mem + 8;
+    @memcpy(new_data[0..copy_len], old_data[0..copy_len]);
+
+    return @ptrCast(new_data);
+}
+
+// -----------------------------------------------------------------------
+// Shared _initterm callback queue (WASM only)
+// -----------------------------------------------------------------------
+// On WASM, _initterm collects guest x86 function addresses here.
+// After the stub returns, x86/execute.zig reads them to build a
+// trampoline.  Previously this state lived in msvcrt/process.zig,
+// creating a layer violation (x86 interpreter → CRT stubs).
+pub var pending_initterm_callbacks: [64]u32 = [_]u32{0} ** 64;
+pub var pending_initterm_count: usize = 0;
+
 /// Shared tracing logic for all stubs. Must be `inline` so that
 /// `@returnAddress()` resolves to the caller of the stub, not this helper.
 inline fn traceStub(comptime n: comptime_int) void {

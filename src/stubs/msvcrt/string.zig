@@ -186,8 +186,8 @@ pub fn stub_strcspn(s1_ptr: usize, s2_ptr: usize) callconv(.c) usize {
 pub fn stub_strdup(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const s = trace.c_span(str_ptr);
-    const kernel32_mem = @import("../kernel32/mem.zig");
-    const raw = kernel32_mem.raw_alloc(s.len + 1) orelse return 0;
+    const stub_common = @import("../stub_common.zig");
+    const raw = stub_common.raw_alloc(s.len + 1) orelse return 0;
     const ptr = @as([*]u8, @ptrCast(raw));
     @memcpy(ptr[0..s.len], s);
     ptr[s.len] = 0;
@@ -199,8 +199,8 @@ pub fn stub_wcsdup(str_ptr: usize) callconv(.c) usize {
     const str = @as([*]const u16, @ptrFromInt(str_ptr));
     const len = std.mem.indexOfScalar(u16, str[0..65536], 0) orelse 0;
     
-    const kernel32_mem = @import("../kernel32/mem.zig");
-    const raw = kernel32_mem.raw_alloc((len + 1) * 2) orelse return 0;
+    const stub_common = @import("../stub_common.zig");
+    const raw = stub_common.raw_alloc((len + 1) * 2) orelse return 0;
     const ptr = @as([*]u16, @ptrCast(@alignCast(raw)));
     @memcpy(ptr[0..len], str[0..len]);
     ptr[len] = 0;

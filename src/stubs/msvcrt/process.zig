@@ -368,8 +368,8 @@ pub fn stub_getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
     for (msvcrt.msvcrt_env_vars.items) |v| {
         if (std.ascii.eqlIgnoreCase(v.key, name)) {
             if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> '{s}'\n", .{name, v.val});
-            const kernel32_mem = @import("../kernel32/mem.zig");
-            const ptr = @as([*]u8, @ptrCast(kernel32_mem.raw_alloc(v.val.len + 1) orelse return null));
+            const stub_common = @import("../stub_common.zig");
+            const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(v.val.len + 1) orelse return null));
             @memcpy(ptr[0..v.val.len], v.val);
             ptr[v.val.len] = 0;
             return @ptrCast(ptr);
@@ -384,8 +384,8 @@ pub fn stub_getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
             if (std.ascii.startsWithIgnoreCase(env_str, name) and env_str.len > name.len and env_str[name.len] == '=') {
                 const val = env_str[name.len + 1 ..];
                 if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> '{s}' (inherited)\n", .{name, val});
-                const kernel32_mem = @import("../kernel32/mem.zig");
-                const ptr = @as([*]u8, @ptrCast(kernel32_mem.raw_alloc(val.len + 1) orelse return null));
+                const stub_common = @import("../stub_common.zig");
+                const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(val.len + 1) orelse return null));
                 @memcpy(ptr[0..val.len], val);
                 ptr[val.len] = 0;
                 return @ptrCast(ptr);
@@ -399,8 +399,8 @@ pub fn stub_getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
     // environment, we'll provide a generic fallback since CLI tools frequently require it.
     if (std.ascii.eqlIgnoreCase(name, "TMP") or std.ascii.eqlIgnoreCase(name, "TEMP")) {
         const tmp_str = "tmp\x00";
-        const kernel32_mem = @import("../kernel32/mem.zig");
-        const ptr = @as([*]u8, @ptrCast(kernel32_mem.raw_alloc(4096) orelse return null));
+        const stub_common = @import("../stub_common.zig");
+        const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(4096) orelse return null));
         @memset(ptr[0..4096], 0);
         @memcpy(ptr[0..tmp_str.len], tmp_str);
         return @ptrCast(ptr);
@@ -468,10 +468,13 @@ pub fn stub_XcptFilter(xcptnum: u32, pxcptinfoptrs: *anyopaque) callconv(.c) i32
     return 0;
 }
 
-/// Pending init function callbacks for WASM — guest virtual addresses of x86
-/// functions that need to be executed by the interpreter after _initterm returns.
-pub var pending_initterm_callbacks: [64]u32 = [_]u32{0} ** 64;
-pub var pending_initterm_count: usize = 0;
+/// Pending init function callbacks for WASM — shared through stub_common
+/// so x86/execute.zig can read them without importing msvcrt directly.
+const initterm = struct {
+    const sc = @import("../stub_common.zig");
+    fn callbacks() *[64]u32 { return &sc.pending_initterm_callbacks; }
+    fn count() *usize { return &sc.pending_initterm_count; }
+};
 
 pub fn stub_initterm(pfbegin: [*]const ?*const fn () callconv(.c) void, pfend: [*]const ?*const fn () callconv(.c) void) callconv(.c) void {
     if (comptime !platform.is_native) {
@@ -488,9 +491,9 @@ pub fn stub_initterm(pfbegin: [*]const ?*const fn () callconv(.c) void, pfend: [
             const func_ptr = @as(*const u32, @ptrFromInt(current)).*;
             if (func_ptr != 0) {
                 if (trace.enable_tracing) trace.print("  -> enqueuing init func at guest {x}\n", .{func_ptr});
-                if (pending_initterm_count < 64) {
-                    pending_initterm_callbacks[pending_initterm_count] = func_ptr;
-                    pending_initterm_count += 1;
+                if (initterm.count().* < 64) {
+                    initterm.callbacks().*[initterm.count().*] = func_ptr;
+                    initterm.count().* += 1;
                 }
             }
         }

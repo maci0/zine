@@ -10,106 +10,12 @@ pub inline fn guest_memory() ?*x86_memory.GuestMemory {
     return stub_common.guest_memory;
 }
 
-// Bump allocator for guest-accessible memory.
-// On x86-64, page_allocator returns addresses above 4GB which the guest
-// x86 interpreter can't address.  We pre-allocate a large region at a
-// fixed low address and bump-allocate from it.
-const HEAP_CHUNK_SIZE: usize = 16 * 1024 * 1024; // 16 MB per chunk
-var heap_base: ?[*]u8 = null;
-var heap_pos: usize = 0;
-var heap_cap: usize = 0;
-
-fn heapAlloc(size: usize) ?[*]u8 {
-    const aligned = (size + 7) & ~@as(usize, 7); // 8-byte align
-    if (heap_base == null or heap_pos + aligned > heap_cap) {
-        // Allocate a new chunk
-        const plt = @import("../../platform.zig");
-        const chunk_size = @max(aligned + 4096, HEAP_CHUNK_SIZE);
-        const hint = get_aligned_hint(chunk_size);
-        const mem = plt.mmap(@ptrFromInt(hint), chunk_size, false, -1, 0, false, false) catch return null;
-        @memset(mem, 0);
-        heap_base = mem.ptr;
-        heap_pos = 0;
-        heap_cap = chunk_size;
-    }
-    const ptr = heap_base.? + heap_pos;
-    heap_pos += aligned;
-    return ptr;
-}
-
-pub fn raw_alloc(size: usize) ?*anyopaque {
-    const actual_size = if (size == 0) @as(usize, 64) else size;
-
-    // On WASM: use guest heap allocator to keep addresses in range
-    if (guest_memory()) |gmem| {
-        const alloc_size: u32 = @intCast(@min(actual_size + 16, 0xFFFFFFFF));
-        const addr = gmem.guestAlloc(alloc_size);
-        if (addr == 0) return null;
-        // Store size header at the start (8 bytes), return pointer after header
-        gmem.write32(addr, @intCast(actual_size));
-        gmem.write32(addr +% 4, 0);
-        // Return a host pointer into the guest buffer for the header area
-        const buf_offset = addr -% gmem.base_addr;
-        return @ptrCast(gmem.base.ptr + buf_offset + 8);
-    }
-
-    // Native: bump-allocate from low-address heap
-    const total = actual_size + 8;
-    const ptr = heapAlloc(total) orelse return null;
-    const header = @as(*usize, @ptrCast(@alignCast(ptr)));
-    header.* = actual_size;
-    return @ptrCast(ptr + 8);
-}
-
-pub fn raw_realloc(old_ptr: ?*anyopaque, new_size: usize) ?*anyopaque {
-    if (new_size == 0) return null;
-    if (old_ptr == null) return raw_alloc(new_size);
-
-    // On WASM with guest heap: simple alloc + copy (we don't free)
-    if (guest_memory()) |_| {
-        const old_u8 = @as([*]u8, @ptrCast(old_ptr.?));
-        // Read old size from header (8 bytes before the data pointer)
-        const old_header_ptr = old_u8 - 8;
-        const old_size_32 = @as(*align(1) const u32, @ptrCast(old_header_ptr)).*;
-        const old_size: usize = old_size_32;
-
-        const new_mem = raw_alloc(new_size) orelse return null;
-        const copy_len = @min(old_size, new_size);
-        const new_u8 = @as([*]u8, @ptrCast(new_mem));
-        @memcpy(new_u8[0..copy_len], old_u8[0..copy_len]);
-        return new_mem;
-    }
-
-
-    const old_u8_ptr = @as([*]u8, @ptrCast(old_ptr.?)) - 8;
-    const old_header = @as(*usize, @ptrCast(@alignCast(old_u8_ptr)));
-    const old_size = old_header.*;
-
-    const new_mem = heapAlloc(new_size + 8) orelse return null;
-
-    const new_header = @as(*usize, @ptrCast(@alignCast(new_mem)));
-    new_header.* = new_size;
-
-    const copy_len = @min(old_size, new_size);
-    const old_data = @as([*]u8, @ptrCast(old_ptr.?));
-    const new_data = new_mem + 8;
-    @memcpy(new_data[0..copy_len], old_data[0..copy_len]);
-
-    // Bump allocator doesn't support individual frees — old memory is leaked.
-    // This matches Windows process behavior where heaps are reclaimed at exit.
-
-    return @ptrCast(new_data);
-}
-
-// Keep a rolling hint for 64KB aligned allocations to satisfy Windows memory assumptions
-var next_alloc_hint: usize = 0x60000000;
-
-pub fn get_aligned_hint(size: usize) usize {
-    const hint = next_alloc_hint;
-    const aligned_size = (size + 0xFFFF) & ~@as(usize, 0xFFFF);
-    next_alloc_hint += aligned_size;
-    return hint;
-}
+// Re-export shared allocator functions from stub_common.
+// These were moved out of kernel32/mem.zig because both MSVCRT and
+// kernel32 stubs use them — keeping them here was a boundary violation.
+pub const raw_alloc = stub_common.raw_alloc;
+pub const raw_realloc = stub_common.raw_realloc;
+pub const get_aligned_hint = stub_common.get_aligned_hint;
 
 pub fn stub_VirtualAlloc(lpAddress: usize, dwSize: usize, flAllocationType: u32, flProtect: u32) callconv(w32cc.WINAPI) usize {
     _ = flProtect;
