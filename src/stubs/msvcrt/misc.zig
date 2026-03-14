@@ -570,9 +570,9 @@ pub fn stub_read(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
 }
 
 pub fn stub_write(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
-    if (trace.enable_tracing) trace.print("MSVCRT: _write(fd={d}, count={d})\n", .{fd, count});
+    if (trace.enable_tracing) trace.print("MSVCRT: _write(fd={d}, count={d})\n", .{ fd, count });
     if (buffer_ptr == 0 or count == 0) return 0;
-    const slice = @as([*]const u8, @ptrFromInt(buffer_ptr))[0..count];
+    const slice = @as([*]const u8, @ptrFromInt(trace.addr(buffer_ptr)))[0..count];
     const out_file = std.fs.File{ .handle = fd };
     out_file.writeAll(slice) catch |err| {
         if (trace.enable_tracing) trace.print("  -> _write failed: {}\n", .{err});

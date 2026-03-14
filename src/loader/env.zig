@@ -87,6 +87,27 @@ pub const Environment = struct {
         try builtin.exports.put(name, .{ .addr = addr, .param_bytes = 0 });
     }
 
+    /// Update an existing builtin export address (e.g., to relocate data into guest memory).
+    pub fn updateExport(self: *Environment, dll: []const u8, name: []const u8, new_addr: usize) void {
+        var key_buf: [256]u8 = undefined;
+        var key_len: usize = 0;
+        for (dll) |c| {
+            key_buf[key_len] = std.ascii.toLower(c);
+            key_len += 1;
+        }
+        const normalized = key_buf[0..key_len];
+
+        var it = self.builtins.iterator();
+        while (it.next()) |entry| {
+            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, normalized) or std.ascii.eqlIgnoreCase(entry.key_ptr.*, dll)) {
+                if (entry.value_ptr.exports.getPtr(name)) |exp| {
+                    exp.addr = new_addr;
+                    return;
+                }
+            }
+        }
+    }
+
     /// Register a typed Zig function as a built-in export.
     /// On WASM, this generates an intelligent thunk handler that unwraps
     /// guest arguments into the native function signature safely.

@@ -100,8 +100,9 @@ pub fn main() !void {
             continue;
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
-            log.info(
-                \\Usage: zine.wasm [options] [--] <target.exe> [args...]
+            const stdout = std.fs.File{ .handle = 1 };
+            stdout.writeAll(
+                \\Usage: zine [options] [--] <target.exe> [args...]
                 \\
                 \\Run a Win32 PE executable in a WebAssembly environment.
                 \\
@@ -113,16 +114,24 @@ pub fn main() !void {
                 \\  -v, --version       Show version information
                 \\  --                  Stop processing options
                 \\
-            , .{});
-            return;
+                \\Examples:
+                \\  wasmtime --dir=. zine.wasm -- myapp.exe
+                \\  wasmtime --dir=. zine.wasm -- --trace myapp.exe
+                \\
+            ) catch {};
+            std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
-            log.info("zine.wasm 0.1.0", .{});
-            return;
+            const stdout = std.fs.File{ .handle = 1 };
+            stdout.writeAll("zine 0.1.0\n") catch {};
+            std.process.exit(0);
         }
         if (!end_of_options and target_exe_opt == null and arg.len > 1 and arg[0] == '-') {
-            log.err("Unknown option '{s}'. Try 'zine.wasm --help' for more information.", .{arg});
-            return error.InvalidArguments;
+            const stderr = std.fs.File{ .handle = 2 };
+            var err_buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&err_buf, "Error: unknown option '{s}'.\nTry 'zine --help' for more information.\n", .{arg}) catch "Error: unknown option.\n";
+            stderr.writeAll(msg) catch {};
+            std.process.exit(2);
         }
 
         if (target_exe_opt == null) {
@@ -136,8 +145,8 @@ pub fn main() !void {
     }
 
     if (target_exe_opt == null) {
-        log.err("Missing required argument <target.exe>. Try 'zine.wasm --help' for more information.", .{});
-        return error.InvalidArguments;
+        std.fs.File.stderr().writeAll("Error: missing required argument <target.exe>.\nTry 'zine --help' for more information.\n") catch {};
+        std.process.exit(2);
     }
     const target_exe = target_exe_opt.?;
 
@@ -235,6 +244,72 @@ pub fn main() !void {
     };
     loader.setThunkMemory(&thunk_guest_mem, thunk_base_addr);
 
+    // On WASM, data exports like _iob must be in guest memory (32-bit virtual
+    // addresses) so the x86 interpreter can dereference them. We allocate from
+    // the heap region of combined_buf BEFORE import resolution so the IAT gets
+    // patched with correct guest VAs.
+    {
+        // Set up guest heap early so we can guestAlloc
+        thunk_guest_mem.heap_start = image_size + STACK_SIZE + THUNK_RESERVE;
+        thunk_guest_mem.heap_cursor = thunk_guest_mem.heap_start;
+
+        const io_mod = @import("stubs/msvcrt/io.zig");
+        const iob_size: u32 = @sizeOf(@TypeOf(io_mod.msvcrt_iob));
+        const iob_guest_va = thunk_guest_mem.guestAlloc(iob_size);
+        if (iob_guest_va != 0) {
+            // Copy initial _iob data to guest memory
+            const offset = iob_guest_va - preferred_base;
+            const host_ptr = combined_buf[offset .. offset + iob_size];
+            @memcpy(host_ptr, std.mem.asBytes(&io_mod.msvcrt_iob));
+
+            // Pre-allocate stdout/stderr buffers in guest memory.
+            // _initterm is a no-op on WASM, so CRT init functions that
+            // would normally allocate these buffers never run.
+            const BUFSIZ: u32 = 4096;
+            const stdout_buf_va = thunk_guest_mem.guestAlloc(BUFSIZ);
+            const stderr_buf_va = thunk_guest_mem.guestAlloc(BUFSIZ);
+
+            // Patch _iob[1] (stdout) in guest memory
+            if (stdout_buf_va != 0) {
+                const stdout_offset = offset + @sizeOf(io_mod.MSVCRT_FILE); // _iob[1]
+                const stdout_iob = @as(*io_mod.MSVCRT_FILE, @ptrCast(@alignCast(combined_buf[stdout_offset..].ptr)));
+                stdout_iob._base = stdout_buf_va;
+                stdout_iob._ptr = stdout_buf_va;
+                stdout_iob._cnt = @intCast(BUFSIZ);
+                stdout_iob._bufsiz = @intCast(BUFSIZ);
+                stdout_iob._flag = 0x0082; // _IOWRT | _IOFLRTN (write mode, flush on return)
+            }
+
+            // Patch _iob[2] (stderr) in guest memory - unbuffered
+            if (stderr_buf_va != 0) {
+                const stderr_offset = offset + 2 * @sizeOf(io_mod.MSVCRT_FILE); // _iob[2]
+                const stderr_iob = @as(*io_mod.MSVCRT_FILE, @ptrCast(@alignCast(combined_buf[stderr_offset..].ptr)));
+                stderr_iob._base = stderr_buf_va;
+                stderr_iob._ptr = stderr_buf_va;
+                stderr_iob._cnt = @intCast(BUFSIZ);
+                stderr_iob._bufsiz = @intCast(BUFSIZ);
+                stderr_iob._flag = 0x0044; // _IOREAD | _IOWRT  ... actually stderr uses _IONBF
+                // stderr is typically unbuffered: _flag = _IOWRT | _IONBF (0x0002 | 0x0004 = 0x0006)
+                // But some CRTs ignore _IONBF if _base is set, so set small buffer
+                stderr_iob._flag = 0x0006; // _IOWRT | _IONBF
+            }
+
+            // Update the export address to point to guest memory
+            environment.updateExport("MSVCRT.dll", "_iob", iob_guest_va);
+
+            // Store for getFile() to use on WASM
+            io_mod.iob_guest_addr = iob_guest_va;
+        }
+
+        // Also allocate _acmdln in guest memory
+        const acmdln_guest_va = thunk_guest_mem.guestAlloc(4096);
+        if (acmdln_guest_va != 0) {
+            @memset(combined_buf[acmdln_guest_va - preferred_base .. acmdln_guest_va - preferred_base + 4096], 0);
+            environment.updateExport("MSVCRT.dll", "_acmdln", acmdln_guest_va);
+            stubs_msvcrt.msvcrt_acmdln_guest = acmdln_guest_va;
+        }
+    }
+
     // --- Resolve imports iteratively ---
     // IMPORTANT: This must happen BEFORE copying the PE image into combined_buf,
     // because resolveImports patches mod.mapped_memory (IAT slots). If we copy
@@ -315,8 +390,8 @@ pub fn main() !void {
     // --- Set up CPU and run interpreter ---
     const ep_rva: u32 = main_module.parser.getNtHeaders().OptionalHeader.AddressOfEntryPoint;
     if (ep_rva == 0) {
-        log.err("No entry point found in executable.", .{});
-        return error.NoEntryPoint;
+        std.fs.File.stderr().writeAll("Error: no entry point found in executable.\n") catch {};
+        std.process.exit(1);
     }
 
     var cpu = x86_cpu.Cpu{};

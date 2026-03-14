@@ -236,6 +236,8 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "IsBadReadPtr", kernel32_misc.stub_IsBadReadPtr);
     try environment.addBuiltinExportComptime(m, "IsBadWritePtr", kernel32_misc.stub_IsBadWritePtr);
     try environment.addBuiltinExportComptime(m, "IsBadCodePtr", kernel32_misc.stub_IsBadCodePtr);
+    try environment.addBuiltinExportComptime(m, "IsBadStringPtrA", kernel32_misc.stub_IsBadStringPtrA);
+    try environment.addBuiltinExportComptime(m, "IsBadStringPtrW", kernel32_misc.stub_IsBadStringPtrW);
     try environment.addBuiltinExportComptime(m, "MulDiv", kernel32_misc.stub_MulDiv);
     try environment.addBuiltinExportComptime(m, "Beep", kernel32_misc.stub_Beep);
     try environment.addBuiltinExportComptime(m, "OutputDebugStringA", kernel32_misc.stub_OutputDebugStringA);

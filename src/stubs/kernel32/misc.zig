@@ -404,6 +404,16 @@ pub fn stub_IsBadCodePtr(lpfn: usize) callconv(w32cc.WINAPI) i32 {
     return if (lpfn == 0) 1 else 0;
 }
 
+pub fn stub_IsBadStringPtrA(lpsz: usize, ucchMax: usize) callconv(w32cc.WINAPI) i32 {
+    _ = ucchMax;
+    return if (lpsz == 0) 1 else 0;
+}
+
+pub fn stub_IsBadStringPtrW(lpsz: usize, ucchMax: usize) callconv(w32cc.WINAPI) i32 {
+    _ = ucchMax;
+    return if (lpsz == 0) 1 else 0;
+}
+
 // --- INI file support ---
 
 fn readIniValue(lpFileName: usize, lpAppName: usize, lpKeyName: usize) ?[]const u8 {

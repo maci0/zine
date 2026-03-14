@@ -62,7 +62,7 @@ The native entry point handles:
   - `--fltk` — use native FLTK GUI instead of web UI
   - `--no-gui` — disable GUI (no web server), even for GUI subsystem apps
   - `-h`, `--help` — show help
-  - `-V`, `--version` — show version
+  - `-v`, `--version` — show version
   - `--` — end of zine options (allows target names starting with `-`)
   - Environment variables: `ZINE_TRACE` (API tracing), `ZINE_TRACE_INSN` (instruction tracing), `ZINE_PROFILE` (profiling)
 - `.bat`/`.cmd` file preprocessing via `bat.zig`

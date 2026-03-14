@@ -30,6 +30,10 @@ pub var msvcrt_iob: [3]MSVCRT_FILE = [_]MSVCRT_FILE{
     MSVCRT_FILE{ ._ptr = 0, ._cnt = 0, ._base = 0, ._flag = 0x0004, ._file = 2, ._charbuf = 0, ._bufsiz = 0, ._tmpfname = 0 },
 };
 
+/// On WASM, _iob is allocated in guest memory at this virtual address.
+/// Set by wasm_main.zig during startup.
+pub var iob_guest_addr: usize = 0;
+
 // We need a way to map MSVCRT_FILE pointers to Zig File handles.
 // Since we don't want to use malloc/free for everything, we can keep a simple array of open files.
 const MAX_FILES = 64;
@@ -40,13 +44,28 @@ pub fn getFile(ptr: ?*anyopaque) ?std.fs.File {
     if (ptr) |p| {
         const ptr_val = @intFromPtr(p);
 
-        // Check if it's one of the standard streams
+        // Check if it's one of the standard streams (host address)
         const iob_start = @intFromPtr(&msvcrt_iob);
         if (ptr_val >= iob_start and ptr_val < iob_start + @sizeOf(@TypeOf(msvcrt_iob))) {
             const idx = (ptr_val - iob_start) / @sizeOf(MSVCRT_FILE);
             if (idx == 0) return std.fs.File{ .handle = 0 }; // stdin
             if (idx == 1) return std.fs.File{ .handle = 1 }; // stdout
             if (idx == 2) return std.fs.File{ .handle = 2 }; // stderr
+        }
+
+        // On WASM, also check guest-memory _iob addresses
+        if (comptime !@import("../../platform.zig").is_native) {
+            if (iob_guest_addr != 0) {
+                const translated = trace.addr(ptr_val);
+                const iob_host = trace.addr(iob_guest_addr);
+                const iob_end = iob_host + @sizeOf(@TypeOf(msvcrt_iob));
+                if (translated >= iob_host and translated < iob_end) {
+                    const idx = (translated - iob_host) / @sizeOf(MSVCRT_FILE);
+                    if (idx == 0) return std.fs.File{ .handle = 0 };
+                    if (idx == 1) return std.fs.File{ .handle = 1 };
+                    if (idx == 2) return std.fs.File{ .handle = 2 };
+                }
+            }
         }
 
         // Check if it's one of our dynamically opened files

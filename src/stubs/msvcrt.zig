@@ -22,6 +22,7 @@ pub var msvcrt_mb_cur_max: i32 = 1;
 // Initialized to point to empty strings; main.zig sets _acmdln to the real command line
 var acmdln_default: [1]u8 = .{0};
 pub var msvcrt_acmdln: usize = 0;
+pub var msvcrt_acmdln_guest: usize = 0; // Guest VA on WASM
 var wcmdln_default: [2]u8 = .{ 0, 0 };
 pub var msvcrt_wcmdln: usize = 0;
 

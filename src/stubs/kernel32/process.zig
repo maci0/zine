@@ -281,6 +281,7 @@ pub fn stub_GetModuleHandleA(lpModuleName_ptr: usize) callconv(w32cc.WINAPI) usi
 
 var cmdline_buf: [4096]u8 = undefined;
 var cmdline_initialized: bool = false;
+var cmdline_guest_addr: usize = 0; // Guest virtual address for WASM
 
 pub fn stub_GetCommandLineA() callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineA\n", .{});
@@ -343,7 +344,30 @@ pub fn stub_GetCommandLineA() callconv(w32cc.WINAPI) usize {
             pos = dummy.len;
         }
         cmdline_buf[pos] = 0;
+
+        // On WASM, copy cmdline to guest memory so the returned pointer
+        // is a guest virtual address readable by the x86 interpreter.
+        if (comptime !platform.is_native) {
+            const kernel32_mem_mod = @import("mem.zig");
+            if (kernel32_mem_mod.guest_memory) |gmem| {
+                const guest_va = gmem.guestAlloc(4096);
+                if (guest_va != 0) {
+                    const host_ptr = @as([*]u8, @ptrFromInt(trace.addr(guest_va)));
+                    @memcpy(host_ptr[0 .. pos + 1], cmdline_buf[0 .. pos + 1]);
+                    cmdline_guest_addr = guest_va;
+                }
+            }
+        }
+
         cmdline_initialized = true;
+    }
+
+    // On WASM, return the guest virtual address
+    if (comptime !platform.is_native) {
+        if (cmdline_guest_addr != 0) {
+            if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineA -> '{s}' (guest addr 0x{x})\n", .{ trace.c_span(cmdline_guest_addr), cmdline_guest_addr });
+            return cmdline_guest_addr;
+        }
     }
 
     if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineA -> '{s}'\n", .{trace.c_span(@intFromPtr(@as([*:0]const u8, @ptrCast(&cmdline_buf))))});
