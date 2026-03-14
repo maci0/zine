@@ -417,8 +417,8 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
 
     // All SEH handlers returned ExceptionContinueSearch.
     // Try the top-level exception filter set via SetUnhandledExceptionFilter.
-    const kernel32_misc = @import("win32/kernel32/misc.zig");
-    if (kernel32_misc.unhandled_exception_filter != 0) {
+    const kernel32_error = @import("win32/kernel32/error.zig");
+    if (kernel32_error.unhandled_exception_filter != 0) {
         // Build EXCEPTION_POINTERS on the stack
         var exc_ptrs: extern struct {
             ExceptionRecord: *teb.EXCEPTION_RECORD,
@@ -428,8 +428,8 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
             .ContextRecord = &context,
         };
 
-        const filter_fn = @as(*const fn (*const anyopaque) callconv(.winapi) i32, @ptrFromInt(kernel32_misc.unhandled_exception_filter));
-        if (trace.enable_tracing) trace.print("SEH: Calling top-level exception filter at 0x{X}\n", .{kernel32_misc.unhandled_exception_filter});
+        const filter_fn = @as(*const fn (*const anyopaque) callconv(.winapi) i32, @ptrFromInt(kernel32_error.unhandled_exception_filter));
+        if (trace.enable_tracing) trace.print("SEH: Calling top-level exception filter at 0x{X}\n", .{kernel32_error.unhandled_exception_filter});
         const result = filter_fn(@ptrCast(&exc_ptrs));
 
         if (result == -1) { // EXCEPTION_CONTINUE_EXECUTION
@@ -754,7 +754,7 @@ pub fn main() !void {
     // Store the exe's directory as a Windows-style path for GetModuleFileNameA
     {
         const path_utils = @import("path_utils.zig");
-        const kernel32_misc = @import("win32/kernel32/misc.zig");
+        const kernel32_path = @import("win32/kernel32/path.zig");
         const fixed_exe = try allocator.dupe(u8, target_exe);
         defer allocator.free(fixed_exe);
         std.mem.replaceScalar(u8, fixed_exe, '\\', '/');
@@ -777,13 +777,13 @@ pub fn main() !void {
             if (std.fs.cwd().realpathAlloc(allocator, ".")) |real_cwd| {
                 var cwd_win_buf: [1024]u8 = undefined;
                 const cwd_win_len = path_utils.posixToWin32(real_cwd, &cwd_win_buf);
-                const cwd_copy_len = @min(cwd_win_len, kernel32_misc.current_directory.len - 1);
-                @memcpy(kernel32_misc.current_directory[0..cwd_copy_len], cwd_win_buf[0..cwd_copy_len]);
-                kernel32_misc.current_directory_len = cwd_copy_len;
+                const cwd_copy_len = @min(cwd_win_len, kernel32_path.current_directory.len - 1);
+                @memcpy(kernel32_path.current_directory[0..cwd_copy_len], cwd_win_buf[0..cwd_copy_len]);
+                kernel32_path.current_directory_len = cwd_copy_len;
             } else |_| {
                 // Fallback: use exe dir if we can't get the real cwd
-                @memcpy(kernel32_misc.current_directory[0..win_dir_len], win_dir_buf[0..win_dir_len]);
-                kernel32_misc.current_directory_len = win_dir_len;
+                @memcpy(kernel32_path.current_directory[0..win_dir_len], win_dir_buf[0..win_dir_len]);
+                kernel32_path.current_directory_len = win_dir_len;
             }
         }
     }

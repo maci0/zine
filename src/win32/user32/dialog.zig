@@ -13,7 +13,7 @@ var modal_dialog_result: isize = 0;
 var modal_dialog_dismissed: bool = false;
 var modal_dlgproc: usize = 0;
 
-pub fn stub_MessageBoxA(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32) callconv(w32cc.WINAPI) i32 {
+pub fn MessageBoxA(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = uType;
     const text = if (lpText != 0) trace.c_span(lpText) else "(null)";
@@ -26,7 +26,7 @@ pub fn stub_MessageBoxA(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32
     return 1; // IDOK
 }
 
-pub fn stub_DialogBoxParamA(hInstance: usize, lpTemplateName: usize, hWndParent: usize, lpDialogFunc: usize, dwInitParam: isize) callconv(w32cc.WINAPI) isize {
+pub fn DialogBoxParamA(hInstance: usize, lpTemplateName: usize, hWndParent: usize, lpDialogFunc: usize, dwInitParam: isize) callconv(w32cc.WINAPI) isize {
     _ = hWndParent;
     if (trace.enable_tracing) trace.print("USER32: DialogBoxParamA(template={x}, dlgproc={x})\n", .{ lpTemplateName, lpDialogFunc });
 
@@ -168,7 +168,7 @@ fn handleModalCancel() void {
     }
 }
 
-pub fn stub_EndDialog(hDlg: usize, nResult: isize) callconv(w32cc.WINAPI) i32 {
+pub fn EndDialog(hDlg: usize, nResult: isize) callconv(w32cc.WINAPI) i32 {
     _ = hDlg;
     if (trace.enable_tracing) trace.print("USER32: EndDialog(result={d})\n", .{nResult});
 
@@ -179,14 +179,14 @@ pub fn stub_EndDialog(hDlg: usize, nResult: isize) callconv(w32cc.WINAPI) i32 {
     return 1;
 }
 
-pub fn stub_GetDlgItem(hDlg: usize, nIDDlgItem: i32) callconv(w32cc.WINAPI) usize {
+pub fn GetDlgItem(hDlg: usize, nIDDlgItem: i32) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("USER32: GetDlgItem(id={d})\n", .{nIDDlgItem});
     // Return a deterministic HWND for the child control based on the parent dialog and child ID
     // This allows subclassing child controls without subclassing the main dialog!
     return (hDlg << 8) ^ @as(usize, @bitCast(@as(isize, nIDDlgItem)));
 }
 
-pub fn stub_SetDlgItemTextA(hDlg: usize, nIDDlgItem: i32, lpString: usize) callconv(w32cc.WINAPI) i32 {
+pub fn SetDlgItemTextA(hDlg: usize, nIDDlgItem: i32, lpString: usize) callconv(w32cc.WINAPI) i32 {
     _ = hDlg;
     const text = if (lpString != 0) trace.c_span(lpString) else "";
     if (trace.enable_tracing) {
@@ -249,7 +249,7 @@ pub fn stub_GetDlgItemInt(hDlg: usize, nIDDlgItem: i32, lpTranslated: usize, bSi
 
 var next_dialog_hwnd: usize = DIALOG_HWND;
 
-pub fn stub_CreateDialogParamA(hInstance: usize, lpTemplateName: usize, hWndParent: usize, lpDialogFunc: usize, dwInitParam: usize) callconv(w32cc.WINAPI) usize {
+pub fn CreateDialogParamA(hInstance: usize, lpTemplateName: usize, hWndParent: usize, lpDialogFunc: usize, dwInitParam: usize) callconv(w32cc.WINAPI) usize {
     _ = hWndParent;
 
     const dialog_hwnd = next_dialog_hwnd;
@@ -317,7 +317,7 @@ pub fn stub_SetDlgItemInt(hDlg: usize, nIDDlgItem: i32, uValue: u32, bSigned: i3
     return 1;
 }
 
-pub fn stub_MessageBoxW(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32) callconv(w32cc.WINAPI) i32 {
+pub fn MessageBoxW(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = uType;
     if (trace.enable_tracing) trace.print("USER32: MessageBoxW\n", .{});

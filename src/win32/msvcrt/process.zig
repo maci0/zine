@@ -33,7 +33,7 @@ fn ensureGuestGlobals() u32 {
 
         // Initialize with current global values
         gmem.write32(addr + g_argc, @bitCast(msvcrt.global_argc));
-        // argv/envp will be filled by ensureGuestArgs → stub_getmainargs
+        // argv/envp will be filled by ensureGuestArgs → getmainargs
         gmem.write32(addr + g_argv, guest_argv_addr);
         gmem.write32(addr + g_envp, guest_envp_addr);
         gmem.write32(addr + g_fmode, msvcrt.msvcrt_fmode);
@@ -57,13 +57,13 @@ pub fn updateGuestGlobals() void {
     }
 }
 
-pub fn stub_p_argc() callconv(.c) usize {
+pub fn p_argc() callconv(.c) usize {
     const g = ensureGuestGlobals();
     if (g != 0) return g + g_argc;
     return @intFromPtr(&msvcrt.global_argc);
 }
 
-pub fn stub_p_argv() callconv(.c) usize {
+pub fn p_argv() callconv(.c) usize {
     const g = ensureGuestGlobals();
     if (g != 0) {
         // Make sure guest args are built first
@@ -74,7 +74,7 @@ pub fn stub_p_argv() callconv(.c) usize {
     return @intFromPtr(&msvcrt.global_argv);
 }
 
-pub fn stub_p_environ() callconv(.c) usize {
+pub fn p_environ() callconv(.c) usize {
     const g = ensureGuestGlobals();
     if (g != 0) {
         ensureGuestArgs();
@@ -178,7 +178,7 @@ fn ensureGuestArgs() void {
     if (trace.enable_tracing) trace.print("MSVCRT: built guest args at 0x{X} ({d} bytes)\n", .{ base_addr, gpos });
 }
 
-pub fn stub_getmainargs(
+pub fn getmainargs(
     argc_ptr: usize,
     argv_ptr: usize,
     envp_ptr: usize,
@@ -219,12 +219,12 @@ pub fn stub_getmainargs(
     return 0;
 }
 
-pub fn stub_exit(status: i32) callconv(.c) noreturn {
+pub fn exit(status: i32) callconv(.c) noreturn {
     if (trace.enable_tracing) trace.print("MSVCRT: exit({d}) called from 0x{X}\n", .{ status, @returnAddress() });
     platform.exitProcess(@intCast(@as(u32, @bitCast(status)) & 0xFF));
 }
 
-pub fn stub_spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 {
+pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 {
     if (comptime !platform.is_native) {
         _ = .{ mode, cmdname_ptr, argv_ptr };
         if (trace.enable_tracing) trace.print("MSVCRT: _spawnvp not supported on this platform\n", .{});
@@ -354,7 +354,7 @@ pub fn stub_spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c)
     }
 }
 
-pub fn stub_getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
+pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
     if (name_ptr == 0) return null;
     const name = trace.c_span(name_ptr);
     
@@ -404,7 +404,7 @@ pub fn stub_getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
     return null;
 }
 
-pub fn stub_putenv(envstring_ptr: usize) callconv(.c) i32 {
+pub fn putenv(envstring_ptr: usize) callconv(.c) i32 {
     if (envstring_ptr == 0) return -1;
     const envstring = trace.c_span(envstring_ptr);
     if (trace.enable_tracing) trace.print("MSVCRT: _putenv('{s}')\n", .{envstring});
@@ -434,7 +434,7 @@ pub fn stub_putenv(envstring_ptr: usize) callconv(.c) i32 {
     return 0;
 }
 
-pub fn stub_p_pgmptr() callconv(.c) usize {
+pub fn p_pgmptr() callconv(.c) usize {
     const g = ensureGuestGlobals();
     if (g != 0) {
         // Make sure argv[0] is available in guest memory for pgmptr
@@ -465,13 +465,13 @@ pub fn stub_XcptFilter(xcptnum: u32, pxcptinfoptrs: *anyopaque) callconv(.c) i32
 
 /// Pending init function callbacks for WASM — shared through stub_common
 /// so x86/execute.zig can read them without importing msvcrt directly.
-const initterm = struct {
+const initterm_state = struct {
     const sc = @import("../stub_common.zig");
     fn callbacks() *[64]u32 { return &sc.pending_initterm_callbacks; }
     fn count() *usize { return &sc.pending_initterm_count; }
 };
 
-pub fn stub_initterm(pfbegin: [*]const ?*const fn () callconv(.c) void, pfend: [*]const ?*const fn () callconv(.c) void) callconv(.c) void {
+pub fn initterm(pfbegin: [*]const ?*const fn () callconv(.c) void, pfend: [*]const ?*const fn () callconv(.c) void) callconv(.c) void {
     if (comptime !platform.is_native) {
         // On WASM, the function pointers are guest x86 addresses stored as
         // u32 values in the PE's .CRT section. We read them and enqueue for
@@ -486,9 +486,9 @@ pub fn stub_initterm(pfbegin: [*]const ?*const fn () callconv(.c) void, pfend: [
             const func_ptr = @as(*const u32, @ptrFromInt(current)).*;
             if (func_ptr != 0) {
                 if (trace.enable_tracing) trace.print("  -> enqueuing init func at guest {x}\n", .{func_ptr});
-                if (initterm.count().* < 64) {
-                    initterm.callbacks().*[initterm.count().*] = func_ptr;
-                    initterm.count().* += 1;
+                if (initterm_state.count().* < 64) {
+                    initterm_state.callbacks().*[initterm_state.count().*] = func_ptr;
+                    initterm_state.count().* += 1;
                 }
             }
         }
@@ -500,19 +500,19 @@ pub fn stub_initterm(pfbegin: [*]const ?*const fn () callconv(.c) void, pfend: [
     }
 }
 
-pub fn stub_p_fmode() callconv(.c) usize {
+pub fn p_fmode() callconv(.c) usize {
     const g = ensureGuestGlobals();
     if (g != 0) return g + g_fmode;
     return @intFromPtr(&msvcrt.msvcrt_fmode);
 }
 
-pub fn stub_p_commode() callconv(.c) usize {
+pub fn p_commode() callconv(.c) usize {
     const g = ensureGuestGlobals();
     if (g != 0) return g + g_commode;
     return @intFromPtr(&msvcrt.msvcrt_commode);
 }
 
-pub fn stub_p_initenv() callconv(.c) usize {
+pub fn p_initenv() callconv(.c) usize {
     const g = ensureGuestGlobals();
     if (g != 0) return g + g_initenv;
     const static_p = struct {
@@ -522,15 +522,15 @@ pub fn stub_p_initenv() callconv(.c) usize {
     return @intFromPtr(@as(*const anyopaque, @ptrCast(@constCast(&static_p.p))));
 }
 
-pub fn stub_p_timezone() callconv(.c) *i32 {
+pub fn p_timezone() callconv(.c) *i32 {
     return &msvcrt.msvcrt_timezone;
 }
 
-pub fn stub_p_daylight() callconv(.c) *i32 {
+pub fn p_daylight() callconv(.c) *i32 {
     return &msvcrt.msvcrt_daylight;
 }
 
-pub fn stub_p_tzname() callconv(.c) *[2]?*anyopaque {
+pub fn p_tzname() callconv(.c) *[2]?*anyopaque {
     return &msvcrt.msvcrt_tzname;
 }
 
@@ -542,7 +542,7 @@ pub fn stub_set_app_type(app_type: i32) callconv(.c) void {
 var wargv_ptrs: [64]?[*:0]u16 = [_]?[*:0]u16{null} ** 64;
 var wargv_bufs: [64][512]u16 = undefined;
 
-pub fn stub_wgetmainargs(
+pub fn wgetmainargs(
     argc: *i32,
     argv: *[*]?[*:0]u16,
     envp: *[*]?[*:0]u8,

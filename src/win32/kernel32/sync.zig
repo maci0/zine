@@ -4,34 +4,70 @@ const w32cc = @import("../../calling_convention.zig");
 
 // --- Interlocked operations ---
 
-pub fn stub_InterlockedIncrement(lpAddend: usize) callconv(w32cc.WINAPI) i32 {
+pub fn InterlockedIncrement(lpAddend: usize) callconv(w32cc.WINAPI) i32 {
     if (lpAddend == 0) return 0;
     const ptr = @as(*i32, @ptrFromInt(lpAddend));
     return @atomicRmw(i32, ptr, .Add, 1, .seq_cst) + 1;
 }
 
-pub fn stub_InterlockedDecrement(lpAddend: usize) callconv(w32cc.WINAPI) i32 {
+pub fn InterlockedDecrement(lpAddend: usize) callconv(w32cc.WINAPI) i32 {
     if (lpAddend == 0) return 0;
     const ptr = @as(*i32, @ptrFromInt(lpAddend));
     return @atomicRmw(i32, ptr, .Sub, 1, .seq_cst) - 1;
 }
 
 // --- Critical sections ---
+// Backed by real mutexes since CreateThread spawns real OS threads.
 
-pub fn stub_InitializeCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
+const MAX_CRITICAL_SECTIONS = 256;
+var cs_mutexes: [MAX_CRITICAL_SECTIONS]std.Thread.Mutex = init_cs: {
+    var arr: [MAX_CRITICAL_SECTIONS]std.Thread.Mutex = undefined;
+    for (&arr) |*m| m.* = .{};
+    break :init_cs arr;
+};
+var cs_addrs: [MAX_CRITICAL_SECTIONS]usize = [_]usize{0} ** MAX_CRITICAL_SECTIONS;
+
+fn getOrCreateCS(addr: usize) ?*std.Thread.Mutex {
+    // Find existing
+    for (0..MAX_CRITICAL_SECTIONS) |i| {
+        if (cs_addrs[i] == addr) return &cs_mutexes[i];
+    }
+    // Allocate new
+    for (0..MAX_CRITICAL_SECTIONS) |i| {
+        if (cs_addrs[i] == 0) {
+            cs_addrs[i] = addr;
+            cs_mutexes[i] = .{};
+            return &cs_mutexes[i];
+        }
+    }
+    return null; // table full — fall through to no-op
+}
+
+pub fn InitializeCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: InitializeCriticalSection({x})\n", .{lpCriticalSection});
+    if (lpCriticalSection != 0) _ = getOrCreateCS(lpCriticalSection);
 }
 
-pub fn stub_EnterCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
-    _ = lpCriticalSection;
+pub fn EnterCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
+    if (lpCriticalSection == 0) return;
+    if (getOrCreateCS(lpCriticalSection)) |m| m.lock();
 }
 
-pub fn stub_LeaveCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
-    _ = lpCriticalSection;
+pub fn LeaveCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
+    if (lpCriticalSection == 0) return;
+    if (getOrCreateCS(lpCriticalSection)) |m| m.unlock();
 }
 
-pub fn stub_DeleteCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
+pub fn DeleteCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: DeleteCriticalSection({x})\n", .{lpCriticalSection});
+    if (lpCriticalSection == 0) return;
+    for (0..MAX_CRITICAL_SECTIONS) |i| {
+        if (cs_addrs[i] == lpCriticalSection) {
+            cs_addrs[i] = 0;
+            cs_mutexes[i] = .{};
+            return;
+        }
+    }
 }
 
 // --- Events ---
@@ -56,7 +92,7 @@ pub fn stub_SetEvent(hEvent: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 // WAIT_OBJECT_0 = 0
-pub fn stub_WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.WINAPI) u32 {
+pub fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: WaitForSingleObject({x}, {d})\n", .{ hHandle, dwMilliseconds });
 
     // Check if this is a child process handle
@@ -136,20 +172,20 @@ fn getOrCreateTlsEntry() *TlsThreadEntry {
     return &tls_threads[0];
 }
 
-pub fn stub_TlsAlloc() callconv(w32cc.WINAPI) u32 {
+pub fn TlsAlloc() callconv(w32cc.WINAPI) u32 {
     if (tls_next >= MAX_TLS_SLOTS) return 0xFFFFFFFF; // TLS_OUT_OF_INDEXES
     const idx = tls_next;
     tls_next += 1;
     return idx;
 }
 
-pub fn stub_TlsGetValue(dwTlsIndex: u32) callconv(w32cc.WINAPI) usize {
+pub fn TlsGetValue(dwTlsIndex: u32) callconv(w32cc.WINAPI) usize {
     if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;
     const entry = getOrCreateTlsEntry();
     return entry.slots[dwTlsIndex];
 }
 
-pub fn stub_TlsSetValue(dwTlsIndex: u32, lpTlsValue: usize) callconv(w32cc.WINAPI) i32 {
+pub fn TlsSetValue(dwTlsIndex: u32, lpTlsValue: usize) callconv(w32cc.WINAPI) i32 {
     if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;
     const entry = getOrCreateTlsEntry();
     entry.slots[dwTlsIndex] = lpTlsValue;
@@ -188,7 +224,7 @@ pub fn stub_ReleaseSemaphore(hSemaphore: usize, lReleaseCount: i32, lpPreviousCo
 
 var next_dup_handle: usize = 0xD0000001;
 
-pub fn stub_DuplicateHandle(
+pub fn DuplicateHandle(
     hSourceProcessHandle: usize,
     hSourceHandle: usize,
     hTargetProcessHandle: usize,
@@ -203,17 +239,31 @@ pub fn stub_DuplicateHandle(
     _ = bInheritHandle;
     _ = dwOptions;
     if (trace.enable_tracing) trace.print("KERNEL32: DuplicateHandle(src={x})\n", .{hSourceHandle});
-    if (lpTargetHandle != 0) {
-        // Return the same handle (or a new fake one)
-        @as(*usize, @ptrFromInt(lpTargetHandle)).* = next_dup_handle;
-        next_dup_handle += 1;
+    if (lpTargetHandle == 0) return 1;
+
+    // For real file descriptors (small values), use dup()
+    if (hSourceHandle < 0x10000) {
+        const src_fd = @as(i32, @bitCast(@as(u32, @truncate(hSourceHandle))));
+        const new_fd = std.posix.dup(src_fd) catch {
+            // Fallback to fake handle
+            @as(*usize, @ptrFromInt(lpTargetHandle)).* = next_dup_handle;
+            next_dup_handle += 1;
+            return 1;
+        };
+        if (trace.enable_tracing) trace.print("KERNEL32: DuplicateHandle fd {d} -> {d}\n", .{ src_fd, new_fd });
+        @as(*usize, @ptrFromInt(lpTargetHandle)).* = @intCast(@as(u32, @bitCast(new_fd)));
+        return 1;
     }
+
+    // Synthetic handle: return a new fake one
+    @as(*usize, @ptrFromInt(lpTargetHandle)).* = next_dup_handle;
+    next_dup_handle += 1;
     return 1; // TRUE = success
 }
 
 // --- InterlockedCompareExchange ---
 // LONG InterlockedCompareExchange(LONG volatile *Destination, LONG Exchange, LONG Comperand)
-pub fn stub_InterlockedCompareExchange(dest: usize, exchange: i32, comperand: i32) callconv(w32cc.WINAPI) i32 {
+pub fn InterlockedCompareExchange(dest: usize, exchange: i32, comperand: i32) callconv(w32cc.WINAPI) i32 {
     if (dest == 0) return 0;
     const ptr = @as(*i32, @ptrFromInt(dest));
     return @cmpxchgStrong(i32, ptr, comperand, exchange, .seq_cst, .seq_cst) orelse comperand;
@@ -239,14 +289,14 @@ pub fn stub_FindNextChangeNotification(hChangeHandle: usize) callconv(w32cc.WINA
 
 // --- SList (Interlocked Singly Linked Lists) ---
 
-pub fn stub_InitializeSListHead(ListHead: usize) callconv(w32cc.WINAPI) void {
+pub fn InitializeSListHead(ListHead: usize) callconv(w32cc.WINAPI) void {
     // SLIST_HEADER is 8 bytes on x86 — zero it out
     if (ListHead != 0) {
         @memset(@as([*]u8, @ptrFromInt(ListHead))[0..8], 0);
     }
 }
 
-pub fn stub_InterlockedFlushSList(ListHead: usize) callconv(w32cc.WINAPI) usize {
+pub fn InterlockedFlushSList(ListHead: usize) callconv(w32cc.WINAPI) usize {
     if (ListHead != 0) {
         // Read the first pointer (first 4 bytes of SLIST_HEADER)
         const first = @as(*usize, @ptrFromInt(ListHead)).*;
@@ -258,25 +308,25 @@ pub fn stub_InterlockedFlushSList(ListHead: usize) callconv(w32cc.WINAPI) usize 
 
 // --- Extended Critical Sections ---
 
-pub fn stub_InitializeCriticalSectionEx(lpCriticalSection: usize, dwSpinCount: u32, flags: u32) callconv(w32cc.WINAPI) i32 {
+pub fn InitializeCriticalSectionEx(lpCriticalSection: usize, dwSpinCount: u32, flags: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: InitializeCriticalSectionEx(cs={X}, spin={d}, flags={X})\n", .{ lpCriticalSection, dwSpinCount, flags });
-    stub_InitializeCriticalSection(lpCriticalSection);
+    InitializeCriticalSection(lpCriticalSection);
     return 1; // TRUE = success
 }
 
-pub fn stub_InitializeCriticalSectionAndSpinCount(lpCriticalSection: usize, dwSpinCount: u32) callconv(w32cc.WINAPI) i32 {
+pub fn InitializeCriticalSectionAndSpinCount(lpCriticalSection: usize, dwSpinCount: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: InitializeCriticalSectionAndSpinCount(cs={X}, spin={d})\n", .{ lpCriticalSection, dwSpinCount });
-    stub_InitializeCriticalSection(lpCriticalSection);
+    InitializeCriticalSection(lpCriticalSection);
     return 1; // TRUE = success
 }
 
 // --- Pointer encoding (identity transform in emulation) ---
 
-pub fn stub_EncodePointer(ptr: usize) callconv(w32cc.WINAPI) usize {
+pub fn EncodePointer(ptr: usize) callconv(w32cc.WINAPI) usize {
     return ptr; // No encoding needed
 }
 
-pub fn stub_DecodePointer(ptr: usize) callconv(w32cc.WINAPI) usize {
+pub fn DecodePointer(ptr: usize) callconv(w32cc.WINAPI) usize {
     return ptr; // No decoding needed
 }
 
@@ -288,7 +338,7 @@ const MAX_FLS_SLOTS = 128;
 var fls_values: [MAX_FLS_SLOTS]usize = [_]usize{0} ** MAX_FLS_SLOTS;
 var fls_callbacks: [MAX_FLS_SLOTS]usize = [_]usize{0} ** MAX_FLS_SLOTS;
 
-pub fn stub_FlsAlloc(lpCallback: usize) callconv(w32cc.WINAPI) u32 {
+pub fn FlsAlloc(lpCallback: usize) callconv(w32cc.WINAPI) u32 {
     if (fls_next >= MAX_FLS_SLOTS) return 0xFFFFFFFF; // FLS_OUT_OF_INDEXES
     const idx = fls_next;
     fls_callbacks[idx] = lpCallback;
@@ -298,18 +348,18 @@ pub fn stub_FlsAlloc(lpCallback: usize) callconv(w32cc.WINAPI) u32 {
     return idx;
 }
 
-pub fn stub_FlsGetValue(dwFlsIndex: u32) callconv(w32cc.WINAPI) usize {
+pub fn FlsGetValue(dwFlsIndex: u32) callconv(w32cc.WINAPI) usize {
     if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
     return fls_values[dwFlsIndex];
 }
 
-pub fn stub_FlsSetValue(dwFlsIndex: u32, lpFlsData: usize) callconv(w32cc.WINAPI) i32 {
+pub fn FlsSetValue(dwFlsIndex: u32, lpFlsData: usize) callconv(w32cc.WINAPI) i32 {
     if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
     fls_values[dwFlsIndex] = lpFlsData;
     return 1; // TRUE
 }
 
-pub fn stub_FlsFree(dwFlsIndex: u32) callconv(w32cc.WINAPI) i32 {
+pub fn FlsFree(dwFlsIndex: u32) callconv(w32cc.WINAPI) i32 {
     if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
     fls_values[dwFlsIndex] = 0;
     fls_callbacks[dwFlsIndex] = 0;
@@ -318,13 +368,13 @@ pub fn stub_FlsFree(dwFlsIndex: u32) callconv(w32cc.WINAPI) i32 {
 
 // --- Additional sync stubs ---
 
-pub fn stub_InterlockedExchange(target: usize, value: i32) callconv(w32cc.WINAPI) i32 {
+pub fn InterlockedExchange(target: usize, value: i32) callconv(w32cc.WINAPI) i32 {
     if (target == 0) return 0;
     const ptr = @as(*i32, @ptrFromInt(target));
     return @atomicRmw(i32, ptr, .Xchg, value, .seq_cst);
 }
 
-pub fn stub_TlsFree(dwTlsIndex: u32) callconv(w32cc.WINAPI) i32 {
+pub fn TlsFree(dwTlsIndex: u32) callconv(w32cc.WINAPI) i32 {
     if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;
     // Clear the value in all thread entries
     for (&tls_threads) |*entry| {

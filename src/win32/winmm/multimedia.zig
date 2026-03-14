@@ -1,14 +1,14 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const renderer = @import("../../gui/renderer.zig");
-const dsound_stubs = @import("../dsound/stubs.zig");
+const dsound_stubs = @import("../dsound/dsound.zig");
 const platform = @import("../../platform.zig");
 const w32 = @import("../../win32_constants.zig");
 const w32cc = @import("../../calling_convention.zig");
 const winmm = @import("../winmm.zig");
 
 
-pub fn stub_timeGetTime() callconv(w32cc.WINAPI) u32 {
+pub fn timeGetTime() callconv(w32cc.WINAPI) u32 {
     // Called in tight timing loops; yield to avoid 100% CPU usage.
     platform.yield();
 
@@ -16,7 +16,7 @@ pub fn stub_timeGetTime() callconv(w32cc.WINAPI) u32 {
     return @intCast(ts & 0xFFFFFFFF);
 }
 
-pub fn stub_waveOutSetVolume(hwo: u32, dwVolume: u32) callconv(w32cc.WINAPI) u32 {
+pub fn waveOutSetVolume(hwo: u32, dwVolume: u32) callconv(w32cc.WINAPI) u32 {
     _ = hwo;
     winmm.waveout_volume = dwVolume;
 
@@ -39,7 +39,7 @@ pub fn stub_waveOutSetVolume(hwo: u32, dwVolume: u32) callconv(w32cc.WINAPI) u32
     return 0; // MMSYSERR_NOERROR
 }
 
-pub fn stub_waveOutGetVolume(hwo: u32, pdwVolume: usize) callconv(w32cc.WINAPI) u32 {
+pub fn waveOutGetVolume(hwo: u32, pdwVolume: usize) callconv(w32cc.WINAPI) u32 {
     _ = hwo;
     if (pdwVolume != 0) {
         @as(*align(1) u32, @ptrFromInt(pdwVolume)).* = winmm.waveout_volume;
@@ -373,7 +373,7 @@ fn mmTimerThread(idx: usize) void {
     }
 }
 
-pub fn stub_timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usize, fuEvent: u32) callconv(w32cc.WINAPI) u32 {
+pub fn timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usize, fuEvent: u32) callconv(w32cc.WINAPI) u32 {
     _ = uResolution;
     if (trace.enable_tracing) trace.print("WINMM: timeSetEvent(delay={d}, callback=0x{x}, flags=0x{x})\n", .{ uDelay, fptc, fuEvent });
 
@@ -416,7 +416,7 @@ pub fn stub_timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usi
     return id;
 }
 
-pub fn stub_timeKillEvent(uTimerID: u32) callconv(w32cc.WINAPI) u32 {
+pub fn timeKillEvent(uTimerID: u32) callconv(w32cc.WINAPI) u32 {
     for (&mm_timers) |*t| {
         if (t.active and t.id == uTimerID) {
             t.active = false;
@@ -440,7 +440,7 @@ pub fn stub_waveOutGetNumDevs() callconv(w32cc.WINAPI) u32 {
 }
 
 // MMRESULT waveOutOpen(LPHWAVEOUT phwo, UINT uDeviceID, LPCWAVEFORMATEX pwfx, DWORD_PTR dwCallback, DWORD_PTR dwInstance, DWORD fdwOpen)
-pub fn stub_waveOutOpen(phwo: usize, uDeviceID: u32, pwfx: usize, dwCallback: usize, dwInstance: usize, fdwOpen: u32) callconv(w32cc.WINAPI) u32 {
+pub fn waveOutOpen(phwo: usize, uDeviceID: u32, pwfx: usize, dwCallback: usize, dwInstance: usize, fdwOpen: u32) callconv(w32cc.WINAPI) u32 {
     _ = uDeviceID; _ = pwfx; _ = dwCallback; _ = dwInstance; _ = fdwOpen;
     if (trace.enable_tracing) trace.print("WINMM: waveOutOpen\n", .{});
     // Write a fake handle to *phwo
@@ -462,7 +462,7 @@ pub fn stub_waveOutReset(hwo: u32) callconv(w32cc.WINAPI) u32 {
 }
 
 // MMRESULT waveOutWrite(HWAVEOUT hwo, LPWAVEHDR pwh, UINT cbwh)
-pub fn stub_waveOutWrite(hwo: u32, pwh: usize, cbwh: u32) callconv(w32cc.WINAPI) u32 {
+pub fn waveOutWrite(hwo: u32, pwh: usize, cbwh: u32) callconv(w32cc.WINAPI) u32 {
     _ = hwo; _ = cbwh;
     // Mark the buffer as done immediately (set WHDR_DONE flag = 0x1)
     if (pwh != 0) {
@@ -473,7 +473,7 @@ pub fn stub_waveOutWrite(hwo: u32, pwh: usize, cbwh: u32) callconv(w32cc.WINAPI)
 }
 
 // MMRESULT waveOutPrepareHeader(HWAVEOUT hwo, LPWAVEHDR pwh, UINT cbwh)
-pub fn stub_waveOutPrepareHeader(hwo: u32, pwh: usize, cbwh: u32) callconv(w32cc.WINAPI) u32 {
+pub fn waveOutPrepareHeader(hwo: u32, pwh: usize, cbwh: u32) callconv(w32cc.WINAPI) u32 {
     _ = hwo; _ = cbwh;
     // Set WHDR_PREPARED flag
     if (pwh != 0) {
@@ -493,7 +493,7 @@ pub fn stub_waveOutUnprepareHeader(hwo: u32, pwh: usize, cbwh: u32) callconv(w32
 }
 
 // MMRESULT waveOutGetDevCapsA(UINT uDeviceID, LPWAVEOUTCAPS pwoc, UINT cbwoc)
-pub fn stub_waveOutGetDevCapsA(uDeviceID: u32, pwoc: usize, cbwoc: u32) callconv(w32cc.WINAPI) u32 {
+pub fn waveOutGetDevCapsA(uDeviceID: u32, pwoc: usize, cbwoc: u32) callconv(w32cc.WINAPI) u32 {
     _ = uDeviceID;
     if (trace.enable_tracing) trace.print("WINMM: waveOutGetDevCapsA\n", .{});
     if (pwoc != 0 and cbwoc >= 52) {
@@ -524,7 +524,7 @@ pub fn stub_waveOutGetID(hwo: u32, puDeviceID: usize) callconv(w32cc.WINAPI) u32
 }
 
 // MMRESULT midiOutOpen(LPHMIDIOUT phmo, UINT uDeviceID, DWORD_PTR dwCallback, DWORD_PTR dwInstance, DWORD fdwOpen)
-pub fn stub_midiOutOpen(phmo: usize, uDeviceID: u32, dwCallback: usize, dwInstance: usize, fdwOpen: u32) callconv(w32cc.WINAPI) u32 {
+pub fn midiOutOpen(phmo: usize, uDeviceID: u32, dwCallback: usize, dwInstance: usize, fdwOpen: u32) callconv(w32cc.WINAPI) u32 {
     _ = uDeviceID; _ = dwCallback; _ = dwInstance; _ = fdwOpen;
     if (phmo != 0) {
         @as(*align(1) u32, @ptrFromInt(phmo)).* = 0xBEEF0050;

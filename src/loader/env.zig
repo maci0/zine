@@ -321,7 +321,7 @@ pub const Environment = struct {
     /// its fixed parameters followed by a final `ap: usize` parameter which will
     /// receive a host pointer to the variadic arguments on the guest x86 stack.
     ///
-    /// Example: `stub_printf(fmt_ptr: usize, ap: usize)` — `ap` points to the
+    /// Example: `printf(fmt_ptr: usize, ap: usize)` — `ap` points to the
     /// first variadic arg on the guest stack, translated to a host address.
     ///
     /// `fixed_params` is the number of guest-visible parameters BEFORE the varargs

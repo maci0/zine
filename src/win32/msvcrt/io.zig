@@ -94,7 +94,7 @@ fn allocateFileSlot() ?usize {
     return null;
 }
 
-pub fn stub_p_iob() callconv(.c) *anyopaque {
+pub fn p_iob() callconv(.c) *anyopaque {
     return &msvcrt_iob;
 }
 
@@ -145,12 +145,12 @@ pub fn stub_setmode(fd: i32, mode: i32) callconv(.c) i32 {
 var global_filename_buf: [4096]u8 align(16) = undefined;
 var global_mode_buf: [32]u8 align(16) = undefined;
 
-pub fn stub_fsopen(filename_ptr: usize, mode_ptr: usize, shflag: i32) callconv(.c) ?*anyopaque {
+pub fn fsopen(filename_ptr: usize, mode_ptr: usize, shflag: i32) callconv(.c) ?*anyopaque {
     _ = shflag;
-    return stub_fopen(filename_ptr, mode_ptr);
+    return fopen(filename_ptr, mode_ptr);
 }
 
-pub fn stub_fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
+pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
     if (filename_ptr == 0 or mode_ptr == 0) return null;
 
     const filename = trace.c_span(filename_ptr);
@@ -235,7 +235,7 @@ pub fn stub_fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque
     }
 }
 
-pub fn stub_fclose(f: ?*anyopaque) callconv(.c) i32 {
+pub fn fclose(f: ?*anyopaque) callconv(.c) i32 {
     trace.print("MSVCRT_IO: fclose\n", .{});
     if (getFile(f)) |file| {
         const ptr_val = @intFromPtr(f.?);
@@ -251,7 +251,7 @@ pub fn stub_fclose(f: ?*anyopaque) callconv(.c) i32 {
     return -1;
 }
 
-pub fn stub_fread(buffer: [*]u8, size: usize, count: usize, f: ?*anyopaque) callconv(.c) usize {
+pub fn fread(buffer: [*]u8, size: usize, count: usize, f: ?*anyopaque) callconv(.c) usize {
     if (getFile(f)) |file| {
         const bytes_to_read = size * count;
         if (bytes_to_read == 0) return 0;
@@ -273,7 +273,7 @@ pub fn stub_fread(buffer: [*]u8, size: usize, count: usize, f: ?*anyopaque) call
     return 0;
 }
 
-pub fn stub_fwrite(buffer: [*]const u8, size: usize, count: usize, f: ?*anyopaque) callconv(.c) usize {
+pub fn fwrite(buffer: [*]const u8, size: usize, count: usize, f: ?*anyopaque) callconv(.c) usize {
     const bytes_to_write = size *% count;
     trace.print("MSVCRT_IO: fwrite (size: {d}, count: {d}, total: {d})\n", .{ size, count, bytes_to_write });
     // Defensive: a size > 256MB is almost certainly a sign-extension bug.
@@ -294,7 +294,7 @@ pub fn stub_fwrite(buffer: [*]const u8, size: usize, count: usize, f: ?*anyopaqu
     return 0;
 }
 
-pub fn stub_fseek(f: ?*anyopaque, offset: i32, origin: i32) callconv(.c) i32 {
+pub fn fseek(f: ?*anyopaque, offset: i32, origin: i32) callconv(.c) i32 {
     trace.print("MSVCRT_IO: fseek(offset={d}, origin={d})\n", .{ offset, origin });
     if (getFile(f)) |file| {
         switch (origin) {
@@ -316,7 +316,7 @@ pub fn stub_fseek(f: ?*anyopaque, offset: i32, origin: i32) callconv(.c) i32 {
     return -1;
 }
 
-pub fn stub_ftell(f: ?*anyopaque) callconv(.c) i32 {
+pub fn ftell(f: ?*anyopaque) callconv(.c) i32 {
     if (getFile(f)) |file| {
         const pos = file.getPos() catch return -1;
         trace.print("MSVCRT_IO: ftell -> {d}\n", .{pos});
@@ -326,7 +326,7 @@ pub fn stub_ftell(f: ?*anyopaque) callconv(.c) i32 {
     return -1;
 }
 
-pub fn stub_fgets(buf_ptr: usize, max_count: i32, f: ?*anyopaque) callconv(.c) usize {
+pub fn fgets(buf_ptr: usize, max_count: i32, f: ?*anyopaque) callconv(.c) usize {
     if (buf_ptr == 0 or max_count <= 1) return 0;
     if (getFile(f)) |file| {
         const buf = @as([*]u8, @ptrFromInt(buf_ptr));
@@ -349,7 +349,7 @@ pub fn stub_fgets(buf_ptr: usize, max_count: i32, f: ?*anyopaque) callconv(.c) u
     return 0;
 }
 
-pub fn stub_fgetc(f: ?*anyopaque) callconv(.c) i32 {
+pub fn fgetc(f: ?*anyopaque) callconv(.c) i32 {
     if (getFile(f)) |file| {
         var buf: [1]u8 = undefined;
         const bytes_read = file.read(&buf) catch return -1;
@@ -368,7 +368,7 @@ pub fn stub_fgetc(f: ?*anyopaque) callconv(.c) i32 {
     return -1;
 }
 
-pub fn stub_fputc(c: i32, f: ?*anyopaque) callconv(.c) i32 {
+pub fn fputc(c: i32, f: ?*anyopaque) callconv(.c) i32 {
     if (getFile(f)) |file| {
         var buf: [1]u8 = undefined;
         buf[0] = @intCast(c & 0xFF);
@@ -379,7 +379,7 @@ pub fn stub_fputc(c: i32, f: ?*anyopaque) callconv(.c) i32 {
     return -1;
 }
 
-pub fn stub_putchar(c: i32) callconv(.c) i32 {
+pub fn putchar(c: i32) callconv(.c) i32 {
     var buf: [1]u8 = undefined;
     buf[0] = @intCast(c & 0xFF);
     const out_file = std.fs.File{ .handle = 1 }; // stdout
@@ -391,7 +391,7 @@ const fmt_mod = @import("fmt.zig");
 
 const platform_mod = @import("../../platform.zig");
 
-pub const stub_fprintf = if (platform_mod.is_wasm) stub_fprintf_wasm else stub_fprintf_native;
+pub const fprintf = if (platform_mod.is_wasm) stub_fprintf_wasm else stub_fprintf_native;
 
 fn stub_fprintf_wasm(f: ?*anyopaque, format_ptr: usize, ap: usize) callconv(.c) i32 {
     return fprintf_impl(f, format_ptr, ap);
@@ -417,7 +417,7 @@ fn fprintf_impl(f: ?*anyopaque, format_ptr: usize, ap: usize) i32 {
     return -1;
 }
 
-pub fn stub_fwprintf(f: ?*anyopaque, format_ptr: usize) callconv(.c) i32 {
+pub fn fwprintf(f: ?*anyopaque, format_ptr: usize) callconv(.c) i32 {
     if (getFile(f)) |file| {
         if (format_ptr != 0) {
             const fmt = @as([*]const u16, @ptrFromInt(format_ptr));

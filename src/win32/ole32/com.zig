@@ -33,7 +33,7 @@ pub fn stub_CoCreateInstance(rclsid: usize, pUnkOuter: usize, dwClsContext: u32,
     return @as(i32, @bitCast(@as(u32, 0x80004002))); // E_NOINTERFACE
 }
 
-pub fn stub_CoTaskMemAlloc(cb: usize) callconv(w32cc.WINAPI) usize {
+pub fn CoTaskMemAlloc(cb: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("OLE32: CoTaskMemAlloc({d})\n", .{cb});
     if (mem.raw_alloc(cb)) |ptr| {
         return @intFromPtr(ptr);

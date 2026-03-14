@@ -5,7 +5,7 @@ const io = @import("io.zig");
 
 const stub_common = @import("../stub_common.zig");
 
-pub fn stub_malloc(size: usize) callconv(.c) ?*anyopaque {
+pub fn malloc(size: usize) callconv(.c) ?*anyopaque {
     if (size == 0) return null;
     if (size > 0x0FFFFFFF) {
         if (trace.enable_tracing) trace.print("MSVCRT: malloc({x}) -> failed (too large) from {x}\n", .{ size, @returnAddress() });
@@ -19,7 +19,7 @@ pub fn stub_malloc(size: usize) callconv(.c) ?*anyopaque {
     return ptr;
 }
 
-pub fn stub_calloc(num: usize, size: usize) callconv(.c) ?*anyopaque {
+pub fn calloc(num: usize, size: usize) callconv(.c) ?*anyopaque {
     if (@mulWithOverflow(num, size)[1] != 0) return null;
     const total = num * size;
     if (total == 0 or total > 0x0FFFFFFF) return null;
@@ -35,7 +35,7 @@ pub fn stub_free(ptr: ?*anyopaque) callconv(.c) void {
     // Memory is reclaimed when the process exits.
 }
 
-pub fn stub_realloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
+pub fn realloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
     if (trace.enable_tracing) trace.print("MSVCRT: realloc({x}, {x})\n", .{ @intFromPtr(ptr), size });
     if (size == 0) {
         stub_free(ptr);
@@ -46,17 +46,17 @@ pub fn stub_realloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
 
 // --- ANSI String & Memory ---
 
-pub fn stub_memset(dest_ptr: usize, c: i32, count: usize) callconv(.c) usize {
+pub fn memset(dest_ptr: usize, c: i32, count: usize) callconv(.c) usize {
     if (dest_ptr != 0 and count > 0) @memset(@as([*]u8, @ptrFromInt(dest_ptr))[0..count], @as(u8, @intCast(c & 0xFF)));
     return dest_ptr;
 }
 
-pub fn stub_memcpy(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
+pub fn memcpy(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
     if (dest_ptr != 0 and src_ptr != 0 and count > 0) @memcpy(@as([*]u8, @ptrFromInt(dest_ptr))[0..count], @as([*]const u8, @ptrFromInt(src_ptr))[0..count]);
     return dest_ptr;
 }
 
-pub fn stub_memmove(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
+pub fn memmove(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
     if (dest_ptr == 0 or src_ptr == 0 or count == 0) return dest_ptr;
     const dest = @as([*]u8, @ptrFromInt(dest_ptr))[0..count];
     const src = @as([*]const u8, @ptrFromInt(src_ptr))[0..count];

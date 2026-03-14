@@ -6,7 +6,7 @@ const renderer = @import("../../gui/renderer.zig");
 const w32 = @import("../../win32_constants.zig");
 const w32cc = @import("../../calling_convention.zig");
 
-pub fn stub_SetRect(lprc: *user32.RECT, xLeft: i32, yTop: i32, xRight: i32, yBottom: i32) callconv(w32cc.WINAPI) i32 {
+pub fn SetRect(lprc: *user32.RECT, xLeft: i32, yTop: i32, xRight: i32, yBottom: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: SetRect\n", .{});
     lprc.left = xLeft;
     lprc.top = yTop;
@@ -15,7 +15,7 @@ pub fn stub_SetRect(lprc: *user32.RECT, xLeft: i32, yTop: i32, xRight: i32, yBot
     return 1;
 }
 
-pub fn stub_AdjustWindowRectEx(lpRect: *user32.RECT, dwStyle: u32, bMenu: i32, dwExStyle: u32) callconv(w32cc.WINAPI) i32 {
+pub fn AdjustWindowRectEx(lpRect: *user32.RECT, dwStyle: u32, bMenu: i32, dwExStyle: u32) callconv(w32cc.WINAPI) i32 {
     const adj = user32.calcFrameAdjustments(dwStyle, bMenu != 0, dwExStyle);
     if (trace.enable_tracing) trace.print("USER32: AdjustWindowRectEx(style={x}, menu={d}, exstyle={x}) -> l={d} t={d} r={d} b={d}\n", .{ dwStyle, bMenu, dwExStyle, adj.left, adj.top, adj.right, adj.bottom });
     lpRect.left -= adj.left;
@@ -25,11 +25,11 @@ pub fn stub_AdjustWindowRectEx(lpRect: *user32.RECT, dwStyle: u32, bMenu: i32, d
     return 1;
 }
 
-pub fn stub_AdjustWindowRect(lpRect: *user32.RECT, dwStyle: u32, bMenu: i32) callconv(w32cc.WINAPI) i32 {
-    return stub_AdjustWindowRectEx(lpRect, dwStyle, bMenu, 0);
+pub fn AdjustWindowRect(lpRect: *user32.RECT, dwStyle: u32, bMenu: i32) callconv(w32cc.WINAPI) i32 {
+    return AdjustWindowRectEx(lpRect, dwStyle, bMenu, 0);
 }
 
-pub fn stub_SystemParametersInfoA(uiAction: u32, uiParam: u32, pvParam: usize, fWinIni: u32) callconv(w32cc.WINAPI) i32 {
+pub fn SystemParametersInfoA(uiAction: u32, uiParam: u32, pvParam: usize, fWinIni: u32) callconv(w32cc.WINAPI) i32 {
     _ = uiParam;
     _ = fWinIni;
     if (trace.enable_tracing) trace.print("USER32: SystemParametersInfoA(action={x})\n", .{uiAction});
@@ -54,7 +54,7 @@ pub fn stub_SystemParametersInfoA(uiAction: u32, uiParam: u32, pvParam: usize, f
     return 1;
 }
 
-pub fn stub_GetSystemMetrics(nIndex: i32) callconv(w32cc.WINAPI) i32 {
+pub fn GetSystemMetrics(nIndex: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: GetSystemMetrics({d})\n", .{nIndex});
     // Windows 2000 "Windows Standard" at 96 DPI
     return switch (nIndex) {
@@ -116,7 +116,7 @@ pub fn stub_GetSystemMetrics(nIndex: i32) callconv(w32cc.WINAPI) i32 {
     };
 }
 
-pub fn stub_RegisterClassA(lpWndClass: usize) callconv(w32cc.WINAPI) u16 {
+pub fn RegisterClassA(lpWndClass: usize) callconv(w32cc.WINAPI) u16 {
     if (lpWndClass != 0) {
         const wc = @as(*const w32.WNDCLASSA, @ptrFromInt(lpWndClass));
         if (wc.lpfnWndProc != 0) {
@@ -185,7 +185,7 @@ fn ansiClassEql(class_ptr: usize, target: []const u8) bool {
     return true;
 }
 
-pub fn stub_CreateWindowExA(
+pub fn CreateWindowExA(
     dwExStyle: u32, lpClassName: usize, lpWindowName: usize, dwStyle: u32,
     x: i32, y: i32, nWidth: i32, nHeight: i32,
     hWndParent: usize, hMenu: usize, hInstance: usize, lpParam: usize,
@@ -278,7 +278,7 @@ fn wideClassEql(class_ptr: usize, target: []const u8) bool {
 
 var next_child_hwnd: usize = 0x00001000;
 
-pub fn stub_CreateWindowExW(
+pub fn CreateWindowExW(
     dwExStyle: u32, lpClassName: usize, lpWindowName: usize, dwStyle: u32,
     x: i32, y: i32, nWidth: i32, nHeight: i32,
     hWndParent: usize, hMenu: usize, hInstance: usize, lpParam: usize,
@@ -807,7 +807,7 @@ pub fn stub_DrawEdge(hdc: usize, qrc: usize, edge: u32, grfFlags: u32) callconv(
     if (qrc == 0) return 0;
     const drawing = @import("../gdi32/drawing.zig");
     const rend = @import("../../gui/renderer.zig");
-    const misc = @import("misc.zig");
+    const display = @import("display.zig");
 
     const fb = drawing.getFramebufferForDc(hdc) orelse return 0;
     const rc = @as(*w32.RECT, @ptrFromInt(qrc));
@@ -834,11 +834,11 @@ pub fn stub_DrawEdge(hdc: usize, qrc: usize, edge: u32, grfFlags: u32) callconv(
     const BF_ADJUST: u32 = 0x2000;
 
     // Win2k system colors for 3D effects (COLORREF = 0x00BBGGRR)
-    const highlight = misc.stub_GetSysColor(20);     // COLOR_BTNHIGHLIGHT (#FFFFFF)
-    const light = misc.stub_GetSysColor(22);           // COLOR_3DLIGHT (#D4D0C8)
-    const shadow = misc.stub_GetSysColor(16);          // COLOR_BTNSHADOW (#808080)
-    const dkshadow = misc.stub_GetSysColor(21);        // COLOR_3DDKSHADOW (#404040)
-    const face = misc.stub_GetSysColor(15);            // COLOR_BTNFACE (#D4D0C8)
+    const highlight = display.GetSysColor(20);     // COLOR_BTNHIGHLIGHT (#FFFFFF)
+    const light = display.GetSysColor(22);           // COLOR_3DLIGHT (#D4D0C8)
+    const shadow = display.GetSysColor(16);          // COLOR_BTNSHADOW (#808080)
+    const dkshadow = display.GetSysColor(21);        // COLOR_3DDKSHADOW (#404040)
+    const face = display.GetSysColor(15);            // COLOR_BTNFACE (#D4D0C8)
 
     // Determine outer and inner edge colors
     var outer_tl: u32 = face; // top-left color
@@ -925,7 +925,7 @@ pub fn stub_FrameRect(hDC: usize, lprc: usize, hbr: usize) callconv(w32cc.WINAPI
     const drawing = @import("../gdi32/drawing.zig");
     const gdi32 = @import("../gdi32.zig");
     const rend = @import("../../gui/renderer.zig");
-    const misc = @import("misc.zig");
+    const display = @import("display.zig");
 
     const fb = drawing.getFramebufferForDc(hDC) orelse return 0;
     const rc = @as(*const w32.RECT, @ptrFromInt(lprc));
@@ -934,7 +934,7 @@ pub fn stub_FrameRect(hDC: usize, lprc: usize, hbr: usize) callconv(w32cc.WINAPI
     var color: u32 = 0x00000000;
     if (hbr <= 30) {
         // System color brush (COLOR_xxx + 1)
-        color = misc.stub_GetSysColor(@intCast(hbr -| 1));
+        color = display.GetSysColor(@intCast(hbr -| 1));
     } else if (gdi32.findObject(hbr)) |obj| {
         if (obj.obj_type == .Brush) color = obj.data.brush.color;
     }
@@ -1090,13 +1090,13 @@ pub fn stub_IsRectEmpty(lprc: *const user32.RECT) callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
-pub fn stub_EqualRect(lprc1: *const user32.RECT, lprc2: *const user32.RECT) callconv(w32cc.WINAPI) i32 {
+pub fn EqualRect(lprc1: *const user32.RECT, lprc2: *const user32.RECT) callconv(w32cc.WINAPI) i32 {
     if (lprc1.left == lprc2.left and lprc1.top == lprc2.top and
         lprc1.right == lprc2.right and lprc1.bottom == lprc2.bottom) return 1;
     return 0;
 }
 
-pub fn stub_InflateRect(lprc: *user32.RECT, dx: i32, dy: i32) callconv(w32cc.WINAPI) i32 {
+pub fn InflateRect(lprc: *user32.RECT, dx: i32, dy: i32) callconv(w32cc.WINAPI) i32 {
     lprc.left -= dx;
     lprc.top -= dy;
     lprc.right += dx;
@@ -1104,7 +1104,7 @@ pub fn stub_InflateRect(lprc: *user32.RECT, dx: i32, dy: i32) callconv(w32cc.WIN
     return 1;
 }
 
-pub fn stub_IntersectRect(lprcDst: *user32.RECT, lprcSrc1: *const user32.RECT, lprcSrc2: *const user32.RECT) callconv(w32cc.WINAPI) i32 {
+pub fn IntersectRect(lprcDst: *user32.RECT, lprcSrc1: *const user32.RECT, lprcSrc2: *const user32.RECT) callconv(w32cc.WINAPI) i32 {
     const left = @max(lprcSrc1.left, lprcSrc2.left);
     const top = @max(lprcSrc1.top, lprcSrc2.top);
     const right = @min(lprcSrc1.right, lprcSrc2.right);

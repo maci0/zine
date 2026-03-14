@@ -23,7 +23,7 @@ pub fn get_fd_file(fd: i32) ?std.fs.File {
 
 const FILE = io.MSVCRT_FILE;
 
-pub fn stub_access(path_ptr: usize, mode: i32) callconv(.c) i32 {
+pub fn access(path_ptr: usize, mode: i32) callconv(.c) i32 {
     if (path_ptr == 0) return -1;
     const path = trace.c_span(path_ptr);
     const posix_fs = @import("posix_fs.zig");
@@ -32,7 +32,7 @@ pub fn stub_access(path_ptr: usize, mode: i32) callconv(.c) i32 {
     return result;
 }
 
-pub fn stub_sopen(path_ptr: usize, oflag: i32, shflag: i32, pmode: i32) callconv(.c) i32 {
+pub fn sopen(path_ptr: usize, oflag: i32, shflag: i32, pmode: i32) callconv(.c) i32 {
     _ = shflag;
     _ = pmode;
     if (path_ptr == 0) return -1;
@@ -67,7 +67,7 @@ pub fn stub_sopen(path_ptr: usize, oflag: i32, shflag: i32, pmode: i32) callconv
     return rc;
 }
 
-pub fn stub_read(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
+pub fn read(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
     if (trace.enable_tracing) trace.print("MSVCRT: _read(fd={d}, count={d})\n", .{ fd, count });
     if (buffer_ptr == 0 or count == 0) return 0;
     const file = std.fs.File{ .handle = fd };
@@ -83,7 +83,7 @@ pub fn stub_read(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
     return @intCast(read_bytes);
 }
 
-pub fn stub_write(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
+pub fn write(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
     if (trace.enable_tracing) trace.print("MSVCRT: _write(fd={d}, count={d})\n", .{ fd, count });
     if (buffer_ptr == 0 or count == 0) return 0;
     const slice = @as([*]const u8, @ptrFromInt(trace.addr(buffer_ptr)))[0..count];
@@ -95,7 +95,7 @@ pub fn stub_write(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
     return @intCast(count);
 }
 
-pub fn stub_lseek(fd: i32, offset: i32, origin: i32) callconv(.c) i32 {
+pub fn lseek(fd: i32, offset: i32, origin: i32) callconv(.c) i32 {
     const file = std.fs.File{ .handle = fd };
     switch (origin) {
         0 => file.seekTo(@intCast(offset)) catch return -1,
@@ -112,7 +112,7 @@ pub fn stub_lseek(fd: i32, offset: i32, origin: i32) callconv(.c) i32 {
     return @intCast(file.getPos() catch return -1);
 }
 
-pub fn stub_close(fd: i32) callconv(.c) i32 {
+pub fn close(fd: i32) callconv(.c) i32 {
     if (fd >= 3) {
         const file = std.fs.File{ .handle = fd };
         file.close();
@@ -121,7 +121,7 @@ pub fn stub_close(fd: i32) callconv(.c) i32 {
     return -1;
 }
 
-pub fn stub_fileno(file_ptr: usize) callconv(.c) i32 {
+pub fn fileno(file_ptr: usize) callconv(.c) i32 {
     if (file_ptr != 0) {
         const ms_file = @as(*FILE, @ptrFromInt(file_ptr));
         return ms_file._file;
@@ -134,18 +134,18 @@ pub fn stub_isatty(fd: i32) callconv(.c) i32 {
     return 0;
 }
 
-pub fn stub_tell(fd: i32) callconv(.c) i32 {
+pub fn tell(fd: i32) callconv(.c) i32 {
     const file = std.fs.File{ .handle = fd };
     return @intCast(file.getPos() catch return -1);
 }
 
-pub fn stub_chsize(fd: i32, size: i32) callconv(.c) i32 {
+pub fn chsize(fd: i32, size: i32) callconv(.c) i32 {
     const file = std.fs.File{ .handle = fd };
     file.setEndPos(@intCast(size)) catch return -1;
     return 0;
 }
 
-pub fn stub_filelength(fd: i32) callconv(.c) i32 {
+pub fn filelength(fd: i32) callconv(.c) i32 {
     const file = std.fs.File{ .handle = fd };
     if (file.getEndPos()) |pos| {
         if (trace.enable_tracing) trace.print("MSVCRT: _filelength(fd={d}) -> {d}\n", .{ fd, pos });
@@ -156,7 +156,7 @@ pub fn stub_filelength(fd: i32) callconv(.c) i32 {
     }
 }
 
-pub fn stub_stat(path_ptr: usize, stat_ptr: usize) callconv(.c) i32 {
+pub fn stat(path_ptr: usize, stat_ptr: usize) callconv(.c) i32 {
     if (path_ptr < 0x10000 or stat_ptr == 0) return -1;
     const path = std.mem.span(@as([*:0]const u8, @ptrFromInt(path_ptr)));
 
@@ -178,7 +178,7 @@ pub fn stub_stat(path_ptr: usize, stat_ptr: usize) callconv(.c) i32 {
     return -1;
 }
 
-pub fn stub_fstat(fd: i32, stat_ptr: usize) callconv(.c) i32 {
+pub fn fstat(fd: i32, stat_ptr: usize) callconv(.c) i32 {
     if (stat_ptr != 0) {
         const file = std.fs.File{ .handle = fd };
         if (file.stat() catch null) |st| {
@@ -212,11 +212,11 @@ pub fn stub_findnext(handle: isize, find_data: usize) callconv(.c) i32 {
     return -1;
 }
 
-pub fn stub_get_osfhandle(fd: i32) callconv(.c) isize {
+pub fn get_osfhandle(fd: i32) callconv(.c) isize {
     return @as(isize, @intCast(fd));
 }
 
-pub fn stub_open_osfhandle(osfhandle: isize, flags: i32) callconv(.c) i32 {
+pub fn open_osfhandle(osfhandle: isize, flags: i32) callconv(.c) i32 {
     _ = flags;
     return @intCast(osfhandle);
 }

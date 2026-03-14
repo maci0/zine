@@ -4,7 +4,7 @@ const user32 = @import("../user32.zig");
 const w32 = @import("../../win32_constants.zig");
 const w32cc = @import("../../calling_convention.zig");
 
-pub fn stub_PeekMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32, wRemoveMsg: u32) callconv(w32cc.WINAPI) i32 {
+pub fn PeekMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32, wRemoveMsg: u32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd; _ = wMsgFilterMin; _ = wMsgFilterMax;
 
     // Scope the mutex to just the message queue checks
@@ -140,7 +140,7 @@ pub fn stub_TranslateMessage(lpMsg: usize) callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
-pub fn stub_DispatchMessageA(lpMsg: usize) callconv(w32cc.WINAPI) isize {
+pub fn DispatchMessageA(lpMsg: usize) callconv(w32cc.WINAPI) isize {
     if (lpMsg != 0) {
         const msg = @as(*user32.MSG, @ptrFromInt(lpMsg));
         if (trace.enable_tracing) trace.print("USER32: DispatchMessageA(Msg={x}, wParam={x})\n", .{msg.message, msg.wParam});
@@ -161,11 +161,11 @@ pub fn stub_DispatchMessageA(lpMsg: usize) callconv(w32cc.WINAPI) isize {
     return 0;
 }
 
-pub fn stub_GetMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32) callconv(w32cc.WINAPI) i32 {
+pub fn GetMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: GetMessageA called\n", .{});
     var spin_count: u32 = 0;
     while (true) {
-        const result = stub_PeekMessageA(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, w32.PM_REMOVE);
+        const result = PeekMessageA(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, w32.PM_REMOVE);
         if (result != 0) {
             if (trace.enable_tracing) {
                 const msg = @as(*user32.MSG, @ptrFromInt(lpMsg));
@@ -200,7 +200,7 @@ pub fn stub_GetMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilte
     }
 }
 
-pub fn stub_PostMessageA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) callconv(w32cc.WINAPI) i32 {
+pub fn PostMessageA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: PostMessageA(hwnd={x}, Msg={x})\n", .{ hWnd, Msg });
 
     // Queue the message in the pending messages ring buffer
@@ -222,7 +222,7 @@ pub fn stub_PostMessageA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) ca
     return 1;
 }
 
-pub fn stub_PostQuitMessage(nExitCode: i32) callconv(w32cc.WINAPI) void {
+pub fn PostQuitMessage(nExitCode: i32) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("USER32: PostQuitMessage({d})\n", .{nExitCode});
     // Queue WM_QUIT in the message queue to allow cleanup
     user32.pending_command_mutex.lock();
@@ -242,7 +242,7 @@ pub fn stub_PostQuitMessage(nExitCode: i32) callconv(w32cc.WINAPI) void {
     }
 }
 
-pub fn stub_SendMessageA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) callconv(w32cc.WINAPI) isize {
+pub fn SendMessageA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) callconv(w32cc.WINAPI) isize {
     if (trace.enable_tracing) trace.print("USER32: SendMessageA(hwnd={x}, Msg={x}, wParam={x})\n", .{ hWnd, Msg, wParam });
 
     const renderer = @import("../../gui/renderer.zig");

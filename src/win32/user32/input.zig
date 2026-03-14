@@ -3,14 +3,14 @@ const renderer = @import("../../gui/renderer.zig");
 const w32 = @import("../../win32_constants.zig");
 const w32cc = @import("../../calling_convention.zig");
 
-pub fn stub_GetKeyboardState(lpKeyState: usize) callconv(w32cc.WINAPI) i32 {
+pub fn GetKeyboardState(lpKeyState: usize) callconv(w32cc.WINAPI) i32 {
     if (lpKeyState != 0) {
         @memcpy(@as([*]u8, @ptrFromInt(lpKeyState))[0..256], &renderer.keyboard_state);
     }
     return 1;
 }
 
-pub fn stub_GetKeyState(nVirtKey: i32) callconv(w32cc.WINAPI) i16 {
+pub fn GetKeyState(nVirtKey: i32) callconv(w32cc.WINAPI) i16 {
     const vk: u8 = @intCast(@as(u32, @bitCast(nVirtKey)) & 0xFF);
     const state = renderer.keyboard_state[vk];
     if (state != 0) return @bitCast(@as(u16, 0x8000));
@@ -22,7 +22,7 @@ pub fn stub_SetCursor(hCursor: usize) callconv(w32cc.WINAPI) usize {
     return 0x87654321;
 }
 
-pub fn stub_GetCursorPos(lpPoint: usize) callconv(w32cc.WINAPI) i32 {
+pub fn GetCursorPos(lpPoint: usize) callconv(w32cc.WINAPI) i32 {
     if (lpPoint != 0) {
         const pt = @as(*w32.POINT, @ptrFromInt(lpPoint));
         pt.x = renderer.last_mouse_x;
@@ -33,17 +33,17 @@ pub fn stub_GetCursorPos(lpPoint: usize) callconv(w32cc.WINAPI) i32 {
 
 var capture_hwnd: usize = 0;
 
-pub fn stub_GetCapture() callconv(w32cc.WINAPI) usize {
+pub fn GetCapture() callconv(w32cc.WINAPI) usize {
     return capture_hwnd;
 }
 
-pub fn stub_SetCapture(hWnd: usize) callconv(w32cc.WINAPI) usize {
+pub fn SetCapture(hWnd: usize) callconv(w32cc.WINAPI) usize {
     const prev = capture_hwnd;
     capture_hwnd = hWnd;
     return prev;
 }
 
-pub fn stub_ReleaseCapture() callconv(w32cc.WINAPI) i32 {
+pub fn ReleaseCapture() callconv(w32cc.WINAPI) i32 {
     capture_hwnd = 0;
     return 1;
 }
@@ -61,7 +61,7 @@ pub const TimerEntry = struct {
 
 pub var timers: [16]TimerEntry = [_]TimerEntry{.{ .hwnd = 0, .id = 0, .elapse_ms = 0, .callback = 0, .last_fire = 0, .active = false }} ** 16;
 
-pub fn stub_SetTimer(hWnd: usize, nIDEvent: usize, uElapse: u32, lpTimerFunc: usize) callconv(w32cc.WINAPI) usize {
+pub fn SetTimer(hWnd: usize, nIDEvent: usize, uElapse: u32, lpTimerFunc: usize) callconv(w32cc.WINAPI) usize {
     _ = lpTimerFunc; // We don't call lpTimerFunc; we post WM_TIMER instead
     if (trace.enable_tracing) trace.print("USER32: SetTimer(hwnd={x}, id={d}, elapse={d}ms)\n", .{ hWnd, nIDEvent, uElapse });
 
@@ -95,7 +95,7 @@ pub fn stub_SetTimer(hWnd: usize, nIDEvent: usize, uElapse: u32, lpTimerFunc: us
     return nIDEvent;
 }
 
-pub fn stub_KillTimer(hWnd: usize, uIDEvent: usize) callconv(w32cc.WINAPI) i32 {
+pub fn KillTimer(hWnd: usize, uIDEvent: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: KillTimer(hwnd={x}, id={d})\n", .{ hWnd, uIDEvent });
     for (&timers) |*t| {
         if (t.active and t.id == uIDEvent and t.hwnd == hWnd) {

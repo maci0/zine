@@ -11,7 +11,7 @@ const renderer = @import("../../gui/renderer.zig");
 const kernel32 = @import("../kernel32.zig");
 const w32 = @import("../../win32_constants.zig");
 const w32cc = @import("../../calling_convention.zig");
-const ddraw_stubs = @import("../ddraw/stubs.zig");
+const ddraw_stubs = @import("../ddraw/ddraw.zig");
 
 // ===== IDirect3D7 =====
 

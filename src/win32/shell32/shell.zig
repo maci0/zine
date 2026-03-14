@@ -45,7 +45,7 @@ pub fn stub_DragQueryFileW(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) 
     return 0;
 }
 
-pub fn stub_SHGetFileInfoA(pszPath: usize, dwFileAttributes: u32, psfi: usize, cbFileInfo: u32, uFlags: u32) callconv(w32cc.WINAPI) usize {
+pub fn SHGetFileInfoA(pszPath: usize, dwFileAttributes: u32, psfi: usize, cbFileInfo: u32, uFlags: u32) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) {
         const path = if (pszPath != 0) trace.c_span(pszPath) else "(null)";
         trace.print("SHELL32: SHGetFileInfoA('{s}', attrs=0x{X}, flags=0x{X})\n", .{ path, dwFileAttributes, uFlags });
@@ -137,7 +137,7 @@ pub fn stub_Shell_NotifyIconA(dwMessage: u32, lpData: usize) callconv(w32cc.WINA
     return 1;
 }
 
-pub fn stub_ShellAboutW(hWnd: usize, szApp: usize, szOtherStuff: usize, hIcon: usize) callconv(w32cc.WINAPI) i32 {
+pub fn ShellAboutW(hWnd: usize, szApp: usize, szOtherStuff: usize, hIcon: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = hIcon;
     if (trace.enable_tracing) trace.print("SHELL32: ShellAboutW\n", .{});

@@ -4,14 +4,14 @@ const msvcrt = @import("../msvcrt.zig");
 const io = @import("io.zig");
 
 
-pub fn stub_strlen(str_ptr: usize) callconv(.c) usize {
+pub fn strlen(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const len = trace.c_span(str_ptr).len;
     if (trace.enable_tracing) trace.print("MSVCRT: strlen('{s}') -> {d}\n", .{trace.c_span(str_ptr)[0..len], len});
     return len;
 }
 
-pub fn stub_strcpy(dest_ptr: usize, src_ptr: usize) callconv(.c) usize {
+pub fn strcpy(dest_ptr: usize, src_ptr: usize) callconv(.c) usize {
     if (dest_ptr == 0 or src_ptr == 0) return dest_ptr;
     const dest = @as([*]u8, @ptrFromInt(dest_ptr));
     const src = @as([*]const u8, @ptrFromInt(src_ptr));
@@ -24,7 +24,7 @@ pub fn stub_strcpy(dest_ptr: usize, src_ptr: usize) callconv(.c) usize {
     return dest_ptr;
 }
 
-pub fn stub_strncpy(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
+pub fn strncpy(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
     if (dest_ptr == 0 or src_ptr == 0 or count == 0) return dest_ptr;
     const dest = @as([*]u8, @ptrFromInt(dest_ptr));
     const src = @as([*]const u8, @ptrFromInt(src_ptr));
@@ -40,7 +40,7 @@ pub fn stub_strncpy(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) 
     return dest_ptr;
 }
 
-pub fn stub_strcat(dest_ptr: usize, src_ptr: usize) callconv(.c) usize {
+pub fn strcat(dest_ptr: usize, src_ptr: usize) callconv(.c) usize {
     if (dest_ptr == 0 or src_ptr == 0) return dest_ptr;
     const dest = @as([*]u8, @ptrFromInt(dest_ptr));
     // Find end of dest
@@ -56,7 +56,7 @@ pub fn stub_strcat(dest_ptr: usize, src_ptr: usize) callconv(.c) usize {
     return dest_ptr;
 }
 
-pub fn stub_strcmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
+pub fn strcmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
     const s1 = @as([*]const u8, @ptrFromInt(s1_ptr));
     const s2 = @as([*]const u8, @ptrFromInt(s2_ptr));
@@ -65,7 +65,7 @@ pub fn stub_strcmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
-pub fn stub_strncmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
+pub fn strncmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0 or count == 0) return 0;
     const s1 = @as([*]const u8, @ptrFromInt(s1_ptr));
     const s2 = @as([*]const u8, @ptrFromInt(s2_ptr));
@@ -75,7 +75,7 @@ pub fn stub_strncmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
-pub fn stub_stricmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
+pub fn stricmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
     const s1 = trace.c_span(s1_ptr);
     const s2 = trace.c_span(s2_ptr);
@@ -104,7 +104,7 @@ pub fn stub_stricmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     return ret;
 }
 
-pub fn stub_mbsicmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
+pub fn mbsicmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
     const s1 = trace.c_span(s1_ptr);
     const s2 = trace.c_span(s2_ptr);
@@ -120,7 +120,7 @@ pub fn stub_mbsicmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     return ret;
 }
 
-pub fn stub_strnicmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
+pub fn strnicmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0 or count == 0) return 0;
     const s1 = trace.c_span(s1_ptr);
     const s2 = trace.c_span(s2_ptr);
@@ -136,7 +136,7 @@ pub fn stub_strnicmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i3
     return 0;
 }
 
-pub fn stub_strchr(s_ptr: usize, c: i32) callconv(.c) usize {
+pub fn strchr(s_ptr: usize, c: i32) callconv(.c) usize {
     if (s_ptr == 0) return 0;
     const target = @as(u8, @intCast(c & 0xFF));
     const s = trace.c_span(s_ptr);
@@ -145,7 +145,7 @@ pub fn stub_strchr(s_ptr: usize, c: i32) callconv(.c) usize {
     return 0;
 }
 
-pub fn stub_strrchr(str_ptr: usize, c: i32) callconv(.c) usize {
+pub fn strrchr(str_ptr: usize, c: i32) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const target = @as(u8, @intCast(c & 0xFF));
     const s = trace.c_span(str_ptr);
@@ -154,7 +154,7 @@ pub fn stub_strrchr(str_ptr: usize, c: i32) callconv(.c) usize {
     return 0;
 }
 
-pub fn stub_strstr(str_ptr: usize, substr_ptr: usize) callconv(.c) usize {
+pub fn strstr(str_ptr: usize, substr_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0 or substr_ptr == 0) return 0;
     const str = trace.c_span(str_ptr);
     const substr = trace.c_span(substr_ptr);
@@ -163,7 +163,7 @@ pub fn stub_strstr(str_ptr: usize, substr_ptr: usize) callconv(.c) usize {
     return 0;
 }
 
-pub fn stub_strpbrk(s1_ptr: usize, s2_ptr: usize) callconv(.c) ?*anyopaque {
+pub fn strpbrk(s1_ptr: usize, s2_ptr: usize) callconv(.c) ?*anyopaque {
     if (s1_ptr == 0 or s2_ptr == 0) return null;
     const s1 = trace.c_span(s1_ptr);
     const s2 = trace.c_span(s2_ptr);
@@ -171,14 +171,14 @@ pub fn stub_strpbrk(s1_ptr: usize, s2_ptr: usize) callconv(.c) ?*anyopaque {
     return null;
 }
 
-pub fn stub_strcspn(s1_ptr: usize, s2_ptr: usize) callconv(.c) usize {
+pub fn strcspn(s1_ptr: usize, s2_ptr: usize) callconv(.c) usize {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
     const s1 = trace.c_span(s1_ptr);
     const s2 = trace.c_span(s2_ptr);
     return std.mem.indexOfAny(u8, s1, s2) orelse s1.len;
 }
 
-pub fn stub_strdup(str_ptr: usize) callconv(.c) usize {
+pub fn strdup(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const s = trace.c_span(str_ptr);
     const stub_common = @import("../stub_common.zig");
@@ -189,7 +189,7 @@ pub fn stub_strdup(str_ptr: usize) callconv(.c) usize {
     return @intFromPtr(raw);
 }
 
-pub fn stub_wcsdup(str_ptr: usize) callconv(.c) usize {
+pub fn wcsdup(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const str = @as([*]const u16, @ptrFromInt(str_ptr));
     const len = std.mem.indexOfScalar(u16, str[0..65536], 0) orelse 0;
@@ -202,7 +202,7 @@ pub fn stub_wcsdup(str_ptr: usize) callconv(.c) usize {
     return @intFromPtr(raw);
 }
 
-pub fn stub_itoa(value: i32, buffer_ptr: usize, radix: i32) callconv(.c) usize {
+pub fn itoa(value: i32, buffer_ptr: usize, radix: i32) callconv(.c) usize {
     if (trace.enable_tracing) trace.print("MSVCRT: _itoa(value={d}, buf={x}, radix={d})\n", .{value, buffer_ptr, radix});
     if (buffer_ptr == 0) return 0;
     const buffer = @as([*]u8, @ptrFromInt(buffer_ptr));
@@ -216,7 +216,7 @@ pub fn stub_itoa(value: i32, buffer_ptr: usize, radix: i32) callconv(.c) usize {
     return buffer_ptr;
 }
 
-pub fn stub_strtoul(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) u32 {
+pub fn strtoul(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) u32 {
     if (str_ptr == 0) return 0;
     const str = @as([*:0]const u8, @ptrFromInt(str_ptr));
     var i: usize = 0;
@@ -251,16 +251,16 @@ pub fn stub_strtoul(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) u32
     return final_val;
 }
 
-pub fn stub_strtol(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) i32 {
-    const val = @as(i32, @bitCast(stub_strtoul(str_ptr, end_ptr, radix)));
+pub fn strtol(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) i32 {
+    const val = @as(i32, @bitCast(strtoul(str_ptr, end_ptr, radix)));
     if (trace.enable_tracing) {
         trace.print("MSVCRT: strtol('{s}', {d}) -> {d}\n", .{trace.c_span(str_ptr), radix, val});
     }
     return val;
 }
 
-pub fn stub_atoi(str_ptr: usize) callconv(.c) i32 {
-    const val = @as(i32, @bitCast(stub_strtoul(str_ptr, 0, 10)));
+pub fn atoi(str_ptr: usize) callconv(.c) i32 {
+    const val = @as(i32, @bitCast(strtoul(str_ptr, 0, 10)));
     if (trace.enable_tracing) {
         if (str_ptr != 0) {
             trace.print("MSVCRT: atoi('{s}') -> {d}\n", .{trace.c_span(str_ptr), val});
@@ -271,14 +271,14 @@ pub fn stub_atoi(str_ptr: usize) callconv(.c) i32 {
 
 // --- Wide String ---
 
-pub fn stub_wcslen(str_ptr: usize) callconv(.c) usize {
+pub fn wcslen(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const str = @as([*]const u16, @ptrFromInt(str_ptr));
     const len = std.mem.indexOfScalar(u16, str[0..65536], 0) orelse 0;
     return len;
 }
 
-pub fn stub_wcsupr(str_ptr: usize) callconv(.c) usize {
+pub fn wcsupr(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const str = @as([*]u16, @ptrFromInt(str_ptr));
     const len = trace.c_span_w(str_ptr).len;
@@ -288,7 +288,7 @@ pub fn stub_wcsupr(str_ptr: usize) callconv(.c) usize {
     return str_ptr;
 }
 
-pub fn stub_wcscpy(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
+pub fn wcscpy(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
     log_wcs("wcscpy src: ", src_ptr);
     if (dst_ptr == 0 or src_ptr == 0) return dst_ptr;
     const dst = @as([*]u16, @ptrFromInt(dst_ptr));
@@ -302,7 +302,7 @@ pub fn stub_wcscpy(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
     return dst_ptr;
 }
 
-pub fn stub_wcsncpy(dst_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
+pub fn wcsncpy(dst_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
     if (dst_ptr == 0 or src_ptr == 0) return dst_ptr;
     const dst = @as([*]u16, @ptrFromInt(dst_ptr));
     const src = @as([*]const u16, @ptrFromInt(src_ptr));
@@ -317,7 +317,7 @@ pub fn stub_wcsncpy(dst_ptr: usize, src_ptr: usize, count: usize) callconv(.c) u
     return dst_ptr;
 }
 
-pub fn stub_wcscat(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
+pub fn wcscat(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
     if (dst_ptr == 0 or src_ptr == 0) return dst_ptr;
     const dst = @as([*]u16, @ptrFromInt(dst_ptr));
     // Find end of dst
@@ -333,7 +333,7 @@ pub fn stub_wcscat(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
     return dst_ptr;
 }
 
-pub fn stub_wcscmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
+pub fn wcscmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
     const s1 = @as([*]const u16, @ptrFromInt(s1_ptr));
     const s2 = @as([*]const u16, @ptrFromInt(s2_ptr));
@@ -342,7 +342,7 @@ pub fn stub_wcscmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
-pub fn stub_wcsncmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
+pub fn wcsncmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0 or count == 0) return 0;
     const s1 = @as([*]const u16, @ptrFromInt(s1_ptr));
     const s2 = @as([*]const u16, @ptrFromInt(s2_ptr));
@@ -352,7 +352,7 @@ pub fn stub_wcsncmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
-pub fn stub_wcsicmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
+pub fn wcsicmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
     const s1 = @as([*]const u16, @ptrFromInt(s1_ptr));
     const s2 = @as([*]const u16, @ptrFromInt(s2_ptr));
@@ -365,7 +365,7 @@ pub fn stub_wcsicmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
-pub fn stub_wcsnicmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
+pub fn wcsnicmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0 or count == 0) return 0;
     const s1 = @as([*]const u16, @ptrFromInt(s1_ptr));
     const s2 = @as([*]const u16, @ptrFromInt(s2_ptr));
@@ -379,7 +379,7 @@ pub fn stub_wcsnicmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i3
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
-pub fn stub_wcschr(str_ptr: usize, c: i32) callconv(.c) usize {
+pub fn wcschr(str_ptr: usize, c: i32) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const str = @as([*]const u16, @ptrFromInt(str_ptr));
     const target = @as(u16, @intCast(c & 0xFFFF));
@@ -389,7 +389,7 @@ pub fn stub_wcschr(str_ptr: usize, c: i32) callconv(.c) usize {
     return 0;
 }
 
-pub fn stub_wcsrchr(str_ptr: usize, c: i32) callconv(.c) usize {
+pub fn wcsrchr(str_ptr: usize, c: i32) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const str = @as([*]const u16, @ptrFromInt(str_ptr));
     const target = @as(u16, @intCast(c & 0xFFFF));
@@ -399,7 +399,7 @@ pub fn stub_wcsrchr(str_ptr: usize, c: i32) callconv(.c) usize {
     return 0;
 }
 
-pub fn stub_wcsstr(str_ptr: usize, substr_ptr: usize) callconv(.c) usize {
+pub fn wcsstr(str_ptr: usize, substr_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0 or substr_ptr == 0) return 0;
     const str = trace.c_span_w(str_ptr);
     const substr = trace.c_span_w(substr_ptr);
@@ -413,7 +413,7 @@ pub fn stub_wcsstr(str_ptr: usize, substr_ptr: usize) callconv(.c) usize {
     return 0;
 }
 
-pub fn stub_wcstol(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) i32 {
+pub fn wcstol(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) i32 {
     if (str_ptr == 0) return 0;
     const str = @as([*]const u16, @ptrFromInt(str_ptr));
     var i: usize = 0;
@@ -444,7 +444,7 @@ pub fn stub_wcstol(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) i32 
     return val * sign;
 }
 
-pub fn stub_wtoi(str_ptr: usize) callconv(.c) i32 {
+pub fn wtoi(str_ptr: usize) callconv(.c) i32 {
     if (str_ptr == 0) return 0;
     const str = @as([*]const u16, @ptrFromInt(str_ptr));
     var i: usize = 0;
@@ -509,7 +509,7 @@ pub fn init_pctype() void {
     @memcpy(msvcrt.msvcrt_mbctype[1..257], mbctype_data[0..256]);
 }
 
-pub fn stub_p_pctype() callconv(.c) *?*u16 {
+pub fn p_pctype() callconv(.c) *?*u16 {
     const static = struct {
         var p: ?*u16 = null;
     };
@@ -517,7 +517,7 @@ pub fn stub_p_pctype() callconv(.c) *?*u16 {
     return @ptrCast(@constCast(&static.p));
 }
 
-pub fn stub_isalnum(c: i32) callconv(.c) i32 {
+pub fn isalnum(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         return msvcrt.msvcrt_pctype[index] & 0x0107; // _ALPHA | _DIGIT
@@ -525,7 +525,7 @@ pub fn stub_isalnum(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-pub fn stub_isalpha(c: i32) callconv(.c) i32 {
+pub fn isalpha(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         const res = msvcrt.msvcrt_pctype[index] & 0x0103; // _ALPHA | _UPPER | _LOWER
@@ -535,7 +535,7 @@ pub fn stub_isalpha(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-pub fn stub_isdigit(c: i32) callconv(.c) i32 {
+pub fn isdigit(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         return msvcrt.msvcrt_pctype[index] & 0x0004; // _DIGIT
@@ -543,7 +543,7 @@ pub fn stub_isdigit(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-pub fn stub_isupper(c: i32) callconv(.c) i32 {
+pub fn isupper(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         return msvcrt.msvcrt_pctype[index] & 0x0001; // _UPPER
@@ -551,7 +551,7 @@ pub fn stub_isupper(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-pub fn stub_islower(c: i32) callconv(.c) i32 {
+pub fn islower(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         return msvcrt.msvcrt_pctype[index] & 0x0002; // _LOWER
@@ -559,7 +559,7 @@ pub fn stub_islower(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-pub fn stub_isspace(c: i32) callconv(.c) i32 {
+pub fn isspace(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         const res = msvcrt.msvcrt_pctype[index] & 0x0008; // _SPACE
@@ -569,7 +569,7 @@ pub fn stub_isspace(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-pub fn stub_isxdigit(c: i32) callconv(.c) i32 {
+pub fn isxdigit(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         return msvcrt.msvcrt_pctype[index] & 0x0080; // _HEX
@@ -577,7 +577,7 @@ pub fn stub_isxdigit(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-pub fn stub_isprint(c: i32) callconv(.c) i32 {
+pub fn isprint(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         return msvcrt.msvcrt_pctype[index] & 0x0157; // _BLANK | _PUNCT | _ALPHA | _DIGIT
@@ -585,7 +585,7 @@ pub fn stub_isprint(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-pub fn stub_ispunct(c: i32) callconv(.c) i32 {
+pub fn ispunct(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         return msvcrt.msvcrt_pctype[index] & 0x0010; // _PUNCT
@@ -593,7 +593,7 @@ pub fn stub_ispunct(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-pub fn stub_isctype(c: i32, mask: i32) callconv(.c) i32 {
+pub fn isctype(c: i32, mask: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         return if ((msvcrt.msvcrt_pctype[index] & @as(u16, @intCast(mask & 0xFFFF))) != 0) 1 else 0;
@@ -601,19 +601,19 @@ pub fn stub_isctype(c: i32, mask: i32) callconv(.c) i32 {
     return 0;
 }
 
-pub fn stub_tolower(c: i32) callconv(.c) i32 {
+pub fn tolower(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
     if (v <= 255) return std.ascii.toLower(@intCast(v));
     return v;
 }
 
-pub fn stub_toupper(c: i32) callconv(.c) i32 {
+pub fn toupper(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
     if (v <= 255) return std.ascii.toUpper(@intCast(v));
     return v;
 }
 
-pub fn stub_iswctype(c: i32, desc: i32) callconv(.c) i32 {
+pub fn iswctype(c: i32, desc: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         const res = if ((msvcrt.msvcrt_pctype[index] & @as(u16, @intCast(desc & 0xFFFF))) != 0) @as(i32, 1) else @as(i32, 0);
@@ -624,36 +624,36 @@ pub fn stub_iswctype(c: i32, desc: i32) callconv(.c) i32 {
     return 0;
 }
 
-pub fn stub_towupper(c: i32) callconv(.c) i32 {
+pub fn towupper(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
     if (v <= 255) return std.ascii.toUpper(@intCast(v));
     return v;
 }
 
-pub fn stub_towlower(c: i32) callconv(.c) i32 {
+pub fn towlower(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
     if (v <= 255) return std.ascii.toLower(@intCast(v));
     return v;
 }
 
-pub fn stub_ismbcspace(c: i32) callconv(.c) i32 {
+pub fn ismbcspace(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
     return if (v == ' ' or v == '\t' or v == '\n' or v == '\r' or v == 0x0B or v == 0x0C) 1 else 0;
 }
 
-pub fn stub_mbsinc(str_ptr: usize) callconv(.c) usize {
+pub fn mbsinc(str_ptr: usize) callconv(.c) usize {
     return if (str_ptr == 0) 0 else str_ptr + 1;
 }
 
-pub fn stub_mbccpy(dest: usize, src: usize) callconv(.c) void {
+pub fn mbccpy(dest: usize, src: usize) callconv(.c) void {
     if (dest != 0 and src != 0) @as([*]u8, @ptrFromInt(dest))[0] = @as([*]const u8, @ptrFromInt(src))[0];
 }
 
-pub fn stub_mbclen(c_ptr: usize) callconv(.c) usize {
+pub fn mbclen(c_ptr: usize) callconv(.c) usize {
     return if (c_ptr == 0) 0 else 1;
 }
 
-pub fn stub_mbsdec(start: usize, current: usize) callconv(.c) usize {
+pub fn mbsdec(start: usize, current: usize) callconv(.c) usize {
     if (start == 0 or current <= start) return 0;
     if (trace.enable_tracing) trace.print("MSVCRT: _mbsdec(start={x}, current={x}) -> {x}\n", .{start, current, current - 1});
     return current - 1;
@@ -679,7 +679,7 @@ pub fn log_wcs(prefix: []const u8, str_ptr: usize) void {
 
 // --- Generic Stubs ---
 
-pub fn stub_iscntrl(c: i32) callconv(.c) i32 {
+pub fn iscntrl(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         return msvcrt.msvcrt_pctype[index] & 0x0020; // _CONTROL

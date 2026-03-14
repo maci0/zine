@@ -15,7 +15,7 @@ pub fn stub_InitCommonControlsEx(lpInitCtrls: usize) callconv(w32cc.WINAPI) i32 
     return 1;
 }
 
-pub fn stub_ImageList_Create(cx: i32, cy: i32, flags: u32, cInitial: i32, cGrow: i32) callconv(w32cc.WINAPI) usize {
+pub fn ImageList_Create(cx: i32, cy: i32, flags: u32, cInitial: i32, cGrow: i32) callconv(w32cc.WINAPI) usize {
     _ = cx;
     _ = cy;
     _ = flags;
@@ -85,7 +85,7 @@ pub fn stub_CreateUpDownControl(dwStyle: u32, x: i32, y: i32, cx: i32, cy: i32, 
 
 var next_comctl_hwnd: usize = 0x00002000;
 
-pub fn stub_CreateStatusWindowA(style: u32, lpszText: usize, hwndParent: usize, wID: u32) callconv(w32cc.WINAPI) usize {
+pub fn CreateStatusWindowA(style: u32, lpszText: usize, hwndParent: usize, wID: u32) callconv(w32cc.WINAPI) usize {
     _ = hwndParent;
     _ = wID;
     const hwnd = next_comctl_hwnd;

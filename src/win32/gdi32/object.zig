@@ -4,7 +4,7 @@ const gdi32 = @import("../gdi32.zig");
 const w32 = @import("../../win32_constants.zig");
 const w32cc = @import("../../calling_convention.zig");
 
-pub fn stub_GetStockObject(fnObject: i32) callconv(w32cc.WINAPI) usize {
+pub fn GetStockObject(fnObject: i32) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("GDI32: GetStockObject({d})\n", .{fnObject});
     const handle = 0x0B0B0000 | @as(usize, @intCast(@as(u32, @bitCast(fnObject)) & 0xFF));
     
@@ -27,7 +27,7 @@ pub fn stub_GetStockObject(fnObject: i32) callconv(w32cc.WINAPI) usize {
     return handle;
 }
 
-pub fn stub_SelectObject(hdc: usize, h: usize) callconv(w32cc.WINAPI) usize {
+pub fn SelectObject(hdc: usize, h: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("GDI32: SelectObject(dc=0x{x}, obj=0x{x})\n", .{ hdc, h });
     var old_obj: usize = 0;
     
@@ -68,19 +68,19 @@ pub fn stub_DeleteObject(h: usize) callconv(w32cc.WINAPI) i32 {
     return 1;
 }
 
-pub fn stub_CreateSolidBrush(crColor: u32) callconv(w32cc.WINAPI) usize {
+pub fn CreateSolidBrush(crColor: u32) callconv(w32cc.WINAPI) usize {
     const handle = gdi32.nextHandle();
     gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = crColor, .style = 0 } } });
     return handle;
 }
 
-pub fn stub_CreatePen(iStyle: i32, cWidth: i32, crColor: u32) callconv(w32cc.WINAPI) usize {
+pub fn CreatePen(iStyle: i32, cWidth: i32, crColor: u32) callconv(w32cc.WINAPI) usize {
     const handle = gdi32.nextHandle();
     gdi32.registerObject(.{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = crColor, .width = cWidth, .style = iStyle } } });
     return handle;
 }
 
-pub fn stub_CreateFontIndirectA(lplf: usize) callconv(w32cc.WINAPI) usize {
+pub fn CreateFontIndirectA(lplf: usize) callconv(w32cc.WINAPI) usize {
     _ = lplf;
     if (trace.enable_tracing) trace.print("GDI32: CreateFontIndirectA\n", .{});
     const handle = gdi32.nextHandle();
@@ -88,7 +88,7 @@ pub fn stub_CreateFontIndirectA(lplf: usize) callconv(w32cc.WINAPI) usize {
     return handle;
 }
 
-pub fn stub_CreateCompatibleBitmap(hdc: usize, cx: i32, cy: i32) callconv(w32cc.WINAPI) usize {
+pub fn CreateCompatibleBitmap(hdc: usize, cx: i32, cy: i32) callconv(w32cc.WINAPI) usize {
     _ = hdc;
     const w: u32 = if (cx > 0) @intCast(cx) else 1;
     const h: u32 = if (cy > 0) @intCast(cy) else 1;
@@ -113,7 +113,7 @@ pub fn stub_CreateBitmap(nWidth: i32, nHeight: i32, nPlanes: u32, nBitCount: u32
     return gdi32.nextHandle();
 }
 
-pub fn stub_CreateDIBSection(hdc: usize, pbmi: usize, usage: u32, ppvBits: usize, hSection: usize, offset: u32) callconv(w32cc.WINAPI) usize {
+pub fn CreateDIBSection(hdc: usize, pbmi: usize, usage: u32, ppvBits: usize, hSection: usize, offset: u32) callconv(w32cc.WINAPI) usize {
     _ = hdc;
     _ = usage;
     _ = hSection;
@@ -155,7 +155,7 @@ pub fn stub_CreateDIBSection(hdc: usize, pbmi: usize, usage: u32, ppvBits: usize
     return handle;
 }
 
-pub fn stub_GetObjectA(h: usize, c: i32, pv: usize) callconv(w32cc.WINAPI) i32 {
+pub fn GetObjectA(h: usize, c: i32, pv: usize) callconv(w32cc.WINAPI) i32 {
     if (c <= 0) return 0;
 
     // Check if it's a DIB/bitmap
@@ -196,7 +196,7 @@ pub fn stub_GetObjectA(h: usize, c: i32, pv: usize) callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
-pub fn stub_GetCurrentObject(hdc: usize, tp: u32) callconv(w32cc.WINAPI) usize {
+pub fn GetCurrentObject(hdc: usize, tp: u32) callconv(w32cc.WINAPI) usize {
     if (gdi32.getDc(hdc)) |dc| {
         return switch (tp) {
             1 => dc.pen,       // OBJ_PEN
@@ -246,7 +246,7 @@ pub fn stub_CreateRectRgn(x1: i32, y1: i32, x2: i32, y2: i32) callconv(w32cc.WIN
     return gdi32.nextHandle();
 }
 
-pub fn stub_CreateBrushIndirect(lplb: usize) callconv(w32cc.WINAPI) usize {
+pub fn CreateBrushIndirect(lplb: usize) callconv(w32cc.WINAPI) usize {
     const handle = gdi32.nextHandle();
     var color: u32 = 0;
     var style: i32 = 0;
@@ -261,7 +261,7 @@ pub fn stub_CreateBrushIndirect(lplb: usize) callconv(w32cc.WINAPI) usize {
     return handle;
 }
 
-pub fn stub_CreatePenIndirect(lplgpn: usize) callconv(w32cc.WINAPI) usize {
+pub fn CreatePenIndirect(lplgpn: usize) callconv(w32cc.WINAPI) usize {
     const handle = gdi32.nextHandle();
     var color: u32 = 0;
     var width: i32 = 1;
@@ -279,7 +279,7 @@ pub fn stub_CreatePenIndirect(lplgpn: usize) callconv(w32cc.WINAPI) usize {
     return handle;
 }
 
-pub fn stub_CreateFontA(nHeight: i32, nWidth: i32, nEscapement: i32, nOrientation: i32, fnWeight: i32, fdwItalic: u32, fdwUnderline: u32, fdwStrikeOut: u32, fdwCharSet: u32, fdwOutputPrecision: u32, fdwClipPrecision: u32, fdwQuality: u32, fdwPitchAndFamily: u32, lpszFace: usize) callconv(w32cc.WINAPI) usize {
+pub fn CreateFontA(nHeight: i32, nWidth: i32, nEscapement: i32, nOrientation: i32, fnWeight: i32, fdwItalic: u32, fdwUnderline: u32, fdwStrikeOut: u32, fdwCharSet: u32, fdwOutputPrecision: u32, fdwClipPrecision: u32, fdwQuality: u32, fdwPitchAndFamily: u32, lpszFace: usize) callconv(w32cc.WINAPI) usize {
     _ = nHeight; _ = nWidth; _ = nEscapement; _ = nOrientation; _ = fnWeight;
     _ = fdwItalic; _ = fdwUnderline; _ = fdwStrikeOut; _ = fdwCharSet;
     _ = fdwOutputPrecision; _ = fdwClipPrecision; _ = fdwQuality;
@@ -303,7 +303,7 @@ pub fn stub_UnrealizeObject(h: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 // CreateHalftonePalette: creates a halftone palette for a DC
-pub fn stub_CreateHalftonePalette(hdc: usize) callconv(w32cc.WINAPI) usize {
+pub fn CreateHalftonePalette(hdc: usize) callconv(w32cc.WINAPI) usize {
     _ = hdc;
     const handle = gdi32.nextHandle();
     gdi32.registerObject(.{ .handle = handle, .obj_type = .Palette, .data = .{ .none = {} } });
@@ -312,7 +312,7 @@ pub fn stub_CreateHalftonePalette(hdc: usize) callconv(w32cc.WINAPI) usize {
 }
 
 // CreatePatternBrush: creates a brush based on a bitmap pattern
-pub fn stub_CreatePatternBrush(hBitmap: usize) callconv(w32cc.WINAPI) usize {
+pub fn CreatePatternBrush(hBitmap: usize) callconv(w32cc.WINAPI) usize {
     _ = hBitmap;
     const handle = gdi32.nextHandle();
     gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0, .style = 3 } } }); // style 3 = pattern

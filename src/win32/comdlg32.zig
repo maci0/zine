@@ -1,13 +1,13 @@
 const env = @import("../loader/env.zig");
 const kernel32 = @import("kernel32.zig");
-const stubs = @import("comdlg32/stubs.zig");
+const stubs = @import("comdlg32/dialogs.zig");
 
 pub fn register(environment: *env.Environment) !void {
     const m = "comdlg32.dll";
-    try environment.addBuiltinExportComptime(m, "GetOpenFileNameA", stubs.stub_GetOpenFileNameA);
-    try environment.addBuiltinExportComptime(m, "GetSaveFileNameA", stubs.stub_GetSaveFileNameA);
-    try environment.addBuiltinExportComptime(m, "GetOpenFileNameW", stubs.stub_GetOpenFileNameW);
-    try environment.addBuiltinExportComptime(m, "GetSaveFileNameW", stubs.stub_GetSaveFileNameW);
+    try environment.addBuiltinExportComptime(m, "GetOpenFileNameA", stubs.GetOpenFileNameA);
+    try environment.addBuiltinExportComptime(m, "GetSaveFileNameA", stubs.GetSaveFileNameA);
+    try environment.addBuiltinExportComptime(m, "GetOpenFileNameW", stubs.GetOpenFileNameW);
+    try environment.addBuiltinExportComptime(m, "GetSaveFileNameW", stubs.GetSaveFileNameW);
     try environment.addBuiltinExportComptime(m, "ChooseColorA", stubs.stub_ChooseColorA);
     try environment.addBuiltinExportComptime(m, "ChooseFontA", stubs.stub_ChooseFontA);
     try environment.addBuiltinExportComptime(m, "PrintDlgA", stubs.stub_PrintDlgA);

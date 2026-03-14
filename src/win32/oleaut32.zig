@@ -1,5 +1,5 @@
 const env = @import("../loader/env.zig");
-const stubs = @import("ole32/stubs.zig");
+const stubs = @import("ole32/com.zig");
 
 pub fn register(environment: *env.Environment) !void {
     const m = "oleaut32.dll";

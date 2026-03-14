@@ -1,5 +1,5 @@
 const env = @import("../loader/env.zig");
-const stubs = @import("dinput/stubs.zig");
+const stubs = @import("dinput/dinput.zig");
 
 pub fn register(environment: *env.Environment) !void {
     stubs.initVtables();

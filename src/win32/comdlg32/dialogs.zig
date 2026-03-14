@@ -124,12 +124,12 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
     return 0; // FALSE (user cancelled or error)
 }
 
-pub fn stub_GetOpenFileNameA(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
+pub fn GetOpenFileNameA(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("COMDLG32: GetOpenFileNameA({x})\n", .{lpofn_ptr});
     return commonFileDialogA(lpofn_ptr, false);
 }
 
-pub fn stub_GetSaveFileNameA(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
+pub fn GetSaveFileNameA(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("COMDLG32: GetSaveFileNameA({x})\n", .{lpofn_ptr});
     return commonFileDialogA(lpofn_ptr, true);
 }
@@ -246,12 +246,12 @@ fn commonFileDialogW(lpofn_ptr: usize, is_save: bool) i32 {
     return 0; // FALSE (cancelled)
 }
 
-pub fn stub_GetOpenFileNameW(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
+pub fn GetOpenFileNameW(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("COMDLG32: GetOpenFileNameW({x})\n", .{lpofn_ptr});
     return commonFileDialogW(lpofn_ptr, false);
 }
 
-pub fn stub_GetSaveFileNameW(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
+pub fn GetSaveFileNameW(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("COMDLG32: GetSaveFileNameW({x})\n", .{lpofn_ptr});
     return commonFileDialogW(lpofn_ptr, true);
 }

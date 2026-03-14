@@ -2,23 +2,23 @@ const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
 const renderer = @import("../gui/renderer.zig");
-const dsound_stubs = @import("dsound/stubs.zig");
-const stubs = @import("winmm/stubs.zig");
+const dsound_stubs = @import("dsound/dsound.zig");
+const stubs = @import("winmm/multimedia.zig");
 
 // waveOut volume: low word = left (0-0xFFFF), high word = right (0-0xFFFF)
 pub var waveout_volume: u32 = 0xFFFFFFFF; // max volume
 
 pub fn register(environment: *env.Environment) !void {
     const m = "WINMM.dll";
-    try environment.addBuiltinExportComptime(m, "timeGetTime", stubs.stub_timeGetTime);
-    try environment.addBuiltinExportComptime(m, "waveOutSetVolume", stubs.stub_waveOutSetVolume);
-    try environment.addBuiltinExportComptime(m, "waveOutGetVolume", stubs.stub_waveOutGetVolume);
+    try environment.addBuiltinExportComptime(m, "timeGetTime", stubs.timeGetTime);
+    try environment.addBuiltinExportComptime(m, "waveOutSetVolume", stubs.waveOutSetVolume);
+    try environment.addBuiltinExportComptime(m, "waveOutGetVolume", stubs.waveOutGetVolume);
     try environment.addBuiltinExportComptime(m, "PlaySoundA", stubs.stub_PlaySoundA);
     try environment.addBuiltinExportComptime(m, "timeGetDevCaps", stubs.stub_timeGetDevCaps);
     try environment.addBuiltinExportComptime(m, "timeBeginPeriod", stubs.stub_timeBeginPeriod);
     try environment.addBuiltinExportComptime(m, "timeEndPeriod", stubs.stub_timeEndPeriod);
-    try environment.addBuiltinExportComptime(m, "timeSetEvent", stubs.stub_timeSetEvent);
-    try environment.addBuiltinExportComptime(m, "timeKillEvent", stubs.stub_timeKillEvent);
+    try environment.addBuiltinExportComptime(m, "timeSetEvent", stubs.timeSetEvent);
+    try environment.addBuiltinExportComptime(m, "timeKillEvent", stubs.timeKillEvent);
 
     // --- Remaining WINMM stubs for 100% win2k coverage ---
     const kernel32 = @import("kernel32.zig");
@@ -45,17 +45,17 @@ pub fn register(environment: *env.Environment) !void {
 
     // --- MSS32.DLL required WINMM imports ---
     // waveOut functions
-    try environment.addBuiltinExportComptime(m, "waveOutOpen", stubs.stub_waveOutOpen);
+    try environment.addBuiltinExportComptime(m, "waveOutOpen", stubs.waveOutOpen);
     try environment.addBuiltinExportComptime(m, "waveOutClose", stubs.stub_waveOutClose_);
     try environment.addBuiltinExportComptime(m, "waveOutReset", stubs.stub_waveOutReset);
-    try environment.addBuiltinExportComptime(m, "waveOutWrite", stubs.stub_waveOutWrite);
-    try environment.addBuiltinExportComptime(m, "waveOutPrepareHeader", stubs.stub_waveOutPrepareHeader);
+    try environment.addBuiltinExportComptime(m, "waveOutWrite", stubs.waveOutWrite);
+    try environment.addBuiltinExportComptime(m, "waveOutPrepareHeader", stubs.waveOutPrepareHeader);
     try environment.addBuiltinExportComptime(m, "waveOutUnprepareHeader", stubs.stub_waveOutUnprepareHeader);
-    try environment.addBuiltinExportComptime(m, "waveOutGetDevCapsA", stubs.stub_waveOutGetDevCapsA);
+    try environment.addBuiltinExportComptime(m, "waveOutGetDevCapsA", stubs.waveOutGetDevCapsA);
     try environment.addBuiltinExportComptime(m, "waveOutGetID", stubs.stub_waveOutGetID);
 
     // midiOut functions
-    try environment.addBuiltinExportComptime(m, "midiOutOpen", stubs.stub_midiOutOpen);
+    try environment.addBuiltinExportComptime(m, "midiOutOpen", stubs.midiOutOpen);
     try environment.addBuiltinExportComptime(m, "midiOutClose", kernel32.stub_args1);
     try environment.addBuiltinExportComptime(m, "midiOutReset", kernel32.stub_args1);
     try environment.addBuiltinExportComptime(m, "midiOutShortMsg", kernel32.stub_args2);

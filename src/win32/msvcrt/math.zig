@@ -4,7 +4,7 @@ const msvcrt = @import("../msvcrt.zig");
 const io = @import("io.zig");
 
 
-pub fn stub_controlfp(new: u32, mask: u32) callconv(.c) u32 {
+pub fn controlfp(new: u32, mask: u32) callconv(.c) u32 {
     _ = new;
     _ = mask;
     return 0x9001f;
@@ -17,7 +17,7 @@ pub fn stub_setusermatherr(handler: *anyopaque) callconv(.c) void {
 const platform = @import("../../platform.zig");
 const native_arch = @import("builtin").target.cpu.arch;
 
-pub const stub_ftol = if (platform.is_x86)
+pub const ftol = if (platform.is_x86)
     &stub_ftol_x86
 else if (platform.is_x86_64)
     &stub_ftol_x64
@@ -51,11 +51,11 @@ fn stub_ftol_generic() callconv(.c) i64 {
     return 0;
 }
 
-pub fn stub_ceil(x: f64) callconv(.c) f64 {
+pub fn ceil(x: f64) callconv(.c) f64 {
     return @ceil(x);
 }
 
-pub fn stub_floor(x: f64) callconv(.c) f64 {
+pub fn floor(x: f64) callconv(.c) f64 {
     return @floor(x);
 }
 

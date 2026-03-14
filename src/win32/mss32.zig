@@ -1,5 +1,5 @@
 const env = @import("../loader/env.zig");
-const stubs = @import("mss32/stubs.zig");
+const stubs = @import("mss32/miles.zig");
 
 pub fn register(environment: *env.Environment) !void {
     const m = "mss32.dll";
@@ -11,7 +11,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "_AIL_get_timer_highest_delay@0", stubs.stub_get_timer_highest_delay);
     try environment.addBuiltinExportComptime(m, "_AIL_set_preference@8", stubs.stub_noop2);
     try environment.addBuiltinExportComptime(m, "_AIL_get_preference@4", stubs.stub_noop1);
-    try environment.addBuiltinExportComptime(m, "_AIL_waveOutOpen@16", stubs.stub_waveOutOpen);
+    try environment.addBuiltinExportComptime(m, "_AIL_waveOutOpen@16", stubs.waveOutOpen);
     try environment.addBuiltinExportComptime(m, "_AIL_waveOutClose@4", stubs.stub_noop1);
     try environment.addBuiltinExportComptime(m, "_AIL_set_digital_master_volume@8", stubs.stub_noop2);
     try environment.addBuiltinExportComptime(m, "_AIL_allocate_sample_handle@4", stubs.stub_allocate_sample);

@@ -6,7 +6,7 @@ const w32cc = @import("../../calling_convention.zig");
 const std = @import("std");
 const w32 = @import("../../win32_constants.zig");
 
-pub fn stub_LoadIconA(hInstance: usize, lpIconName: usize) callconv(w32cc.WINAPI) usize {
+pub fn LoadIconA(hInstance: usize, lpIconName: usize) callconv(w32cc.WINAPI) usize {
     var hInst = hInstance;
     if (hInst == 0) {
         hInst = kernel32.main_module_handle;
@@ -134,7 +134,7 @@ fn loadStringFromPE(hInst: usize, uID: u32, out_buf: [*]u8, max_len: usize) usiz
     return copy_len;
 }
 
-pub fn stub_LoadStringA(hInstance: ?*anyopaque, uID: u32, lpBuffer_ptr: usize, nBufferMax: i32) callconv(w32cc.WINAPI) i32 {
+pub fn LoadStringA(hInstance: ?*anyopaque, uID: u32, lpBuffer_ptr: usize, nBufferMax: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) {
         trace.print("USER32: LoadStringA(hInst={*}, uID={d}, buffer={x}, max={d})\n", .{ hInstance, uID, lpBuffer_ptr, nBufferMax });
     }
@@ -160,7 +160,7 @@ pub fn stub_LoadStringA(hInstance: ?*anyopaque, uID: u32, lpBuffer_ptr: usize, n
     return 0;
 }
 
-pub fn stub_LoadStringW(hInstance: ?*anyopaque, uID: u32, lpBuffer_ptr: usize, nBufferMax: i32) callconv(w32cc.WINAPI) i32 {
+pub fn LoadStringW(hInstance: ?*anyopaque, uID: u32, lpBuffer_ptr: usize, nBufferMax: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) {
         trace.print("USER32: LoadStringW(hInst={*}, uID={d}, buffer={x}, max={d})\n", .{ hInstance, uID, lpBuffer_ptr, nBufferMax });
     }
@@ -358,7 +358,7 @@ fn loadBitmapFromPE(hInst: usize, lpBitmapName: usize) usize {
     return 0;
 }
 
-pub fn stub_LoadBitmapA(hInstance: usize, lpBitmapName: usize) callconv(w32cc.WINAPI) usize {
+pub fn LoadBitmapA(hInstance: usize, lpBitmapName: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) {
         if (lpBitmapName <= 0xFFFF) {
             trace.print("USER32: LoadBitmapA(ID={d})\n", .{lpBitmapName});
@@ -373,7 +373,7 @@ pub fn stub_LoadBitmapA(hInstance: usize, lpBitmapName: usize) callconv(w32cc.WI
     return 0xB17B0001; // Dummy bitmap handle
 }
 
-pub fn stub_LoadBitmapW(hInstance: usize, lpBitmapName: usize) callconv(w32cc.WINAPI) usize {
+pub fn LoadBitmapW(hInstance: usize, lpBitmapName: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) {
         if (lpBitmapName <= 0xFFFF) {
             trace.print("USER32: LoadBitmapW(ID={d})\n", .{lpBitmapName});

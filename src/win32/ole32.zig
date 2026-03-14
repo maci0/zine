@@ -1,5 +1,5 @@
 const env = @import("../loader/env.zig");
-const stubs = @import("ole32/stubs.zig");
+const stubs = @import("ole32/com.zig");
 
 pub fn register(environment: *env.Environment) !void {
     // ole32.dll
@@ -8,7 +8,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "CoInitializeEx", stubs.stub_CoInitializeEx);
     try environment.addBuiltinExportComptime(m, "CoUninitialize", stubs.stub_CoUninitialize);
     try environment.addBuiltinExportComptime(m, "CoCreateInstance", stubs.stub_CoCreateInstance);
-    try environment.addBuiltinExportComptime(m, "CoTaskMemAlloc", stubs.stub_CoTaskMemAlloc);
+    try environment.addBuiltinExportComptime(m, "CoTaskMemAlloc", stubs.CoTaskMemAlloc);
     try environment.addBuiltinExportComptime(m, "CoTaskMemFree", stubs.stub_CoTaskMemFree);
     try environment.addBuiltinExportComptime(m, "DoDragDrop", stubs.stub_DoDragDrop);
 

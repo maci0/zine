@@ -14,7 +14,7 @@ pub fn stub_DrawMenuBar(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     return 1;
 }
 
-pub fn stub_SetMenu(hWnd: usize, hMenu: usize) callconv(w32cc.WINAPI) i32 {
+pub fn SetMenu(hWnd: usize, hMenu: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     if (trace.enable_tracing) trace.print("USER32: SetMenu\n", .{});
     if (hMenu != 0) user32.window_has_menu = true;
@@ -81,7 +81,7 @@ fn findOrAllocMenuSlot(key: u64) *MenuItemState {
     return &menu_item_states[63];
 }
 
-pub fn stub_CheckMenuItem(hMenu: usize, uIDCheckItem: u32, uCheck: u32) callconv(w32cc.WINAPI) u32 {
+pub fn CheckMenuItem(hMenu: usize, uIDCheckItem: u32, uCheck: u32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("USER32: CheckMenuItem(menu={X}, item={d}, check={x})\n", .{ hMenu, uIDCheckItem, uCheck });
     const MF_CHECKED: u32 = 0x0008;
     const key = menuItemKey(hMenu, uIDCheckItem);
@@ -97,21 +97,21 @@ pub fn stub_CheckMenuItem(hMenu: usize, uIDCheckItem: u32, uCheck: u32) callconv
 
 var next_menu_handle: usize = 0x00001000;
 
-pub fn stub_CreateMenu() callconv(w32cc.WINAPI) usize {
+pub fn CreateMenu() callconv(w32cc.WINAPI) usize {
     const handle = next_menu_handle;
     next_menu_handle += 1;
     if (trace.enable_tracing) trace.print("USER32: CreateMenu() -> 0x{X}\n", .{handle});
     return handle;
 }
 
-pub fn stub_CreatePopupMenu() callconv(w32cc.WINAPI) usize {
+pub fn CreatePopupMenu() callconv(w32cc.WINAPI) usize {
     const handle = next_menu_handle;
     next_menu_handle += 1;
     if (trace.enable_tracing) trace.print("USER32: CreatePopupMenu() -> 0x{X}\n", .{handle});
     return handle;
 }
 
-pub fn stub_EnableMenuItem(hMenu: usize, uIDEnableItem: u32, uEnable: u32) callconv(w32cc.WINAPI) i32 {
+pub fn EnableMenuItem(hMenu: usize, uIDEnableItem: u32, uEnable: u32) callconv(w32cc.WINAPI) i32 {
     const MF_GRAYED: u32 = 0x0001;
     const MF_DISABLED: u32 = 0x0002;
     const key = menuItemKey(hMenu, uIDEnableItem);
@@ -152,7 +152,7 @@ pub fn stub_GetMenuItemCount(hMenu: usize) callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
-pub fn stub_GetMenuState(hMenu: usize, uId: u32, uFlags: u32) callconv(w32cc.WINAPI) u32 {
+pub fn GetMenuState(hMenu: usize, uId: u32, uFlags: u32) callconv(w32cc.WINAPI) u32 {
     _ = uFlags;
     const key = menuItemKey(hMenu, uId);
     for (&menu_item_states) |*s| {

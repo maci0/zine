@@ -46,7 +46,7 @@ pub fn stub_RtlUnwind(targetFrame: usize, targetIp: usize, exceptionRecord: usiz
 // NtQuerySystemInformation
 // =============================================================================
 
-pub fn stub_NtQuerySystemInformation(systemInformationClass: u32, systemInformation: usize, systemInformationLength: u32, returnLength: usize) callconv(w32cc.WINAPI) u32 {
+pub fn NtQuerySystemInformation(systemInformationClass: u32, systemInformation: usize, systemInformationLength: u32, returnLength: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("NTDLL: NtQuerySystemInformation(class={d}, info={x}, len={d}, ret_len={x})\n", .{ systemInformationClass, systemInformation, systemInformationLength, returnLength });
     if (systemInformationClass == 0) { // SystemBasicInformation
         if (systemInformationLength >= 44) {
@@ -143,7 +143,7 @@ pub fn stub_NtQuerySystemInformation(systemInformationClass: u32, systemInformat
 // VerSetConditionMask
 // =============================================================================
 
-pub fn stub_VerSetConditionMask(mask_lo: u32, mask_hi: u32, typeMask: u32, condition: u8) callconv(w32cc.WINAPI) u64 {
+pub fn VerSetConditionMask(mask_lo: u32, mask_hi: u32, typeMask: u32, condition: u8) callconv(w32cc.WINAPI) u64 {
     _ = mask_hi;
     if (trace.enable_tracing) trace.print("NTDLL: VerSetConditionMask(mask=0x{x}, type=0x{x}, cond={d})\n", .{ mask_lo, typeMask, condition });
     if (typeMask == 0 or condition == 0) return mask_lo;
@@ -167,7 +167,7 @@ pub fn stub_VerSetConditionMask(mask_lo: u32, mask_hi: u32, typeMask: u32, condi
 // Unicode strings
 // =============================================================================
 
-pub fn stub_RtlInitUnicodeString(dest: usize, source: usize) callconv(w32cc.WINAPI) void {
+pub fn RtlInitUnicodeString(dest: usize, source: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("NTDLL: RtlInitUnicodeString(dest={x}, source={x})\n", .{ dest, source });
     if (dest == 0) return;
 
@@ -192,7 +192,7 @@ pub fn stub_RtlInitUnicodeString(dest: usize, source: usize) callconv(w32cc.WINA
 // SID functions
 // =============================================================================
 
-pub fn stub_RtlAllocateAndInitializeSid(
+pub fn RtlAllocateAndInitializeSid(
     identAuth: usize, subAuthCount: u8,
     sa0: u32, sa1: u32, sa2: u32, sa3: u32,
     sa4: u32, sa5: u32, sa6: u32, sa7: u32,
@@ -224,7 +224,7 @@ pub fn stub_RtlAllocateAndInitializeSid(
     return 0; // STATUS_SUCCESS
 }
 
-pub fn stub_RtlEqualSid(sid1: usize, sid2: usize) callconv(w32cc.WINAPI) i32 {
+pub fn RtlEqualSid(sid1: usize, sid2: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("NTDLL: RtlEqualSid({x}, {x})\n", .{ sid1, sid2 });
     if (sid1 == 0 or sid2 == 0) return 0;
 
@@ -244,11 +244,11 @@ pub fn stub_RtlEqualSid(sid1: usize, sid2: usize) callconv(w32cc.WINAPI) i32 {
 // =============================================================================
 
 pub const stub_chkstk = if (platform.is_x86)
-    &stub_chkstk_x86
+    &chkstk_x86
 else
-    &stub_chkstk_generic;
+    &chkstk_generic;
 
-fn stub_chkstk_x86() callconv(.naked) void {
+fn chkstk_x86() callconv(.naked) void {
     asm volatile (
         \\  push %%ecx
         \\  lea 8(%%esp), %%ecx
@@ -268,14 +268,14 @@ fn stub_chkstk_x86() callconv(.naked) void {
     );
 }
 
-fn stub_chkstk_generic() callconv(w32cc.WINAPI) void {}
+fn chkstk_generic() callconv(w32cc.WINAPI) void {}
 
 pub const stub_allmul = if (platform.is_x86)
-    &stub_allmul_x86
+    &allmul_x86
 else
-    &stub_allmul_generic;
+    &allmul_generic;
 
-fn stub_allmul_x86() callconv(.naked) void {
+fn allmul_x86() callconv(.naked) void {
     asm volatile (
         \\  mov 8(%%esp), %%ecx
         \\  mov 16(%%esp), %%eax
@@ -300,16 +300,16 @@ fn stub_allmul_x86() callconv(.naked) void {
     );
 }
 
-fn stub_allmul_generic() callconv(w32cc.WINAPI) usize {
+fn allmul_generic() callconv(w32cc.WINAPI) usize {
     return 0;
 }
 
 pub const stub_alldiv = if (platform.is_x86)
-    &stub_alldiv_x86
+    &alldiv_x86
 else
-    &stub_alldiv_generic;
+    &alldiv_generic;
 
-fn stub_alldiv_x86() callconv(.naked) void {
+fn alldiv_x86() callconv(.naked) void {
     asm volatile (
         \\  push %%esi
         \\  push %%edi
@@ -364,7 +364,7 @@ fn stub_alldiv_x86() callconv(.naked) void {
     );
 }
 
-fn stub_alldiv_generic() callconv(w32cc.WINAPI) usize {
+fn alldiv_generic() callconv(w32cc.WINAPI) usize {
     return 0;
 }
 
@@ -372,7 +372,7 @@ fn stub_alldiv_generic() callconv(w32cc.WINAPI) usize {
 // String/memory helpers (exported from NTDLL)
 // =============================================================================
 
-pub fn stub_strrchr(str_ptr: usize, c: i32) callconv(w32cc.WINAPI) usize {
+pub fn strrchr(str_ptr: usize, c: i32) callconv(w32cc.WINAPI) usize {
     if (str_ptr == 0) return 0;
     const s = @as([*]const u8, @ptrFromInt(str_ptr));
     const ch: u8 = @truncate(@as(u32, @bitCast(c)));
@@ -386,7 +386,7 @@ pub fn stub_strrchr(str_ptr: usize, c: i32) callconv(w32cc.WINAPI) usize {
     return last;
 }
 
-pub fn stub_wcsicmp(s1_ptr: usize, s2_ptr: usize) callconv(w32cc.WINAPI) i32 {
+pub fn wcsicmp(s1_ptr: usize, s2_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
     const s1 = @as([*]const u16, @ptrFromInt(s1_ptr));
     const s2 = @as([*]const u16, @ptrFromInt(s2_ptr));
@@ -405,7 +405,7 @@ fn toLowerW(c: u16) u16 {
     return c;
 }
 
-pub fn stub_memmove(dest_ptr: usize, src_ptr: usize, count: usize) callconv(w32cc.WINAPI) usize {
+pub fn memmove(dest_ptr: usize, src_ptr: usize, count: usize) callconv(w32cc.WINAPI) usize {
     if (dest_ptr == 0 or src_ptr == 0 or count == 0) return dest_ptr;
     const dst = @as([*]u8, @ptrFromInt(dest_ptr));
     const src = @as([*]const u8, @ptrFromInt(src_ptr));
@@ -428,10 +428,10 @@ pub fn stub_memmove(dest_ptr: usize, src_ptr: usize, count: usize) callconv(w32c
 // =============================================================================
 
 test "VerSetConditionMask builds correct mask" {
-    const mask1 = stub_VerSetConditionMask(0, 0, 0x01, 3);
+    const mask1 = VerSetConditionMask(0, 0, 0x01, 3);
     try std.testing.expect(mask1 == (3 << 3));
 
-    const mask2 = stub_VerSetConditionMask(@intCast(mask1 & 0xFFFFFFFF), 0, 0x02, 1);
+    const mask2 = VerSetConditionMask(@intCast(mask1 & 0xFFFFFFFF), 0, 0x02, 1);
     try std.testing.expect(mask2 == (3 << 3) | (1 << 0));
 }
 
@@ -439,7 +439,7 @@ test "RtlInitUnicodeString fills struct correctly" {
     var wstr = [_]u16{ 'H', 'i', 0 };
     var unicode_string: [8]u8 = undefined;
 
-    stub_RtlInitUnicodeString(@intFromPtr(&unicode_string), @intFromPtr(&wstr));
+    RtlInitUnicodeString(@intFromPtr(&unicode_string), @intFromPtr(&wstr));
 
     const length = @as(*align(1) const u16, @ptrCast(&unicode_string[0])).*;
     const max_length = @as(*align(1) const u16, @ptrCast(&unicode_string[2])).*;
@@ -454,7 +454,7 @@ test "RtlInitUnicodeString with null source" {
     var unicode_string: [8]u8 = undefined;
     @memset(&unicode_string, 0xFF);
 
-    stub_RtlInitUnicodeString(@intFromPtr(&unicode_string), 0);
+    RtlInitUnicodeString(@intFromPtr(&unicode_string), 0);
 
     const length = @as(*align(1) const u16, @ptrCast(&unicode_string[0])).*;
     const max_length = @as(*align(1) const u16, @ptrCast(&unicode_string[2])).*;
@@ -469,10 +469,10 @@ test "RtlEqualSid compares correctly" {
     var sid1 = [_]u8{ 1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0 };
     var sid2 = [_]u8{ 1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0 };
 
-    try std.testing.expectEqual(@as(i32, 1), stub_RtlEqualSid(@intFromPtr(&sid1), @intFromPtr(&sid2)));
+    try std.testing.expectEqual(@as(i32, 1), RtlEqualSid(@intFromPtr(&sid1), @intFromPtr(&sid2)));
 
     sid2[8] = 19;
-    try std.testing.expectEqual(@as(i32, 0), stub_RtlEqualSid(@intFromPtr(&sid1), @intFromPtr(&sid2)));
+    try std.testing.expectEqual(@as(i32, 0), RtlEqualSid(@intFromPtr(&sid1), @intFromPtr(&sid2)));
 }
 
 test "NtClose returns STATUS_SUCCESS" {

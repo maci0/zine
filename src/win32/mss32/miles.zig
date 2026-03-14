@@ -17,7 +17,7 @@ pub fn stub_get_timer_highest_delay() callconv(w32cc.WINAPI) u32 {
     return 1000;
 }
 
-pub fn stub_waveOutOpen(driver: usize, frequency: u32, bits: u32, channels: u32) callconv(w32cc.WINAPI) usize {
+pub fn waveOutOpen(driver: usize, frequency: u32, bits: u32, channels: u32) callconv(w32cc.WINAPI) usize {
     _ = driver; _ = frequency; _ = bits; _ = channels;
     if (trace.enable_tracing) trace.print("MSS32: AIL_waveOutOpen\n", .{});
     return 0xBEEF0030; // Fake digital driver handle

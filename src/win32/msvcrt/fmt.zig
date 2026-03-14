@@ -133,7 +133,7 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
 
 // --- printf ---
 
-pub const stub_printf = if (platform.is_wasm) stub_printf_wasm else stub_printf_native;
+pub const printf = if (platform.is_wasm) stub_printf_wasm else stub_printf_native;
 
 fn stub_printf_wasm(fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     return printf_impl(fmt_ptr, ap);
@@ -158,7 +158,7 @@ fn printf_impl(fmt_ptr: usize, ap: usize) i32 {
 
 // --- vprintf ---
 
-pub fn stub_vprintf(fmt_ptr: usize, ap: usize) callconv(.c) i32 {
+pub fn vprintf(fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     if (fmt_ptr == 0) return 0;
     var buf: [4096]u8 = undefined;
     const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(trace.addr(fmt_ptr)), trace.addr(ap));
@@ -170,7 +170,7 @@ pub fn stub_vprintf(fmt_ptr: usize, ap: usize) callconv(.c) i32 {
 
 // --- vfprintf ---
 
-pub fn stub_vfprintf(stream: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
+pub fn vfprintf(stream: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     if (fmt_ptr == 0) return 0;
     var buf: [4096]u8 = undefined;
     const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(trace.addr(fmt_ptr)), trace.addr(ap));
@@ -183,7 +183,7 @@ pub fn stub_vfprintf(stream: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 
 
 // --- vsnprintf ---
 
-pub fn stub_vsnprintf(buf_ptr: usize, max: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
+pub fn vsnprintf(buf_ptr: usize, max: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     if (buf_ptr == 0 or max == 0 or fmt_ptr == 0) return 0;
     var buf: [4096]u8 = undefined;
     const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(trace.addr(fmt_ptr)), trace.addr(ap));
@@ -197,7 +197,7 @@ pub fn stub_vsnprintf(buf_ptr: usize, max: usize, fmt_ptr: usize, ap: usize) cal
 
 // --- snprintf ---
 
-pub const stub_snprintf = if (platform.is_wasm) stub_snprintf_wasm else stub_snprintf_native;
+pub const snprintf = if (platform.is_wasm) stub_snprintf_wasm else stub_snprintf_native;
 
 fn stub_snprintf_wasm(buf_ptr: usize, max: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     return snprintf_impl(buf_ptr, max, fmt_ptr, ap);
@@ -224,7 +224,7 @@ fn snprintf_impl(buf_ptr: usize, max: usize, fmt_ptr: usize, ap: usize) i32 {
 
 // --- swprintf ---
 
-pub const stub_swprintf = if (platform.is_wasm) stub_swprintf_wasm else stub_swprintf_native;
+pub const swprintf = if (platform.is_wasm) stub_swprintf_wasm else stub_swprintf_native;
 
 fn stub_swprintf_wasm(buf_ptr: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     return swprintf_impl(buf_ptr, fmt_ptr, ap);
@@ -263,7 +263,7 @@ fn swprintf_impl(buf_ptr: usize, fmt_ptr: usize, ap: usize) i32 {
 
 // --- sprintf ---
 
-pub const stub_sprintf = if (platform.is_wasm) stub_sprintf_wasm else stub_sprintf_native;
+pub const sprintf = if (platform.is_wasm) stub_sprintf_wasm else stub_sprintf_native;
 
 fn stub_sprintf_wasm(buf_ptr: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     return sprintf_impl(buf_ptr, fmt_ptr, ap);
@@ -289,7 +289,7 @@ fn sprintf_impl(buf_ptr: usize, fmt_ptr: usize, ap: usize) i32 {
 
 // --- puts / fputs ---
 
-pub fn stub_puts(str_ptr: usize) callconv(.c) i32 {
+pub fn puts(str_ptr: usize) callconv(.c) i32 {
     if (str_ptr >= 0x10000) {
         const s = std.mem.span(@as([*:0]const u8, @ptrFromInt(trace.addr(str_ptr))));
         const f = std.fs.File{ .handle = 1 };
@@ -300,7 +300,7 @@ pub fn stub_puts(str_ptr: usize) callconv(.c) i32 {
     return -1;
 }
 
-pub fn stub_fputs(str_ptr: usize, file_ptr: usize) callconv(.c) i32 {
+pub fn fputs(str_ptr: usize, file_ptr: usize) callconv(.c) i32 {
     if (str_ptr >= 0x10000) {
         const s = std.mem.span(@as([*:0]const u8, @ptrFromInt(trace.addr(str_ptr))));
         if (trace.enable_tracing) trace.print("MSVCRT: fputs '{s}'\n", .{s});
@@ -315,7 +315,7 @@ pub fn stub_fputs(str_ptr: usize, file_ptr: usize) callconv(.c) i32 {
 
 // --- sscanf ---
 
-pub const stub_sscanf = if (platform.is_wasm) stub_sscanf_wasm else stub_sscanf_native;
+pub const sscanf = if (platform.is_wasm) stub_sscanf_wasm else stub_sscanf_native;
 
 fn stub_sscanf_wasm(buf_ptr: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     return sscanf_impl(buf_ptr, fmt_ptr, ap);
@@ -340,13 +340,13 @@ fn sscanf_impl(buf_ptr: usize, fmt_ptr: usize, ap: usize) i32 {
     // Super hacky sscanf for single %d/%i/%x
     if (std.mem.eql(u8, fmt, "%d") or std.mem.eql(u8, fmt, "%i") or std.mem.eql(u8, fmt, "%ld")) {
         if (a1 != 0) {
-            const val = @import("string.zig").stub_strtol(trace.addr(buf_ptr), 0, 10);
+            const val = @import("string.zig").strtol(trace.addr(buf_ptr), 0, 10);
             @as(*i32, @ptrFromInt(a1)).* = val;
             return 1;
         }
     } else if (std.mem.eql(u8, fmt, "%x") or std.mem.eql(u8, fmt, "%X")) {
         if (a1 != 0) {
-            const val = @import("string.zig").stub_strtoul(trace.addr(buf_ptr), 0, 16);
+            const val = @import("string.zig").strtoul(trace.addr(buf_ptr), 0, 16);
             @as(*u32, @ptrFromInt(a1)).* = val;
             return 1;
         }

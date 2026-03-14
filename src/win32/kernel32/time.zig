@@ -4,7 +4,7 @@ const platform = @import("../../platform.zig");
 const w32 = @import("../../win32_constants.zig");
 const w32cc = @import("../../calling_convention.zig");
 
-pub fn stub_GetTimeZoneInformation(lpTimeZoneInformation: usize) callconv(w32cc.WINAPI) u32 {
+pub fn GetTimeZoneInformation(lpTimeZoneInformation: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetTimeZoneInformation({x})\n", .{lpTimeZoneInformation});
     if (lpTimeZoneInformation != 0) {
         const tzi = @as([*]u8, @ptrFromInt(lpTimeZoneInformation));
@@ -13,7 +13,7 @@ pub fn stub_GetTimeZoneInformation(lpTimeZoneInformation: usize) callconv(w32cc.
     return 0; // TIME_ZONE_ID_UNKNOWN
 }
 
-pub fn stub_QueryPerformanceCounter(lpPerformanceCount: usize) callconv(w32cc.WINAPI) i32 {
+pub fn QueryPerformanceCounter(lpPerformanceCount: usize) callconv(w32cc.WINAPI) i32 {
     if (lpPerformanceCount != 0) {
         const ptr = @as(*u64, @ptrFromInt(lpPerformanceCount));
         ptr.* = @intCast(@as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))));
@@ -22,7 +22,7 @@ pub fn stub_QueryPerformanceCounter(lpPerformanceCount: usize) callconv(w32cc.WI
     return 1;
 }
 
-pub fn stub_QueryPerformanceFrequency(lpFrequency: usize) callconv(w32cc.WINAPI) i32 {
+pub fn QueryPerformanceFrequency(lpFrequency: usize) callconv(w32cc.WINAPI) i32 {
     if (lpFrequency != 0) {
         const ptr = @as(*u64, @ptrFromInt(lpFrequency));
         ptr.* = 1000000000; // 1 GHz
@@ -31,7 +31,7 @@ pub fn stub_QueryPerformanceFrequency(lpFrequency: usize) callconv(w32cc.WINAPI)
     return 1;
 }
 
-pub fn stub_GetVersionExA(lpVersionInfo: usize) callconv(w32cc.WINAPI) i32 {
+pub fn GetVersionExA(lpVersionInfo: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetVersionExA({x})\n", .{lpVersionInfo});
     if (lpVersionInfo != 0) {
         const info = @as(*w32.OSVERSIONINFOA, @ptrFromInt(lpVersionInfo));
@@ -44,7 +44,7 @@ pub fn stub_GetVersionExA(lpVersionInfo: usize) callconv(w32cc.WINAPI) i32 {
     return 1;
 }
 
-pub fn stub_GetLocalTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
+pub fn GetLocalTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: GetLocalTime({x})\n", .{lpSystemTime});
     if (lpSystemTime == 0) return;
     const st = @as(*w32.SYSTEMTIME, @ptrFromInt(lpSystemTime));
@@ -64,7 +64,7 @@ pub fn stub_GetLocalTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
     st.wMilliseconds = 0;
 }
 
-pub fn stub_GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: usize) callconv(w32cc.WINAPI) void {
+pub fn GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: GetSystemTimeAsFileTime({x})\n", .{lpSystemTimeAsFileTime});
     if (lpSystemTimeAsFileTime == 0) return;
     const unix_ns: u128 = @bitCast(std.time.nanoTimestamp());
@@ -75,19 +75,19 @@ pub fn stub_GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: usize) callconv(w32c
     ft.dwHighDateTime = @intCast(filetime >> 32);
 }
 
-pub fn stub_GetSystemTimeAdjustment(lpTimeAdjustment: usize, lpTimeIncrement: usize, lpTimeAdjustmentDisabled: usize) callconv(w32cc.WINAPI) i32 {
+pub fn GetSystemTimeAdjustment(lpTimeAdjustment: usize, lpTimeIncrement: usize, lpTimeAdjustmentDisabled: usize) callconv(w32cc.WINAPI) i32 {
     if (lpTimeAdjustment != 0) @as(*u32, @ptrFromInt(lpTimeAdjustment)).* = 0;
     if (lpTimeIncrement != 0) @as(*u32, @ptrFromInt(lpTimeIncrement)).* = 156250;
     if (lpTimeAdjustmentDisabled != 0) @as(*i32, @ptrFromInt(lpTimeAdjustmentDisabled)).* = 1; // TRUE
     return 1;
 }
 
-pub fn stub_GetTickCount() callconv(w32cc.WINAPI) u32 {
+pub fn GetTickCount() callconv(w32cc.WINAPI) u32 {
     const ts = std.time.milliTimestamp();
     return @intCast(ts & 0xFFFFFFFF);
 }
 
-pub fn stub_Sleep(dwMilliseconds: u32) callconv(w32cc.WINAPI) void {
+pub fn Sleep(dwMilliseconds: u32) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: Sleep({d})\n", .{dwMilliseconds});
     if (dwMilliseconds > 0) {
         std.Thread.sleep(dwMilliseconds * std.time.ns_per_ms);
@@ -96,7 +96,7 @@ pub fn stub_Sleep(dwMilliseconds: u32) callconv(w32cc.WINAPI) void {
     }
 }
 
-pub fn stub_GetVersion() callconv(w32cc.WINAPI) u32 {
+pub fn GetVersion() callconv(w32cc.WINAPI) u32 {
     // Return Windows 2000 (5.0) to match GetVersionExA
     // Low word: major version in low byte, minor in high byte = 0x0005
     // High word: build number (set high bit 0 for NT) = 0x0893 (2195)
@@ -106,7 +106,7 @@ pub fn stub_GetVersion() callconv(w32cc.WINAPI) u32 {
 
 // CompareFileTime: compares two FILETIMEs
 // Returns: -1 if ft1 < ft2, 0 if equal, 1 if ft1 > ft2
-pub fn stub_CompareFileTime(lpft1: usize, lpft2: usize) callconv(w32cc.WINAPI) i32 {
+pub fn CompareFileTime(lpft1: usize, lpft2: usize) callconv(w32cc.WINAPI) i32 {
     if (lpft1 == 0 or lpft2 == 0) return 0;
     const ft1 = @as(*const w32.FILETIME, @ptrFromInt(lpft1));
     const ft2 = @as(*const w32.FILETIME, @ptrFromInt(lpft2));
@@ -119,20 +119,15 @@ pub fn stub_CompareFileTime(lpft1: usize, lpft2: usize) callconv(w32cc.WINAPI) i
     return 0;
 }
 
-pub fn stub_GetSystemTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
+pub fn GetSystemTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: GetSystemTime({x})\n", .{lpSystemTime});
     // Use GetLocalTime for simplicity (close enough for gaming)
-    stub_GetLocalTime(lpSystemTime);
-}
-
-pub fn stub_FindClose(hFindFile: usize) callconv(w32cc.WINAPI) i32 {
-    if (trace.enable_tracing) trace.print("KERNEL32: FindClose({x})\n", .{hFindFile});
-    return 1; // TRUE = success
+    GetLocalTime(lpSystemTime);
 }
 
 // --- Time conversion stubs ---
 
-pub fn stub_SystemTimeToFileTime(lpSystemTime: usize, lpFileTime: usize) callconv(w32cc.WINAPI) i32 {
+pub fn SystemTimeToFileTime(lpSystemTime: usize, lpFileTime: usize) callconv(w32cc.WINAPI) i32 {
     if (lpSystemTime == 0 or lpFileTime == 0) return 0;
     const st = @as(*const w32.SYSTEMTIME, @ptrFromInt(lpSystemTime));
     const ft = @as(*w32.FILETIME, @ptrFromInt(lpFileTime));
@@ -161,7 +156,7 @@ pub fn stub_SystemTimeToFileTime(lpSystemTime: usize, lpFileTime: usize) callcon
     return 1; // TRUE
 }
 
-pub fn stub_FileTimeToSystemTime(lpFileTime: usize, lpSystemTime: usize) callconv(w32cc.WINAPI) i32 {
+pub fn FileTimeToSystemTime(lpFileTime: usize, lpSystemTime: usize) callconv(w32cc.WINAPI) i32 {
     if (lpFileTime == 0 or lpSystemTime == 0) return 0;
     const ft = @as(*const w32.FILETIME, @ptrFromInt(lpFileTime));
     const st = @as(*w32.SYSTEMTIME, @ptrFromInt(lpSystemTime));
@@ -191,7 +186,7 @@ pub fn stub_FileTimeToSystemTime(lpFileTime: usize, lpSystemTime: usize) callcon
     return 1; // TRUE
 }
 
-pub fn stub_FileTimeToLocalFileTime(lpFileTime: usize, lpLocalFileTime: usize) callconv(w32cc.WINAPI) i32 {
+pub fn FileTimeToLocalFileTime(lpFileTime: usize, lpLocalFileTime: usize) callconv(w32cc.WINAPI) i32 {
     if (lpFileTime == 0 or lpLocalFileTime == 0) return 0;
     // We don't do timezone conversion — just copy
     const src = @as(*const w32.FILETIME, @ptrFromInt(lpFileTime));

@@ -325,10 +325,10 @@ pub fn main() !void {
     // Set virtual CWD so file opens resolve correctly
     // On WASI, realpath is not available, so we just use \".\" as the CWD.
     {
-        const kernel32_misc = @import("win32/kernel32/misc.zig");
+        const kernel32_path = @import("win32/kernel32/path.zig");
         const cwd_str = ".";
-        @memcpy(kernel32_misc.current_directory[0..cwd_str.len], cwd_str);
-        kernel32_misc.current_directory_len = cwd_str.len;
+        @memcpy(kernel32_path.current_directory[0..cwd_str.len], cwd_str);
+        kernel32_path.current_directory_len = cwd_str.len;
     }
 
     // Minimal environment

@@ -1,5 +1,5 @@
 const env = @import("../loader/env.zig");
-const stubs = @import("shell32/stubs.zig");
+const stubs = @import("shell32/shell.zig");
 
 pub fn register(environment: *env.Environment) !void {
     const m = "SHELL32.dll";
@@ -8,12 +8,12 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "DragAcceptFiles", stubs.stub_DragAcceptFiles);
     try environment.addBuiltinExportComptime(m, "DragQueryFileA", stubs.stub_DragQueryFileA);
     try environment.addBuiltinExportComptime(m, "DragQueryFileW", stubs.stub_DragQueryFileW);
-    try environment.addBuiltinExportComptime(m, "SHGetFileInfoA", stubs.stub_SHGetFileInfoA);
+    try environment.addBuiltinExportComptime(m, "SHGetFileInfoA", stubs.SHGetFileInfoA);
     try environment.addBuiltinExportComptime(m, "SHGetPathFromIDListA", stubs.stub_SHGetPathFromIDListA);
     try environment.addBuiltinExportComptime(m, "SHBrowseForFolderA", stubs.stub_SHBrowseForFolderA);
     try environment.addBuiltinExportComptime(m, "ExtractIconA", stubs.stub_ExtractIconA);
     try environment.addBuiltinExportComptime(m, "Shell_NotifyIconA", stubs.stub_Shell_NotifyIconA);
-    try environment.addBuiltinExportComptime(m, "ShellAboutW", stubs.stub_ShellAboutW);
+    try environment.addBuiltinExportComptime(m, "ShellAboutW", stubs.ShellAboutW);
 
     // --- Remaining SHELL32 stubs for 100% win2k coverage ---
     const kernel32 = @import("kernel32.zig");

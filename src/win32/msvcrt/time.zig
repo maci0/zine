@@ -35,7 +35,7 @@ fn fillTm(tm: *Tm, ts: u64) void {
     };
 }
 
-pub fn stub_time(time_ptr: usize) callconv(.c) i32 {
+pub fn time(time_ptr: usize) callconv(.c) i32 {
     const t = @as(i32, @intCast(std.time.timestamp()));
     if (time_ptr != 0) {
         @as(*i32, @ptrFromInt(time_ptr)).* = t;
@@ -43,7 +43,7 @@ pub fn stub_time(time_ptr: usize) callconv(.c) i32 {
     return t;
 }
 
-pub fn stub_localtime(time_ptr: usize) callconv(.c) *Tm {
+pub fn localtime(time_ptr: usize) callconv(.c) *Tm {
     if (time_ptr != 0) {
         const ts: u64 = @intCast(@as(*const i32, @ptrFromInt(time_ptr)).*);
         fillTm(&localtime_result, ts);
@@ -56,7 +56,7 @@ var ctime_buf: [26]u8 = undefined;
 const day_names = [_][]const u8{ "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
 const mon_names = [_][]const u8{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
 
-pub fn stub_ctime(time_ptr: usize) callconv(.c) [*]const u8 {
+pub fn ctime(time_ptr: usize) callconv(.c) [*]const u8 {
     var tm: Tm = .{};
     if (time_ptr != 0) {
         const raw = @as(*const i32, @ptrFromInt(time_ptr)).*;
@@ -83,14 +83,14 @@ pub fn stub_ctime(time_ptr: usize) callconv(.c) [*]const u8 {
     return &ctime_buf;
 }
 
-pub fn stub_tzset() callconv(.c) void {
+pub fn tzset() callconv(.c) void {
     msvcrt.msvcrt_timezone = 0;
     msvcrt.msvcrt_daylight = 0;
     if (trace.enable_tracing) trace.print("MSVCRT: _tzset()\n", .{});
 }
 
 // struct _timeb { time_t time; unsigned short millitm; short timezone; short dstflag; }
-pub fn stub_ftime(timeb_ptr: usize) callconv(.c) void {
+pub fn ftime(timeb_ptr: usize) callconv(.c) void {
     if (timeb_ptr == 0) return;
     const ms = std.time.milliTimestamp();
     const secs: i32 = @intCast(@divTrunc(ms, 1000));
@@ -118,12 +118,45 @@ pub fn stub_futime(fd: i32, times_ptr: usize) callconv(.c) i32 {
     return 0;
 }
 
-pub fn stub_mktime(tm_ptr: usize) callconv(.c) i32 {
+pub fn mktime(tm_ptr: usize) callconv(.c) i32 {
     if (tm_ptr == 0) return -1;
-    // Return a dummy timestamp (epoch)
-    return 0;
+    const tm = @as(*const Tm, @ptrFromInt(tm_ptr));
+
+    // Convert struct tm to Unix timestamp
+    const year: i64 = @as(i64, tm.tm_year) + 1900;
+    var month: i64 = @as(i64, tm.tm_mon) + 1;
+    var y = year;
+
+    // Adjust for months out of range
+    if (month <= 0) {
+        y -= 1;
+        month += 12;
+    } else if (month > 12) {
+        y += @divTrunc(month - 1, 12);
+        month = @mod(month - 1, 12) + 1;
+    }
+
+    // Days from epoch (1970-01-01) using a simplified algorithm
+    if (month <= 2) {
+        y -= 1;
+        month += 12;
+    }
+    const era_days = 365 * (y - 1970) + @divFloor(y - 1969, 4) - @divFloor(y - 1901, 100) + @divFloor(y - 1601, 400);
+    const month_days = @divTrunc(153 * (month - 3) + 2, 5);
+    const total_days = era_days + month_days + @as(i64, tm.tm_mday) - 1 - 306;
+
+    const total_secs = total_days * 86400 + @as(i64, tm.tm_hour) * 3600 + @as(i64, tm.tm_min) * 60 + @as(i64, tm.tm_sec);
+
+    if (total_secs < 0 or total_secs > 0x7FFFFFFF) return -1;
+    return @intCast(total_secs);
 }
 
-pub fn stub_clock() callconv(.c) i32 {
-    return 0; // clock_t = 0 ticks
+var clock_start: ?i64 = null;
+
+pub fn clock() callconv(.c) i32 {
+    // CLOCKS_PER_SEC is 1000 on MSVC
+    const now = std.time.milliTimestamp();
+    if (clock_start == null) clock_start = now;
+    const elapsed = now - clock_start.?;
+    return @intCast(@min(elapsed, 0x7FFFFFFF));
 }

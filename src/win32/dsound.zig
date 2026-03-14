@@ -1,2 +1,2 @@
-const stubs = @import("dsound/stubs.zig");
+const stubs = @import("dsound/dsound.zig");
 pub const register = stubs.register;

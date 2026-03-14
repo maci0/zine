@@ -139,7 +139,7 @@ fn dispatchNativeCall(cpu: *Cpu) void {
     // Special case: _ftol reads from x87 FPU stack (ST0), but in interpreter
     // mode the FPU state is emulated — the real x87 stack is empty.
     const msvcrt_math = @import("../win32/msvcrt/math.zig");
-    if (target_addr == @intFromPtr(msvcrt_math.stub_ftol)) {
+    if (target_addr == @intFromPtr(msvcrt_math.ftol)) {
         const fval = cpu.fpu.pop();
         const ival = safeFloatToInt(i64, fval);
         const uval = @as(u64, @bitCast(ival));

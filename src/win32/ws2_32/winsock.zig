@@ -72,7 +72,7 @@ fn addressToSockaddr(addr: std.net.Address, name: usize, addrlen: usize) void {
 // Winsock stub implementations (all pub, shared with wsock32)
 // ============================================================
 
-pub fn stub_WSAStartup(wVersionRequired: u16, lpWSAData: usize) callconv(w32cc.WINAPI) i32 {
+pub fn WSAStartup(wVersionRequired: u16, lpWSAData: usize) callconv(w32cc.WINAPI) i32 {
     _ = wVersionRequired;
     if (trace.enable_tracing) trace.print("WS2_32: WSAStartup\n", .{});
     if (lpWSAData != 0) {
@@ -84,7 +84,7 @@ pub fn stub_WSAStartup(wVersionRequired: u16, lpWSAData: usize) callconv(w32cc.W
     return 0; // Success
 }
 
-pub fn stub_WSACleanup() callconv(w32cc.WINAPI) i32 {
+pub fn WSACleanup() callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
@@ -96,7 +96,7 @@ pub fn stub_WSASetLastError(iError: i32) callconv(w32cc.WINAPI) void {
     _ = iError;
 }
 
-pub fn stub_socket(af: i32, sock_type: i32, protocol: i32) callconv(w32cc.WINAPI) usize {
+pub fn socket(af: i32, sock_type: i32, protocol: i32) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("WS2_32: socket(af={d}, type={d}, proto={d})\n", .{ af, sock_type, protocol });
     if (comptime platform.is_native) {
         const fd = std.posix.socket(
@@ -113,7 +113,7 @@ pub fn stub_socket(af: i32, sock_type: i32, protocol: i32) callconv(w32cc.WINAPI
     return INVALID_SOCKET;
 }
 
-pub fn stub_bind(s: usize, name: usize, namelen: i32) callconv(w32cc.WINAPI) i32 {
+pub fn bind(s: usize, name: usize, namelen: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("WS2_32: bind(s={d})\n", .{s});
     if (comptime platform.is_native) {
         const addr = sockaddrToAddress(name, namelen) orelse return SOCKET_ERROR;
@@ -126,7 +126,7 @@ pub fn stub_bind(s: usize, name: usize, namelen: i32) callconv(w32cc.WINAPI) i32
     return SOCKET_ERROR;
 }
 
-pub fn stub_listen(s: usize, backlog: i32) callconv(w32cc.WINAPI) i32 {
+pub fn listen(s: usize, backlog: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("WS2_32: listen(s={d}, backlog={d})\n", .{ s, backlog });
     if (comptime platform.is_native) {
         std.posix.listen(socketToFd(s), @intCast(@as(u32, @bitCast(backlog)))) catch |err| {
@@ -138,7 +138,7 @@ pub fn stub_listen(s: usize, backlog: i32) callconv(w32cc.WINAPI) i32 {
     return SOCKET_ERROR;
 }
 
-pub fn stub_accept(s: usize, addr: usize, addrlen: usize) callconv(w32cc.WINAPI) usize {
+pub fn accept(s: usize, addr: usize, addrlen: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("WS2_32: accept(s={d})\n", .{s});
     if (comptime platform.is_native) {
         var address: std.net.Address = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
@@ -155,7 +155,7 @@ pub fn stub_accept(s: usize, addr: usize, addrlen: usize) callconv(w32cc.WINAPI)
     return INVALID_SOCKET;
 }
 
-pub fn stub_connect(s: usize, name: usize, namelen: i32) callconv(w32cc.WINAPI) i32 {
+pub fn connect(s: usize, name: usize, namelen: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("WS2_32: connect(s={d})\n", .{s});
     if (comptime platform.is_native) {
         const addr = sockaddrToAddress(name, namelen) orelse return SOCKET_ERROR;
@@ -168,7 +168,7 @@ pub fn stub_connect(s: usize, name: usize, namelen: i32) callconv(w32cc.WINAPI) 
     return SOCKET_ERROR;
 }
 
-pub fn stub_send(s: usize, buf: usize, len: i32, flags: i32) callconv(w32cc.WINAPI) i32 {
+pub fn send(s: usize, buf: usize, len: i32, flags: i32) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
         if (buf == 0 or len <= 0) return SOCKET_ERROR;
         const data = @as([*]const u8, @ptrFromInt(buf))[0..@intCast(@as(u32, @bitCast(len)))];
@@ -185,7 +185,7 @@ pub fn stub_send(s: usize, buf: usize, len: i32, flags: i32) callconv(w32cc.WINA
     return len; // pretend we sent everything
 }
 
-pub fn stub_sendto(s: usize, buf: usize, len: i32, flags: i32, to: usize, tolen: i32) callconv(w32cc.WINAPI) i32 {
+pub fn sendto(s: usize, buf: usize, len: i32, flags: i32, to: usize, tolen: i32) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
         if (buf == 0 or len <= 0) return SOCKET_ERROR;
         const data = @as([*]const u8, @ptrFromInt(buf))[0..@intCast(@as(u32, @bitCast(len)))];
@@ -209,7 +209,7 @@ pub fn stub_sendto(s: usize, buf: usize, len: i32, flags: i32, to: usize, tolen:
     return len;
 }
 
-pub fn stub_recv(s: usize, buf: usize, len: i32, flags: i32) callconv(w32cc.WINAPI) i32 {
+pub fn recv(s: usize, buf: usize, len: i32, flags: i32) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
         if (buf == 0 or len <= 0) return SOCKET_ERROR;
         const buffer = @as([*]u8, @ptrFromInt(buf))[0..@intCast(@as(u32, @bitCast(len)))];
@@ -226,7 +226,7 @@ pub fn stub_recv(s: usize, buf: usize, len: i32, flags: i32) callconv(w32cc.WINA
     return SOCKET_ERROR;
 }
 
-pub fn stub_recvfrom(s: usize, buf: usize, len: i32, flags: i32, from: usize, fromlen: usize) callconv(w32cc.WINAPI) i32 {
+pub fn recvfrom(s: usize, buf: usize, len: i32, flags: i32, from: usize, fromlen: usize) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
         if (buf == 0 or len <= 0) return SOCKET_ERROR;
         const buffer = @as([*]u8, @ptrFromInt(buf))[0..@intCast(@as(u32, @bitCast(len)))];
@@ -248,7 +248,7 @@ pub fn stub_recvfrom(s: usize, buf: usize, len: i32, flags: i32, from: usize, fr
     return SOCKET_ERROR;
 }
 
-pub fn stub_closesocket(s: usize) callconv(w32cc.WINAPI) i32 {
+pub fn closesocket(s: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("WS2_32: closesocket(s={d})\n", .{s});
     if (comptime platform.is_native) {
         std.posix.close(socketToFd(s));
@@ -269,7 +269,7 @@ pub fn stub_shutdown(s: usize, how: i32) callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
-pub fn stub_select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, timeout: usize) callconv(w32cc.WINAPI) i32 {
+pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, timeout: usize) callconv(w32cc.WINAPI) i32 {
     _ = nfds;
     if (comptime platform.is_native) {
         // Win32 fd_set layout: { u32 fd_count; SOCKET fd_array[64]; }
@@ -411,7 +411,7 @@ pub fn stub_select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize,
     return 0; // no sockets ready
 }
 
-pub fn stub_setsockopt(s: usize, level: i32, optname: i32, optval: usize, optlen: i32) callconv(w32cc.WINAPI) i32 {
+pub fn setsockopt(s: usize, level: i32, optname: i32, optval: usize, optlen: i32) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
         const val_ptr: ?[*]const u8 = if (optval != 0 and optlen > 0)
             @ptrFromInt(optval)
@@ -438,7 +438,7 @@ pub fn stub_setsockopt(s: usize, level: i32, optname: i32, optval: usize, optlen
     return 0;
 }
 
-pub fn stub_getsockopt(s: usize, level: i32, optname: i32, optval: usize, optlen: usize) callconv(w32cc.WINAPI) i32 {
+pub fn getsockopt(s: usize, level: i32, optname: i32, optval: usize, optlen: usize) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
         if (optval == 0 or optlen == 0) return SOCKET_ERROR;
         const lenp = @as(*std.posix.socklen_t, @ptrFromInt(optlen));
@@ -462,7 +462,7 @@ pub fn stub_getsockopt(s: usize, level: i32, optname: i32, optval: usize, optlen
     return SOCKET_ERROR;
 }
 
-pub fn stub_ioctlsocket(s: usize, cmd: i32, argp: usize) callconv(w32cc.WINAPI) i32 {
+pub fn ioctlsocket(s: usize, cmd: i32, argp: usize) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
         // FIONBIO = 0x8004667E on Windows → set non-blocking via fcntl F_SETFL
         const FIONBIO_WIN32: i32 = @bitCast(@as(u32, 0x8004667E));
@@ -481,7 +481,7 @@ pub fn stub_ioctlsocket(s: usize, cmd: i32, argp: usize) callconv(w32cc.WINAPI) 
     return 0;
 }
 
-pub fn stub_getpeername(s: usize, name: usize, namelen: usize) callconv(w32cc.WINAPI) i32 {
+pub fn getpeername(s: usize, name: usize, namelen: usize) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
         var addr: std.net.Address = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
         var addr_len: std.posix.socklen_t = 16; // sizeof(sockaddr_in)
@@ -494,7 +494,7 @@ pub fn stub_getpeername(s: usize, name: usize, namelen: usize) callconv(w32cc.WI
     return SOCKET_ERROR;
 }
 
-pub fn stub_getsockname(s: usize, name: usize, namelen: usize) callconv(w32cc.WINAPI) i32 {
+pub fn getsockname(s: usize, name: usize, namelen: usize) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
         var addr: std.net.Address = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
         var addr_len: std.posix.socklen_t = 16; // sizeof(sockaddr_in)
@@ -511,19 +511,19 @@ pub fn stub_getsockname(s: usize, name: usize, namelen: usize) callconv(w32cc.WI
 // Byte-order conversion (pure Zig, works everywhere)
 // ============================================================
 
-pub fn stub_htonl(hostlong: u32) callconv(w32cc.WINAPI) u32 {
+pub fn htonl(hostlong: u32) callconv(w32cc.WINAPI) u32 {
     return @byteSwap(hostlong);
 }
 
-pub fn stub_htons(hostshort: u16) callconv(w32cc.WINAPI) u16 {
+pub fn htons(hostshort: u16) callconv(w32cc.WINAPI) u16 {
     return @byteSwap(hostshort);
 }
 
-pub fn stub_ntohl(netlong: u32) callconv(w32cc.WINAPI) u32 {
+pub fn ntohl(netlong: u32) callconv(w32cc.WINAPI) u32 {
     return @byteSwap(netlong);
 }
 
-pub fn stub_ntohs(netshort: u16) callconv(w32cc.WINAPI) u16 {
+pub fn ntohs(netshort: u16) callconv(w32cc.WINAPI) u16 {
     return @byteSwap(netshort);
 }
 
@@ -556,7 +556,7 @@ fn parseIp4Manual(ip_str: []const u8) ?[4]u8 {
     return octets;
 }
 
-pub fn stub_inet_addr(cp: usize) callconv(w32cc.WINAPI) u32 {
+pub fn inet_addr(cp: usize) callconv(w32cc.WINAPI) u32 {
     if (cp == 0) return 0xFFFFFFFF;
     const str = @as([*]const u8, @ptrFromInt(cp));
     const len = std.mem.indexOfScalar(u8, str[0..256], 0) orelse return 0xFFFFFFFF;
@@ -566,7 +566,7 @@ pub fn stub_inet_addr(cp: usize) callconv(w32cc.WINAPI) u32 {
 }
 
 var inet_ntoa_buf: [16]u8 = undefined;
-pub fn stub_inet_ntoa(in_addr: u32) callconv(w32cc.WINAPI) usize {
+pub fn inet_ntoa(in_addr: u32) callconv(w32cc.WINAPI) usize {
     const bytes: [4]u8 = @bitCast(in_addr);
     const result = std.fmt.bufPrint(&inet_ntoa_buf, "{d}.{d}.{d}.{d}", .{
         bytes[0], bytes[1], bytes[2], bytes[3],
@@ -619,7 +619,7 @@ fn fillHostent(name_str: []const u8, addr_bytes: [4]u8) usize {
     return @intFromPtr(&hostent_buf);
 }
 
-pub fn stub_gethostbyname(name: usize) callconv(w32cc.WINAPI) usize {
+pub fn gethostbyname(name: usize) callconv(w32cc.WINAPI) usize {
     if (name == 0) return 0;
     const name_str = trace.c_span(name);
     if (trace.enable_tracing) trace.print("WS2_32: gethostbyname(\"{s}\")\n", .{name_str});
@@ -650,7 +650,7 @@ pub fn stub_gethostbyname(name: usize) callconv(w32cc.WINAPI) usize {
     return 0;
 }
 
-pub fn stub_gethostbyaddr(addr: usize, len: i32, atype: i32) callconv(w32cc.WINAPI) usize {
+pub fn gethostbyaddr(addr: usize, len: i32, atype: i32) callconv(w32cc.WINAPI) usize {
     _ = atype;
     if (trace.enable_tracing) trace.print("WS2_32: gethostbyaddr\n", .{});
     if (addr == 0 or len < 4) return 0;
@@ -658,7 +658,7 @@ pub fn stub_gethostbyaddr(addr: usize, len: i32, atype: i32) callconv(w32cc.WINA
     return fillHostent("unknown", ip_bytes.*);
 }
 
-pub fn stub_gethostname(name: usize, namelen: i32) callconv(w32cc.WINAPI) i32 {
+pub fn gethostname(name: usize, namelen: i32) callconv(w32cc.WINAPI) i32 {
     if (name != 0 and namelen > 0) {
         const hostname = "localhost";
         const buf = @as([*]u8, @ptrFromInt(name));

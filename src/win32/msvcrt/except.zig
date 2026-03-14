@@ -1,0 +1,201 @@
+/// MSVCRT exception handling: _except_handler3, _setjmp3, longjmp,
+/// _EH_prolog (x86/x64/generic variants).
+const trace = @import("../../trace.zig");
+const platform = @import("../../platform.zig");
+
+// --- setjmp / longjmp / EH_prolog ---
+
+pub const setjmp3 = if (platform.is_x86) &stub_setjmp3_x86 else if (platform.is_x86_64) &stub_setjmp3_x64 else &stub_setjmp3_generic;
+
+fn stub_setjmp3_x86() callconv(.naked) i32 {
+    asm volatile (
+        \\mov 4(%esp), %eax   # env
+        \\mov %ebp, 0(%eax)
+        \\mov %ebx, 4(%eax)
+        \\mov %edi, 8(%eax)
+        \\mov %esi, 12(%eax)
+        \\mov %esp, 16(%eax)
+        \\mov (%esp), %edx   # return address
+        \\mov %edx, 20(%eax)
+        \\xor %eax, %eax
+        \\ret
+    );
+}
+
+fn stub_setjmp3_x64(env_ptr: usize) callconv(.c) i32 {
+    const env = @as([*]u64, @ptrFromInt(env_ptr));
+    env[0] = asm volatile ("movq %%rbp, %[out]" : [out] "=r" (-> u64));
+    env[1] = asm volatile ("movq %%rbx, %[out]" : [out] "=r" (-> u64));
+    return 0;
+}
+
+fn stub_setjmp3_generic(_: usize) callconv(.c) i32 {
+    return 0; // On WASM, setjmp is handled by the interpreter
+}
+
+pub const stub_EH_prolog = if (platform.is_x86) &EH_prolog_x86 else if (platform.is_x86_64) &stub_EH_prolog_x64 else &EH_prolog_generic;
+
+fn EH_prolog_x86() callconv(.naked) void {
+    asm volatile (
+        \\ pushl $-1
+        \\ pushl %eax
+        \\ pushl %fs:0
+        \\ movl  %esp, %fs:0
+        \\ movl  12(%esp), %eax
+        \\ movl  %ebp, 12(%esp)
+        \\ leal  12(%esp), %ebp
+        \\ pushl %eax
+        \\ ret
+    );
+}
+
+fn stub_EH_prolog_x64() callconv(.c) void {
+    // 32-bit SEH prolog N/A on x86_64
+}
+
+fn EH_prolog_generic() callconv(.c) void {}
+
+pub const longjmp = if (platform.is_x86) &stub_longjmp_x86 else if (platform.is_x86_64) &stub_longjmp_x64 else &stub_longjmp_generic;
+
+fn stub_longjmp_x86() callconv(.naked) void {
+    asm volatile (
+        \\mov 4(%esp), %edx   # env
+        \\mov 8(%esp), %eax   # value
+        \\test %eax, %eax
+        \\jnz 1f
+        \\inc %eax            # longjmp(0) returns 1
+        \\1:
+        \\mov 0(%edx), %ebp
+        \\mov 4(%edx), %ebx
+        \\mov 8(%edx), %edi
+        \\mov 12(%edx), %esi
+        \\mov 16(%edx), %esp
+        \\add $4, %esp        # pop return address of setjmp
+        \\jmp *20(%edx)       # jump back to setjmp caller
+    );
+}
+
+fn stub_longjmp_x64(env_ptr: usize, value: i32) callconv(.c) void {
+    _ = env_ptr;
+    _ = value;
+    if (trace.enable_tracing) trace.print("MSVCRT: WARNING: longjmp called on x86_64 (not fully implemented)\n", .{});
+}
+
+fn stub_longjmp_generic(_: usize, _: i32) callconv(.c) void {
+    // On WASM, longjmp is handled by the interpreter
+}
+
+// --- SEH Exception Handlers ---
+
+/// MSVC _except_handler3: walks the scope table to find an __except filter
+/// that handles the exception.
+pub fn except_handler3(
+    exception_record_ptr: usize,
+    establisher_frame: usize,
+    context_record_ptr: usize,
+    dispatcher_context: usize,
+) callconv(.c) u32 {
+    _ = dispatcher_context;
+
+    const try_level_ptr = @as(*align(1) i32, @ptrFromInt(establisher_frame + 12));
+    const scope_table_addr = @as(*align(1) usize, @ptrFromInt(establisher_frame + 8)).*;
+
+    var try_level = try_level_ptr.*;
+    const frame_ebp = establisher_frame + 16;
+
+    if (trace.enable_tracing) {
+        trace.print("SEH _except_handler3: frame=0x{X} try_level={d} scope_table=0x{X} ebp=0x{X}\n", .{ establisher_frame, try_level, scope_table_addr, frame_ebp });
+    }
+
+    if (scope_table_addr < 0x10000 or try_level < 0) {
+        if (trace.enable_tracing) trace.print("SEH _except_handler3: invalid scope table or try_level, returning ContinueSearch\n", .{});
+        return 1; // ExceptionContinueSearch
+    }
+
+    if (frame_ebp >= 0x14) {
+        const excptrs_slot = @as(*align(1) [2]usize, @ptrFromInt(frame_ebp -% 0x14));
+        excptrs_slot.*[0] = exception_record_ptr;
+        excptrs_slot.*[1] = context_record_ptr;
+    }
+
+    while (try_level >= 0) {
+        const entry_base = scope_table_addr + @as(usize, @intCast(try_level)) * 12;
+
+        const enclosing_level = @as(*align(1) i32, @ptrFromInt(entry_base)).*;
+        const filter_func_addr = @as(*align(1) usize, @ptrFromInt(entry_base + 4)).*;
+        const handler_func_addr = @as(*align(1) usize, @ptrFromInt(entry_base + 8)).*;
+
+        if (trace.enable_tracing) {
+            trace.print("SEH _except_handler3: level={d} enclosing={d} filter=0x{X} handler=0x{X}\n", .{ try_level, enclosing_level, filter_func_addr, handler_func_addr });
+        }
+
+        if (filter_func_addr != 0) {
+            const filter_result = call_seh_filter(filter_func_addr, frame_ebp);
+
+            if (trace.enable_tracing) {
+                trace.print("SEH _except_handler3: filter returned {d}\n", .{filter_result});
+            }
+
+            if (filter_result == 1) { // EXCEPTION_EXECUTE_HANDLER
+                try_level_ptr.* = enclosing_level;
+                jump_to_seh_handler(handler_func_addr, frame_ebp);
+                unreachable;
+            } else if (filter_result == -1) { // EXCEPTION_CONTINUE_EXECUTION
+                return 0; // ExceptionContinueExecution
+            }
+        }
+
+        try_level = enclosing_level;
+    }
+
+    return 1; // ExceptionContinueSearch
+}
+
+const call_seh_filter = if (platform.is_x86) call_seh_filter_x86 else call_seh_filter_x64;
+
+fn call_seh_filter_x86(filter_addr: usize, frame_ebp: usize) i32 {
+    return asm volatile (
+        \\push %%ebp
+        \\push %%ebx
+        \\push %%esi
+        \\push %%edi
+        \\push %%ecx
+        \\push %%edx
+        \\mov %[ebp_val], %%ebp
+        \\call *%[filter]
+        \\pop %%edx
+        \\pop %%ecx
+        \\pop %%edi
+        \\pop %%esi
+        \\pop %%ebx
+        \\pop %%ebp
+        : [result] "={eax}" (-> i32),
+        : [filter] "r" (filter_addr),
+          [ebp_val] "r" (frame_ebp),
+    );
+}
+
+fn call_seh_filter_x64(filter_addr: usize, frame_ebp: usize) i32 {
+    _ = frame_ebp;
+    const filter_fn = @as(*const fn () callconv(.c) i32, @ptrFromInt(filter_addr));
+    return filter_fn();
+}
+
+const jump_to_seh_handler = if (platform.is_x86) jump_to_seh_handler_x86 else jump_to_seh_handler_x64;
+
+fn jump_to_seh_handler_x86(handler_addr: usize, frame_ebp: usize) noreturn {
+    asm volatile (
+        \\mov %[ebp_val], %%ebp
+        \\jmp *%[handler]
+        :
+        : [handler] "r" (handler_addr),
+          [ebp_val] "r" (frame_ebp),
+    );
+    unreachable;
+}
+
+fn jump_to_seh_handler_x64(handler_addr: usize, frame_ebp: usize) noreturn {
+    _ = frame_ebp;
+    const handler_fn = @as(*const fn () callconv(.c) noreturn, @ptrFromInt(handler_addr));
+    handler_fn();
+}

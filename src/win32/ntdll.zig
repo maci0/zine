@@ -1,7 +1,7 @@
 const env = @import("../loader/env.zig");
 
 const kernel32 = @import("kernel32.zig");
-const stubs = @import("ntdll/stubs.zig");
+const stubs = @import("ntdll/ntapi.zig");
 
 pub fn register(environment: *env.Environment) !void {
     const m = "ntdll.dll";
@@ -9,18 +9,18 @@ pub fn register(environment: *env.Environment) !void {
     // Core NT functions
     try environment.addBuiltinExportComptime(m, "RtlFreeAnsiString", stubs.stub_RtlFreeAnsiString);
     try environment.addBuiltinExportComptime(m, "RtlUnicodeStringToAnsiString", stubs.stub_RtlUnicodeStringToAnsiString);
-    try environment.addBuiltinExportComptime(m, "NtQuerySystemInformation", stubs.stub_NtQuerySystemInformation);
+    try environment.addBuiltinExportComptime(m, "NtQuerySystemInformation", stubs.NtQuerySystemInformation);
     try environment.addBuiltinExportComptime(m, "RtlTimeToElapsedTimeFields", stubs.stub_RtlTimeToElapsedTimeFields);
 
     // Version/SID functions
-    try environment.addBuiltinExportComptime(m, "VerSetConditionMask", stubs.stub_VerSetConditionMask);
+    try environment.addBuiltinExportComptime(m, "VerSetConditionMask", stubs.VerSetConditionMask);
     try environment.addBuiltinExportComptime(m, "NtOpenProcessToken", kernel32.stub_args3);
-    try environment.addBuiltinExportComptime(m, "RtlAllocateAndInitializeSid", stubs.stub_RtlAllocateAndInitializeSid);
+    try environment.addBuiltinExportComptime(m, "RtlAllocateAndInitializeSid", stubs.RtlAllocateAndInitializeSid);
     try environment.addBuiltinExportComptime(m, "NtQueryInformationToken", kernel32.stub_args5);
     try environment.addBuiltinExportComptime(m, "RtlFreeSid", stubs.stub_RtlFreeSid);
-    try environment.addBuiltinExportComptime(m, "RtlEqualSid", stubs.stub_RtlEqualSid);
+    try environment.addBuiltinExportComptime(m, "RtlEqualSid", stubs.RtlEqualSid);
     try environment.addBuiltinExportComptime(m, "NtClose", stubs.stub_NtClose);
-    try environment.addBuiltinExportComptime(m, "RtlInitUnicodeString", stubs.stub_RtlInitUnicodeString);
+    try environment.addBuiltinExportComptime(m, "RtlInitUnicodeString", stubs.RtlInitUnicodeString);
     try environment.addBuiltinExportComptime(m, "RtlUnicodeStringToInteger", kernel32.stub_args3);
     try environment.addBuiltinExportComptime(m, "RtlLargeIntegerToChar", kernel32.stub_args4);
     try environment.addBuiltinExportComptime(m, "RtlAnsiStringToUnicodeString", stubs.stub_RtlUnicodeStringToAnsiString);
@@ -33,7 +33,7 @@ pub fn register(environment: *env.Environment) !void {
 
     // String/memory functions
     try environment.addBuiltinExportComptime(m, "RtlUnwind", stubs.stub_RtlUnwind);
-    try environment.addBuiltinExportComptime(m, "strrchr", stubs.stub_strrchr);
-    try environment.addBuiltinExportComptime(m, "_wcsicmp", stubs.stub_wcsicmp);
-    try environment.addBuiltinExportComptime(m, "memmove", stubs.stub_memmove);
+    try environment.addBuiltinExportComptime(m, "strrchr", stubs.strrchr);
+    try environment.addBuiltinExportComptime(m, "_wcsicmp", stubs.wcsicmp);
+    try environment.addBuiltinExportComptime(m, "memmove", stubs.memmove);
 }
