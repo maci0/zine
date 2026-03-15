@@ -6,13 +6,14 @@ The JIT compiler is designed to be fully self-contained in the `src/jit` directo
 
 ## Architecture and Components
 
-The JIT pipeline consists of three main components:
+The JIT pipeline consists of four main components:
 
 ### 1. WebAssembly Definitions (`wasm.zig`)
 Contains constants and enums defining the binary structure of WASM.
 - **Section IDs**: Custom, Type, Import, Func, Table, Memory, Global, Export, Start, Element, Code, Data, DataCount
 - **ValTypes**: `i32`, `i64`, `f32`, `f64`
-- **Opcodes**: A subset of common WASM bytecode instructions (e.g. `i32.add`, `local.get`, `br_if`).
+- **Opcodes**: WASM bytecode instructions covering i32 arithmetic, comparisons, loads/stores (including 8/16-bit variants), control flow (`block`, `if`, `br_if`), and i32↔i64 conversions.
+- **BlockType**: Enum for structured control flow block signatures (`void`, `i32`, etc.).
 
 ### 2. Bytecode Emitter (`emitter.zig`)
 Provides binary serialization utilities required for generating a standard `.wasm` module.
@@ -20,21 +21,39 @@ Provides binary serialization utilities required for generating a standard `.was
 - **LEB128 Encoders**: Functions to encode unsigned (`appendUleb128`) and signed (`appendIleb128`) integers, which WebAssembly uses for most immediate values.
 - **`WasmModule`**: Manages the construction of the final WASM binary by tracking distinct sections (Type, Func, Export, Code) and writing them out with proper sizes.
 
-### 3. JIT Compiler (`compiler.zig`)
+### 3. Translation Helpers (`translate.zig`)
+Factored-out primitives used by the compiler for instruction translation:
+- **`emitEffectiveAddress`**: Computes x86 memory operand addresses with full SIB support (base + index×scale + displacement).
+- **`emitLoadOperand` / `emitStoreOperand`**: Handles register, memory (with proper 8/16/32-bit load/store sizing), immediate, and relative operands.
+- **`emitConditionCode`**: Emits Wasm code to evaluate any of the 16 x86 condition codes (JO/JNO/JB/JNB/JZ/JNZ/JBE/JA/JS/JNS/JP/JNP/JL/JGE/JLE/JG).
+- **`emitUpdateZfSf` / `emitClearCfOf`**: Flag computation helpers.
+- **`emitPush32` / `emitPop32`**: ESP manipulation + memory store/load for stack operations.
+
+### 4. JIT Compiler (`compiler.zig`)
 The core orchestrator that bridges the x86 decoder and the WASM emitter.
 
-The `JitCompiler` currently acts as a template for translating blocks of x86 code.
 - **Register Mapping**: Maps x86 general-purpose registers (EAX...EDI) to contiguous WebAssembly local variables (`i32`).
 - **Translation Loop**: Decodes x86 instructions sequentially using `decoder.zig` and delegates them to the translation logic until it encounters an unsupported opcode or the block terminates.
-- **Instruction Support**: Currently translates basic `MOV` and `ALU` operations (`ADD`, `SUB`, `AND`, `OR`, `XOR`).
+- **Instruction Support**: Translates all instruction categories handled by the interpreter — data movement, ALU, multiply/divide, shifts/rotates, control flow, flag manipulation, and more. Rarely-used instructions (FPU, I/O, BCD, segment ops) are stubbed as no-ops.
 
 ## Translation Concepts
 
 ### Register Management
-WebAssembly executes on a stack machine, but standard blocks and functions declare local variables that can be loaded to / popped from the stack. The JIT leverages these locals to store the x86 register state across an execution block. Local index `0` represents EAX, index `1` represents ECX, etc., mapping identically to their x86 encoding indices.
+WebAssembly executes on a stack machine, but standard blocks and functions declare local variables that can be loaded to / popped from the stack. The JIT leverages these locals to store the x86 register state across an execution block.
+
+| Local | Purpose |
+|-------|-------------|
+| 0–7 | EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI |
+| 8 | CF (Carry Flag) |
+| 9 | ZF (Zero Flag) |
+| 10 | SF (Sign Flag) |
+| 11 | OF (Overflow Flag) |
+| 12 | Scratch register |
+| 13 | DF (Direction Flag) |
+| 14 | PF (Parity Flag) |
 
 ### Control Flow
-Currently, the JIT emits a single global WASM function representing a basic block. This single block is built completely linearly. Future designs will implement `br` and `br_if` constructs internally, or lift them back to the host execution environment for cross-block dispatching.
+The JIT emits `br` and `br_if` for unconditional and conditional jumps respectively, with condition code evaluation covering all 16 x86 CCs. `CALL` pushes a return address to the guest stack via `i32.store` and branches; `RET` pops via `i32.load` and returns. `CMOVcc` uses `if`/`end` blocks. Future designs will implement cross-block dispatching via trace linking.
 
 ## Caching
 
@@ -78,21 +97,26 @@ The second phase establishes the capability to compute standalone x86 math flows
 - [x] Implement memory-safe `MOV reg, imm` and `MOV reg, reg` bytecode generation.
 - [x] Implement translation for baseline `ALU` block operations (`ADD`, `SUB`, `AND`, `OR`, `XOR`).
 
-### Phase 3: Condition Codes & Flags (Partial)
+### Phase 3: Condition Codes & Flags (Complete)
 x86 heavily relies on a central status register (EFLAGS). Unlike x86 instructions which natively update flags contextually, WebAssembly mathematics do not magically compute carry/overflow flags.
-- [x] **Abstract Status Flag Representation**: Determine whether to map CPU flags into discrete `i32` WebAssembly locals or into a singular packed EFLAGS-simulating local.
-- [ ] **Synthetic Flag Calculation**: Emit WebAssembly opcode sequences (e.g., bitwise parity, sign bit checks, and explicit carry evaluations) *immediately following* translated `ALU` operations to keep the synthetic flags accurate. *(Currently only ZF and SF are computed; CF and OF are skipped.)*
-- [ ] **Comparisons**: Implement specific x86 `CMP` and `TEST` translations optimized uniquely for flag generation without storing results.
+- [x] **Abstract Status Flag Representation**: CPU flags mapped to discrete `i32` WebAssembly locals (CF, ZF, SF, OF, DF, PF — locals 8–14).
+- [x] **Synthetic Flag Calculation**: ZF and SF computed inline after all ALU/shift/INC/DEC operations. CF/OF cleared for logic ops. Dedicated helpers for ADD carry and SUB borrow.
+- [x] **Comparisons**: `CMP` and `TEST` translations emit flag updates without storing results.
+- [x] **PUSHFD/POPFD**: Synthesize/decompose packed EFLAGS from/to individual flag locals.
+- [x] **Flag manipulation**: CLC, STC, CLD, STD, CMC translated to direct local set/toggle.
 
-### Phase 4: Control Flow (Partial)
+### Phase 4: Control Flow (Complete)
 Translating branching logic is critical because WebAssembly operates as a strictly-structured language, whereas x86 assembly supports arbitrary cross-module jumping.
-- [ ] **Conditionals**: Map `JMP` and conditional `Jcc` (Jump if Carry, Jump if Zero) into structured WebAssembly `block` logic utilizing `br` and `br_if` breaks. *(Currently only JZ is implemented; other conditionals are skipped.)*
+- [x] **Conditionals**: All 16 x86 Jcc conditions (JO/JNO/JB/JNB/JZ/JNZ/JBE/JA/JS/JNS/JP/JNP/JL/JGE/JLE/JG) mapped to `br_if` with condition evaluation via `translate.emitConditionCode`.
+- [x] **SETcc/CMOVcc**: All 16 conditions supported. CMOVcc uses Wasm `if`/`end` blocks.
+- [x] **LOOP/LOOPcc/JECXZ**: ECX decrement + conditional branch.
 - [ ] **Basic Flow Analysis**: WebAssembly doesn't support wild `goto` instructions. The JIT must pre-analyze x86 execution bounds to construct valid `loop` and `block` hierarchies dynamically.
-- [ ] **Subroutines**: Implement `CALL` and `RET` mechanisms, mapping the x86 guest stack pointers explicitly by translating implicit memory pushes/pops into literal `i32.store` and `i32.load` operations. *(CALL currently pushes a placeholder 0 as return EIP.)*
+- [x] **Subroutines**: `CALL` pushes return address to guest stack via `i32.store`; `RET`/`RET imm16` pops via `i32.load`. `LEAVE` implemented.
 
-### Phase 5: Memory Accesses (Partial)
+### Phase 5: Memory Accesses (Complete)
 Operating outside of local registers requires translating hardware pointers into WebAssembly linear `memory` addressing.
-- [ ] **Dereferencing**: Support indirect `MOV [mem], reg` and `MOV reg, [mem]` translations by compiling the x86 ModR/M effective-address structures (Base + Index * Scale + Displacement). *(Currently only basic register-based ModRM; no displacement support.)*
+- [x] **Dereferencing**: Full ModR/M effective-address support (Base + Index × Scale + Displacement) via `translate.emitEffectiveAddress`. Supports `i32.load`, `i32.load8_u`, `i32.load16_u`, `i32.store`, `i32.store8`, `i32.store16`.
+- [x] **Operand Abstraction**: Unified `emitLoadOperand`/`emitStoreOperand` handles reg, memory, immediate, and relative operands with correct sizing.
 - [ ] **Memory Segments**: Validate legacy Segment mappings (`CS`, `DS`, `SS`) during WASM pointer calculation, especially for Windows 32-bit TEB (Thread Environment Block) pointer accesses via the `FS` register.
 - [ ] **Linkage**: Connect standard WebAssembly `memory` exports securely to the primary `zine` x86 4GB virtual address space.
 

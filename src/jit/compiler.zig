@@ -2,12 +2,13 @@ const std = @import("std");
 const wasm = @import("wasm.zig");
 const emitter = @import("emitter.zig");
 const decoder = @import("../x86/decoder.zig");
+const t = @import("translate.zig");
+
+const Body = emitter.Buffer;
 
 pub const JitCompiler = struct {
     allocator: std.mem.Allocator,
     module: emitter.WasmModule,
-    
-    // Dynarec Phase 6: EIP -> Wasm Function Index map
     block_cache: std.AutoHashMap(u32, u32),
 
     pub fn init(allocator: std.mem.Allocator) JitCompiler {
@@ -23,385 +24,1120 @@ pub const JitCompiler = struct {
         self.module.deinit();
     }
 
-    /// Translates a block of x86 code into a WebAssembly module.
-    /// In a full Dynarec, this will take the starting EIP and register the block in the cache.
     pub fn compile(self: *JitCompiler, guest_eip: u32, x86_code: []const u8) ![]u8 {
         var offset: usize = 0;
-        
-        // Register block
         try self.block_cache.put(guest_eip, @intCast(self.module.func_section.bytes.items.len));
 
-        // Build a type section: 1 function type (void -> void)
-        try self.module.type_section.appendUleb128(1); // 1 type
-        try self.module.type_section.append(0x60); // func form
-        try self.module.type_section.appendUleb128(0); // 0 params
-        try self.module.type_section.appendUleb128(0); // 0 returns
+        // Type section: 1 function type (void -> void)
+        try self.module.type_section.appendUleb128(1);
+        try self.module.type_section.append(0x60);
+        try self.module.type_section.appendUleb128(0);
+        try self.module.type_section.appendUleb128(0);
 
-        // Build a func section: 1 function of type 0
-        try self.module.func_section.appendUleb128(1); // 1 function
-        try self.module.func_section.appendUleb128(0); // type index 0
+        // Func section: 1 function of type 0
+        try self.module.func_section.appendUleb128(1);
+        try self.module.func_section.appendUleb128(0);
 
-        // Build a code section: 1 function body
-        var body = emitter.Buffer.init(self.allocator);
+        // Code section: 1 function body
+        var body = Body.init(self.allocator);
         defer body.deinit();
 
-        // 13 local variables of type i32:
-        // 0-7: EAX..EDI
-        // 8:  CF (Carry)
-        // 9:  ZF (Zero)
-        // 10: SF (Sign)
-        // 11: OF (Overflow)
-        // 12: Scratch space
+        // Locals: LOCAL_COUNT i32 variables
         try body.appendUleb128(1); // 1 local entry
-        try body.appendUleb128(13); // count of 13
+        try body.appendUleb128(t.LOCAL_COUNT);
         try body.append(@intFromEnum(wasm.ValType.i32));
 
         while (offset < x86_code.len) {
             const insn = decoder.decode(x86_code[offset..]);
-            if (insn.length == 0) {
-                // Invalid instruction or end of stream
-                break;
-            }
-
+            if (insn.length == 0) break;
             try self.translateInstruction(&body, &insn);
-
             offset += insn.length;
         }
 
         try body.appendOpcode(.end);
 
-        // Calculate body size and write to code section
-        try self.module.code_section.appendUleb128(1); // 1 function body
+        try self.module.code_section.appendUleb128(1);
         try self.module.code_section.appendUleb128(@as(u32, @intCast(body.bytes.items.len)));
         try self.module.code_section.appendSlice(body.bytes.items);
-        
+
         return self.module.finish();
     }
 
-    fn translateInstruction(self: *JitCompiler, body: *emitter.Buffer, insn: *const decoder.Instruction) !void {
+    fn translateInstruction(self: *JitCompiler, body: *Body, insn: *const decoder.Instruction) !void {
         _ = self;
         switch (insn.opcode) {
+            // ===== NOP =====
             0x90 => try body.appendOpcode(.nop),
-            
-            // MOV reg, imm32 (B8-BF)
-            0xB8...0xBF => {
+
+            // ===== MOV reg, imm (B0-B7: 8-bit, B8-BF: 32-bit) =====
+            0xB0...0xB7, 0xB8...0xBF => {
                 const reg: u3 = @truncate(insn.opcode);
                 try body.appendOpcode(.i32_const);
                 try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
                 try body.appendOpcode(.local_set);
                 try body.appendUleb128(reg);
             },
-            
-            // ALU r/m32, reg32 (01, 09, 11, 19, 21, 29, 31)
-            0x01, 0x09, 0x11, 0x19, 0x21, 0x29, 0x31 => {
-                if (insn.modrm) |modrm| {
-                    if (modrm.mod == 3) { // register to register
-                        const dest_reg = modrm.rm;
-                        const src_reg = modrm.reg;
-                        
-                        // Push dest
-                        try body.appendOpcode(.local_get);
-                        try body.appendUleb128(dest_reg);
-                        
-                        // Push src
-                        try body.appendOpcode(.local_get);
-                        try body.appendUleb128(src_reg);
-                        
-                        // Perform operation
-                        switch (insn.opcode) {
-                            0x01 => try body.appendOpcode(.i32_add),
-                            0x09 => try body.appendOpcode(.i32_or),
-                            0x11 => {}, // ADC unsupported without flags yet
-                            0x19 => {}, // SBB unsupported without flags yet
-                            0x21 => try body.appendOpcode(.i32_and),
-                            0x29 => try body.appendOpcode(.i32_sub),
-                            0x31 => try body.appendOpcode(.i32_xor),
-                            else => unreachable,
-                        }
 
-                        // Duplicate the operation result so we can test it for flags
-                        // WASM lacks `dup`, so we store it to dest_reg, then load it back immediately
-                        try body.appendOpcode(.local_set);
-                        try body.appendUleb128(dest_reg);
-                        
-                        try body.appendOpcode(.local_get);
-                        try body.appendUleb128(dest_reg);
-
-                        // Calculate and store ZF (Zero Flag: result == 0)
-                        try body.appendOpcode(.i32_eqz);
-                        try body.appendOpcode(.local_set);
-                        try body.appendUleb128(9); // ZF local
-
-                        // We need the result back on stack for SF
-                        try body.appendOpcode(.local_get);
-                        try body.appendUleb128(dest_reg);
-
-                        // Calculate and store SF (Sign Flag: result < 0)
-                        try body.appendOpcode(.i32_const);
-                        try body.appendIleb128(0);
-                        try body.appendOpcode(.i32_lt_s);
-                        try body.appendOpcode(.local_set);
-                        try body.appendUleb128(10); // SF local
-
-                        // Carry (CF) and Overflow (OF) are skipped for now due to complexity
-                        // of calculating them strictly post-add vs post-sub.
-                    }
-                }
+            // ===== PUSH reg (50-57) =====
+            0x50...0x57 => {
+                const reg: u3 = @truncate(insn.opcode);
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(reg);
+                try t.emitPush32(body);
             },
-            
-            // MOV r/m32, reg32 (89)
-            0x89 => {
+
+            // ===== POP reg (58-5F) =====
+            0x58...0x5F => {
+                const reg: u3 = @truncate(insn.opcode);
+                try t.emitPop32(body);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(reg);
+            },
+
+            // ===== PUSH imm32 (68) =====
+            0x68 => {
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
+                try t.emitPush32(body);
+            },
+
+            // ===== PUSH imm8 sign-extended (6A) =====
+            0x6A => {
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
+                try t.emitPush32(body);
+            },
+
+            // ===== ALU r/m, reg (8-bit: 00,08,10,18,20,28,30,38) =====
+            // ===== ALU r/m, reg (32-bit: 01,09,11,19,21,29,31,39) =====
+            // ===== ALU reg, r/m (8-bit: 02,0A,12,1A,22,2A,32,3A) =====
+            // ===== ALU reg, r/m (32-bit: 03,0B,13,1B,23,2B,33,3B) =====
+            // ===== ALU AL, imm8 (04,0C,14,1C,24,2C,34,3C) =====
+            // ===== ALU EAX, imm32 (05,0D,15,1D,25,2D,35,3D) =====
+            0x00...0x05, 0x08...0x0D, 0x10...0x15, 0x18...0x1D,
+            0x20...0x25, 0x28...0x2D, 0x30...0x35, 0x38...0x3D,
+            => {
+                try translateAlu(body, insn);
+            },
+
+            // ===== INC reg (40-47) =====
+            0x40...0x47 => {
+                const reg: u3 = @truncate(insn.opcode);
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(reg);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(1);
+                try body.appendOpcode(.i32_add);
+                try body.appendOpcode(.local_tee);
+                try body.appendUleb128(reg);
+                try t.emitUpdateZfSf(body);
+            },
+
+            // ===== DEC reg (48-4F) =====
+            0x48...0x4F => {
+                const reg: u3 = @truncate(insn.opcode);
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(reg);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(1);
+                try body.appendOpcode(.i32_sub);
+                try body.appendOpcode(.local_tee);
+                try body.appendUleb128(reg);
+                try t.emitUpdateZfSf(body);
+            },
+
+            // ===== Group 1: ALU r/m, imm (80, 81, 83) =====
+            0x80, 0x81, 0x82, 0x83 => {
+                try translateGroup1(body, insn);
+            },
+
+            // ===== TEST r/m, reg (84=8bit, 85=32bit) =====
+            0x84, 0x85 => {
+                try t.emitLoadOperand(body, insn, 0);
+                try t.emitLoadOperand(body, insn, 1);
+                try body.appendOpcode(.i32_and);
+                try t.emitUpdateZfSf(body);
+                try t.emitClearCfOf(body);
+            },
+
+            // ===== XCHG r/m, reg (86, 87) =====
+            0x86, 0x87 => {
                 if (insn.modrm) |modrm| {
                     if (modrm.mod == 3) {
-                        try body.appendOpcode(.local_get);
-                        try body.appendUleb128(modrm.reg); // src
-                        try body.appendOpcode(.local_set);
-                        try body.appendUleb128(modrm.rm);  // dest
-                    } else {
-                        // Memory Store
-                        // Calculate Address (Base Register)
+                        // reg-reg exchange via scratch
                         try body.appendOpcode(.local_get);
                         try body.appendUleb128(modrm.rm);
-                        
-                        // Add displacement if any (oversimplified for standalone test)
-                        
-                        // Push Source Value
+                        try body.appendOpcode(.local_set);
+                        try body.appendUleb128(t.LOCAL_SCRATCH);
                         try body.appendOpcode(.local_get);
                         try body.appendUleb128(modrm.reg);
-                        
-                        // Store it
-                        try body.appendOpcode(.i32_store);
-                        try body.appendUleb128(2); // align 32-bit
-                        try body.appendUleb128(0); // offset 0
-                    }
-                }
-            },
-            
-            // MOV reg32, r/m32 (8B)
-            0x8B => {
-                if (insn.modrm) |modrm| {
-                    if (modrm.mod == 3) {
-                        try body.appendOpcode(.local_get);
-                        try body.appendUleb128(modrm.rm);  // src
                         try body.appendOpcode(.local_set);
-                        try body.appendUleb128(modrm.reg); // dest
-                    } else {
-                        // Memory Load
-                        // Calculate Address
+                        try body.appendUleb128(modrm.rm);
                         try body.appendOpcode(.local_get);
-                        try body.appendUleb128(modrm.rm); // Base Register
-                        
-                        // Load it
-                        try body.appendOpcode(.i32_load);
-                        try body.appendUleb128(2); // align 32-bit
-                        try body.appendUleb128(0); // offset 0
-                        
-                        // Save to dest reg
+                        try body.appendUleb128(t.LOCAL_SCRATCH);
                         try body.appendOpcode(.local_set);
                         try body.appendUleb128(modrm.reg);
                     }
                 }
             },
-            
-            // CMP r/m32, reg32 (39)
-            0x39 => {
+
+            // ===== MOV r/m, reg (88=8bit, 89=32bit) =====
+            0x88, 0x89 => {
+                try t.emitLoadOperand(body, insn, 1);
+                try t.emitStoreOperand(body, insn, 0);
+            },
+
+            // ===== MOV reg, r/m (8A=8bit, 8B=32bit) =====
+            0x8A, 0x8B => {
+                try t.emitLoadOperand(body, insn, 1);
+                try t.emitStoreOperand(body, insn, 0);
+            },
+
+            // ===== LEA reg, [mem] (8D) =====
+            0x8D => {
                 if (insn.modrm) |modrm| {
-                    if (modrm.mod == 3) {
-                        const dest_reg = modrm.rm;
-                        const src_reg = modrm.reg;
-
-                        // Push dest
-                        try body.appendOpcode(.local_get);
-                        try body.appendUleb128(dest_reg);
-                        
-                        // Push src
-                        try body.appendOpcode(.local_get);
-                        try body.appendUleb128(src_reg);
-
-                        // Perform subtraction
-                        try body.appendOpcode(.i32_sub);
-
-                        // Calculate ZF
-                        // We must duplicate the result without tearing it down. But we can't save it to dest_reg for CMP!
-                        // So we save it to a scratch local or we just calculate ZF / SF directly and drop.
-                        // For simplicity let's use a designated "Scratch" local 12 or we re-calculate directly on stack.
-                        
-                        // Actually WebAssembly has `local.tee`! We can tee to a scratch variable.
-                        // Let's use local index 12 as a generic scratch register since we declared 12. Oh wait we only declared 12 total (0-11).
-                        // Let's set local count to 13 earlier and use index 12 as scratch.
-                        try body.appendOpcode(.local_tee);
-                        try body.appendUleb128(12);
-
-                        // Calculate ZF
-                        try body.appendOpcode(.i32_eqz);
-                        try body.appendOpcode(.local_set);
-                        try body.appendUleb128(9);
-
-                        // Load Scratch back
-                        try body.appendOpcode(.local_get);
-                        try body.appendUleb128(12);
-
-                        // Calculate SF
-                        try body.appendOpcode(.i32_const);
-                        try body.appendIleb128(0);
-                        try body.appendOpcode(.i32_lt_s);
-                        try body.appendOpcode(.local_set);
-                        try body.appendUleb128(10);
-                    }
+                    try t.emitEffectiveAddress(body, insn, 1);
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(modrm.reg);
                 }
             },
 
-            // TEST r/m32, reg32 (85)
-            0x85 => {
-                if (insn.modrm) |modrm| {
-                    if (modrm.mod == 3) {
-                        const dest_reg = modrm.rm;
-                        const src_reg = modrm.reg;
+            // ===== MOV Sreg (8C, 8E) — stub as nop =====
+            0x8C, 0x8E => {},
 
-                        try body.appendOpcode(.local_get);
-                        try body.appendUleb128(dest_reg);
-                        
-                        try body.appendOpcode(.local_get);
-                        try body.appendUleb128(src_reg);
-
-                        try body.appendOpcode(.i32_and);
-
-                        // `local.tee` to scratch
-                        try body.appendOpcode(.local_tee);
-                        try body.appendUleb128(12);
-
-                        // ZF
-                        try body.appendOpcode(.i32_eqz);
-                        try body.appendOpcode(.local_set);
-                        try body.appendUleb128(9);
-
-                        // SF
-                        try body.appendOpcode(.local_get);
-                        try body.appendUleb128(12);
-                        try body.appendOpcode(.i32_const);
-                        try body.appendIleb128(0);
-                        try body.appendOpcode(.i32_lt_s);
-                        try body.appendOpcode(.local_set);
-                        try body.appendUleb128(10);
-                    }
-                }
-            },
-            
-            // JMP rel32 (E9)
-            0xE9 => {
-                // Unconditional jump. 
-                // In purely structural WASM, we break to an appropriate block depth.
-                // For this standalone test phase, we'll just emit a `br 0` indicating a break from current block.
-                try body.appendOpcode(.br);
-                try body.appendUleb128(0); // break depth 0 label mapping
-            },
-            
-            // JMP rel8 (EB)
-            0xEB => {
-                try body.appendOpcode(.br);
-                try body.appendUleb128(0);
-            },
-            
-            // Jcc short (70-7F)
-            0x70...0x7F => {
-                // Conditional jump based on flags.
-                const cc: u4 = @truncate(insn.opcode);
-                
-                // For simplicity, let's map JZ (Jump if Zero, 0x74) which checks ZF.
-                if (cc == 0x4) {
-                    try body.appendOpcode(.local_get);
-                    try body.appendUleb128(9); // ZF
-                    try body.appendOpcode(.br_if);
-                    try body.appendUleb128(0);
-                } else {
-                    // Other CC evaluation logic skipping for structural template
-                }
-            },
-
-            // CALL rel32 (E8)
-            0xE8 => {
-                // CALL pushes EIP to the x86 stack and jumps.
-                // x86 stack operates via ESP mapped to memory.
-                
-                // 1. Load ESP (Local 4)
+            // ===== XCHG EAX, reg (91-97) =====
+            0x91...0x97 => {
+                const reg: u3 = @truncate(insn.opcode);
                 try body.appendOpcode(.local_get);
-                try body.appendUleb128(4);
-                
-                // 2. Subtract 4 from ESP
+                try body.appendUleb128(t.REG_EAX);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.LOCAL_SCRATCH);
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(reg);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.REG_EAX);
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_SCRATCH);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(reg);
+            },
+
+            // ===== CBW/CWDE (98) =====
+            0x98 => {
+                // Sign-extend AX/AL into EAX (simplified: sign-extend low 16 to 32)
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.REG_EAX);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(16);
+                try body.appendOpcode(.i32_shl);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(16);
+                try body.appendOpcode(.i32_shr_s);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.REG_EAX);
+            },
+
+            // ===== CDQ (99) =====
+            0x99 => {
+                // EDX = (EAX < 0) ? 0xFFFFFFFF : 0
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.REG_EAX);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(31);
+                try body.appendOpcode(.i32_shr_s); // arithmetic shift: fills with sign bit
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.REG_EDX);
+            },
+
+            // ===== PUSHFD (9C) =====
+            0x9C => {
+                // Synthesize EFLAGS from flag locals and push
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(0x202); // Reserved + IF
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_CF);
+                try body.appendOpcode(.i32_or); // CF at bit 0
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_ZF);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(6);
+                try body.appendOpcode(.i32_shl);
+                try body.appendOpcode(.i32_or); // ZF at bit 6
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_SF);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(7);
+                try body.appendOpcode(.i32_shl);
+                try body.appendOpcode(.i32_or); // SF at bit 7
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_OF);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(11);
+                try body.appendOpcode(.i32_shl);
+                try body.appendOpcode(.i32_or); // OF at bit 11
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_DF);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(10);
+                try body.appendOpcode(.i32_shl);
+                try body.appendOpcode(.i32_or); // DF at bit 10
+                try t.emitPush32(body);
+            },
+
+            // ===== POPFD (9D) =====
+            0x9D => {
+                try t.emitPop32(body);
+                try body.appendOpcode(.local_tee);
+                try body.appendUleb128(t.LOCAL_SCRATCH);
+                // Extract CF (bit 0)
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(1);
+                try body.appendOpcode(.i32_and);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.LOCAL_CF);
+                // ZF (bit 6)
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_SCRATCH);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(6);
+                try body.appendOpcode(.i32_shr_u);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(1);
+                try body.appendOpcode(.i32_and);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.LOCAL_ZF);
+                // SF (bit 7)
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_SCRATCH);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(7);
+                try body.appendOpcode(.i32_shr_u);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(1);
+                try body.appendOpcode(.i32_and);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.LOCAL_SF);
+                // OF (bit 11)
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_SCRATCH);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(11);
+                try body.appendOpcode(.i32_shr_u);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(1);
+                try body.appendOpcode(.i32_and);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.LOCAL_OF);
+                // DF (bit 10)
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_SCRATCH);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(10);
+                try body.appendOpcode(.i32_shr_u);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(1);
+                try body.appendOpcode(.i32_and);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.LOCAL_DF);
+            },
+
+            // ===== SAHF (9E) / LAHF (9F) — stub =====
+            0x9E, 0x9F => {},
+
+            // ===== MOV AL/EAX, moffs (A0, A1) =====
+            0xA0, 0xA1 => {
+                try t.emitLoadOperand(body, insn, 0);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.REG_EAX);
+            },
+
+            // ===== MOV moffs, AL/EAX (A2, A3) =====
+            0xA2, 0xA3 => {
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.REG_EAX);
+                try t.emitStoreOperand(body, insn, 1);
+            },
+
+            // ===== TEST AL/EAX, imm (A8, A9) =====
+            0xA8, 0xA9 => {
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.REG_EAX);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
+                try body.appendOpcode(.i32_and);
+                try t.emitUpdateZfSf(body);
+                try t.emitClearCfOf(body);
+            },
+
+            // ===== String ops (A4-AF) — nop stubs =====
+            0xA4, 0xA5, 0xA6, 0xA7, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF => {},
+
+            // ===== RET (C3) =====
+            0xC3 => {
+                try t.emitPop32(body);
+                try body.appendOpcode(.drop);
+                try body.appendOpcode(.return_);
+            },
+
+            // ===== RET imm16 (C2) =====
+            0xC2 => {
+                try t.emitPop32(body);
+                try body.appendOpcode(.drop);
+                // ESP += imm
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.REG_ESP);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
+                try body.appendOpcode(.i32_add);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.REG_ESP);
+                try body.appendOpcode(.return_);
+            },
+
+            // ===== MOV r/m8, imm8 (C6) =====
+            0xC6 => {
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
+                try t.emitStoreOperand(body, insn, 0);
+            },
+
+            // ===== MOV r/m32, imm32 (C7) =====
+            0xC7 => {
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
+                try t.emitStoreOperand(body, insn, 0);
+            },
+
+            // ===== LEAVE (C9) =====
+            0xC9 => {
+                // ESP = EBP
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.REG_EBP);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.REG_ESP);
+                // POP EBP
+                try t.emitPop32(body);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.REG_EBP);
+            },
+
+            // ===== Shift/Rotate (C0, C1, D0, D1, D2, D3) =====
+            0xC0, 0xC1, 0xD0, 0xD1, 0xD2, 0xD3 => {
+                try translateShift(body, insn);
+            },
+
+            // ===== CALL rel32 (E8) =====
+            0xE8 => {
+                // Push return address (placeholder 0)
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.REG_ESP);
                 try body.appendOpcode(.i32_const);
                 try body.appendIleb128(4);
                 try body.appendOpcode(.i32_sub);
-                
-                // 3. Save new ESP
                 try body.appendOpcode(.local_tee);
-                try body.appendUleb128(4);
-                
-                // 4. Memory Store (EIP + length) at new ESP
-                // WebAssembly: i32.store (align=2, offset=0) [Address] [Value]
+                try body.appendUleb128(t.REG_ESP);
                 try body.appendOpcode(.i32_const);
-                // Placeholder EIP push
-                try body.appendIleb128(0); 
+                try body.appendIleb128(0); // Placeholder EIP
                 try body.appendOpcode(.i32_store);
-                try body.appendUleb128(2); // align 32bit
-                try body.appendUleb128(0); // offset 0
-                
-                // 5. Jump (break)
+                try body.appendUleb128(2);
+                try body.appendUleb128(0);
                 try body.appendOpcode(.br);
                 try body.appendUleb128(0);
             },
-            
-            // RET (C3)
-            0xC3 => {
-                // RET pops EIP from the x86 stack and jumps.
-                
-                // 1. Load from ESP (Local 4)
+
+            // ===== JMP rel32 (E9) / JMP rel8 (EB) =====
+            0xE9, 0xEB => {
+                try body.appendOpcode(.br);
+                try body.appendUleb128(0);
+            },
+
+            // ===== Jcc short (70-7F) =====
+            0x70...0x7F => {
+                const cc: u4 = @truncate(insn.opcode);
+                try t.emitConditionCode(body, cc);
+                try body.appendOpcode(.br_if);
+                try body.appendUleb128(0);
+            },
+
+            // ===== LOOP/LOOPcc/JECXZ (E0-E3) =====
+            0xE0 => { // LOOPNE: ECX-=1, jump if ECX!=0 && ZF=0
                 try body.appendOpcode(.local_get);
-                try body.appendUleb128(4);
-                try body.appendOpcode(.i32_load);
-                try body.appendUleb128(2); // align 32bit
-                try body.appendUleb128(0); // offset 0
-                
-                // 2. Drop popped value (In a real dynarec, we'd use this for a dynamic jump)
-                try body.appendOpcode(.drop);
-                
-                // 3. Add 4 to ESP
-                try body.appendOpcode(.local_get);
-                try body.appendUleb128(4);
+                try body.appendUleb128(t.REG_ECX);
                 try body.appendOpcode(.i32_const);
-                try body.appendIleb128(4);
-                try body.appendOpcode(.i32_add);
+                try body.appendIleb128(1);
+                try body.appendOpcode(.i32_sub);
+                try body.appendOpcode(.local_tee);
+                try body.appendUleb128(t.REG_ECX);
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_ZF);
+                try body.appendOpcode(.i32_eqz);
+                try body.appendOpcode(.i32_and);
+                try body.appendOpcode(.br_if);
+                try body.appendUleb128(0);
+            },
+            0xE1 => { // LOOPE: ECX-=1, jump if ECX!=0 && ZF=1
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.REG_ECX);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(1);
+                try body.appendOpcode(.i32_sub);
+                try body.appendOpcode(.local_tee);
+                try body.appendUleb128(t.REG_ECX);
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_ZF);
+                try body.appendOpcode(.i32_and);
+                try body.appendOpcode(.br_if);
+                try body.appendUleb128(0);
+            },
+            0xE2 => { // LOOP: ECX-=1, jump if ECX!=0
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.REG_ECX);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(1);
+                try body.appendOpcode(.i32_sub);
+                try body.appendOpcode(.local_tee);
+                try body.appendUleb128(t.REG_ECX);
+                try body.appendOpcode(.br_if);
+                try body.appendUleb128(0);
+            },
+            0xE3 => { // JECXZ: jump if ECX==0
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.REG_ECX);
+                try body.appendOpcode(.i32_eqz);
+                try body.appendOpcode(.br_if);
+                try body.appendUleb128(0);
+            },
+
+            // ===== Group 3: TEST/NOT/NEG/MUL/IMUL/DIV/IDIV (F6, F7) =====
+            0xF6, 0xF7 => {
+                try translateGroup3(body, insn);
+            },
+
+            // ===== Group 5: INC/DEC/CALL/JMP/PUSH r/m (FF) =====
+            0xFF => {
+                try translateGroup5(body, insn);
+            },
+
+            // ===== Group 4: INC/DEC r/m8 (FE) =====
+            0xFE => {
+                if (insn.modrm) |modrm| {
+                    try t.emitLoadOperand(body, insn, 0);
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(if (modrm.reg == 0) @as(i32, 1) else @as(i32, -1));
+                    try body.appendOpcode(.i32_add);
+                    try body.appendOpcode(.local_tee);
+                    try body.appendUleb128(t.LOCAL_SCRATCH);
+                    try t.emitStoreOperand(body, insn, 0);
+                    try body.appendOpcode(.local_get);
+                    try body.appendUleb128(t.LOCAL_SCRATCH);
+                    try t.emitUpdateZfSf(body);
+                }
+            },
+
+            // ===== Flag manipulation =====
+            0xF8 => { try body.appendOpcode(.i32_const); try body.appendIleb128(0); try body.appendOpcode(.local_set); try body.appendUleb128(t.LOCAL_CF); }, // CLC
+            0xF9 => { try body.appendOpcode(.i32_const); try body.appendIleb128(1); try body.appendOpcode(.local_set); try body.appendUleb128(t.LOCAL_CF); }, // STC
+            0xFC => { try body.appendOpcode(.i32_const); try body.appendIleb128(0); try body.appendOpcode(.local_set); try body.appendUleb128(t.LOCAL_DF); }, // CLD
+            0xFD => { try body.appendOpcode(.i32_const); try body.appendIleb128(1); try body.appendOpcode(.local_set); try body.appendUleb128(t.LOCAL_DF); }, // STD
+            0xFA, 0xFB => {}, // CLI/STI — nop in usermode
+            0xF5 => { // CMC: toggle CF
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_CF);
+                try body.appendOpcode(.i32_eqz);
                 try body.appendOpcode(.local_set);
-                try body.appendUleb128(4);
-                
-                // 4. End Function Return break
-                try body.appendOpcode(.return_);
+                try body.appendUleb128(t.LOCAL_CF);
             },
-            
-            else => {
-                // Ignore unimplemented for now
+
+            // ===== Two-byte: Jcc near (0F 80-8F) =====
+            0x0F80...0x0F8F => {
+                const cc: u4 = @truncate(insn.opcode);
+                try t.emitConditionCode(body, cc);
+                try body.appendOpcode(.br_if);
+                try body.appendUleb128(0);
             },
+
+            // ===== SETcc (0F 90-9F) =====
+            0x0F90...0x0F9F => {
+                const cc: u4 = @truncate(insn.opcode);
+                try t.emitConditionCode(body, cc);
+                try t.emitStoreOperand(body, insn, 0);
+            },
+
+            // ===== MOVZX r32, r/m8 (0F B6) =====
+            0x0FB6 => {
+                if (insn.modrm) |modrm| {
+                    try t.emitLoadOperand(body, insn, 1);
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(0xFF);
+                    try body.appendOpcode(.i32_and);
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(modrm.reg);
+                }
+            },
+            // ===== MOVZX r32, r/m16 (0F B7) =====
+            0x0FB7 => {
+                if (insn.modrm) |modrm| {
+                    try t.emitLoadOperand(body, insn, 1);
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(@as(i32, 0xFFFF));
+                    try body.appendOpcode(.i32_and);
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(modrm.reg);
+                }
+            },
+            // ===== MOVSX r32, r/m8 (0F BE) =====
+            0x0FBE => {
+                if (insn.modrm) |modrm| {
+                    try t.emitLoadOperand(body, insn, 1);
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(24);
+                    try body.appendOpcode(.i32_shl);
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(24);
+                    try body.appendOpcode(.i32_shr_s);
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(modrm.reg);
+                }
+            },
+            // ===== MOVSX r32, r/m16 (0F BF) =====
+            0x0FBF => {
+                if (insn.modrm) |modrm| {
+                    try t.emitLoadOperand(body, insn, 1);
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(16);
+                    try body.appendOpcode(.i32_shl);
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(16);
+                    try body.appendOpcode(.i32_shr_s);
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(modrm.reg);
+                }
+            },
+
+            // ===== IMUL r32, r/m32 (0F AF) =====
+            0x0FAF => {
+                if (insn.modrm) |modrm| {
+                    try body.appendOpcode(.local_get);
+                    try body.appendUleb128(modrm.reg);
+                    try t.emitLoadOperand(body, insn, 1);
+                    try body.appendOpcode(.i32_mul);
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(modrm.reg);
+                }
+            },
+
+            // ===== CMOVcc (0F 40-4F) =====
+            0x0F40...0x0F4F => {
+                if (insn.modrm) |modrm| {
+                    const cc: u4 = @truncate(insn.opcode);
+                    try t.emitConditionCode(body, cc);
+                    try body.appendOpcode(.if_);
+                    try body.append(@intFromEnum(wasm.BlockType.void));
+                    try t.emitLoadOperand(body, insn, 1);
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(modrm.reg);
+                    try body.appendOpcode(.end);
+                }
+            },
+
+            // ===== BSWAP (0F C8-CF) =====
+            0x0FC8...0x0FCF => {
+                const reg: u3 = @truncate(insn.opcode);
+                // val = get reg; byte-swap via shifts
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(reg);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.LOCAL_SCRATCH);
+                // result = ((v>>24)&0xFF) | ((v>>8)&0xFF00) | ((v<<8)&0xFF0000) | ((v<<24)&0xFF000000)
+                // Simplified: use 4 extractions
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_SCRATCH);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(24);
+                try body.appendOpcode(.i32_shr_u);
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_SCRATCH);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(8);
+                try body.appendOpcode(.i32_shr_u);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(@as(i32, @bitCast(@as(u32, 0xFF00))));
+                try body.appendOpcode(.i32_and);
+                try body.appendOpcode(.i32_or);
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_SCRATCH);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(8);
+                try body.appendOpcode(.i32_shl);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(@as(i32, @bitCast(@as(u32, 0xFF0000))));
+                try body.appendOpcode(.i32_and);
+                try body.appendOpcode(.i32_or);
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_SCRATCH);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(24);
+                try body.appendOpcode(.i32_shl);
+                try body.appendOpcode(.i32_or);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(reg);
+            },
+
+            // ===== BSF (0F BC) =====
+            0x0FBC => {
+                if (insn.modrm) |modrm| {
+                    try t.emitLoadOperand(body, insn, 1);
+                    try body.appendOpcode(.i32_ctz);
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(modrm.reg);
+                }
+            },
+
+            // ===== BSR (0F BD) =====
+            0x0FBD => {
+                if (insn.modrm) |modrm| {
+                    // BSR = 31 - CLZ
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(31);
+                    try t.emitLoadOperand(body, insn, 1);
+                    try body.appendOpcode(.i32_clz);
+                    try body.appendOpcode(.i32_sub);
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(modrm.reg);
+                }
+            },
+
+            // ===== IMUL r, r/m, imm32 (69) / IMUL r, r/m, imm8 (6B) =====
+            0x69, 0x6B => {
+                if (insn.modrm) |modrm| {
+                    try t.emitLoadOperand(body, insn, 1);
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
+                    try body.appendOpcode(.i32_mul);
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(modrm.reg);
+                }
+            },
+
+            // ===== PUSHAD (60) =====
+            0x60 => {
+                // Push EAX,ECX,EDX,EBX,orig_ESP,EBP,ESI,EDI
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.REG_ESP);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.LOCAL_SCRATCH);
+                inline for ([_]u32{ 0, 1, 2, 3 }) |r| {
+                    try body.appendOpcode(.local_get);
+                    try body.appendUleb128(r);
+                    try t.emitPush32(body);
+                }
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.LOCAL_SCRATCH);
+                try t.emitPush32(body);
+                inline for ([_]u32{ 5, 6, 7 }) |r| {
+                    try body.appendOpcode(.local_get);
+                    try body.appendUleb128(r);
+                    try t.emitPush32(body);
+                }
+            },
+
+            // ===== POPAD (61) =====
+            0x61 => {
+                inline for ([_]u32{ 7, 6, 5 }) |r| {
+                    try t.emitPop32(body);
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(r);
+                }
+                try t.emitPop32(body);
+                try body.appendOpcode(.drop); // skip ESP
+                inline for ([_]u32{ 3, 2, 1, 0 }) |r| {
+                    try t.emitPop32(body);
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(r);
+                }
+            },
+
+            // ===== Stubs for rarely-used instructions =====
+            0xCC, 0xCD, 0xF4 => {}, // INT3, INT, HLT
+            0x06, 0x07, 0x0E, 0x16, 0x17, 0x1E, 0x1F => {}, // segment push/pop
+            0x27, 0x2F, 0x37, 0x3F => {}, // BCD adjust
+            0x62 => {}, // BOUND
+            0x6C, 0x6D, 0x6E, 0x6F => {}, // INS/OUTS
+            0xC8 => {}, // ENTER
+            0xC4, 0xC5 => {}, // LES/LDS
+            0xD4, 0xD5 => {}, // AAM/AAD
+            0xD7 => {}, // XLAT
+            0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF => {}, // FPU
+            0xE4, 0xE5, 0xE6, 0xE7, 0xEC, 0xED, 0xEE, 0xEF => {}, // IN/OUT
+            0x9B, 0xF1 => {}, // FWAIT, INT1
+            0x0F18, 0x0F19, 0x0F1A, 0x0F1B, 0x0F1C, 0x0F1D, 0x0F1E, 0x0F1F => {}, // NOP hints
+            0x0FA0, 0x0FA1, 0x0FA8, 0x0FA9 => {}, // PUSH/POP FS/GS
+            0x0FA3, 0x0FAB, 0x0FB3, 0x0FBB, 0x0FBA => {}, // BT family
+            0x0FA4, 0x0FA5, 0x0FAC, 0x0FAD => {}, // SHLD/SHRD
+            0x0FC0, 0x0FC1 => {}, // XADD
+            0x0FB0, 0x0FB1 => {}, // CMPXCHG
+            0x0F02, 0x0F03 => {}, // LAR/LSL
+
+            // Default: ignore unimplemented
+            else => {},
         }
     }
 };
+
+// =======================================================================
+// Sub-translators (factored out to keep the main switch readable)
+// =======================================================================
+
+fn translateAlu(body: *Body, insn: *const decoder.Instruction) !void {
+    const group: u3 = @truncate(insn.opcode >> 3);
+    const wasm_op = t.aluGroupToWasmOp(group) orelse return;
+
+    // Load destination and source
+    try t.emitLoadOperand(body, insn, 0);
+    try t.emitLoadOperand(body, insn, 1);
+
+    // Perform operation
+    try body.appendOpcode(wasm_op);
+
+    // CMP/TEST don't store — just update flags
+    if (group == 7) {
+        // CMP: result on stack, compute ZF/SF, don't store
+        try t.emitUpdateZfSf(body);
+    } else {
+        // Store result to destination, then update flags from the stored value
+        try body.appendOpcode(.local_tee);
+        try body.appendUleb128(t.LOCAL_SCRATCH);
+        try t.emitStoreOperand(body, insn, 0);
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_SCRATCH);
+        try t.emitUpdateZfSf(body);
+    }
+
+    // Logic ops clear CF/OF
+    if (group == 1 or group == 4 or group == 6) {
+        try t.emitClearCfOf(body);
+    }
+}
+
+fn translateGroup1(body: *Body, insn: *const decoder.Instruction) !void {
+    const modrm = insn.modrm orelse return;
+    const sub_op = modrm.reg;
+    const wasm_op = t.aluGroupToWasmOp(sub_op) orelse return;
+
+    try t.emitLoadOperand(body, insn, 0);
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
+    try body.appendOpcode(wasm_op);
+
+    if (sub_op == 7) { // CMP
+        try t.emitUpdateZfSf(body);
+    } else {
+        try body.appendOpcode(.local_tee);
+        try body.appendUleb128(t.LOCAL_SCRATCH);
+        try t.emitStoreOperand(body, insn, 0);
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_SCRATCH);
+        try t.emitUpdateZfSf(body);
+    }
+
+    if (sub_op == 1 or sub_op == 4 or sub_op == 6) {
+        try t.emitClearCfOf(body);
+    }
+}
+
+fn translateShift(body: *Body, insn: *const decoder.Instruction) !void {
+    const modrm = insn.modrm orelse return;
+    const sub_op = modrm.reg;
+
+    try t.emitLoadOperand(body, insn, 0);
+
+    // Get shift count
+    switch (insn.opcode) {
+        0xD0, 0xD1 => {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(1);
+        },
+        0xD2, 0xD3 => {
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.REG_ECX);
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(31);
+            try body.appendOpcode(.i32_and);
+        },
+        0xC0, 0xC1 => {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(@as(i32, @bitCast(insn.imm & 31)));
+        },
+        else => return,
+    }
+
+    switch (sub_op) {
+        0 => try body.appendOpcode(.i32_rotl), // ROL
+        1 => try body.appendOpcode(.i32_rotr), // ROR
+        4 => try body.appendOpcode(.i32_shl), // SHL
+        5 => try body.appendOpcode(.i32_shr_u), // SHR
+        7 => try body.appendOpcode(.i32_shr_s), // SAR
+        else => {
+            try body.appendOpcode(.drop);
+            return;
+        },
+    }
+
+    try body.appendOpcode(.local_tee);
+    try body.appendUleb128(t.LOCAL_SCRATCH);
+    try t.emitStoreOperand(body, insn, 0);
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(t.LOCAL_SCRATCH);
+    try t.emitUpdateZfSf(body);
+}
+
+fn translateGroup3(body: *Body, insn: *const decoder.Instruction) !void {
+    const modrm = insn.modrm orelse return;
+    switch (modrm.reg) {
+        0, 1 => { // TEST r/m, imm
+            try t.emitLoadOperand(body, insn, 0);
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
+            try body.appendOpcode(.i32_and);
+            try t.emitUpdateZfSf(body);
+            try t.emitClearCfOf(body);
+        },
+        2 => { // NOT
+            try t.emitLoadOperand(body, insn, 0);
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(-1);
+            try body.appendOpcode(.i32_xor);
+            try t.emitStoreOperand(body, insn, 0);
+        },
+        3 => { // NEG
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0);
+            try t.emitLoadOperand(body, insn, 0);
+            try body.appendOpcode(.i32_sub);
+            try body.appendOpcode(.local_tee);
+            try body.appendUleb128(t.LOCAL_SCRATCH);
+            try t.emitStoreOperand(body, insn, 0);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.LOCAL_SCRATCH);
+            try t.emitUpdateZfSf(body);
+        },
+        4 => { // MUL (unsigned): EDX:EAX = EAX * r/m
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.REG_EAX);
+            try t.emitLoadOperand(body, insn, 0);
+            try body.appendOpcode(.i32_mul);
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(t.REG_EAX);
+            // EDX = 0 (simplified — 32x32->32 only)
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0);
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(t.REG_EDX);
+        },
+        5 => { // IMUL (signed)
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.REG_EAX);
+            try t.emitLoadOperand(body, insn, 0);
+            try body.appendOpcode(.i32_mul);
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(t.REG_EAX);
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0);
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(t.REG_EDX);
+        },
+        6 => { // DIV (unsigned)
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.REG_EAX);
+            try body.appendOpcode(.local_tee);
+            try body.appendUleb128(t.LOCAL_SCRATCH);
+            try t.emitLoadOperand(body, insn, 0);
+            try body.appendOpcode(.i32_div_u);
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(t.REG_EAX);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.LOCAL_SCRATCH);
+            try t.emitLoadOperand(body, insn, 0);
+            try body.appendOpcode(.i32_rem_u);
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(t.REG_EDX);
+        },
+        7 => { // IDIV (signed)
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.REG_EAX);
+            try body.appendOpcode(.local_tee);
+            try body.appendUleb128(t.LOCAL_SCRATCH);
+            try t.emitLoadOperand(body, insn, 0);
+            try body.appendOpcode(.i32_div_s);
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(t.REG_EAX);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.LOCAL_SCRATCH);
+            try t.emitLoadOperand(body, insn, 0);
+            try body.appendOpcode(.i32_rem_s);
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(t.REG_EDX);
+        },
+    }
+}
+
+fn translateGroup5(body: *Body, insn: *const decoder.Instruction) !void {
+    const modrm = insn.modrm orelse return;
+    switch (modrm.reg) {
+        0 => { // INC r/m32
+            try t.emitLoadOperand(body, insn, 0);
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(1);
+            try body.appendOpcode(.i32_add);
+            try body.appendOpcode(.local_tee);
+            try body.appendUleb128(t.LOCAL_SCRATCH);
+            try t.emitStoreOperand(body, insn, 0);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.LOCAL_SCRATCH);
+            try t.emitUpdateZfSf(body);
+        },
+        1 => { // DEC r/m32
+            try t.emitLoadOperand(body, insn, 0);
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(1);
+            try body.appendOpcode(.i32_sub);
+            try body.appendOpcode(.local_tee);
+            try body.appendUleb128(t.LOCAL_SCRATCH);
+            try t.emitStoreOperand(body, insn, 0);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.LOCAL_SCRATCH);
+            try t.emitUpdateZfSf(body);
+        },
+        2 => { // CALL r/m32 (indirect)
+            try t.emitLoadOperand(body, insn, 0);
+            try body.appendOpcode(.drop);
+            try body.appendOpcode(.br);
+            try body.appendUleb128(0);
+        },
+        4 => { // JMP r/m32 (indirect)
+            try t.emitLoadOperand(body, insn, 0);
+            try body.appendOpcode(.drop);
+            try body.appendOpcode(.br);
+            try body.appendUleb128(0);
+        },
+        6 => { // PUSH r/m32
+            try t.emitLoadOperand(body, insn, 0);
+            try t.emitPush32(body);
+        },
+        else => {},
+    }
+}
+
+// =======================================================================
+// Tests
+// =======================================================================
 
 test "jit compiler basic structure" {
     var compiler = JitCompiler.init(std.testing.allocator);
     defer compiler.deinit();
 
-    // Setup some simple test instructions:
-    // MOV EAX, 1
-    // MOV ECX, 2
-    // ADD EAX, ECX
     const x86_test_code = [_]u8{
         0xB8, 0x01, 0x00, 0x00, 0x00, // MOV EAX, 1
         0xB9, 0x02, 0x00, 0x00, 0x00, // MOV ECX, 2
-        0x01, 0xC8,                   // ADD EAX, ECX
+        0x01, 0xC8, // ADD EAX, ECX
     };
-    
+
     const wasm_bin = try compiler.compile(0x1000, &x86_test_code);
     defer std.testing.allocator.free(wasm_bin);
 
-    // Should contain magic + version + empty section headers + a single end opcode or something similar
-    // depending on the exact implementation in finish().
-    try std.testing.expect(wasm_bin.len >= 8); // At least magic and version
+    try std.testing.expect(wasm_bin.len >= 8);
+}
+
+test "jit compiler push/pop" {
+    var compiler = JitCompiler.init(std.testing.allocator);
+    defer compiler.deinit();
+
+    const code = [_]u8{
+        0x50, // PUSH EAX
+        0x5B, // POP EBX
+    };
+
+    const wasm_bin = try compiler.compile(0x2000, &code);
+    defer std.testing.allocator.free(wasm_bin);
+
+    try std.testing.expect(wasm_bin.len >= 8);
+}
+
+test "jit compiler group1 sub imm" {
+    var compiler = JitCompiler.init(std.testing.allocator);
+    defer compiler.deinit();
+
+    const code = [_]u8{
+        0x83, 0xE8, 0x05, // SUB EAX, 5 (83 /5 ib)
+    };
+
+    const wasm_bin = try compiler.compile(0x3000, &code);
+    defer std.testing.allocator.free(wasm_bin);
+
+    try std.testing.expect(wasm_bin.len >= 8);
+}
+
+test "jit compiler all jcc conditions" {
+    var compiler = JitCompiler.init(std.testing.allocator);
+    defer compiler.deinit();
+
+    // Test all 16 Jcc short opcodes compile without error
+    var code: [32]u8 = undefined;
+    var i: usize = 0;
+    var cc: u8 = 0x70;
+    while (cc <= 0x7F) : (cc += 1) {
+        code[i] = cc;
+        code[i + 1] = 0x00; // rel8 = 0
+        i += 2;
+    }
+
+    const wasm_bin = try compiler.compile(0x4000, code[0..i]);
+    defer std.testing.allocator.free(wasm_bin);
+
+    try std.testing.expect(wasm_bin.len >= 8);
+}
+
+test "jit compiler shifts" {
+    var compiler = JitCompiler.init(std.testing.allocator);
+    defer compiler.deinit();
+
+    const code = [_]u8{
+        0xC1, 0xE0, 0x04, // SHL EAX, 4
+        0xC1, 0xE8, 0x02, // SHR EAX, 2
+        0xC1, 0xF8, 0x01, // SAR EAX, 1
+    };
+
+    const wasm_bin = try compiler.compile(0x5000, &code);
+    defer std.testing.allocator.free(wasm_bin);
+
+    try std.testing.expect(wasm_bin.len >= 8);
+}
+
+test "jit compiler movzx/movsx" {
+    var compiler = JitCompiler.init(std.testing.allocator);
+    defer compiler.deinit();
+
+    const code = [_]u8{
+        0x0F, 0xB6, 0xC1, // MOVZX EAX, CL
+        0x0F, 0xBE, 0xC1, // MOVSX EAX, CL
+    };
+
+    const wasm_bin = try compiler.compile(0x6000, &code);
+    defer std.testing.allocator.free(wasm_bin);
+
+    try std.testing.expect(wasm_bin.len >= 8);
+}
+
+test "jit compiler lea" {
+    var compiler = JitCompiler.init(std.testing.allocator);
+    defer compiler.deinit();
+
+    const code = [_]u8{
+        0x8D, 0x44, 0x8B, 0x10, // LEA EAX, [EBX+ECX*4+0x10]
+    };
+
+    const wasm_bin = try compiler.compile(0x7000, &code);
+    defer std.testing.allocator.free(wasm_bin);
+
+    try std.testing.expect(wasm_bin.len >= 8);
 }

@@ -80,6 +80,7 @@ pub fn main() !void {
 
     var target_exe_opt: ?[]const u8 = null;
     var app_args: std.ArrayListUnmanaged(?[*:0]u8) = .{};
+    var use_jit = false;
     var end_of_options = false;
     while (args.next()) |arg| {
         if (!end_of_options and std.mem.eql(u8, arg, "--")) {
@@ -99,6 +100,10 @@ pub fn main() !void {
             trace.enable_instructions = true;
             continue;
         }
+        if (!end_of_options and std.mem.eql(u8, arg, "--jit")) {
+            use_jit = true;
+            continue;
+        }
         if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
             const stdout = std.fs.File{ .handle = 1 };
             stdout.writeAll(
@@ -110,6 +115,7 @@ pub fn main() !void {
                 \\  -t, --trace         Enable all tracing output (API + instructions)
                 \\      --trace-api     Enable API tracing only
                 \\      --trace-insn    Enable x86 instruction tracing only
+                \\      --jit           Use JIT compiler (accepted, uses interpreter on WASM)
                 \\  -h, --help          Show this help message
                 \\  -v, --version       Show version information
                 \\  --                  Stop processing options
@@ -264,6 +270,31 @@ pub fn main() !void {
             io_mod.initGuestIob(&thunk_guest_mem, combined_buf, preferred_base, @intCast(iob_exp.addr));
         }
 
+        // __pioinfo: fix up pointer from host→guest so CRT's _osfile validation works.
+        // __pioinfo[0] must point to the GUEST address of ioinfo_table0.
+        if (environment.resolveExport("MSVCRT.dll", "__pioinfo")) |pioinfo_exp| {
+            if (environment.resolveExport("MSVCRT.dll", "_nhandle")) |_| {
+                // ioinfo_table0 was also relocated as part of __pioinfo data.
+                // We need to allocate ioinfo_table0 separately in guest memory
+                // and patch __pioinfo[0] to point to it.
+                const ioinfo_size: u32 = @intCast(io_mod.ioinfo_table0.len);
+                const ioinfo_guest_va = thunk_guest_mem.guestAlloc(ioinfo_size);
+                if (ioinfo_guest_va != 0) {
+                    // Copy ioinfo_table0 data to guest memory
+                    const ioinfo_offset = ioinfo_guest_va - preferred_base;
+                    @memcpy(combined_buf[ioinfo_offset..][0..ioinfo_size], &io_mod.ioinfo_table0);
+
+                    // Patch __pioinfo[0] in guest memory to point to guest ioinfo_table0
+                    const pioinfo_offset = @as(u32, @intCast(pioinfo_exp.addr)) - preferred_base;
+                    const pioinfo_ptr = @as(*align(1) u32, @ptrCast(combined_buf[pioinfo_offset..].ptr));
+                    pioinfo_ptr.* = ioinfo_guest_va;
+
+                    // Also update the host copy so __p__iob-style accessors work
+                    io_mod.pioinfo[0] = ioinfo_guest_va;
+                }
+            }
+        }
+
         // _acmdln: track guest VA for ensureGuestArgs
         if (environment.resolveExport("MSVCRT.dll", "_acmdln")) |acmdln_exp| {
             stubs_msvcrt.msvcrt_acmdln_guest = acmdln_exp.addr;
@@ -381,10 +412,99 @@ pub fn main() !void {
         cpu.fs_base,
     });
 
-    x86_execute.run(&cpu);
+    if (use_jit) {
+        log.info("JIT mode: compiling x86 blocks to WASM alongside interpreter", .{});
+        runWithJit(&cpu, allocator);
+    } else {
+        x86_execute.run(&cpu);
+    }
 
     log.info("wasm: interpreter halted, EAX=0x{X}", .{cpu.eax});
 
     // Propagate the guest process exit code to the WASM host
     std.process.exit(@truncate(cpu.eax));
+}
+
+// ---------------------------------------------------------------------------
+// JIT-integrated execution loop
+// ---------------------------------------------------------------------------
+// Runs the interpreter but also compiles each new basic block via the JIT
+// compiler. The compiled WASM binary is cached per starting EIP. This
+// validates the JIT on real PE code even though we can't instantiate
+// generated WASM from within a WASM environment.
+
+const jit_compiler = @import("jit/compiler.zig");
+const x86_decoder = @import("x86/decoder.zig");
+
+fn runWithJit(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
+    var jit = jit_compiler.JitCompiler.init(allocator);
+    defer jit.deinit();
+
+    var blocks_compiled: u32 = 0;
+    var expected_next_eip: u32 = 0;
+
+    while (!cpu.halted) {
+        const eip = cpu.eip;
+
+        // Only compile at actual basic block entries — when EIP changes
+        // discontinuously (jump, call, ret). Sequential instruction advances
+        // (eip == expected_next_eip) are NOT new blocks.
+        if (eip != expected_next_eip and !jit.block_cache.contains(eip)) {
+            // Read up to 256 bytes of x86 code at this EIP for compilation
+            if (cpu.memory.readSlice(eip, 256)) |code| {
+                // Find the block length by scanning for a terminating instruction
+                const block_len = scanBlock(code);
+                if (block_len > 0) {
+                    // Re-init the module for each block (compile produces a standalone module)
+                    jit.module.deinit();
+                    jit.module = @import("jit/emitter.zig").WasmModule.init(allocator);
+
+                    if (jit.compile(eip, code[0..block_len])) |wasm_bin| {
+                        blocks_compiled += 1;
+                        if (blocks_compiled <= 10) {
+                            log.info("JIT: compiled block at EIP=0x{X} ({d} x86 bytes -> {d} WASM bytes)", .{
+                                eip, block_len, wasm_bin.len,
+                            });
+                        } else if (blocks_compiled == 11) {
+                            log.info("JIT: (suppressing further compilation logs)", .{});
+                        }
+                        allocator.free(wasm_bin);
+                    } else |_| {
+                        // Compilation failed — not fatal, interpreter handles it
+                    }
+                }
+            }
+        }
+
+        // Execute one instruction and track the expected next EIP
+        x86_execute.step(cpu);
+        expected_next_eip = cpu.eip;
+    }
+
+    log.info("JIT: compiled {d} unique basic blocks", .{blocks_compiled});
+}
+
+/// Scan x86 code to find the end of a basic block (up to a terminating
+/// instruction like RET, JMP, HLT, or INT3).
+fn scanBlock(code: []const u8) usize {
+    var offset: usize = 0;
+    while (offset < code.len) {
+        const insn = x86_decoder.decode(code[offset..]);
+        if (insn.length == 0) break;
+        offset += insn.length;
+
+        // Block terminators
+        switch (insn.opcode) {
+            0xC3, 0xC2, // RET, RET imm16
+            0xCB, 0xCA, // RETF
+            0xE9, 0xEB, // JMP rel32, JMP rel8
+            0xF4, // HLT
+            0xCC, // INT3
+            => break,
+            // Conditional jumps don't terminate — they're branch targets
+            // within the block (the fall-through continues)
+            else => {},
+        }
+    }
+    return offset;
 }

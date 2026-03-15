@@ -398,10 +398,10 @@ fn dsbuffer_GetCurrentPosition(this: *IDirectSoundBuffer, pdwCurrentPlayCursor: 
     const wc = getWriteCursor();
 
     if (pdwCurrentPlayCursor != 0) {
-        @as(*u32, @ptrFromInt(pdwCurrentPlayCursor)).* = pc;
+        @as(*align(1) u32, @ptrFromInt(pdwCurrentPlayCursor)).* = pc;
     }
     if (pdwCurrentWriteCursor != 0) {
-        @as(*u32, @ptrFromInt(pdwCurrentWriteCursor)).* = wc;
+        @as(*align(1) u32, @ptrFromInt(pdwCurrentWriteCursor)).* = wc;
     }
 
     return 0;

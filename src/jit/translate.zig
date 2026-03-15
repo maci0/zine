@@ -1,0 +1,371 @@
+// JIT instruction translation helpers.
+// Factored out of compiler.zig to keep individual files manageable.
+
+const std = @import("std");
+const wasm = @import("wasm.zig");
+const emitter = @import("emitter.zig");
+const decoder = @import("../x86/decoder.zig");
+
+const Body = emitter.Buffer;
+
+// Local variable indices (Wasm locals):
+// 0-7:  EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI
+// 8:    CF (Carry Flag)
+// 9:    ZF (Zero Flag)
+// 10:   SF (Sign Flag)
+// 11:   OF (Overflow Flag)
+// 12:   Scratch
+// 13:   DF (Direction Flag)
+// 14:   PF (Parity Flag)
+pub const LOCAL_CF: u32 = 8;
+pub const LOCAL_ZF: u32 = 9;
+pub const LOCAL_SF: u32 = 10;
+pub const LOCAL_OF: u32 = 11;
+pub const LOCAL_SCRATCH: u32 = 12;
+pub const LOCAL_DF: u32 = 13;
+pub const LOCAL_PF: u32 = 14;
+pub const LOCAL_COUNT: u32 = 15;
+
+// Register indices matching x86 encoding
+pub const REG_EAX: u32 = 0;
+pub const REG_ECX: u32 = 1;
+pub const REG_EDX: u32 = 2;
+pub const REG_EBX: u32 = 3;
+pub const REG_ESP: u32 = 4;
+pub const REG_EBP: u32 = 5;
+pub const REG_ESI: u32 = 6;
+pub const REG_EDI: u32 = 7;
+
+/// Emit code to push the effective address of a memory operand onto the Wasm stack.
+pub fn emitEffectiveAddress(body: *Body, insn: *const decoder.Instruction, idx: u1) !void {
+    const op = insn.operands[idx];
+    switch (op) {
+        .mem => |m| {
+            var has_value = false;
+            if (m.base) |base| {
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(base);
+                has_value = true;
+            }
+            if (m.index) |index| {
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(index);
+                if (m.scale > 0) {
+                    try body.appendOpcode(.i32_const);
+                    try body.appendUleb128(@as(u32, 1) << m.scale);
+                    try body.appendOpcode(.i32_mul);
+                }
+                if (has_value) {
+                    try body.appendOpcode(.i32_add);
+                } else {
+                    has_value = true;
+                }
+            }
+            if (m.displacement != 0) {
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(m.displacement);
+                if (has_value) {
+                    try body.appendOpcode(.i32_add);
+                } else {
+                    has_value = true;
+                }
+            }
+            if (!has_value) {
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(0);
+            }
+        },
+        else => {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0);
+        },
+    }
+}
+
+/// Load operand value onto Wasm stack.
+pub fn emitLoadOperand(body: *Body, insn: *const decoder.Instruction, idx: u1) !void {
+    const op = insn.operands[idx];
+    switch (op) {
+        .reg => |r| {
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(r);
+        },
+        .mem => {
+            try emitEffectiveAddress(body, insn, idx);
+            switch (insn.op_size) {
+                .byte => {
+                    try body.appendOpcode(.i32_load8_u);
+                    try body.appendUleb128(0);
+                    try body.appendUleb128(0);
+                },
+                .word => {
+                    try body.appendOpcode(.i32_load16_u);
+                    try body.appendUleb128(1);
+                    try body.appendUleb128(0);
+                },
+                .dword => {
+                    try body.appendOpcode(.i32_load);
+                    try body.appendUleb128(2);
+                    try body.appendUleb128(0);
+                },
+            }
+        },
+        .imm => |v| {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(@as(i32, @bitCast(v)));
+        },
+        .rel => |r| {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(r);
+        },
+        .none => {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0);
+        },
+    }
+}
+
+/// Store value from Wasm stack to operand destination.
+pub fn emitStoreOperand(body: *Body, insn: *const decoder.Instruction, idx: u1) !void {
+    const op = insn.operands[idx];
+    switch (op) {
+        .reg => |r| {
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(r);
+        },
+        .mem => {
+            // Value is on stack. We need address below it.
+            // Save value to scratch, push addr, push value back, store.
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(LOCAL_SCRATCH);
+            try emitEffectiveAddress(body, insn, idx);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_SCRATCH);
+            switch (insn.op_size) {
+                .byte => {
+                    try body.appendOpcode(.i32_store8);
+                    try body.appendUleb128(0);
+                    try body.appendUleb128(0);
+                },
+                .word => {
+                    try body.appendOpcode(.i32_store16);
+                    try body.appendUleb128(1);
+                    try body.appendUleb128(0);
+                },
+                .dword => {
+                    try body.appendOpcode(.i32_store);
+                    try body.appendUleb128(2);
+                    try body.appendUleb128(0);
+                },
+            }
+        },
+        else => {},
+    }
+}
+
+/// Emit ZF and SF computation from the value currently on the Wasm stack.
+/// Consumes the value (drops it after computing flags).
+pub fn emitUpdateZfSf(body: *Body) !void {
+    // tee to scratch for reuse
+    try body.appendOpcode(.local_tee);
+    try body.appendUleb128(LOCAL_SCRATCH);
+    // ZF = (result == 0)
+    try body.appendOpcode(.i32_eqz);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(LOCAL_ZF);
+    // SF = (result < 0)
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(LOCAL_SCRATCH);
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(0);
+    try body.appendOpcode(.i32_lt_s);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(LOCAL_SF);
+}
+
+/// Emit CF computation for ADD: CF = (result < operand1) unsigned.
+pub fn emitCfAdd(body: *Body, dest_local: u32) !void {
+    // CF for add: result < either operand (unsigned)
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(dest_local);
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(LOCAL_SCRATCH); // original dest value saved there
+    try body.appendOpcode(.i32_lt_u);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(LOCAL_CF);
+}
+
+/// Emit CF computation for SUB: CF = (operand1 < operand2) unsigned.
+pub fn emitCfSub(body: *Body) !void {
+    // Already computed result in dest. We stored originals.
+    // CF = (op1 < op2) unsigned — caller must push op1 and op2
+    try body.appendOpcode(.i32_lt_u);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(LOCAL_CF);
+}
+
+/// Emit CF=0, OF=0 (for logic ops like AND, OR, XOR, TEST).
+pub fn emitClearCfOf(body: *Body) !void {
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(0);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(LOCAL_CF);
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(0);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(LOCAL_OF);
+}
+
+/// Emit a Jcc condition check. Pushes 0 or 1 onto the Wasm stack.
+pub fn emitConditionCode(body: *Body, cc: u4) !void {
+    switch (cc) {
+        0x0 => { // JO: OF=1
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_OF);
+        },
+        0x1 => { // JNO: OF=0
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_OF);
+            try body.appendOpcode(.i32_eqz);
+        },
+        0x2 => { // JB: CF=1
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_CF);
+        },
+        0x3 => { // JNB: CF=0
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_CF);
+            try body.appendOpcode(.i32_eqz);
+        },
+        0x4 => { // JZ: ZF=1
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_ZF);
+        },
+        0x5 => { // JNZ: ZF=0
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_ZF);
+            try body.appendOpcode(.i32_eqz);
+        },
+        0x6 => { // JBE: CF=1 OR ZF=1
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_CF);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_ZF);
+            try body.appendOpcode(.i32_or);
+        },
+        0x7 => { // JA: CF=0 AND ZF=0
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_CF);
+            try body.appendOpcode(.i32_eqz);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_ZF);
+            try body.appendOpcode(.i32_eqz);
+            try body.appendOpcode(.i32_and);
+        },
+        0x8 => { // JS: SF=1
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_SF);
+        },
+        0x9 => { // JNS: SF=0
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_SF);
+            try body.appendOpcode(.i32_eqz);
+        },
+        0xA => { // JP: PF=1
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_PF);
+        },
+        0xB => { // JNP: PF=0
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_PF);
+            try body.appendOpcode(.i32_eqz);
+        },
+        0xC => { // JL: SF!=OF
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_SF);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_OF);
+            try body.appendOpcode(.i32_ne);
+        },
+        0xD => { // JGE: SF==OF
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_SF);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_OF);
+            try body.appendOpcode(.i32_eq);
+        },
+        0xE => { // JLE: ZF=1 OR SF!=OF
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_ZF);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_SF);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_OF);
+            try body.appendOpcode(.i32_ne);
+            try body.appendOpcode(.i32_or);
+        },
+        0xF => { // JG: ZF=0 AND SF==OF
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_ZF);
+            try body.appendOpcode(.i32_eqz);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_SF);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_OF);
+            try body.appendOpcode(.i32_eq);
+            try body.appendOpcode(.i32_and);
+        },
+    }
+}
+
+/// Get the Wasm ALU opcode for an x86 ALU group.
+pub fn aluGroupToWasmOp(group: u3) ?wasm.Opcode {
+    return switch (group) {
+        0 => .i32_add, // ADD
+        1 => .i32_or, // OR
+        2 => .i32_add, // ADC (add, carry handled separately)
+        3 => .i32_sub, // SBB (sub, carry handled separately)
+        4 => .i32_and, // AND
+        5 => .i32_sub, // SUB
+        6 => .i32_xor, // XOR
+        7 => .i32_sub, // CMP (sub, don't store)
+    };
+}
+
+/// Emit PUSH: decrement ESP, store value at [ESP].
+/// Value must already be on the Wasm stack.
+pub fn emitPush32(body: *Body) !void {
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(LOCAL_SCRATCH);
+    // ESP -= 4
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(REG_ESP);
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(4);
+    try body.appendOpcode(.i32_sub);
+    try body.appendOpcode(.local_tee);
+    try body.appendUleb128(REG_ESP);
+    // store [ESP] = value
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(LOCAL_SCRATCH);
+    try body.appendOpcode(.i32_store);
+    try body.appendUleb128(2);
+    try body.appendUleb128(0);
+}
+
+/// Emit POP: load from [ESP], increment ESP. Result on Wasm stack.
+pub fn emitPop32(body: *Body) !void {
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(REG_ESP);
+    try body.appendOpcode(.i32_load);
+    try body.appendUleb128(2);
+    try body.appendUleb128(0);
+    // ESP += 4
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(REG_ESP);
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(4);
+    try body.appendOpcode(.i32_add);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(REG_ESP);
+}

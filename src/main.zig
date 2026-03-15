@@ -113,6 +113,7 @@ pub fn main() !void {
     var argv0_opt: ?[]const u8 = null;
     var app_args: std.ArrayListUnmanaged(?[*:0]u8) = .{};
     var use_interpreter = false;
+    var use_jit = false;
     var no_gui = false;
 
     if (std.process.hasEnvVarConstant("ZINE_TRACE")) {
@@ -148,6 +149,10 @@ pub fn main() !void {
             use_interpreter = true;
             continue;
         }
+        if (!end_of_options and std.mem.eql(u8, arg, "--jit")) {
+            use_jit = true;
+            continue;
+        }
         if (!end_of_options and std.mem.eql(u8, arg, "--profile")) {
             profiler.enabled = true;
             continue;
@@ -172,6 +177,7 @@ pub fn main() !void {
                 \\      --trace-insn    Enable x86 instruction tracing only
                 \\      --profile       Enable profiling (hot code, opcodes, stubs)
                 \\  -i, --interpret     Use x86 software interpreter instead of native execution
+                \\      --jit           Use JIT compiler (x86-to-WASM translation)
                 \\      --fltk          Use native FLTK GUI instead of web UI
                 \\      --no-gui        Disable GUI (no web server), even for GUI apps
                 \\      --argv0 <name>  Override argv[0] passed to the target
@@ -587,7 +593,7 @@ pub fn main() !void {
 
     try teb.setupFS(thread_env);
 
-    if (use_interpreter) {
+    if (use_interpreter or use_jit) {
         // x86 software interpreter path — jump straight to the entry point.
         // The PE entry point calls CRT init and DllMain itself, so we skip
         // the native DllMain dispatch and CRT env logging.
@@ -611,7 +617,12 @@ pub fn main() !void {
         cpu.ebp = cpu.esp;
         trace.print("Interpreter: EIP=0x{X} ESP=0x{X} (image base=0x{X}, stack base=0x{X})\n", .{ cpu.eip, cpu.esp, base, @intFromPtr(stack_mem.ptr) });
 
-        x86_execute.run(&cpu);
+        if (use_jit) {
+            log.warn("JIT on native x86: blocks will be compiled to WASM for validation but NOT executed", .{});
+            runWithJit(&cpu, allocator);
+        } else {
+            x86_execute.run(&cpu);
+        }
         profiler.dump();
         trace.print("*** Interpreter halted, EAX=0x{X} ***\n", .{cpu.eax});
         std.process.exit(@truncate(cpu.eax));
@@ -646,4 +657,71 @@ pub fn main() !void {
         std.fs.File.stderr().writeAll("Error: no entry point found in executable.\n") catch {};
         std.process.exit(1);
     }
+}
+
+// ---------------------------------------------------------------------------
+// JIT-integrated execution loop
+// ---------------------------------------------------------------------------
+
+const jit_compiler = @import("jit/compiler.zig");
+const jit_emitter = @import("jit/emitter.zig");
+const x86_decoder = @import("x86/decoder.zig");
+
+fn runWithJit(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
+    var jit = jit_compiler.JitCompiler.init(allocator);
+    defer jit.deinit();
+
+    var blocks_compiled: u32 = 0;
+    var expected_next_eip: u32 = 0;
+
+    while (!cpu.halted) {
+        const eip = cpu.eip;
+
+        // Only compile at actual basic block entries — when EIP changes
+        // discontinuously (jump, call, ret). Sequential instruction advances
+        // (eip == expected_next_eip) are NOT new blocks.
+        if (eip != expected_next_eip and !jit.block_cache.contains(eip)) {
+            if (cpu.memory.readSlice(eip, 256)) |code| {
+                const block_len = scanBlock(code);
+                if (block_len > 0) {
+                    jit.module.deinit();
+                    jit.module = jit_emitter.WasmModule.init(allocator);
+
+                    if (jit.compile(eip, code[0..block_len])) |wasm_bin| {
+                        blocks_compiled += 1;
+                        if (blocks_compiled <= 10) {
+                            log.info("JIT: compiled block at EIP=0x{X} ({d} x86 bytes -> {d} WASM bytes)", .{
+                                eip, block_len, wasm_bin.len,
+                            });
+                        } else if (blocks_compiled == 11) {
+                            log.info("JIT: (suppressing further compilation logs)", .{});
+                        }
+                        allocator.free(wasm_bin);
+                    } else |_| {}
+                }
+            }
+        }
+
+        // Execute one instruction and track the expected next EIP
+        x86_execute.step(cpu);
+        // After step, cpu.eip is the next instruction. If execution was
+        // sequential, this will match eip on the next iteration.
+        expected_next_eip = cpu.eip;
+    }
+
+    log.info("JIT: compiled {d} unique basic blocks", .{blocks_compiled});
+}
+
+fn scanBlock(code: []const u8) usize {
+    var offset: usize = 0;
+    while (offset < code.len) {
+        const insn = x86_decoder.decode(code[offset..]);
+        if (insn.length == 0) break;
+        offset += insn.length;
+        switch (insn.opcode) {
+            0xC3, 0xC2, 0xCB, 0xCA, 0xE9, 0xEB, 0xF4, 0xCC => break,
+            else => {},
+        }
+    }
+    return offset;
 }

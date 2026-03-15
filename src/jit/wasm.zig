@@ -111,6 +111,17 @@ pub const Opcode = enum(u8) {
     i32_shr_u = 0x76,
     i32_rotl = 0x77,
     i32_rotr = 0x78,
-    
-    // Extensions and 64-bit opcodes omit for minimalism unless requested later.
+
+    i32_wrap_i64 = 0xA7,
+    i64_extend_i32_s = 0xAC,
+    i64_extend_i32_u = 0xAD,
+};
+
+/// Block types for structured control flow.
+pub const BlockType = enum(u8) {
+    void = 0x40,
+    i32 = 0x7F,
+    i64 = 0x7E,
+    f32 = 0x7D,
+    f64 = 0x7C,
 };
