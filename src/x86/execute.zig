@@ -203,7 +203,7 @@ fn dispatchNativeCall(cpu: *Cpu) void {
     if (comptime !@import("../platform.zig").is_native) {
         const sc = @import("../win32/stub_common.zig");
         if (sc.pending_initterm_count > 0) {
-            buildInittermTrampoline(cpu, ret_addr);
+            buildInittermTrampoline(cpu);
         }
     }
 }
@@ -212,7 +212,7 @@ fn dispatchNativeCall(cpu: *Cpu) void {
 /// Each callback is a CALL rel32 to a guest function address, followed by a final RET.
 /// The current EIP (CRT return address) is pushed onto the guest stack so the
 /// trampoline's RET returns control to the CRT startup code.
-fn buildInittermTrampoline(cpu: *Cpu, _: u32) void {
+pub fn buildInittermTrampoline(cpu: *Cpu) void {
     const stub_common = @import("../win32/stub_common.zig");
     const count = stub_common.pending_initterm_count;
     if (count == 0) return;

@@ -50,8 +50,8 @@ pub fn qsort(base: usize, num: usize, width: usize, compare_ptr: usize) callconv
             if (compare(ap, bp) > 0) {
                 var k: usize = 0;
                 while (k < width) : (k += 1) {
-                    const a = @as(*u8, @ptrFromInt(ap + k));
-                    const b = @as(*u8, @ptrFromInt(bp + k));
+                    const a = @as(*u8, @ptrFromInt(trace.addr(ap + k)));
+                    const b = @as(*u8, @ptrFromInt(trace.addr(bp + k)));
                     const t = a.*;
                     a.* = b.*;
                     b.* = t;
@@ -104,7 +104,7 @@ pub fn setlocale(category: i32, locale_ptr: usize) callconv(.c) usize {
 
 pub fn strupr(str_ptr: usize) callconv(.c) usize {
     if (str_ptr < 0x10000) return 0;
-    const s = @as([*]u8, @ptrFromInt(str_ptr));
+    const s = @as([*]u8, @ptrFromInt(trace.addr(str_ptr)));
     var i: usize = 0;
     while (s[i] != 0 and i < 0x100000) : (i += 1) {
         if (s[i] >= 'a' and s[i] <= 'z') s[i] -= 32;

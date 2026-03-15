@@ -13,8 +13,8 @@ pub fn strlen(str_ptr: usize) callconv(.c) usize {
 
 pub fn strcpy(dest_ptr: usize, src_ptr: usize) callconv(.c) usize {
     if (dest_ptr == 0 or src_ptr == 0) return dest_ptr;
-    const dest = @as([*]u8, @ptrFromInt(dest_ptr));
-    const src = @as([*]const u8, @ptrFromInt(src_ptr));
+    const dest = @as([*]u8, @ptrFromInt(trace.addr(dest_ptr)));
+    const src = @as([*]const u8, @ptrFromInt(trace.addr(src_ptr)));
     // Element-by-element copy to handle overlapping buffers
     var i: usize = 0;
     while (src[i] != 0) : (i += 1) {
@@ -26,8 +26,8 @@ pub fn strcpy(dest_ptr: usize, src_ptr: usize) callconv(.c) usize {
 
 pub fn strncpy(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
     if (dest_ptr == 0 or src_ptr == 0 or count == 0) return dest_ptr;
-    const dest = @as([*]u8, @ptrFromInt(dest_ptr));
-    const src = @as([*]const u8, @ptrFromInt(src_ptr));
+    const dest = @as([*]u8, @ptrFromInt(trace.addr(dest_ptr)));
+    const src = @as([*]const u8, @ptrFromInt(trace.addr(src_ptr)));
     if (trace.enable_tracing) trace.print("MSVCRT: strncpy(count={d})\n", .{count});
     
     var i: usize = 0;
@@ -42,12 +42,12 @@ pub fn strncpy(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize
 
 pub fn strcat(dest_ptr: usize, src_ptr: usize) callconv(.c) usize {
     if (dest_ptr == 0 or src_ptr == 0) return dest_ptr;
-    const dest = @as([*]u8, @ptrFromInt(dest_ptr));
+    const dest = @as([*]u8, @ptrFromInt(trace.addr(dest_ptr)));
     // Find end of dest
     var dest_len: usize = 0;
     while (dest[dest_len] != 0) : (dest_len += 1) {}
     // Copy src after dest
-    const src = @as([*]const u8, @ptrFromInt(src_ptr));
+    const src = @as([*]const u8, @ptrFromInt(trace.addr(src_ptr)));
     var i: usize = 0;
     while (src[i] != 0) : (i += 1) {
         dest[dest_len + i] = src[i];
@@ -58,8 +58,8 @@ pub fn strcat(dest_ptr: usize, src_ptr: usize) callconv(.c) usize {
 
 pub fn strcmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
-    const s1 = @as([*]const u8, @ptrFromInt(s1_ptr));
-    const s2 = @as([*]const u8, @ptrFromInt(s2_ptr));
+    const s1 = @as([*]const u8, @ptrFromInt(trace.addr(s1_ptr)));
+    const s2 = @as([*]const u8, @ptrFromInt(trace.addr(s2_ptr)));
     var i: usize = 0;
     while (s1[i] == s2[i] and s1[i] != 0) : (i += 1) {}
     return @as(i32, s1[i]) - @as(i32, s2[i]);
@@ -67,8 +67,8 @@ pub fn strcmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
 
 pub fn strncmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0 or count == 0) return 0;
-    const s1 = @as([*]const u8, @ptrFromInt(s1_ptr));
-    const s2 = @as([*]const u8, @ptrFromInt(s2_ptr));
+    const s1 = @as([*]const u8, @ptrFromInt(trace.addr(s1_ptr)));
+    const s2 = @as([*]const u8, @ptrFromInt(trace.addr(s2_ptr)));
     var i: usize = 0;
     while (i < count and s1[i] == s2[i] and s1[i] != 0) : (i += 1) {}
     if (i == count) return 0;
@@ -191,7 +191,7 @@ pub fn strdup(str_ptr: usize) callconv(.c) usize {
 
 pub fn wcsdup(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
-    const str = @as([*]const u16, @ptrFromInt(str_ptr));
+    const str = @as([*]const u16, @ptrFromInt(trace.addr(str_ptr)));
     const len = std.mem.indexOfScalar(u16, str[0..65536], 0) orelse 0;
     
     const stub_common = @import("../stub_common.zig");
@@ -205,7 +205,7 @@ pub fn wcsdup(str_ptr: usize) callconv(.c) usize {
 pub fn itoa(value: i32, buffer_ptr: usize, radix: i32) callconv(.c) usize {
     if (trace.enable_tracing) trace.print("MSVCRT: _itoa(value={d}, buf={x}, radix={d})\n", .{value, buffer_ptr, radix});
     if (buffer_ptr == 0) return 0;
-    const buffer = @as([*]u8, @ptrFromInt(buffer_ptr));
+    const buffer = @as([*]u8, @ptrFromInt(trace.addr(buffer_ptr)));
     const slice = buffer[0..33];
     if (radix == 10) {
         _ = std.fmt.bufPrint(slice, "{d}\x00", .{value}) catch return buffer_ptr;
@@ -218,7 +218,7 @@ pub fn itoa(value: i32, buffer_ptr: usize, radix: i32) callconv(.c) usize {
 
 pub fn strtoul(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) u32 {
     if (str_ptr == 0) return 0;
-    const str = @as([*:0]const u8, @ptrFromInt(str_ptr));
+    const str = @as([*:0]const u8, @ptrFromInt(trace.addr(str_ptr)));
     var i: usize = 0;
     while (std.ascii.isWhitespace(str[i])) i += 1;
     var sign: i32 = 1;
@@ -245,7 +245,7 @@ pub fn strtoul(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) u32 {
         val = val * @as(u32, @intCast(r)) + @as(u32, digit);
         parsed = true;
     }
-    if (end_ptr != 0) @as(*usize, @ptrFromInt(end_ptr)).* = if (parsed) str_ptr + i else str_ptr;
+    if (end_ptr != 0) @as(*usize, @ptrFromInt(trace.addr(end_ptr))).* = if (parsed) str_ptr + i else str_ptr;
     const final_val = if (sign == -1) ~val +% 1 else val;
     if (trace.enable_tracing) trace.print("MSVCRT: strtoul('{s}', {d}) -> {d}\n", .{trace.c_span(str_ptr), radix, final_val});
     return final_val;
@@ -273,14 +273,14 @@ pub fn atoi(str_ptr: usize) callconv(.c) i32 {
 
 pub fn wcslen(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
-    const str = @as([*]const u16, @ptrFromInt(str_ptr));
+    const str = @as([*]const u16, @ptrFromInt(trace.addr(str_ptr)));
     const len = std.mem.indexOfScalar(u16, str[0..65536], 0) orelse 0;
     return len;
 }
 
 pub fn wcsupr(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
-    const str = @as([*]u16, @ptrFromInt(str_ptr));
+    const str = @as([*]u16, @ptrFromInt(trace.addr(str_ptr)));
     const len = trace.c_span_w(str_ptr).len;
     for (str[0..len]) |*ch| {
         if (ch.* >= 'a' and ch.* <= 'z') ch.* -= 32;
@@ -291,8 +291,8 @@ pub fn wcsupr(str_ptr: usize) callconv(.c) usize {
 pub fn wcscpy(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
     log_wcs("wcscpy src: ", src_ptr);
     if (dst_ptr == 0 or src_ptr == 0) return dst_ptr;
-    const dst = @as([*]u16, @ptrFromInt(dst_ptr));
-    const src = @as([*]const u16, @ptrFromInt(src_ptr));
+    const dst = @as([*]u16, @ptrFromInt(trace.addr(dst_ptr)));
+    const src = @as([*]const u16, @ptrFromInt(trace.addr(src_ptr)));
     // Element-by-element copy to handle overlapping buffers (like memmove)
     var i: usize = 0;
     while (src[i] != 0) : (i += 1) {
@@ -304,8 +304,8 @@ pub fn wcscpy(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
 
 pub fn wcsncpy(dst_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
     if (dst_ptr == 0 or src_ptr == 0) return dst_ptr;
-    const dst = @as([*]u16, @ptrFromInt(dst_ptr));
-    const src = @as([*]const u16, @ptrFromInt(src_ptr));
+    const dst = @as([*]u16, @ptrFromInt(trace.addr(dst_ptr)));
+    const src = @as([*]const u16, @ptrFromInt(trace.addr(src_ptr)));
     // Element-by-element copy to handle overlapping buffers
     var i: usize = 0;
     while (i < count and src[i] != 0) : (i += 1) {
@@ -319,12 +319,12 @@ pub fn wcsncpy(dst_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize 
 
 pub fn wcscat(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
     if (dst_ptr == 0 or src_ptr == 0) return dst_ptr;
-    const dst = @as([*]u16, @ptrFromInt(dst_ptr));
+    const dst = @as([*]u16, @ptrFromInt(trace.addr(dst_ptr)));
     // Find end of dst
     var dst_len: usize = 0;
     while (dst[dst_len] != 0) : (dst_len += 1) {}
     // Copy src after dst
-    const src = @as([*]const u16, @ptrFromInt(src_ptr));
+    const src = @as([*]const u16, @ptrFromInt(trace.addr(src_ptr)));
     var i: usize = 0;
     while (src[i] != 0) : (i += 1) {
         dst[dst_len + i] = src[i];
@@ -335,8 +335,8 @@ pub fn wcscat(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
 
 pub fn wcscmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
-    const s1 = @as([*]const u16, @ptrFromInt(s1_ptr));
-    const s2 = @as([*]const u16, @ptrFromInt(s2_ptr));
+    const s1 = @as([*]const u16, @ptrFromInt(trace.addr(s1_ptr)));
+    const s2 = @as([*]const u16, @ptrFromInt(trace.addr(s2_ptr)));
     var i: usize = 0;
     while (s1[i] == s2[i] and s1[i] != 0) : (i += 1) {}
     return @as(i32, s1[i]) - @as(i32, s2[i]);
@@ -344,8 +344,8 @@ pub fn wcscmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
 
 pub fn wcsncmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0 or count == 0) return 0;
-    const s1 = @as([*]const u16, @ptrFromInt(s1_ptr));
-    const s2 = @as([*]const u16, @ptrFromInt(s2_ptr));
+    const s1 = @as([*]const u16, @ptrFromInt(trace.addr(s1_ptr)));
+    const s2 = @as([*]const u16, @ptrFromInt(trace.addr(s2_ptr)));
     var i: usize = 0;
     while (i < count and s1[i] == s2[i] and s1[i] != 0) : (i += 1) {}
     if (i == count) return 0;
@@ -354,8 +354,8 @@ pub fn wcsncmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
 
 pub fn wcsicmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
-    const s1 = @as([*]const u16, @ptrFromInt(s1_ptr));
-    const s2 = @as([*]const u16, @ptrFromInt(s2_ptr));
+    const s1 = @as([*]const u16, @ptrFromInt(trace.addr(s1_ptr)));
+    const s2 = @as([*]const u16, @ptrFromInt(trace.addr(s2_ptr)));
     var i: usize = 0;
     while (s1[i] != 0 and s2[i] != 0) : (i += 1) {
         const c1 = if (s1[i] <= 255) std.ascii.toLower(@intCast(s1[i])) else s1[i];
@@ -367,8 +367,8 @@ pub fn wcsicmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
 
 pub fn wcsnicmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0 or count == 0) return 0;
-    const s1 = @as([*]const u16, @ptrFromInt(s1_ptr));
-    const s2 = @as([*]const u16, @ptrFromInt(s2_ptr));
+    const s1 = @as([*]const u16, @ptrFromInt(trace.addr(s1_ptr)));
+    const s2 = @as([*]const u16, @ptrFromInt(trace.addr(s2_ptr)));
     var i: usize = 0;
     while (i < count and s1[i] != 0 and s2[i] != 0) : (i += 1) {
         const c1 = if (s1[i] <= 255) std.ascii.toLower(@intCast(s1[i])) else s1[i];
@@ -381,21 +381,19 @@ pub fn wcsnicmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
 
 pub fn wcschr(str_ptr: usize, c: i32) callconv(.c) usize {
     if (str_ptr == 0) return 0;
-    const str = @as([*]const u16, @ptrFromInt(str_ptr));
     const target = @as(u16, @intCast(c & 0xFFFF));
     const span = trace.c_span_w(str_ptr);
-    if (target == 0) return @intFromPtr(&str[span.len]);
-    if (std.mem.indexOfScalar(u16, span, target)) |idx| return @intFromPtr(&str[idx]);
+    if (target == 0) return str_ptr + span.len * 2;
+    if (std.mem.indexOfScalar(u16, span, target)) |idx| return str_ptr + idx * 2;
     return 0;
 }
 
 pub fn wcsrchr(str_ptr: usize, c: i32) callconv(.c) usize {
     if (str_ptr == 0) return 0;
-    const str = @as([*]const u16, @ptrFromInt(str_ptr));
     const target = @as(u16, @intCast(c & 0xFFFF));
     const span = trace.c_span_w(str_ptr);
-    if (target == 0) return @intFromPtr(&str[span.len]);
-    if (std.mem.lastIndexOfScalar(u16, span, target)) |idx| return @intFromPtr(&str[idx]);
+    if (target == 0) return str_ptr + span.len * 2;
+    if (std.mem.lastIndexOfScalar(u16, span, target)) |idx| return str_ptr + idx * 2;
     return 0;
 }
 
@@ -415,7 +413,7 @@ pub fn wcsstr(str_ptr: usize, substr_ptr: usize) callconv(.c) usize {
 
 pub fn wcstol(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) i32 {
     if (str_ptr == 0) return 0;
-    const str = @as([*]const u16, @ptrFromInt(str_ptr));
+    const str = @as([*]const u16, @ptrFromInt(trace.addr(str_ptr)));
     var i: usize = 0;
     while (str[i] != 0 and std.ascii.isWhitespace(@intCast(str[i] & 0xFF))) i += 1;
     var sign: i32 = 1;
@@ -440,13 +438,13 @@ pub fn wcstol(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) i32 {
         val = val * r + @as(i32, @intCast(digit));
         parsed = true;
     }
-    if (end_ptr != 0) @as(*usize, @ptrFromInt(end_ptr)).* = if (parsed) str_ptr + i * 2 else str_ptr;
+    if (end_ptr != 0) @as(*usize, @ptrFromInt(trace.addr(end_ptr))).* = if (parsed) str_ptr + i * 2 else str_ptr;
     return val * sign;
 }
 
 pub fn wtoi(str_ptr: usize) callconv(.c) i32 {
     if (str_ptr == 0) return 0;
-    const str = @as([*]const u16, @ptrFromInt(str_ptr));
+    const str = @as([*]const u16, @ptrFromInt(trace.addr(str_ptr)));
     var i: usize = 0;
     while (str[i] != 0 and std.ascii.isWhitespace(@intCast(str[i] & 0xFF))) i += 1;
     var sign: i32 = 1;
@@ -646,7 +644,7 @@ pub fn mbsinc(str_ptr: usize) callconv(.c) usize {
 }
 
 pub fn mbccpy(dest: usize, src: usize) callconv(.c) void {
-    if (dest != 0 and src != 0) @as([*]u8, @ptrFromInt(dest))[0] = @as([*]const u8, @ptrFromInt(src))[0];
+    if (dest != 0 and src != 0) @as([*]u8, @ptrFromInt(trace.addr(dest)))[0] = @as([*]const u8, @ptrFromInt(trace.addr(src)))[0];
 }
 
 pub fn mbclen(c_ptr: usize) callconv(.c) usize {
@@ -665,7 +663,7 @@ pub fn log_wcs(prefix: []const u8, str_ptr: usize) void {
     if (!trace.enable_tracing) return;
     trace.print("{s}(ptr=0x{x}) ", .{ prefix, str_ptr });
     if (str_ptr != 0) {
-        const str = @as([*]const u16, @ptrFromInt(str_ptr));
+        const str = @as([*]const u16, @ptrFromInt(trace.addr(str_ptr)));
         var i: usize = 0;
         var buf: [2]u8 = undefined;
         while (str[i] != 0 and i < 256) : (i += 1) {

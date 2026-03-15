@@ -12,6 +12,7 @@ const std = @import("std");
 const platform = @import("platform.zig");
 const pe = @import("pe.zig");
 const teb = @import("teb.zig");
+const path_utils = @import("path_utils.zig");
 const Module = @import("loader/module.zig").Module;
 const Environment = @import("loader/env.zig").Environment;
 const loader = @import("loader/loader.zig");
@@ -142,11 +143,31 @@ pub fn main() !void {
 
         if (target_exe_opt == null) {
             target_exe_opt = arg;
-            // First positional arg is the target exe — also push as argv[0]
-            try app_args.append(allocator, try allocator.dupeZ(u8, arg));
+            // First positional arg is the target exe — convert to Win32 path for argv[0]
+            var win_buf: [1024]u8 = undefined;
+            const win_len = path_utils.posixToWin32(arg, &win_buf);
+            if (win_len > 0) {
+                try app_args.append(allocator, try allocator.dupeZ(u8, win_buf[0..win_len]));
+            } else {
+                try app_args.append(allocator, try allocator.dupeZ(u8, arg));
+            }
         } else {
-            // All subsequent positional args are guest PE arguments
-            try app_args.append(allocator, try allocator.dupeZ(u8, arg));
+            // Convert absolute POSIX paths to Win32 for guest PE arguments.
+            // Distinguish paths from options: /nologo is an option (short, no
+            // deeper path separators), /tmp/hello.c is a path.
+            const is_posix_path = arg.len > 2 and arg[0] == '/' and
+                (std.mem.indexOfScalar(u8, arg[1..], '/') != null);
+            if (is_posix_path) {
+                var win_buf: [1024]u8 = undefined;
+                const win_len = path_utils.posixToWin32(arg, &win_buf);
+                if (win_len > 0) {
+                    try app_args.append(allocator, try allocator.dupeZ(u8, win_buf[0..win_len]));
+                } else {
+                    try app_args.append(allocator, try allocator.dupeZ(u8, arg));
+                }
+            } else {
+                try app_args.append(allocator, try allocator.dupeZ(u8, arg));
+            }
         }
     }
 
@@ -204,7 +225,9 @@ pub fn main() !void {
     // --- Load the main executable via the registry ---
     const exe_name = std.fs.path.basename(target_exe);
     const main_module = try environment.registry.loadModule(exe_name);
-    stubs_kernel32.main_module_handle = @intFromPtr(main_module.mapped_memory.ptr);
+    // On WASM, the module handle must be the GUEST base VA (not a host pointer)
+    // so the x86 interpreter's address translation works correctly.
+    stubs_kernel32.main_module_handle = main_module.parser.getNtHeaders().OptionalHeader.ImageBase;
 
     log.info("wasm: loaded PE '{s}' at 0x{X} (size={d})", .{
         exe_name,
@@ -333,24 +356,35 @@ pub fn main() !void {
     stubs_msvcrt.global_argc = @intCast(app_args.items.len - 1);
     stubs_msvcrt.global_argv = app_args.items.ptr;
 
-    // Build _acmdln string (space-joined command line)
+    // Build _acmdln string (space-joined command line) in guest memory
+    // so the CRT can read it through the interpreter's address translation.
     {
-        var cmdline_buf = try allocator.alloc(u8, 4096);
-        @memset(cmdline_buf, 0);
-        var pos: usize = 0;
-        for (app_args.items) |arg_opt| {
-            if (arg_opt) |arg| {
-                const span = std.mem.span(arg);
-                if (pos > 0 and pos < 4095) {
-                    cmdline_buf[pos] = ' ';
-                    pos += 1;
+        const cmdline_guest_va = thunk_guest_mem.guestAlloc(4096);
+        if (cmdline_guest_va != 0) {
+            const cmdline_offset = cmdline_guest_va - preferred_base;
+            var pos: usize = 0;
+            for (app_args.items) |arg_opt| {
+                if (arg_opt) |arg| {
+                    const span = std.mem.span(arg);
+                    if (pos > 0 and pos < 4095) {
+                        combined_buf[cmdline_offset + pos] = ' ';
+                        pos += 1;
+                    }
+                    const copy_len = @min(span.len, 4095 - pos);
+                    @memcpy(combined_buf[cmdline_offset + pos ..][0..copy_len], span[0..copy_len]);
+                    pos += copy_len;
                 }
-                const copy_len = @min(span.len, 4095 - pos);
-                @memcpy(cmdline_buf[pos .. pos + copy_len], span[0..copy_len]);
-                pos += copy_len;
+            }
+            combined_buf[cmdline_offset + pos] = 0;
+            stubs_msvcrt.msvcrt_acmdln = cmdline_guest_va;
+
+            // Also update the guest memory copy of _acmdln data export
+            // so the CRT can read the pointer through the interpreter
+            if (stubs_msvcrt.msvcrt_acmdln_guest != 0) {
+                const acmdln_offset = @as(u32, @intCast(stubs_msvcrt.msvcrt_acmdln_guest)) - preferred_base;
+                @as(*align(1) u32, @ptrCast(combined_buf[acmdln_offset..].ptr)).* = cmdline_guest_va;
             }
         }
-        stubs_msvcrt.msvcrt_acmdln = @intFromPtr(cmdline_buf.ptr);
     }
 
     // Set virtual CWD so file opens resolve correctly
@@ -362,10 +396,65 @@ pub fn main() !void {
         kernel32_path.current_directory_len = cwd_str.len;
     }
 
-    // Minimal environment
-    var env_storage = [_]?[*:0]u8{null};
-    stubs_msvcrt.global_envp = @ptrCast(&env_storage);
-    stubs_msvcrt.global_env_initialized = true;
+    // Pass through host environment variables to the guest.
+    // Convert path-valued env vars (INCLUDE, LIB, PATH, TMP, TEMP) to Win32 style.
+    {
+        var env_list: std.ArrayListUnmanaged(?[*:0]u8) = .{};
+        var env_iter = std.process.getEnvMap(allocator) catch null;
+        if (env_iter) |*env_map| {
+            var it = env_map.iterator();
+            while (it.next()) |entry| {
+                const key = entry.key_ptr.*;
+                const val = entry.value_ptr.*;
+
+                // Convert path-valued variables to Win32 style
+                const is_path_var = std.ascii.eqlIgnoreCase(key, "INCLUDE") or
+                    std.ascii.eqlIgnoreCase(key, "LIB") or
+                    std.ascii.eqlIgnoreCase(key, "PATH") or
+                    std.ascii.eqlIgnoreCase(key, "TMP") or
+                    std.ascii.eqlIgnoreCase(key, "TEMP");
+
+                if (is_path_var and val.len > 0) {
+                    // Convert each path component (split by : on POSIX)
+                    var win_val_buf: [4096]u8 = undefined;
+                    var win_pos: usize = 0;
+                    var path_iter = std.mem.splitScalar(u8, val, ':');
+                    var first = true;
+                    while (path_iter.next()) |component| {
+                        if (component.len == 0) continue;
+                        if (!first and win_pos < win_val_buf.len) {
+                            win_val_buf[win_pos] = ';'; // Win32 path separator
+                            win_pos += 1;
+                        }
+                        first = false;
+                        var comp_buf: [1024]u8 = undefined;
+                        const comp_len = path_utils.posixToWin32(component, &comp_buf);
+                        if (comp_len > 0 and win_pos + comp_len < win_val_buf.len) {
+                            @memcpy(win_val_buf[win_pos..][0..comp_len], comp_buf[0..comp_len]);
+                            win_pos += comp_len;
+                        }
+                    }
+
+                    const total_len = key.len + 1 + win_pos;
+                    const env_str = allocator.allocSentinel(u8, total_len, 0) catch continue;
+                    @memcpy(env_str[0..key.len], key);
+                    env_str[key.len] = '=';
+                    @memcpy(env_str[key.len + 1 ..][0..win_pos], win_val_buf[0..win_pos]);
+                    try env_list.append(allocator, env_str.ptr);
+                } else {
+                    const total_len = key.len + 1 + val.len;
+                    const env_str = allocator.allocSentinel(u8, total_len, 0) catch continue;
+                    @memcpy(env_str[0..key.len], key);
+                    env_str[key.len] = '=';
+                    @memcpy(env_str[key.len + 1 ..][0..val.len], val);
+                    try env_list.append(allocator, env_str.ptr);
+                }
+            }
+        }
+        try env_list.append(allocator, null); // null-terminate
+        stubs_msvcrt.global_envp = env_list.items.ptr;
+        stubs_msvcrt.global_env_initialized = true;
+    }
 
     // --- Initialize TEB/PEB ---
     const thread_env = try teb.initTEB(allocator);
@@ -390,7 +479,9 @@ pub fn main() !void {
         .base = combined_buf,
         .base_addr = preferred_base,
         .heap_start = image_size + STACK_SIZE + THUNK_RESERVE,
-        .heap_cursor = image_size + STACK_SIZE + THUNK_RESERVE,
+        // Carry over heap_cursor from loading phase so runtime malloc
+        // doesn't overwrite data exports allocated during PE loading.
+        .heap_cursor = thunk_guest_mem.heap_cursor,
     };
     cpu.eip = preferred_base +% ep_rva;
 

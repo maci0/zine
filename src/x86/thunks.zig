@@ -98,6 +98,16 @@ pub fn dispatch(cpu: *Cpu) void {
         if (entry.param_count) |n| {
             cpu.esp +%= @as(u32, n) * 4;
         }
+
+        // On WASM, _initterm collects guest init function addresses.
+        // Build an x86 trampoline to execute them before returning
+        // to the guest CRT startup code.
+        if (comptime !@import("../platform.zig").is_native) {
+            const sc = @import("../win32/stub_common.zig");
+            if (sc.pending_initterm_count > 0) {
+                @import("execute.zig").buildInittermTrampoline(cpu);
+            }
+        }
     } else {
         log.err("x86 thunks: unregistered thunk ID {d}", .{thunk_id});
         cpu.halted = true;

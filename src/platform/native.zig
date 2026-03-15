@@ -330,12 +330,15 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     const is_app_code = (ip >= 0x400000 and ip <= 0x700000);
     const is_native_dll = (ip >= 0x21000000 and ip < 0x30000000) or // MSS32, .asi plugins
         (ip >= 0x10000000 and ip < 0x20000000); // other DLLs
-    // Also check if IP is a registered native stub (COM vtable methods, Win32 API
-    // stubs compiled into zine). These are valid code that can legally SIGSEGV
-    // (e.g., dsound stub dereferencing a NULL guest pointer).
-    const x86_thunks = @import("../x86/thunks.zig");
-    const is_stub = x86_thunks.isNativeImport(@truncate(ip));
-    if (ip != 0 and !is_app_code and !is_native_dll and !is_stub) {
+    // Check if IP is within the zine binary's code segment. We use the address
+    // of this handler function as a reference point — all Zig-compiled stubs
+    // (COM vtable methods, Win32 API stubs) are in the same binary and within
+    // a ±64MB window. We can't use isNativeImport() because that only matches
+    // exact function entry points, not instructions within functions.
+    const zine_code_ref = @intFromPtr(&sigsegvHandler);
+    const is_zine_code = (ip >= zine_code_ref -| (64 * 1024 * 1024)) and
+        (ip < zine_code_ref + (64 * 1024 * 1024));
+    if (ip != 0 and !is_app_code and !is_native_dll and !is_zine_code) {
         // Bad function pointer call from game code — try to recover
         // This handles both near-null (0x40) and garbage (0xF0EB1210) addresses
         const esp: usize = @bitCast(uctx.mcontext.gregs[reg_sp]);

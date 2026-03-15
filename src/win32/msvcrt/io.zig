@@ -21,18 +21,71 @@ comptime {
     std.debug.assert(@sizeOf(MSVCRT_FILE) == 32);
 }
 
+// MSVC CRT _flag constants:
+// _IOREAD = 0x0001, _IOWRT = 0x0002, _IONBF = 0x0004, _IOMYBUF = 0x0008
+// BUFSIZ = 512
 pub var msvcrt_iob: [3]MSVCRT_FILE = [_]MSVCRT_FILE{
-    // stdin
-    MSVCRT_FILE{ ._ptr = 0, ._cnt = 0, ._base = 0, ._flag = 0x0001, ._file = 0, ._charbuf = 0, ._bufsiz = 0, ._tmpfname = 0 },
-    // stdout
-    MSVCRT_FILE{ ._ptr = 0, ._cnt = 0, ._base = 0, ._flag = 0x0002, ._file = 1, ._charbuf = 0, ._bufsiz = 0, ._tmpfname = 0 },
-    // stderr
-    MSVCRT_FILE{ ._ptr = 0, ._cnt = 0, ._base = 0, ._flag = 0x0004, ._file = 2, ._charbuf = 0, ._bufsiz = 0, ._tmpfname = 0 },
+    // stdin:  _IOREAD, bufsiz=512
+    MSVCRT_FILE{ ._ptr = 0, ._cnt = 0, ._base = 0, ._flag = 0x0001, ._file = 0, ._charbuf = 0, ._bufsiz = 512, ._tmpfname = 0 },
+    // stdout: _IOWRT, bufsiz=512
+    MSVCRT_FILE{ ._ptr = 0, ._cnt = 0, ._base = 0, ._flag = 0x0002, ._file = 1, ._charbuf = 0, ._bufsiz = 512, ._tmpfname = 0 },
+    // stderr: _IOWRT | _IONBF, bufsiz=2 (unbuffered, per MSVC CRT convention)
+    MSVCRT_FILE{ ._ptr = 0, ._cnt = 0, ._base = 0, ._flag = 0x0006, ._file = 2, ._charbuf = 0, ._bufsiz = 2, ._tmpfname = 0 },
 };
 
 /// On WASM, _iob is allocated in guest memory at this virtual address.
 /// Set by wasm_main.zig during startup.
 pub var iob_guest_addr: usize = 0;
+
+// ---------------------------------------------------------------------------
+// MSVC CRT internal file descriptor table (__pioinfo / _osfile)
+//
+// The CRT's _flsbuf validates fd via _osfile(fd) & FOPEN before writing.
+// Without this, fprintf/printf produce zero output. _ioinit() normally
+// initializes this during CRT startup, but since our MSVCRT is stubs
+// (not a real PE), _ioinit never runs.  We pre-initialize fd 0/1/2.
+//
+// struct ioinfo { long osfhnd; char osfile; char pipech; /* pad to 8 */ };
+// __pioinfo is an array of 64 pointers; [0] points to ioinfo[32] for fd 0-31.
+// _nhandle is the total number of file handles available.
+// ---------------------------------------------------------------------------
+
+const IOINFO_SIZE = 8; // sizeof(ioinfo) on x86
+const IOINFO_TABLE_SIZE = 32; // entries per __pioinfo slot
+
+// _osfile flag bits
+const FOPEN: u8 = 0x01;
+const FTEXT: u8 = 0x80;
+const FDEV: u8 = 0x40;
+
+// Pre-initialized ioinfo table for fd 0-31
+// Layout: [osfhnd: i32, osfile: u8, pipech: u8, pad: u16] × 32
+pub var ioinfo_table0: [IOINFO_TABLE_SIZE * IOINFO_SIZE]u8 = init_ioinfo: {
+    var buf: [IOINFO_TABLE_SIZE * IOINFO_SIZE]u8 = [_]u8{0} ** (IOINFO_TABLE_SIZE * IOINFO_SIZE);
+    // fd 0 (stdin):  osfhnd=0, osfile=FOPEN|FTEXT|FDEV
+    buf[0] = 0; buf[1] = 0; buf[2] = 0; buf[3] = 0; // osfhnd = 0
+    buf[4] = FOPEN | FTEXT | FDEV; // osfile
+    // fd 1 (stdout): osfhnd=1, osfile=FOPEN|FTEXT|FDEV
+    buf[8] = 1; buf[9] = 0; buf[10] = 0; buf[11] = 0; // osfhnd = 1
+    buf[12] = FOPEN | FTEXT | FDEV; // osfile
+    // fd 2 (stderr): osfhnd=2, osfile=FOPEN|FTEXT|FDEV
+    buf[16] = 2; buf[17] = 0; buf[18] = 0; buf[19] = 0; // osfhnd = 2
+    buf[20] = FOPEN | FTEXT | FDEV; // osfile
+    break :init_ioinfo buf;
+};
+
+// __pioinfo: array of 64 pointers to ioinfo tables
+// [0] will be set to &ioinfo_table0 at runtime (can't take address at comptime)
+pub var pioinfo: [64]usize = [_]usize{0} ** 64;
+
+/// Initialize __pioinfo[0] to point to ioinfo_table0.
+/// Must be called before the PE starts executing.
+pub fn initPioinfo() void {
+    pioinfo[0] = @intFromPtr(&ioinfo_table0);
+}
+
+// _nhandle: total available file handles
+pub var nhandle: i32 = 256;
 
 // We need a way to map MSVCRT_FILE pointers to Zig File handles.
 // Since we don't want to use malloc/free for everything, we can keep a simple array of open files.
@@ -94,8 +147,12 @@ fn allocateFileSlot() ?usize {
     return null;
 }
 
-pub fn p_iob() callconv(.c) *anyopaque {
-    return &msvcrt_iob;
+pub fn p_iob() callconv(.c) usize {
+    // On WASM, return the guest VA so the x86 interpreter can correctly
+    // access the FILE structs through its guest memory translation.
+    // On native, return the host address (interpreter uses native_linear mode).
+    if (iob_guest_addr != 0) return iob_guest_addr;
+    return @intFromPtr(&msvcrt_iob);
 }
 
 /// Initialize guest-memory _iob with pre-allocated stdout/stderr buffers.
@@ -134,6 +191,14 @@ pub fn initGuestIob(gmem: anytype, combined_buf: []u8, base_addr: u32, guest_va:
         stderr_iob._bufsiz = @intCast(BUFSIZ);
         stderr_iob._flag = 0x0006; // _IOWRT | _IONBF
     }
+
+    // Also update the host msvcrt_iob so that __p__iob() returns correct flags.
+    // On WASM the CRT may access _iob via either the data export (guest copy)
+    // or via __p__iob() (host copy) — both must agree.
+    msvcrt_iob[1]._flag = 0x0082; // _IOWRT | _IORW
+    msvcrt_iob[1]._bufsiz = @intCast(BUFSIZ);
+    msvcrt_iob[2]._flag = 0x0006; // _IOWRT | _IONBF
+    msvcrt_iob[2]._bufsiz = 2;
 }
 
 pub fn stub_setmode(fd: i32, mode: i32) callconv(.c) i32 {

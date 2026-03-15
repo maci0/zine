@@ -47,19 +47,19 @@ pub fn realloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
 // --- ANSI String & Memory ---
 
 pub fn memset(dest_ptr: usize, c: i32, count: usize) callconv(.c) usize {
-    if (dest_ptr != 0 and count > 0) @memset(@as([*]u8, @ptrFromInt(dest_ptr))[0..count], @as(u8, @intCast(c & 0xFF)));
+    if (dest_ptr != 0 and count > 0) @memset(@as([*]u8, @ptrFromInt(trace.addr(dest_ptr)))[0..count], @as(u8, @intCast(c & 0xFF)));
     return dest_ptr;
 }
 
 pub fn memcpy(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
-    if (dest_ptr != 0 and src_ptr != 0 and count > 0) @memcpy(@as([*]u8, @ptrFromInt(dest_ptr))[0..count], @as([*]const u8, @ptrFromInt(src_ptr))[0..count]);
+    if (dest_ptr != 0 and src_ptr != 0 and count > 0) @memcpy(@as([*]u8, @ptrFromInt(trace.addr(dest_ptr)))[0..count], @as([*]const u8, @ptrFromInt(trace.addr(src_ptr)))[0..count]);
     return dest_ptr;
 }
 
 pub fn memmove(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
     if (dest_ptr == 0 or src_ptr == 0 or count == 0) return dest_ptr;
-    const dest = @as([*]u8, @ptrFromInt(dest_ptr))[0..count];
-    const src = @as([*]const u8, @ptrFromInt(src_ptr))[0..count];
+    const dest = @as([*]u8, @ptrFromInt(trace.addr(dest_ptr)))[0..count];
+    const src = @as([*]const u8, @ptrFromInt(trace.addr(src_ptr)))[0..count];
     if (dest_ptr < src_ptr) {
         std.mem.copyForwards(u8, dest, src);
     } else if (dest_ptr > src_ptr) {

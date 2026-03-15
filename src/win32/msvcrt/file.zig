@@ -86,9 +86,18 @@ pub fn read(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
 }
 
 pub fn write(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
-    if (trace.enable_tracing) trace.print("MSVCRT: _write(fd={d}, count={d})\n", .{ fd, count });
+    if (trace.enable_tracing) trace.print("MSVCRT: _write(fd={d}, buf={x}, count={d})\n", .{ fd, buffer_ptr, count });
     if (buffer_ptr == 0 or count == 0) return 0;
-    const slice = @as([*]const u8, @ptrFromInt(trace.addr(buffer_ptr)))[0..count];
+    // On WASM, read from guest memory buffer directly instead of trace.addr
+    // (which may return a stale host pointer if WASM memory grew)
+    const sc = @import("../stub_common.zig");
+    const slice = if (sc.guest_memory) |gmem| blk: {
+        const offset = @as(u32, @truncate(buffer_ptr)) -% gmem.base_addr;
+        if (offset + count <= gmem.base.len) {
+            break :blk gmem.base[offset..][0..count];
+        }
+        break :blk @as([*]const u8, @ptrFromInt(trace.addr(buffer_ptr)))[0..count];
+    } else @as([*]const u8, @ptrFromInt(trace.addr(buffer_ptr)))[0..count];
     const out_file = std.fs.File{ .handle = fd };
     out_file.writeAll(slice) catch |err| {
         if (trace.enable_tracing) trace.print("  -> _write failed: {}\n", .{err});

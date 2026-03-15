@@ -58,15 +58,16 @@ fn heapAlloc(size: usize) ?[*]u8 {
 pub fn raw_alloc(size: usize) ?*anyopaque {
     const actual_size = if (size == 0) @as(usize, 64) else size;
 
-    // On WASM: use guest heap allocator to keep addresses in range
+    // On WASM: use guest heap allocator to keep addresses in range.
+    // Return a guest virtual address (not a host pointer) so the x86
+    // interpreter's address translation works correctly.
     if (guest_memory) |gmem| {
         const alloc_size: u32 = @intCast(@min(actual_size + 16, 0xFFFFFFFF));
         const addr = gmem.guestAlloc(alloc_size);
         if (addr == 0) return null;
         gmem.write32(addr, @intCast(actual_size));
         gmem.write32(addr +% 4, 0);
-        const buf_offset = addr -% gmem.base_addr;
-        return @ptrCast(gmem.base.ptr + buf_offset + 8);
+        return @ptrFromInt(addr +% 8);
     }
 
     // Native: bump-allocate from low-address heap
@@ -81,17 +82,24 @@ pub fn raw_realloc(old_ptr: ?*anyopaque, new_size: usize) ?*anyopaque {
     if (new_size == 0) return null;
     if (old_ptr == null) return raw_alloc(new_size);
 
-    // On WASM with guest heap: simple alloc + copy (we don't free)
-    if (guest_memory) |_| {
-        const old_u8 = @as([*]u8, @ptrCast(old_ptr.?));
-        const old_header_ptr = old_u8 - 8;
-        const old_size_32 = @as(*align(1) const u32, @ptrCast(old_header_ptr)).*;
-        const old_size: usize = old_size_32;
+    // On WASM with guest heap: alloc + copy via guest memory (we don't free).
+    // Pointers are guest virtual addresses, not host pointers.
+    if (guest_memory) |gmem| {
+        const old_guest_va = @as(u32, @truncate(@intFromPtr(old_ptr.?)));
+        const old_size = gmem.read32(old_guest_va -% 8);
 
         const new_mem = raw_alloc(new_size) orelse return null;
-        const copy_len = @min(old_size, new_size);
-        const new_u8 = @as([*]u8, @ptrCast(new_mem));
-        @memcpy(new_u8[0..copy_len], old_u8[0..copy_len]);
+        const new_guest_va = @as(u32, @truncate(@intFromPtr(new_mem)));
+        const copy_len = @min(old_size, @as(u32, @intCast(@min(new_size, 0xFFFFFFFF))));
+
+        // Copy data through guest memory translation
+        const old_offset = old_guest_va -% gmem.base_addr;
+        const new_offset = new_guest_va -% gmem.base_addr;
+        if (old_offset + copy_len <= gmem.base.len and new_offset + copy_len <= gmem.base.len) {
+            const src = gmem.base[old_offset..][0..copy_len];
+            const dst = gmem.base[new_offset..][0..copy_len];
+            @memcpy(dst, src);
+        }
         return new_mem;
     }
 

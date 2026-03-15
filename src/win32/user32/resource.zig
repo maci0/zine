@@ -139,7 +139,7 @@ pub fn LoadStringA(hInstance: ?*anyopaque, uID: u32, lpBuffer_ptr: usize, nBuffe
         trace.print("USER32: LoadStringA(hInst={*}, uID={d}, buffer={x}, max={d})\n", .{ hInstance, uID, lpBuffer_ptr, nBufferMax });
     }
     if (nBufferMax > 0 and lpBuffer_ptr > 0x10000) {
-        const lpBuffer = @as([*]u8, @ptrFromInt(lpBuffer_ptr));
+        const lpBuffer = @as([*]u8, @ptrFromInt(trace.addr(lpBuffer_ptr)));
         const max_len = @as(usize, @intCast(nBufferMax));
 
         var hInst: usize = if (hInstance != null) @intFromPtr(hInstance.?) else 0;

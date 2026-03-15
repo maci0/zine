@@ -50,6 +50,7 @@ const fmt = @import("msvcrt/fmt.zig");
 
 pub fn register(environment: *env.Environment) !void {
     string.init_pctype();
+    io.initPioinfo();
     // Initialize data export pointers to defaults (can't do at comptime)
     if (msvcrt_acmdln == 0) msvcrt_acmdln = @intFromPtr(&acmdln_default);
     if (msvcrt_wcmdln == 0) msvcrt_wcmdln = @intFromPtr(&wcmdln_default);
@@ -65,6 +66,8 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinDataExport(m, "_adjust_fdiv", @intFromPtr(&msvcrt_adjust_fdiv), @sizeOf(@TypeOf(msvcrt_adjust_fdiv)));
     try environment.addBuiltinDataExport(m, "__mb_cur_max", @intFromPtr(&msvcrt_mb_cur_max), @sizeOf(@TypeOf(msvcrt_mb_cur_max)));
     try environment.addBuiltinDataExport(m, "_iob", @intFromPtr(&io.msvcrt_iob), @sizeOf(@TypeOf(io.msvcrt_iob)));
+    try environment.addBuiltinDataExport(m, "__pioinfo", @intFromPtr(&io.pioinfo), @sizeOf(@TypeOf(io.pioinfo)));
+    try environment.addBuiltinDataExport(m, "_nhandle", @intFromPtr(&io.nhandle), @sizeOf(@TypeOf(io.nhandle)));
     try environment.addBuiltinDataExport(m, "_acmdln", @intFromPtr(&msvcrt_acmdln), @sizeOf(@TypeOf(msvcrt_acmdln)));
     try environment.addBuiltinDataExport(m, "_wcmdln", @intFromPtr(&msvcrt_wcmdln), @sizeOf(@TypeOf(msvcrt_wcmdln)));
 
