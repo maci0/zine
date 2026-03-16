@@ -31,7 +31,8 @@ pub fn access(path_ptr: usize, mode: i32) callconv(.c) i32 {
     if (path_ptr == 0) return -1;
     const path = trace.c_span(path_ptr);
     const posix_fs = @import("posix_fs.zig");
-    const result = posix_fs.access(@as([*:0]const u8, @ptrFromInt(path_ptr)), mode);
+    const host_ptr = trace.addr(path_ptr);
+    const result = posix_fs.access(@as([*:0]const u8, @ptrFromInt(host_ptr)), mode);
     if (trace.enable_tracing) trace.print("MSVCRT: _access('{s}', {d}) -> {d}\n", .{ path, mode, result });
     return result;
 }

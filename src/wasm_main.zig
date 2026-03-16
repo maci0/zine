@@ -480,7 +480,11 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
             const argv = @as([*]const u32, @ptrFromInt(host_argv_addr));
             var i: usize = 0;
             while (argv[i] != 0) : (i += 1) {
-                const s = trace.c_span(argv[i]);
+                var s = trace.c_span(argv[i]);
+                // Strip surrounding quotes (DUMPBIN/LIB wrap args in quotes for _spawnvp)
+                if (s.len >= 2 and s[0] == '"' and s[s.len - 1] == '"') {
+                    s = s[1 .. s.len - 1];
+                }
                 arg_strings.append(std.heap.page_allocator, std.heap.page_allocator.dupe(u8, s) catch "") catch break;
             }
         }
@@ -558,21 +562,12 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     runner.applyReverseRelocations(child_buf, &child_module.parser, child_image_size, @truncate(child_module.image_base), child_preferred);
     runner.zeroFillBss(child_buf, child_module.parser.sections);
 
-    // Build argv in child's guest memory so the interpreter's string functions
-    // can access argv strings via GuestMemory translation.
+    // Build argv as host-allocated null-terminated strings.
+    // ensureGuestArgs() reads these via std.mem.span() and copies them
+    // into the child's guest memory for the interpreter.
     var child_argv_ptrs: std.ArrayListUnmanaged(?[*:0]u8) = .{};
     for (arg_strings.items) |s| {
-        // Allocate string in child guest heap
-        const guest_va = child_guest_mem.guestAlloc(@intCast(s.len + 1));
-        if (guest_va != 0) {
-            const offset = guest_va - child_preferred;
-            @memcpy(child_buf[offset..][0..s.len], s);
-            child_buf[offset + s.len] = 0; // null terminator
-            // The argv pointer must be a guest VA (u32), stored as a [*:0]u8
-            // When the thunk dispatcher reads it, c_span(argv[i]) will call
-            // trace.addr() which translates through guest_memory.
-            child_argv_ptrs.append(std.heap.page_allocator, @ptrFromInt(guest_va)) catch {};
-        }
+        child_argv_ptrs.append(std.heap.page_allocator, std.heap.page_allocator.dupeZ(u8, s) catch null) catch {};
     }
     child_argv_ptrs.append(std.heap.page_allocator, null) catch {};
 
