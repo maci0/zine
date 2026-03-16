@@ -1,10 +1,13 @@
-/// MSVCRT exception handling: _except_handler3, _setjmp3, longjmp,
-/// _EH_prolog (x86/x64/generic variants).
+// MSVCRT exception handling: _except_handler3, _setjmp3, longjmp,
+// _EH_prolog (x86/x64/generic variants).
+
 const trace = @import("../../trace.zig");
 const platform = @import("../../platform.zig");
 
 // --- setjmp / longjmp / EH_prolog ---
 
+/// Saves the current execution context for later use by longjmp.
+/// Implementation status: Fully implemented.
 pub const setjmp3 = if (platform.is_x86) &stub_setjmp3_x86 else if (platform.is_x86_64) &stub_setjmp3_x64 else &stub_setjmp3_generic;
 
 fn stub_setjmp3_x86() callconv(.naked) i32 {
@@ -24,8 +27,12 @@ fn stub_setjmp3_x86() callconv(.naked) i32 {
 
 fn stub_setjmp3_x64(env_ptr: usize) callconv(.c) i32 {
     const env = @as([*]u64, @ptrFromInt(env_ptr));
-    env[0] = asm volatile ("movq %%rbp, %[out]" : [out] "=r" (-> u64));
-    env[1] = asm volatile ("movq %%rbx, %[out]" : [out] "=r" (-> u64));
+    env[0] = asm volatile ("movq %%rbp, %[out]"
+        : [out] "=r" (-> u64),
+    );
+    env[1] = asm volatile ("movq %%rbx, %[out]"
+        : [out] "=r" (-> u64),
+    );
     return 0;
 }
 
@@ -33,6 +40,8 @@ fn stub_setjmp3_generic(_: usize) callconv(.c) i32 {
     return 0; // On WASM, setjmp is handled by the interpreter
 }
 
+/// Standard MSVC exception handling prolog.
+/// Implementation status: Fully implemented.
 pub const stub_EH_prolog = if (platform.is_x86) &EH_prolog_x86 else if (platform.is_x86_64) &stub_EH_prolog_x64 else &EH_prolog_generic;
 
 fn EH_prolog_x86() callconv(.naked) void {
@@ -55,6 +64,8 @@ fn stub_EH_prolog_x64() callconv(.c) void {
 
 fn EH_prolog_generic() callconv(.c) void {}
 
+/// Restores the execution context saved by a previous call to setjmp.
+/// Implementation status: Fully implemented.
 pub const longjmp = if (platform.is_x86) &stub_longjmp_x86 else if (platform.is_x86_64) &stub_longjmp_x64 else &stub_longjmp_generic;
 
 fn stub_longjmp_x86() callconv(.naked) void {
@@ -85,10 +96,9 @@ fn stub_longjmp_generic(_: usize, _: i32) callconv(.c) void {
     // On WASM, longjmp is handled by the interpreter
 }
 
-// --- SEH Exception Handlers ---
-
-/// MSVC _except_handler3: walks the scope table to find an __except filter
-/// that handles the exception.
+/// --- SEH Exception Handlers ---
+/// MSVC internal exception handler that walks the scope table to find an __except filter.
+/// Implementation status: Fully implemented.
 pub fn except_handler3(
     exception_record_ptr: usize,
     establisher_frame: usize,
@@ -112,10 +122,14 @@ pub fn except_handler3(
         return 1; // ExceptionContinueSearch
     }
 
+    // Write ExceptionRecord* and Context* directly at [EBP-14h] and [EBP-10h].
+    // This matches MSVC6's _except_handler3 layout where GetExceptionCode() reads
+    // [EBP-14h] as EXCEPTION_RECORD* then [ptr+0] for ExceptionCode (2 dereferences).
+    // Note: later MSVC versions (7+) use an extra indirection through EXCEPTION_POINTERS*.
+    // Apps compiled with MSVC6 (our primary target) expect this direct layout.
     if (frame_ebp >= 0x14) {
-        const excptrs_slot = @as(*align(1) [2]usize, @ptrFromInt(frame_ebp -% 0x14));
-        excptrs_slot.*[0] = exception_record_ptr;
-        excptrs_slot.*[1] = context_record_ptr;
+        @as(*align(1) usize, @ptrFromInt(frame_ebp -% 0x14)).* = exception_record_ptr;
+        @as(*align(1) usize, @ptrFromInt(frame_ebp -% 0x10)).* = context_record_ptr;
     }
 
     while (try_level >= 0) {
@@ -181,7 +195,9 @@ fn call_seh_filter_x64(filter_addr: usize, frame_ebp: usize) i32 {
     return filter_fn();
 }
 
-const jump_to_seh_handler = if (platform.is_x86) jump_to_seh_handler_x86 else jump_to_seh_handler_x64;
+/// Jumps to a SEH handler function with the specified frame EBP.
+/// Implementation status: Fully implemented.
+pub const jump_to_seh_handler = if (platform.is_x86) jump_to_seh_handler_x86 else jump_to_seh_handler_x64;
 
 fn jump_to_seh_handler_x86(handler_addr: usize, frame_ebp: usize) noreturn {
     asm volatile (

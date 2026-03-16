@@ -2,9 +2,9 @@ const trace = @import("../../trace.zig");
 const pe = @import("../../pe.zig");
 const kernel32 = @import("../kernel32.zig");
 const renderer = @import("../../gui/renderer.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 const std = @import("std");
-const w32 = @import("../../win32_constants.zig");
+const w32 = @import("../constants.zig");
 
 pub fn LoadIconA(hInstance: usize, lpIconName: usize) callconv(w32cc.WINAPI) usize {
     var hInst = hInstance;

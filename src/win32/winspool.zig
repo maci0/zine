@@ -1,7 +1,11 @@
+//! WINSPOOL.drv registration.
+
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
-const w32cc = @import("../calling_convention.zig");
+const w32cc = @import("calling_convention.zig");
 
+/// Registers WINSPOOL.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "WINSPOOL.DRV";
     try environment.addBuiltinExportComptime(m, "OpenPrinterA", stub_ret0_3);

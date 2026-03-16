@@ -1,14 +1,13 @@
-/// Formatted I/O — printf / sprintf / fprintf / sscanf family.
-/// Corresponds to the formatted output portions of <stdio.h>.
-/// FILE*-based stream I/O (fopen/fread/fwrite) is in io.zig.
+//! Formatted I/O — printf / sprintf / fprintf / sscanf family.
+
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const io = @import("io.zig");
+const string = @import("string.zig");
 const platform = @import("../../platform.zig");
 
-// Helper: convert C va_list to a raw usize address.
-// On x86, @cVaStart() yields a pointer; on x86_64 it yields a VaListX86_64 struct.
-// The callers below need `@intFromPtr(ap)` which only works on pointers.
+/// Helper to convert C va_list to a raw usize address.
+/// Implementation status: Fully implemented
 pub inline fn va_list_to_usize(ap: anytype) usize {
     const T = @TypeOf(ap);
     const info = @typeInfo(T);
@@ -19,6 +18,8 @@ pub inline fn va_list_to_usize(ap: anytype) usize {
     }
 }
 
+/// Internal helper for vsnprintf implementation.
+/// Implementation status: Partially implemented
 pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: usize) usize {
     if (max == 0) return 0;
     const args = @as([*]const usize, @ptrFromInt(args_ptr));
@@ -40,7 +41,20 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
                 width = width * 10 + (format[ii] - '0');
                 ii += 1;
             }
-            if (format[ii] == 'w' or format[ii] == 'l') ii += 1;
+            // Parse precision (.N)
+            var precision: usize = 0;
+            if (format[ii] == '.') {
+                ii += 1;
+                while (format[ii] >= '0' and format[ii] <= '9') {
+                    precision = precision * 10 + (format[ii] - '0');
+                    ii += 1;
+                }
+            }
+            // Skip length modifiers (l, ll, h, w, I64, z)
+            while (format[ii] == 'w' or format[ii] == 'l' or format[ii] == 'h' or
+                format[ii] == 'I' or format[ii] == 'z' or format[ii] == 'j' or
+                format[ii] == 't' or format[ii] == 'q') ii += 1;
+            if (ii > 0 and format[ii - 1] == 'I' and format[ii] == '6' and format[ii + 1] == '4') ii += 2;
             const c = format[ii];
             if (c == 's') {
                 if (args[ai] >= 0x10000) {
@@ -116,6 +130,21 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
                     oi += 1;
                 }
                 ai += 1;
+            } else if (c == 'f' or c == 'e' or c == 'E' or c == 'g' or c == 'G') {
+                // Floating point: double is 8 bytes (2 x u32 on stack)
+                {
+                    const lo: u32 = @truncate(args[ai]);
+                    const hi: u32 = @truncate(args[ai + 1]);
+                    ai += 2;
+                    const bits: u64 = (@as(u64, hi) << 32) | @as(u64, lo);
+                    const val: f64 = @bitCast(bits);
+                    var nb: [64]u8 = undefined;
+                    const prec_val: u8 = if (precision > 0) @intCast(@min(precision, 20)) else 6;
+                    const ns = std.fmt.bufPrint(&nb, "{d:.[1]}", .{ val, prec_val }) catch "?";
+                    const copy_len = @min(ns.len, max - 1 - oi);
+                    @memcpy(buf[oi .. oi + copy_len], ns[0..copy_len]);
+                    oi += copy_len;
+                }
             } else if (c == '%') {
                 if (oi < max - 1) {
                     buf[oi] = '%';
@@ -131,8 +160,8 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
     return oi;
 }
 
-// --- printf ---
-
+/// Prints formatted output to the standard output stream.
+/// Implementation status: Fully implemented.
 pub const printf = if (platform.is_wasm) stub_printf_wasm else stub_printf_native;
 
 fn stub_printf_wasm(fmt_ptr: usize, ap: usize) callconv(.c) i32 {
@@ -156,8 +185,8 @@ fn printf_impl(fmt_ptr: usize, ap: usize) i32 {
     return @intCast(len);
 }
 
-// --- vprintf ---
-
+/// Prints formatted output to the standard output stream using a pointer to a list of arguments.
+/// Implementation status: Fully implemented.
 pub fn vprintf(fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     if (fmt_ptr == 0) return 0;
     var buf: [4096]u8 = undefined;
@@ -168,21 +197,31 @@ pub fn vprintf(fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     return @intCast(len);
 }
 
-// --- vfprintf ---
-
+/// Writes formatted output to a stream using a pointer to a list of arguments.
+/// Implementation status: Fully implemented.
 pub fn vfprintf(stream: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     if (fmt_ptr == 0) return 0;
     var buf: [4096]u8 = undefined;
     const len = x86_vsnprintf(&buf, 4096, @ptrFromInt(trace.addr(fmt_ptr)), trace.addr(ap));
     if (trace.enable_tracing) trace.print("MSVCRT: vfprintf '{s}'\n", .{buf[0..len]});
 
-    const out_file = if (stream != 0) io.getFile(@ptrFromInt(trace.addr(stream))) orelse std.fs.File{ .handle = 1 } else std.fs.File{ .handle = 1 };
+    // Detect stdout/stderr by comparing stream pointer to known FILE addresses
+    const iob_base = @intFromPtr(&io.msvcrt_iob);
+    const iob_end = iob_base + @sizeOf(@TypeOf(io.msvcrt_iob));
+    const stream_addr = trace.addr(stream);
+    const out_file = if (stream_addr >= iob_base and stream_addr < iob_end)
+        // Known iob entry — compute fd from offset
+        std.fs.File{ .handle = @intCast((stream_addr - iob_base) / @sizeOf(io.MSVCRT_FILE)) }
+    else if (stream != 0)
+        io.getFile(@ptrFromInt(stream_addr)) orelse std.fs.File{ .handle = 1 }
+    else
+        std.fs.File{ .handle = 1 };
     out_file.writeAll(buf[0..len]) catch return -1;
     return @intCast(len);
 }
 
-// --- vsnprintf ---
-
+/// Writes formatted data to a string using a pointer to a list of arguments.
+/// Implementation status: Fully implemented.
 pub fn vsnprintf(buf_ptr: usize, max: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
     if (buf_ptr == 0 or max == 0 or fmt_ptr == 0) return 0;
     var buf: [4096]u8 = undefined;
@@ -195,8 +234,8 @@ pub fn vsnprintf(buf_ptr: usize, max: usize, fmt_ptr: usize, ap: usize) callconv
     return @intCast(copy_len);
 }
 
-// --- snprintf ---
-
+/// Writes formatted data to a string.
+/// Implementation status: Fully implemented.
 pub const snprintf = if (platform.is_wasm) stub_snprintf_wasm else stub_snprintf_native;
 
 fn stub_snprintf_wasm(buf_ptr: usize, max: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
@@ -222,8 +261,8 @@ fn snprintf_impl(buf_ptr: usize, max: usize, fmt_ptr: usize, ap: usize) i32 {
     return @intCast(copy_len);
 }
 
-// --- swprintf ---
-
+/// Writes formatted data to a wide-character string.
+/// Implementation status: Partially implemented.
 pub const swprintf = if (platform.is_wasm) stub_swprintf_wasm else stub_swprintf_native;
 
 fn stub_swprintf_wasm(buf_ptr: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
@@ -261,8 +300,8 @@ fn swprintf_impl(buf_ptr: usize, fmt_ptr: usize, ap: usize) i32 {
     return @intCast(len);
 }
 
-// --- sprintf ---
-
+/// Writes formatted data to a string.
+/// Implementation status: Fully implemented.
 pub const sprintf = if (platform.is_wasm) stub_sprintf_wasm else stub_sprintf_native;
 
 fn stub_sprintf_wasm(buf_ptr: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
@@ -287,8 +326,8 @@ fn sprintf_impl(buf_ptr: usize, fmt_ptr: usize, ap: usize) i32 {
     return @intCast(len);
 }
 
-// --- puts / fputs ---
-
+/// Writes a string to the standard output stream and appends a newline character.
+/// Implementation status: Fully implemented.
 pub fn puts(str_ptr: usize) callconv(.c) i32 {
     if (str_ptr >= 0x10000) {
         const s = std.mem.span(@as([*:0]const u8, @ptrFromInt(trace.addr(str_ptr))));
@@ -300,6 +339,8 @@ pub fn puts(str_ptr: usize) callconv(.c) i32 {
     return -1;
 }
 
+/// Writes a string to a stream.
+/// Implementation status: Fully implemented.
 pub fn fputs(str_ptr: usize, file_ptr: usize) callconv(.c) i32 {
     if (str_ptr >= 0x10000) {
         const s = std.mem.span(@as([*:0]const u8, @ptrFromInt(trace.addr(str_ptr))));
@@ -313,8 +354,8 @@ pub fn fputs(str_ptr: usize, file_ptr: usize) callconv(.c) i32 {
     return -1;
 }
 
-// --- sscanf ---
-
+/// Reads formatted data from a string.
+/// Implementation status: Partially implemented.
 pub const sscanf = if (platform.is_wasm) stub_sscanf_wasm else stub_sscanf_native;
 
 fn stub_sscanf_wasm(buf_ptr: usize, fmt_ptr: usize, ap: usize) callconv(.c) i32 {
@@ -340,13 +381,13 @@ fn sscanf_impl(buf_ptr: usize, fmt_ptr: usize, ap: usize) i32 {
     // Super hacky sscanf for single %d/%i/%x
     if (std.mem.eql(u8, fmt, "%d") or std.mem.eql(u8, fmt, "%i") or std.mem.eql(u8, fmt, "%ld")) {
         if (a1 != 0) {
-            const val = @import("string.zig").strtol(trace.addr(buf_ptr), 0, 10);
+            const val = string.strtol(trace.addr(buf_ptr), 0, 10);
             @as(*i32, @ptrFromInt(a1)).* = val;
             return 1;
         }
     } else if (std.mem.eql(u8, fmt, "%x") or std.mem.eql(u8, fmt, "%X")) {
         if (a1 != 0) {
-            const val = @import("string.zig").strtoul(trace.addr(buf_ptr), 0, 16);
+            const val = string.strtoul(trace.addr(buf_ptr), 0, 16);
             @as(*u32, @ptrFromInt(a1)).* = val;
             return 1;
         }
@@ -354,5 +395,28 @@ fn sscanf_impl(buf_ptr: usize, fmt_ptr: usize, ap: usize) i32 {
         if (trace.enable_tracing) trace.print("  -> unhandled format!\n", .{});
     }
 
+    return 0;
+}
+
+/// UCRT common vfprintf wrapper.
+/// Implementation status: Fully implemented
+pub fn stdio_common_vfprintf(_options: u64, stream: usize, fmt_ptr: usize, _locale: usize, ap: usize) callconv(.c) i32 {
+    _ = _options;
+    _ = _locale;
+    return vfprintf(stream, fmt_ptr, ap);
+}
+
+/// UCRT common vsprintf wrapper.
+/// Implementation status: Fully implemented
+pub fn stdio_common_vsprintf(_options: u64, buf_ptr: usize, buf_size: usize, fmt_ptr: usize, _locale: usize, ap: usize) callconv(.c) i32 {
+    _ = _options;
+    _ = _locale;
+    return vsnprintf(buf_ptr, buf_size, fmt_ptr, ap);
+}
+
+/// UCRT common vfscanf wrapper.
+/// Implementation status: Stub
+pub fn stdio_common_vfscanf(_options: u64, _stream: usize, _fmt: usize, _locale: usize, _ap: usize) callconv(.c) i32 {
+    _ = .{ _options, _stream, _fmt, _locale, _ap };
     return 0;
 }

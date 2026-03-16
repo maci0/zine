@@ -1,8 +1,9 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 
-
+/// stub_ShellExecuteA
+/// Implementation status: Stub
 pub fn stub_ShellExecuteA(hwnd: usize, lpOperation: usize, lpFile: usize, lpParameters: usize, lpDirectory: usize, nShowCmd: i32) callconv(w32cc.WINAPI) usize {
     _ = hwnd;
     _ = lpOperation;
@@ -16,17 +17,23 @@ pub fn stub_ShellExecuteA(hwnd: usize, lpOperation: usize, lpFile: usize, lpPara
     return 33; // > 32 means success
 }
 
+/// stub_DragFinish
+/// Implementation status: Stub
 pub fn stub_DragFinish(hDrop: usize) callconv(w32cc.WINAPI) void {
     _ = hDrop;
     if (trace.enable_tracing) trace.print("SHELL32: DragFinish\n", .{});
 }
 
+/// stub_DragAcceptFiles
+/// Implementation status: Stub
 pub fn stub_DragAcceptFiles(hWnd: usize, fAccept: i32) callconv(w32cc.WINAPI) void {
     _ = hWnd;
     _ = fAccept;
     if (trace.enable_tracing) trace.print("SHELL32: DragAcceptFiles\n", .{});
 }
 
+/// stub_DragQueryFileA
+/// Implementation status: Stub
 pub fn stub_DragQueryFileA(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) callconv(w32cc.WINAPI) u32 {
     _ = hDrop;
     _ = iFile;
@@ -36,6 +43,8 @@ pub fn stub_DragQueryFileA(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) 
     return 0;
 }
 
+/// stub_DragQueryFileW
+/// Implementation status: Stub
 pub fn stub_DragQueryFileW(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) callconv(w32cc.WINAPI) u32 {
     _ = hDrop;
     _ = iFile;
@@ -45,6 +54,8 @@ pub fn stub_DragQueryFileW(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) 
     return 0;
 }
 
+/// SHGetFileInfoA
+/// Implementation status: Partially implemented
 pub fn SHGetFileInfoA(pszPath: usize, dwFileAttributes: u32, psfi: usize, cbFileInfo: u32, uFlags: u32) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) {
         const path = if (pszPath != 0) trace.c_span(pszPath) else "(null)";
@@ -105,6 +116,8 @@ pub fn SHGetFileInfoA(pszPath: usize, dwFileAttributes: u32, psfi: usize, cbFile
     return 1; // Success (non-zero)
 }
 
+/// stub_SHGetPathFromIDListA
+/// Implementation status: Stub
 pub fn stub_SHGetPathFromIDListA(pidl: usize, pszPath: usize) callconv(w32cc.WINAPI) i32 {
     _ = pidl;
     _ = pszPath;
@@ -112,12 +125,16 @@ pub fn stub_SHGetPathFromIDListA(pidl: usize, pszPath: usize) callconv(w32cc.WIN
     return 0;
 }
 
+/// stub_SHBrowseForFolderA
+/// Implementation status: Stub
 pub fn stub_SHBrowseForFolderA(lpbi: usize) callconv(w32cc.WINAPI) usize {
     _ = lpbi;
     if (trace.enable_tracing) trace.print("SHELL32: SHBrowseForFolderA\n", .{});
     return 0; // cancelled
 }
 
+/// stub_ExtractIconA
+/// Implementation status: Stub
 pub fn stub_ExtractIconA(hInst: usize, pszExeFileName: usize, nIconIndex: u32) callconv(w32cc.WINAPI) usize {
     _ = hInst;
     if (trace.enable_tracing) {
@@ -130,6 +147,8 @@ pub fn stub_ExtractIconA(hInst: usize, pszExeFileName: usize, nIconIndex: u32) c
     return 0x0000BEEF; // Dummy icon handle
 }
 
+/// stub_Shell_NotifyIconA
+/// Implementation status: No-op fallback
 pub fn stub_Shell_NotifyIconA(dwMessage: u32, lpData: usize) callconv(w32cc.WINAPI) i32 {
     _ = dwMessage;
     _ = lpData;
@@ -137,6 +156,8 @@ pub fn stub_Shell_NotifyIconA(dwMessage: u32, lpData: usize) callconv(w32cc.WINA
     return 1;
 }
 
+/// ShellAboutW
+/// Implementation status: Partially implemented
 pub fn ShellAboutW(hWnd: usize, szApp: usize, szOtherStuff: usize, hIcon: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = hIcon;
@@ -149,16 +170,17 @@ pub fn ShellAboutW(hWnd: usize, szApp: usize, szOtherStuff: usize, hIcon: usize)
     const extra = if (szOtherStuff != 0) window.wideToUtf8(szOtherStuff) else "";
 
     var buf: [1024]u8 = undefined;
-    const text = std.fmt.bufPrint(&buf,
+    const text = std.fmt.bufPrint(
+        &buf,
         "{s}\n" ++
-        "{s}" ++
-        "{s}" ++
-        "\n" ++
-        "Microsoft Windows 2000\n" ++
-        "5.00.2195\n" ++
-        "\n" ++
-        "Powered by zine — Win2K emulation layer\n" ++
-        "github.com/maci0/zine",
+            "{s}" ++
+            "{s}" ++
+            "\n" ++
+            "Microsoft Windows 2000\n" ++
+            "5.00.2195\n" ++
+            "\n" ++
+            "Powered by zine — Win2K emulation layer\n" ++
+            "github.com/maci0/zine",
         .{
             app_name,
             extra,

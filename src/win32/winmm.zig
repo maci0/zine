@@ -1,3 +1,4 @@
+//! Windows Multimedia (WINMM.dll) implementation.
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
@@ -5,9 +6,11 @@ const renderer = @import("../gui/renderer.zig");
 const dsound_stubs = @import("dsound/dsound.zig");
 const stubs = @import("winmm/multimedia.zig");
 
-// waveOut volume: low word = left (0-0xFFFF), high word = right (0-0xFFFF)
+/// waveOut volume: low word = left (0-0xFFFF), high word = right (0-0xFFFF).
 pub var waveout_volume: u32 = 0xFFFFFFFF; // max volume
 
+/// Registers WINMM.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "WINMM.dll";
     try environment.addBuiltinExportComptime(m, "timeGetTime", stubs.timeGetTime);

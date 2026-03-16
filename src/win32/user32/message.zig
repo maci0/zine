@@ -1,8 +1,8 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const user32 = @import("../user32.zig");
-const w32 = @import("../../win32_constants.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32 = @import("../constants.zig");
+const w32cc = @import("../calling_convention.zig");
 
 pub fn PeekMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32, wRemoveMsg: u32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd; _ = wMsgFilterMin; _ = wMsgFilterMax;

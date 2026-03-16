@@ -1,6 +1,10 @@
+//! ICMP.dll registration.
+
 const env = @import("../loader/env.zig");
 const kernel32 = @import("kernel32.zig");
 
+/// Registers ICMP.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "ICMP.dll";
     try environment.addBuiltinExportComptime(m, "IcmpCreateFile", kernel32.stub_args0);

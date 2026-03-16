@@ -1,32 +1,41 @@
+//! GDI32.dll function stubs and graphics object management.
+//!
+//! This module provides the registration logic for GDI32 API stubs
+//! and maintains global state for GDI objects (bitmaps, brushes, pens)
+//! and device contexts.
+
 const env = @import("../loader/env.zig");
 
 const object = @import("gdi32/object.zig");
 const dc = @import("gdi32/dc.zig");
 const drawing = @import("gdi32/drawing.zig");
 
-// Shared handle counter
+/// Shared handle counter for GDI objects.
 var next_gdi_handle: u32 = 0xA0000001;
 
+/// Allocates a new unique GDI handle.
 pub fn nextHandle() usize {
     const h = next_gdi_handle;
     next_gdi_handle +%= 1;
     return h;
 }
 
-// --- DIB Section Tracking ---
-// Tracks pixel buffers returned by CreateDIBSection so that BitBlt can
-// look up the source bitmap's pixel data.
-
+/// Tracks pixel buffers returned by CreateDIBSection so that BitBlt can
+/// look up the source bitmap's pixel data.
 pub const DibInfo = struct {
-    handle: usize,    // GDI bitmap handle
-    buffer: usize,    // ppvBits pointer (pixel data)
+    /// GDI bitmap handle.
+    handle: usize,
+    /// ppvBits pointer (pixel data) in host memory.
+    buffer: usize,
+    /// Width of the bitmap in pixels.
     width: u32,
+    /// Height of the bitmap in pixels.
     height: u32,
-    bpp: u16,         // bits per pixel
+    /// Bits per pixel (e.g., 24, 32).
+    bpp: u16,
 };
 
-// --- Object Tracking ---
-
+/// Type identifiers for GDI objects.
 pub const ObjectType = enum {
     Bitmap,
     Brush,
@@ -36,20 +45,31 @@ pub const ObjectType = enum {
     Region,
 };
 
+/// Data for solid or styled brushes.
 pub const BrushData = struct {
+    /// RGB color value.
     color: u32,
-    style: i32, // 0 = solid
-};
-
-pub const PenData = struct {
-    color: u32,
-    width: i32,
+    /// Brush style (0 = solid).
     style: i32,
 };
 
+/// Data for solid or styled pens.
+pub const PenData = struct {
+    /// RGB color value.
+    color: u32,
+    /// Width of the pen in pixels.
+    width: i32,
+    /// Pen style (e.g., solid, dashed).
+    style: i32,
+};
+
+/// A generic GDI object container.
 pub const GdiObject = struct {
+    /// Unique handle.
     handle: usize,
+    /// Type of the object.
     obj_type: ObjectType,
+    /// Object-specific data.
     data: union {
         bitmap: DibInfo,
         brush: BrushData,
@@ -98,23 +118,35 @@ pub fn findDib(handle: usize) ?*const DibInfo {
     return null;
 }
 
-// --- Device Context Tracking ---
-
+/// Tracks active GDI Device Contexts (DCs).
 pub const DeviceContext = struct {
+    /// Unique DC handle.
     handle: usize,
-    bitmap: usize, // Selected bitmap handle
-    brush: usize,  // Selected brush handle
-    pen: usize,    // Selected pen handle
-    font: usize,   // Selected font handle
-    bk_mode: i32,  // 1 = TRANSPARENT, 2 = OPAQUE
+    /// Selected bitmap handle.
+    bitmap: usize,
+    /// Selected brush handle.
+    brush: usize,
+    /// Selected pen handle.
+    pen: usize,
+    /// Selected font handle.
+    font: usize,
+    /// Background mode (1 = TRANSPARENT, 2 = OPAQUE).
+    bk_mode: i32,
+    /// Background color (RGB).
     bk_color: u32,
+    /// Text color (RGB).
     text_color: u32,
-    rop2: i32,     // R2_COPYPEN = 13 (default)
-    stretch_mode: i32, // BLACKONWHITE = 1 (default)
-    text_align: u32,   // TA_LEFT | TA_TOP = 0 (default)
-    map_mode: i32,     // MM_TEXT = 1 (default)
+    /// Raster operation mode (R2_COPYPEN = 13 default).
+    rop2: i32,
+    /// Bitmap stretching mode (BLACKONWHITE = 1 default).
+    stretch_mode: i32,
+    /// Text alignment flags (TA_LEFT | TA_TOP = 0 default).
+    text_align: u32,
+    /// Mapping mode (MM_TEXT = 1 default).
+    map_mode: i32,
 };
 
+/// Global table of active Device Contexts.
 pub var dc_entries: [128]DeviceContext = [_]DeviceContext{.{
     .handle = 0,
     .bitmap = 0,
@@ -129,8 +161,10 @@ pub var dc_entries: [128]DeviceContext = [_]DeviceContext{.{
     .text_align = 0,
     .map_mode = 1,
 }} ** 128;
+/// Current number of registered DCs.
 pub var dc_count: usize = 0;
 
+/// Retrieves a pointer to the DeviceContext for the given handle.
 pub fn getDc(handle: usize) ?*DeviceContext {
     for (dc_entries[0..dc_count]) |*dc_entry| {
         if (dc_entry.handle == handle) return dc_entry;
@@ -138,6 +172,7 @@ pub fn getDc(handle: usize) ?*DeviceContext {
     return null;
 }
 
+/// Registers a new DeviceContext handle in the global table.
 pub fn registerDc(handle: usize) void {
     if (dc_count < dc_entries.len) {
         dc_entries[dc_count] = .{
@@ -158,12 +193,14 @@ pub fn registerDc(handle: usize) void {
     }
 }
 
+/// Binds a bitmap to a device context.
 pub fn bindDcBitmap(dc_handle: usize, bmp_handle: usize) void {
     if (getDc(dc_handle)) |dc_entry| {
         dc_entry.bitmap = bmp_handle;
     }
 }
 
+/// Retrieves the DIB information for the bitmap currently selected into a DC.
 pub fn getDcDib(dc_handle: usize) ?*const DibInfo {
     if (getDc(dc_handle)) |dc_entry| {
         return findDib(dc_entry.bitmap);
@@ -171,9 +208,11 @@ pub fn getDcDib(dc_handle: usize) ?*const DibInfo {
     return null;
 }
 
+/// Registers GDI32.dll built-in exports in the environment.
+/// Implementation status: Partially implemented.
 pub fn register(environment: *env.Environment) !void {
     const m = "GDI32.dll";
-    const stub = @import("stub_common.zig");
+    const stub = @import("shared.zig");
 
     // Object Management (object.zig)
     try environment.addBuiltinExportComptime(m, "GetStockObject", object.GetStockObject);

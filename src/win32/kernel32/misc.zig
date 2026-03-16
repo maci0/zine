@@ -1,7 +1,9 @@
 const trace = @import("../../trace.zig");
 const kernel32 = @import("../kernel32.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 
+/// Returns the path of the executable file of the current process.
+/// Implementation status: Partially implemented (supports main module and registered modules).
 pub fn GetModuleFileNameA(hModule: usize, lpFilename: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetModuleFileNameA(hModule={x})\n", .{hModule});
     if (lpFilename == 0 or nSize == 0) return 0;
@@ -63,6 +65,8 @@ pub fn GetModuleFileNameA(hModule: usize, lpFilename: usize, nSize: u32) callcon
     return @intCast(copy_len);
 }
 
+/// Opens a file using the specified access and sharing modes.
+/// Implementation status: Stub (returns HFILE_ERROR).
 pub fn stub_OpenFile(lpFileName: usize, lpReOpenBuff: usize, uStyle: u32) callconv(w32cc.WINAPI) i32 {
     _ = lpReOpenBuff;
     _ = uStyle;

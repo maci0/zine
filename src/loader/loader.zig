@@ -1,3 +1,9 @@
+//! PE loader and import resolver.
+//!
+//! This module handles loading PE files into guest memory, mapping sections,
+//! resolving DLL imports, and setting up thunks for Win32 API calls. It also
+//! manages the thunk code region used on WASM to bridge guest and host.
+
 const std = @import("std");
 const pe = @import("../pe.zig");
 const Module = @import("module.zig").Module;
@@ -7,7 +13,7 @@ const trace = @import("../trace.zig");
 const log = @import("../log.zig");
 const x86_thunks = @import("../x86/thunks.zig");
 const x86_memory = @import("../x86/memory.zig");
-const w32cc = @import("../calling_convention.zig");
+const w32cc = @import("../win32/calling_convention.zig");
 const platform = @import("../platform.zig");
 
 // -----------------------------------------------------------------------
@@ -17,19 +23,35 @@ const platform = @import("../platform.zig");
 var thunk_memory: ?*x86_memory.GuestMemory = null;
 var thunk_write_addr: u32 = 0;
 
-/// Set the guest memory that the thunk allocator writes into.
+/// Configures the guest memory region and base address for thunk allocation.
+/// This memory is used on WASM to store small code snippets that bridge
+/// guest x86 calls to host WASM functions.
 pub fn setThunkMemory(mem: *x86_memory.GuestMemory, start_addr: u32) void {
     thunk_memory = mem;
     thunk_write_addr = start_addr;
 }
 
-/// Allocate and write a thunk stub in guest memory. Returns the guest address.
+/// Allocates and writes a thunk stub in guest memory at the current write address.
+/// Returns the guest address of the written thunk and advances the write address.
+///
+/// This is used on WASM to generate the actual machine code (INT 0xFE + ID)
+/// that the interpreter will trap on to call the host function.
 fn allocThunkCode(mem: *x86_memory.GuestMemory, thunk_id: u32) u32 {
     const addr = thunk_write_addr;
     thunk_write_addr = x86_thunks.writeThunkCode(mem, addr, thunk_id);
     return addr;
 }
 
+/// Patches a single Import Address Table (IAT) slot with the address of a resolved export.
+///
+/// On WASM targets, this is a complex operation:
+/// - If the export is data, the guest address of the data is written directly.
+/// - If the export is a function with a comptime handler, a thunk is allocated that
+///   calls that specific handler (avoiding WASM indirect call type mismatches).
+/// - Otherwise, a generic native thunk is created to dispatch to the host function.
+///
+/// On native targets, the address is written directly to the IAT slot, and
+/// native imports are registered in the thunk table for host-side dispatch.
 fn patchImport(
     first_thunk: *u32,
     exp: BuiltinExport,
@@ -100,6 +122,16 @@ fn patchImport(
     }
 }
 
+/// Recursively resolves all imports for a given module, patching its Import
+/// Address Table (IAT) with either host stub addresses (on native) or guest
+/// thunk addresses (on WASM). 
+///
+/// For each imported DLL, it:
+/// 1. Loads the dependency DLL if it is not already loaded.
+/// 2. Iterates through all imported functions.
+/// 3. Resolves each function to its export in the corresponding module.
+/// 4. Patches the IAT slot with the resolved address or a thunk.
+/// 5. Registers unresolved imports for diagnostic purposes if they cannot be found.
 pub fn resolveImports(env: *Environment, mod: *Module) !void {
     if (mod.imports_resolved) return;
 
@@ -183,7 +215,9 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
     mod.imports_resolved = true;
 }
 
-/// Call DllMain(DLL_PROCESS_ATTACH) for all loaded PE dependency DLLs that haven't been attached yet.
+/// Calls the entry point (DllMain) for all loaded PE dependency DLLs that
+/// have not yet been initialized. This is typically called after all imports
+/// for a module and its dependencies have been resolved.
 pub fn attachLoadedDlls(env: *Environment) void {
     var it = env.registry.modules.iterator();
     while (it.next()) |entry| {

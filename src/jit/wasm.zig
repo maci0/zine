@@ -1,8 +1,12 @@
+//! WASM format definitions and constants.
 const std = @import("std");
 
+/// WASM binary magic number.
 pub const magic: [4]u8 = .{ 0x00, 0x61, 0x73, 0x6d };
+/// WASM binary version number.
 pub const version: [4]u8 = .{ 0x01, 0x00, 0x00, 0x00 };
 
+/// WASM section identifiers.
 pub const SectionId = enum(u8) {
     custom = 0,
     type_ = 1,
@@ -19,6 +23,7 @@ pub const SectionId = enum(u8) {
     data_count = 12,
 };
 
+/// WASM value types.
 pub const ValType = enum(u8) {
     i32 = 0x7F,
     i64 = 0x7E,
@@ -26,6 +31,7 @@ pub const ValType = enum(u8) {
     f64 = 0x7C,
 };
 
+/// WASM export types.
 pub const ExportType = enum(u8) {
     func = 0,
     table = 1,
@@ -33,7 +39,7 @@ pub const ExportType = enum(u8) {
     global = 3,
 };
 
-// Common opcodes
+/// WASM opcodes.
 pub const Opcode = enum(u8) {
     unreachable_ = 0x00,
     nop = 0x01,

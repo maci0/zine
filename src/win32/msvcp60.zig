@@ -1,6 +1,10 @@
-const env = @import("../loader/env.zig");
-const stub_common = @import("stub_common.zig");
+//! MSVCP60.dll registration.
 
+const env = @import("../loader/env.zig");
+const stub_common = @import("shared.zig");
+
+/// Registers MSVCP60.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "msvcp60.dll";
 
@@ -45,7 +49,7 @@ pub fn register(environment: *env.Environment) !void {
     // ??Y = operator+=
     try environment.addBuiltinExportComptime(m, "??Y?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAEAAV01@PBD@Z", stub_common.stub_args1);
     try environment.addBuiltinExportComptime(m, "??Y?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAEAAV01@D@Z", stub_common.stub_args1);
-    
+
     // --- Accessors ---
     // ??A = operator[]
     try environment.addBuiltinExportComptime(m, "??A?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAEAADI@Z", stub_npos);
@@ -76,9 +80,9 @@ pub fn register(environment: *env.Environment) !void {
 var npos_value: u32 = 0xFFFFFFFF;
 var nullstr: u8 = 0;
 
-const w32cc = @import("../calling_convention.zig");
+const w32cc = @import("calling_convention.zig");
 
-// thiscall no-op: ignored this pointer, returns void  
+// thiscall no-op: ignored this pointer, returns void
 fn stub_noop_thiscall() callconv(w32cc.WINAPI) void {}
 
 // return npos (0xFFFFFFFF) for find() and operator[] failure

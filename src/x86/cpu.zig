@@ -1,7 +1,9 @@
-// x86 CPU state for the software interpreter.
-//
-// Contains all register state, segment registers, EFLAGS (lazy), FPU state,
-// and guest memory references needed to execute 32-bit x86 instructions.
+//! x86 CPU register state and control flags.
+//!
+//! This module defines the state of the 32-bit x86 virtual processor,
+//! including general-purpose registers, EIP, EFLAGS, and segment bases.
+//! It also provides helper functions for register access and stack
+//! operations.
 
 const flags_mod = @import("flags.zig");
 const fpu_mod = @import("fpu.zig");
@@ -36,20 +38,27 @@ pub const Segment = enum(u3) {
 };
 
 pub const Cpu = struct {
-    // General purpose registers
+    /// General purpose register EAX (accumulator).
     eax: u32 = 0,
+    /// General purpose register ECX (counter).
     ecx: u32 = 0,
+    /// General purpose register EDX (data).
     edx: u32 = 0,
+    /// General purpose register EBX (base).
     ebx: u32 = 0,
+    /// Stack pointer register ESP.
     esp: u32 = 0,
+    /// Base pointer register EBP.
     ebp: u32 = 0,
+    /// Source index register ESI.
     esi: u32 = 0,
+    /// Destination index register EDI.
     edi: u32 = 0,
 
-    // Instruction pointer
+    /// Instruction pointer register EIP.
     eip: u32 = 0,
 
-    // Segment registers (flat model, but need FS for TEB)
+    /// Segment registers (flat model, but need FS for TEB).
     cs: u16 = 0x001B,
     ds: u16 = 0x0023,
     es: u16 = 0x0023,
@@ -57,24 +66,33 @@ pub const Cpu = struct {
     gs: u16 = 0x0000,
     ss: u16 = 0x0023,
 
-    // FS base — used for TEB access (FS:0, FS:0x18, etc.)
+    /// Base address of the FS segment (used for TEB/PEB access).
     fs_base: u32 = 0,
 
-    // Lazy EFLAGS
+    /// Lazy EFLAGS state (computation deferred until needed).
     flags: LazyFlags = .{},
 
-    // FPU state
+    /// x87 FPU state (registers and control words).
     fpu: FpuState = .{},
 
-    // Guest memory
+    /// SSE/SSE2 XMM registers (XMM0-XMM7), 128 bits each.
+    xmm: [8]u128 = .{0} ** 8,
+
+    /// MXCSR — SSE control/status register.
+    /// Default: all exceptions masked (bits 7-12), round to nearest (bits 13-14 = 00).
+    mxcsr: u32 = 0x1F80,
+
+    /// Guest memory reference (maps virtual guest addresses to host memory).
     memory: GuestMemory = .{ .base = &.{} },
 
-    // Execution state
+    /// If true, the CPU has encountered a HLT instruction or fatal error.
     halted: bool = false,
+    /// Pending interrupt number to be handled on the next step.
     pending_interrupt: ?u8 = null,
 
     // --- Register access by index ---
 
+    /// Gets the value of a general-purpose register by its 3-bit index.
     pub fn getReg(self: *const Cpu, idx: RegIndex) u32 {
         return switch (idx) {
             .eax => self.eax,
@@ -88,6 +106,7 @@ pub const Cpu = struct {
         };
     }
 
+    /// Sets the value of a general-purpose register by its 3-bit index.
     pub fn setReg(self: *Cpu, idx: RegIndex, val: u32) void {
         switch (idx) {
             .eax => self.eax = val,
@@ -146,30 +165,99 @@ pub const Cpu = struct {
 
     // --- Stack operations ---
 
+    /// Pushes a 32-bit value onto the guest stack and decrements ESP.
     pub fn push32(self: *Cpu, val: u32) void {
         self.esp -%= 4;
         self.memory.write32(self.esp, val);
     }
 
+    /// Pops a 32-bit value from the guest stack and increments ESP.
     pub fn pop32(self: *Cpu) u32 {
         const val = self.memory.read32(self.esp);
         self.esp +%= 4;
         return val;
     }
 
+    /// Pushes a 16-bit value onto the guest stack and decrements ESP by 2.
     pub fn push16(self: *Cpu, val: u16) void {
         self.esp -%= 2;
         self.memory.write16(self.esp, val);
     }
 
+    /// Pops a 16-bit value from the guest stack and increments ESP by 2.
     pub fn pop16(self: *Cpu) u16 {
         const val = self.memory.read16(self.esp);
         self.esp +%= 2;
         return val;
     }
 
+    // --- XMM register access ---
+
+    /// Get XMM register as bytes.
+    pub fn getXmmBytes(self: *const Cpu, idx: u3) [16]u8 {
+        return @bitCast(self.xmm[idx]);
+    }
+
+    /// Set XMM register from bytes.
+    pub fn setXmmBytes(self: *Cpu, idx: u3, val: [16]u8) void {
+        self.xmm[idx] = @bitCast(val);
+    }
+
+    /// Get XMM register as 4 x f32.
+    pub fn getXmmF32(self: *const Cpu, idx: u3) [4]f32 {
+        return @bitCast(self.xmm[idx]);
+    }
+
+    /// Set XMM register from 4 x f32.
+    pub fn setXmmF32(self: *Cpu, idx: u3, val: [4]f32) void {
+        self.xmm[idx] = @bitCast(val);
+    }
+
+    /// Get XMM register as 2 x f64.
+    pub fn getXmmF64(self: *const Cpu, idx: u3) [2]f64 {
+        return @bitCast(self.xmm[idx]);
+    }
+
+    /// Set XMM register from 2 x f64.
+    pub fn setXmmF64(self: *Cpu, idx: u3, val: [2]f64) void {
+        self.xmm[idx] = @bitCast(val);
+    }
+
+    /// Get XMM register as 4 x u32.
+    pub fn getXmmU32(self: *const Cpu, idx: u3) [4]u32 {
+        return @bitCast(self.xmm[idx]);
+    }
+
+    /// Set XMM register from 4 x u32.
+    pub fn setXmmU32(self: *Cpu, idx: u3, val: [4]u32) void {
+        self.xmm[idx] = @bitCast(val);
+    }
+
+    /// Get XMM register as 2 x u64.
+    pub fn getXmmU64(self: *const Cpu, idx: u3) [2]u64 {
+        return @bitCast(self.xmm[idx]);
+    }
+
+    /// Set XMM register from 2 x u64.
+    pub fn setXmmU64(self: *Cpu, idx: u3, val: [2]u64) void {
+        self.xmm[idx] = @bitCast(val);
+    }
+
+    // --- MMX register access (aliased to x87 FPU stack physical slots) ---
+
+    /// Get MMX register as u64. MMX regs alias FPU physical registers.
+    pub fn getMmx(self: *const Cpu, idx: u3) u64 {
+        return @bitCast(self.fpu.stack[idx]);
+    }
+
+    /// Set MMX register as u64.
+    pub fn setMmx(self: *Cpu, idx: u3, val: u64) void {
+        self.fpu.stack[idx] = @bitCast(val);
+    }
+
     // --- Segment address resolution ---
 
+    /// Resolves a segment-relative offset to a flat 32-bit virtual address.
     pub fn resolveSegmentAddress(self: *const Cpu, seg: Segment, offset: u32) u32 {
         return switch (seg) {
             .fs => self.fs_base +% offset,

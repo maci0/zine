@@ -1,20 +1,25 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 
 var next_imagelist_handle: usize = 0xCC000001;
 
-
+/// Registers and initializes the common control window classes.
+/// Implementation status: No-op fallback.
 pub fn stub_InitCommonControls() callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("COMCTL32: InitCommonControls\n", .{});
 }
 
+/// Ensures that the common control DLL is loaded, and registers specific common control classes from the DLL.
+/// Implementation status: No-op fallback (always returns TRUE).
 pub fn stub_InitCommonControlsEx(lpInitCtrls: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpInitCtrls;
     if (trace.enable_tracing) trace.print("COMCTL32: InitCommonControlsEx\n", .{});
     return 1;
 }
 
+/// Creates a new image list.
+/// Implementation status: Partially implemented (returns a unique handle).
 pub fn ImageList_Create(cx: i32, cy: i32, flags: u32, cInitial: i32, cGrow: i32) callconv(w32cc.WINAPI) usize {
     _ = cx;
     _ = cy;
@@ -27,12 +32,16 @@ pub fn ImageList_Create(cx: i32, cy: i32, flags: u32, cInitial: i32, cGrow: i32)
     return h;
 }
 
+/// Destroys an image list.
+/// Implementation status: No-op fallback.
 pub fn stub_ImageList_Destroy(himl: usize) callconv(w32cc.WINAPI) i32 {
     _ = himl;
     if (trace.enable_tracing) trace.print("COMCTL32: ImageList_Destroy\n", .{});
     return 1;
 }
 
+/// Adds an image or images to an image list.
+/// Implementation status: Stub.
 pub fn stub_ImageList_Add(himl: usize, hbmImage: usize, hbmMask: usize) callconv(w32cc.WINAPI) i32 {
     _ = himl;
     _ = hbmImage;
@@ -41,6 +50,8 @@ pub fn stub_ImageList_Add(himl: usize, hbmImage: usize, hbmMask: usize) callconv
     return 0;
 }
 
+/// Replaces an image with an icon or cursor.
+/// Implementation status: Stub.
 pub fn stub_ImageList_ReplaceIcon(himl: usize, i: i32, hicon: usize) callconv(w32cc.WINAPI) i32 {
     _ = himl;
     _ = i;
@@ -49,23 +60,31 @@ pub fn stub_ImageList_ReplaceIcon(himl: usize, i: i32, hicon: usize) callconv(w3
     return 0;
 }
 
+/// Retrieves the number of images in an image list.
+/// Implementation status: Stub (returns 0).
 pub fn stub_ImageList_GetImageCount(himl: usize) callconv(w32cc.WINAPI) i32 {
     _ = himl;
     return 0;
 }
 
+/// Sets the background color for an image list.
+/// Implementation status: No-op fallback.
 pub fn stub_ImageList_SetBkColor(himl: usize, clrBk: u32) callconv(w32cc.WINAPI) u32 {
     _ = himl;
     if (trace.enable_tracing) trace.print("COMCTL32: ImageList_SetBkColor\n", .{});
     return clrBk;
 }
 
+/// Posts messages when the mouse pointer leaves a window or hovers over a window for a specified amount of time.
+/// Implementation status: No-op fallback.
 pub fn stub_TrackMouseEvent(lpEventTrack: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpEventTrack;
     if (trace.enable_tracing) trace.print("COMCTL32: _TrackMouseEvent\n", .{});
     return 1;
 }
 
+/// Creates an up-down control.
+/// Implementation status: Stub.
 pub fn stub_CreateUpDownControl(dwStyle: u32, x: i32, y: i32, cx: i32, cy: i32, hParent: usize, nID: i32, hInst: usize, hBuddy: usize, nUpper: i32, nLower: i32, nPos: i32) callconv(w32cc.WINAPI) usize {
     _ = dwStyle;
     _ = x;
@@ -85,6 +104,8 @@ pub fn stub_CreateUpDownControl(dwStyle: u32, x: i32, y: i32, cx: i32, cy: i32, 
 
 var next_comctl_hwnd: usize = 0x00002000;
 
+/// Creates a status window.
+/// Implementation status: Partially implemented (reports the control to the UI renderer).
 pub fn CreateStatusWindowA(style: u32, lpszText: usize, hwndParent: usize, wID: u32) callconv(w32cc.WINAPI) usize {
     _ = hwndParent;
     _ = wID;

@@ -1,8 +1,8 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
 
-// --- Code page functions ---
-
+/// Retrieves information about any valid installed or available code page.
+/// Implementation status: Partially implemented
 pub fn GetCPInfo(CodePage: u32, lpCPInfo: *anyopaque) callconv(w32cc.WINAPI) i32 {
     _ = CodePage;
     const cpinfo = @as([*]u8, @ptrCast(lpCPInfo));
@@ -12,29 +12,37 @@ pub fn GetCPInfo(CodePage: u32, lpCPInfo: *anyopaque) callconv(w32cc.WINAPI) i32
     return 1;
 }
 
+/// Retrieves the current Windows ANSI code page identifier for the operating system.
+/// Implementation status: Partially implemented
 pub fn GetACP() callconv(w32cc.WINAPI) u32 {
     return 1252;
 }
 
+/// Determines whether a specified code page is valid.
+/// Implementation status: Partially implemented
 pub fn IsValidCodePage(CodePage: u32) callconv(w32cc.WINAPI) i32 {
     _ = CodePage;
     return 1;
 }
 
+/// Determines whether a specified character is a lead byte for the specified code page.
+/// Implementation status: Partially implemented
 pub fn IsDBCSLeadByteEx(CodePage: u32, TestChar: u8) callconv(w32cc.WINAPI) i32 {
     _ = CodePage;
     _ = TestChar;
     return 0;
 }
 
+/// Determines whether a character is a lead byte for the system default ANSI code page.
+/// Implementation status: Partially implemented
 pub fn IsDBCSLeadByte(testChar: u8) callconv(w32cc.WINAPI) i32 {
     _ = testChar;
     // We assume an ASCII/ANSI setup without DBCS
-    return 0; // FALSE
+    return 0;
 }
 
-// --- Conversion functions ---
-
+/// --- Conversion functions ---
+/// Implementation status: Partially implemented
 pub fn MultiByteToWideChar(CodePage: u32, dwFlags: u32, lpMultiByteStr_ptr: usize, cbMultiByte: i32, lpWideCharStr_ptr: usize, cchWideChar: i32) callconv(w32cc.WINAPI) i32 {
     _ = CodePage;
     _ = dwFlags;
@@ -60,7 +68,7 @@ pub fn MultiByteToWideChar(CodePage: u32, dwFlags: u32, lpMultiByteStr_ptr: usiz
     const wc_str = @as([*]u16, @ptrFromInt(lpWideCharStr_ptr));
     if (cchWideChar < len) {
         if (trace.enable_tracing and len > 0 and len < 1024) trace.print("  -> ERROR_INSUFFICIENT_BUFFER\n", .{});
-        return 0; // ERROR_INSUFFICIENT_BUFFER
+        return 0;
     }
 
     for (0..len) |i| wc_str[i] = mb_str[i];
@@ -68,6 +76,8 @@ pub fn MultiByteToWideChar(CodePage: u32, dwFlags: u32, lpMultiByteStr_ptr: usiz
     return @intCast(len);
 }
 
+/// Maps a UTF-16 (wide character) string to a character string.
+/// Implementation status: Partially implemented
 pub fn WideCharToMultiByte(CodePage: u32, dwFlags: u32, lpWideCharStr_ptr: usize, cchWideChar: i32, lpMultiByteStr_ptr: usize, cbMultiByte: i32, lpDefaultChar: ?*const u8, lpUsedDefaultChar: ?*i32) callconv(w32cc.WINAPI) i32 {
     _ = CodePage;
     _ = dwFlags;
@@ -91,8 +101,10 @@ pub fn WideCharToMultiByte(CodePage: u32, dwFlags: u32, lpWideCharStr_ptr: usize
 }
 
 const kernel32_mem = @import("mem.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 
+/// Formats a message string.
+/// Implementation status: Partially implemented
 pub fn FormatMessageA(dwFlags: u32, lpSource: ?*anyopaque, dwMessageId: u32, dwLanguageId: u32, lpBuffer: [*]u8, nSize: u32, Arguments: ?*anyopaque) callconv(w32cc.WINAPI) u32 {
     _ = dwLanguageId;
 
@@ -152,16 +164,25 @@ pub fn FormatMessageA(dwFlags: u32, lpSource: ?*anyopaque, dwMessageId: u32, dwL
 
 // --- String type/comparison functions ---
 
-// CT_CTYPE1 flags
+/// Upper case characters
 const C1_UPPER = 0x0001;
+/// Lower case characters
 const C1_LOWER = 0x0002;
+/// Decimal digits
 const C1_DIGIT = 0x0004;
+/// Space characters
 const C1_SPACE = 0x0008;
+/// Punctuation characters
 const C1_PUNCT = 0x0010;
+/// Control characters
 const C1_CNTRL = 0x0020;
+/// Blank characters
 const C1_BLANK = 0x0040;
+/// Hexadecimal digits
 const C1_XDIGIT = 0x0080;
+/// Any alphabetic character
 const C1_ALPHA = 0x0100;
+/// Any defined character
 const C1_DEFINED = 0x0200;
 
 fn getCharTypeW(ch: u16) u16 {
@@ -180,6 +201,8 @@ fn getCharTypeW(ch: u16) u16 {
     return ct;
 }
 
+/// Retrieves character-type information for the characters in the specified Unicode source string.
+/// Implementation status: Partially implemented
 pub fn GetStringTypeW(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpCharType: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetStringTypeW(type={d}, src={x}, len={d})\n", .{ dwInfoType, lpSrcStr, cchSrc });
 
@@ -200,6 +223,8 @@ pub fn GetStringTypeW(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpCharType:
     return 1;
 }
 
+/// Retrieves character-type information for the characters in the specified ANSI source string.
+/// Implementation status: Partially implemented
 pub fn GetStringTypeA(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpCharType: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetStringTypeA(type={d}, src={x}, len={d})\n", .{ dwInfoType, lpSrcStr, cchSrc });
 
@@ -218,8 +243,8 @@ pub fn GetStringTypeA(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpCharType:
     return 1;
 }
 
-// --- LCMapString functions ---
-
+/// --- LCMapString functions ---
+/// Implementation status: Partially implemented
 pub fn LCMapStringA(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, lpDestStr: usize, cchDest: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     if (trace.enable_tracing) trace.print("KERNEL32: LCMapStringA(flags=0x{X})\n", .{dwMapFlags});
@@ -247,6 +272,8 @@ pub fn LCMapStringA(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, 
     return @intCast(copy_len);
 }
 
+/// Maps one Unicode character string to another.
+/// Implementation status: Partially implemented
 pub fn LCMapStringW(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, lpDestStr: usize, cchDest: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     if (trace.enable_tracing) trace.print("KERNEL32: LCMapStringW(flags=0x{X})\n", .{dwMapFlags});
@@ -275,6 +302,8 @@ pub fn LCMapStringW(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, 
     return @intCast(copy_len);
 }
 
+/// Compares two character strings, for a specified locale.
+/// Implementation status: Partially implemented
 pub fn CompareStringA(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1: i32, lpString2: usize, cchCount2: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     const s1 = if (lpString1 != 0) trace.c_span(lpString1) else "";
@@ -304,6 +333,8 @@ pub fn CompareStringA(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1:
     return 2; // CSTR_EQUAL
 }
 
+/// Compares two Unicode character strings.
+/// Implementation status: Partially implemented
 pub fn CompareStringW(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1: i32, lpString2: usize, cchCount2: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     if (trace.enable_tracing) trace.print("KERNEL32: CompareStringW(flags={x})\n", .{dwCmpFlags});
@@ -333,22 +364,28 @@ pub fn CompareStringW(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1:
     return 2; // CSTR_EQUAL
 }
 
-// --- Locale functions ---
-
+/// Returns the locale identifier for the system default locale.
+/// Implementation status: Partially implemented
 pub fn GetSystemDefaultLCID() callconv(w32cc.WINAPI) u32 {
     return 1033; // English (US)
 }
 
+/// Returns the locale identifier for the user default locale.
+/// Implementation status: Partially implemented
 pub fn GetUserDefaultLCID() callconv(w32cc.WINAPI) u32 {
     return 0x0409; // English (US)
 }
 
+/// Determines whether a locale identifier is valid.
+/// Implementation status: No-op fallback
 pub fn stub_IsValidLocale(Locale: u32, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     _ = dwFlags;
-    return 1; // TRUE
+    return 1;
 }
 
+/// Enumerates the locales that are either installed on or supported by an operating system.
+/// Implementation status: Partially implemented
 pub fn EnumSystemLocalesA(lpLocaleEnumProc: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = dwFlags;
     if (lpLocaleEnumProc != 0) {
@@ -360,6 +397,8 @@ pub fn EnumSystemLocalesA(lpLocaleEnumProc: usize, dwFlags: u32) callconv(w32cc.
     return 1;
 }
 
+/// Enumerates the Unicode locales that are either installed on or supported by an operating system.
+/// Implementation status: Partially implemented
 pub fn EnumSystemLocalesW(lpLocaleEnumProc: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = dwFlags;
     if (lpLocaleEnumProc != 0) {
@@ -371,6 +410,8 @@ pub fn EnumSystemLocalesW(lpLocaleEnumProc: usize, dwFlags: u32) callconv(w32cc.
     return 1;
 }
 
+/// Maps one character string to another, performing a specified locale-dependent transformation using a locale name.
+/// Implementation status: Partially implemented
 pub fn LCMapStringEx(lpLocaleName: usize, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, lpDestStr: usize, cchDest: i32, lpVersionInformation: usize, lpReserved: usize, sortHandle: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: LCMapStringEx(flags=0x{X}, localeName={X}, ver={X}, reserved={X}, sort={X})\n", .{ dwMapFlags, lpLocaleName, lpVersionInformation, lpReserved, sortHandle });
 
@@ -389,25 +430,99 @@ pub fn LCMapStringEx(lpLocaleName: usize, dwMapFlags: u32, lpSrcStr: usize, cchS
     return @intCast(copy_len);
 }
 
+/// Retrieves information about a locale specified by identifier.
+/// Implementation status: Partially implemented
 pub fn GetLocaleInfoA(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) callconv(w32cc.WINAPI) i32 {
-    if (trace.enable_tracing) trace.print("KERNEL32: GetLocaleInfoA(Locale={x}, LCType={x})\n", .{Locale, LCType});
+    _ = Locale;
+    if (trace.enable_tracing) trace.print("KERNEL32: GetLocaleInfoA(LCType={x})\n", .{LCType});
 
-    const default_val = "1252";
+    // Return en-US locale data for common LCType values
+    const val = switch (LCType & 0xFFFF) { // mask off flags
+        0x0001 => "0409", // LOCALE_ILANGUAGE
+        0x0002 => "English (United States)", // LOCALE_SLANGUAGE
+        0x0003 => "ENU", // LOCALE_SABBREVLANGNAME
+        0x000B => "1252", // LOCALE_IDEFAULTANSICODEPAGE
+        0x000C => "437", // LOCALE_IDEFAULTCODEPAGE (OEM)
+        0x000D => "-", // LOCALE_SNEGATIVESIGN
+        0x000E => "dddd, MMMM dd, yyyy", // LOCALE_SLONGDATE
+        0x000F => "USD", // LOCALE_SINTLSYMBOL
+        0x0014 => "Monday", // LOCALE_SDAYNAME1
+        0x0015 => "Tuesday", // LOCALE_SDAYNAME2
+        0x0016 => "Wednesday", // LOCALE_SDAYNAME3
+        0x0017 => "Thursday", // LOCALE_SDAYNAME4
+        0x0018 => "Friday", // LOCALE_SDAYNAME5
+        0x0019 => "Saturday", // LOCALE_SDAYNAME6
+        0x001A => "Sunday", // LOCALE_SDAYNAME7
+        0x001B => "1", // LOCALE_IFIRSTDAYOFWEEK (0=Mon)
+        0x001C => "M/d/yyyy", // LOCALE_SSHORTDATE
+        0x001D => ".", // LOCALE_SDECIMAL
+        0x001E => ",", // LOCALE_STHOUSAND
+        0x001F => "3;0", // LOCALE_SGROUPING
+        0x0020 => "2", // LOCALE_IDIGITS
+        0x0025 => "/", // LOCALE_SDATE
+        0x0026 => ":", // LOCALE_STIME
+        0x0027 => "h:mm:ss tt", // LOCALE_STIMEFORMAT
+        0x0028 => "M/d/yyyy", // LOCALE_SSHORTDATE (alt)
+        0x0029 => "AM", // LOCALE_S1159
+        0x002A => "PM", // LOCALE_S2359
+        0x002D => "Mon", // LOCALE_SABBREVDAYNAME1
+        0x002E => "Tue", // LOCALE_SABBREVDAYNAME2
+        0x002F => "Wed", // LOCALE_SABBREVDAYNAME3
+        0x0030 => "Thu", // LOCALE_SABBREVDAYNAME4
+        0x0031 => "Fri", // LOCALE_SABBREVDAYNAME5
+        0x0032 => "Sat", // LOCALE_SABBREVDAYNAME6
+        0x0033 => "Sun", // LOCALE_SABBREVDAYNAME7
+        0x0034 => "January", // LOCALE_SMONTHNAME1 (alt position used by some apps)
+        0x0035 => "February",
+        0x0036 => "March",
+        0x0038 => "Jan", // LOCALE_SABBREVMONTHNAME1
+        0x0039 => "Feb",
+        0x003A => "Mar",
+        0x003B => "Apr",
+        0x003C => "May",
+        0x003D => "Jun",
+        0x003E => "Jul",
+        0x003F => "Aug",
+        0x0040 => "Sep",
+        0x0041 => "Oct",
+        0x0042 => "Nov",
+        0x0043 => "Dec",
+        0x0044 => "January", // LOCALE_SMONTHNAME1
+        0x0045 => "February",
+        0x0046 => "March",
+        0x0047 => "April",
+        0x0048 => "May",
+        0x0049 => "June",
+        0x004A => "July",
+        0x004B => "August",
+        0x004C => "September",
+        0x004D => "October",
+        0x004E => "November",
+        0x004F => "December",
+        0x0050 => "$", // LOCALE_SCURRENCY
+        0x1003 => "ENU", // LOCALE_SABBREVLANGNAME
+        0x1004 => "English", // LOCALE_SNATIVELANGNAME
+        else => "", // return empty for unknown — avoids poisoning with wrong data
+    };
+
+    if (val.len == 0) return 0; // unknown LCType
 
     if (cchData == 0) {
-        return @intCast(default_val.len + 1);
+        return @intCast(val.len + 1);
     }
 
     if (lpLCData != 0) {
         const out = @as([*]u8, @ptrFromInt(lpLCData));
-        const copy_len = @min(default_val.len, @as(usize, @intCast(cchData)) - 1);
-        @memcpy(out[0..copy_len], default_val[0..copy_len]);
+        const copy_len = @min(val.len, @as(usize, @intCast(cchData)) - 1);
+        @memcpy(out[0..copy_len], val[0..copy_len]);
         out[copy_len] = 0;
         return @intCast(copy_len + 1);
     }
     return 0;
 }
 
+/// Retrieves Unicode information about a locale specified by identifier.
+/// Implementation status: Partially implemented
 pub fn GetLocaleInfoW(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     if (trace.enable_tracing) trace.print("KERNEL32: GetLocaleInfoW(LCType={x})\n", .{LCType});
@@ -423,12 +538,14 @@ pub fn GetLocaleInfoW(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) c
     return 0;
 }
 
+/// Retrieves the locale identifier for the current thread.
+/// Implementation status: Partially implemented
 pub fn GetThreadLocale() callconv(w32cc.WINAPI) u32 {
     return 1033; // en-US
 }
 
-// --- Formatting functions ---
-
+/// Formats a date as a date string for a specified locale.
+/// Implementation status: No-op fallback
 pub fn stub_GetDateFormatA(Locale: u32, dwFlags: u32, lpDate: usize, lpFormat: usize, lpDateStr: usize, cchDate: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     _ = dwFlags;
@@ -446,6 +563,8 @@ pub fn stub_GetDateFormatA(Locale: u32, dwFlags: u32, lpDate: usize, lpFormat: u
     return 0;
 }
 
+/// Formats time as a time string for a specified locale.
+/// Implementation status: No-op fallback
 pub fn stub_GetTimeFormatA(Locale: u32, dwFlags: u32, lpTime: usize, lpFormat: usize, lpTimeStr: usize, cchTime: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     _ = dwFlags;
@@ -463,8 +582,9 @@ pub fn stub_GetTimeFormatA(Locale: u32, dwFlags: u32, lpTime: usize, lpFormat: u
     return 0;
 }
 
-// --- String functions (lstr*) ---
-
+/// --- String functions (lstr*) ---
+/// Copies a specified number of characters from a source string into a buffer.
+/// Implementation status: Partially implemented
 pub fn lstrcpynA(lpString1: usize, lpString2: usize, iMaxLength: i32) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0 or lpString2 == 0 or iMaxLength <= 0) return lpString1;
     const src = trace.c_span(lpString2);
@@ -476,6 +596,8 @@ pub fn lstrcpynA(lpString1: usize, lpString2: usize, iMaxLength: i32) callconv(w
     return lpString1;
 }
 
+/// Compares two character strings.
+/// Implementation status: Partially implemented
 pub fn lstrcmpA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 {
     const s1 = if (lpString1 != 0) trace.c_span(lpString1) else "";
     const s2 = if (lpString2 != 0) trace.c_span(lpString2) else "";
@@ -487,6 +609,8 @@ pub fn lstrcmpA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 {
     };
 }
 
+/// Copies a string to a buffer.
+/// Implementation status: Partially implemented
 pub fn lstrcpyA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0 or lpString2 == 0) return lpString1;
     const src = trace.c_span(lpString2);
@@ -496,12 +620,16 @@ pub fn lstrcpyA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize
     return lpString1;
 }
 
+/// Returns the length of the specified string (not including the terminating null character).
+/// Implementation status: Partially implemented
 pub fn lstrlenA(lpString: usize) callconv(w32cc.WINAPI) i32 {
     if (lpString == 0) return 0;
     const s = trace.c_span(lpString);
     return @intCast(s.len);
 }
 
+/// Appends one string to another.
+/// Implementation status: Partially implemented
 pub fn lstrcatA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0) return 0;
     if (lpString2 == 0) return lpString1;
@@ -514,6 +642,8 @@ pub fn lstrcatA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize
     return lpString1;
 }
 
+/// Compares two character strings. The comparison is not case-sensitive.
+/// Implementation status: Partially implemented
 pub fn lstrcmpiA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 {
     if (lpString1 == 0 or lpString2 == 0) return 0;
     const s1 = trace.c_span(lpString1);
@@ -530,6 +660,8 @@ pub fn lstrcmpiA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 
     return 0;
 }
 
+/// Returns the language identifier of the user default locale.
+/// Implementation status: Partially implemented
 pub fn GetUserDefaultLangID() callconv(w32cc.WINAPI) u16 {
     return 0x0409; // English (US)
 }
@@ -542,11 +674,15 @@ fn wlen(ptr: [*]const u16) usize {
     return i;
 }
 
+/// Returns the length of the specified Unicode string.
+/// Implementation status: Partially implemented
 pub fn lstrlenW(lpString: usize) callconv(w32cc.WINAPI) i32 {
     if (lpString == 0) return 0;
     return @intCast(wlen(@ptrFromInt(lpString)));
 }
 
+/// Copies a Unicode string to a buffer.
+/// Implementation status: Partially implemented
 pub fn lstrcpyW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0) return 0;
     if (lpString2 == 0) return lpString1;
@@ -558,6 +694,8 @@ pub fn lstrcpyW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize
     return lpString1;
 }
 
+/// Copies a specified number of characters from a source Unicode string into a buffer.
+/// Implementation status: Partially implemented
 pub fn lstrcpynW(lpString1: usize, lpString2: usize, iMaxLength: i32) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0 or iMaxLength <= 0) return lpString1;
     const dst = @as([*]u16, @ptrFromInt(lpString1));
@@ -574,6 +712,8 @@ pub fn lstrcpynW(lpString1: usize, lpString2: usize, iMaxLength: i32) callconv(w
     return lpString1;
 }
 
+/// Appends one Unicode string to another.
+/// Implementation status: Partially implemented
 pub fn lstrcatW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0) return 0;
     if (lpString2 == 0) return lpString1;
@@ -586,6 +726,8 @@ pub fn lstrcatW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize
     return lpString1;
 }
 
+/// Compares two Unicode character strings.
+/// Implementation status: Partially implemented
 pub fn lstrcmpW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 {
     if (lpString1 == 0 or lpString2 == 0) return 0;
     const s1 = @as([*]const u16, @ptrFromInt(lpString1));
@@ -600,6 +742,8 @@ pub fn lstrcmpW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
+/// Compares two Unicode character strings. The comparison is not case-sensitive.
+/// Implementation status: Partially implemented
 pub fn lstrcmpiW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 {
     if (lpString1 == 0 or lpString2 == 0) return 0;
     const s1 = @as([*]const u16, @ptrFromInt(lpString1));

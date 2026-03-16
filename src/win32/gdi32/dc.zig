@@ -1,8 +1,11 @@
+//! GDI Device Context (DC) management.
 const trace = @import("../../trace.zig");
 const gdi32 = @import("../gdi32.zig");
-const w32 = @import("../../win32_constants.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32 = @import("../constants.zig");
+const w32cc = @import("../calling_convention.zig");
 
+/// Retrieves device-specific information for the specified device.
+/// Implementation status: Partially implemented (returns fixed values for a 1024x768 32bpp display).
 pub fn GetDeviceCaps(hdc: usize, nIndex: i32) callconv(w32cc.WINAPI) i32 {
     _ = hdc;
     if (trace.enable_tracing) trace.print("GDI32: GetDeviceCaps({d})\n", .{nIndex});
@@ -22,6 +25,8 @@ pub fn GetDeviceCaps(hdc: usize, nIndex: i32) callconv(w32cc.WINAPI) i32 {
     };
 }
 
+/// Creates a memory device context (DC) compatible with the specified device.
+/// Implementation status: Fully implemented (registers a new DC in the global GDI object table).
 pub fn CreateCompatibleDC(hdc: usize) callconv(w32cc.WINAPI) usize {
     _ = hdc;
     const handle = gdi32.nextHandle();
@@ -30,6 +35,8 @@ pub fn CreateCompatibleDC(hdc: usize) callconv(w32cc.WINAPI) usize {
     return handle;
 }
 
+/// Deletes the specified device context (DC).
+/// Implementation status: No-op fallback (returns 1).
 pub fn stub_DeleteDC(hdc: usize) callconv(w32cc.WINAPI) i32 {
     _ = hdc;
     return 1;
@@ -40,6 +47,9 @@ pub fn stub_DeleteDC(hdc: usize) callconv(w32cc.WINAPI) i32 {
 var saved_dc_stack: [32]gdi32.DeviceContext = undefined;
 var saved_dc_count: usize = 0;
 
+/// Saves the current state of the specified device context (DC) by copying 
+/// its attributes to a stack.
+/// Implementation status: Partially implemented (uses a fixed-size global stack of 32 states).
 pub fn SaveDC(hdc: usize) callconv(w32cc.WINAPI) i32 {
     if (gdi32.getDc(hdc)) |dc| {
         if (saved_dc_count < saved_dc_stack.len) {
@@ -51,6 +61,8 @@ pub fn SaveDC(hdc: usize) callconv(w32cc.WINAPI) i32 {
     return 0; // failure
 }
 
+/// Restores a device context (DC) to the specified state.
+/// Implementation status: Partially implemented (restores attributes from the global save stack).
 pub fn RestoreDC(hdc: usize, nSavedDC: i32) callconv(w32cc.WINAPI) i32 {
     if (gdi32.getDc(hdc)) |dc| {
         if (nSavedDC == -1 and saved_dc_count > 0) {
@@ -90,6 +102,8 @@ pub fn RestoreDC(hdc: usize, nSavedDC: i32) callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
+/// Sets the background mix mode of the specified device context.
+/// Implementation status: Fully implemented (updates the DC's bk_mode attribute).
 pub fn SetBkMode(hdc: usize, mode: i32) callconv(w32cc.WINAPI) i32 {
     var old_mode: i32 = 1; // OPAQUE previous
     if (gdi32.getDc(hdc)) |dc_entry| {
@@ -99,6 +113,8 @@ pub fn SetBkMode(hdc: usize, mode: i32) callconv(w32cc.WINAPI) i32 {
     return old_mode;
 }
 
+/// Sets the background color of the specified device context to the specified color.
+/// Implementation status: Fully implemented.
 pub fn SetBkColor(hdc: usize, crColor: u32) callconv(w32cc.WINAPI) u32 {
     var old_color: u32 = 0x00FFFFFF;
     if (gdi32.getDc(hdc)) |dc_entry| {
@@ -108,6 +124,8 @@ pub fn SetBkColor(hdc: usize, crColor: u32) callconv(w32cc.WINAPI) u32 {
     return old_color;
 }
 
+/// Sets the text color of the specified device context to the specified color.
+/// Implementation status: Fully implemented.
 pub fn SetTextColor(hdc: usize, crColor: u32) callconv(w32cc.WINAPI) u32 {
     var old_color: u32 = 0;
     if (gdi32.getDc(hdc)) |dc_entry| {
@@ -117,6 +135,8 @@ pub fn SetTextColor(hdc: usize, crColor: u32) callconv(w32cc.WINAPI) u32 {
     return old_color;
 }
 
+/// Retrieves the text color of the specified device context.
+/// Implementation status: Fully implemented.
 pub fn GetTextColor(hdc: usize) callconv(w32cc.WINAPI) u32 {
     if (gdi32.getDc(hdc)) |dc_entry| {
         return dc_entry.text_color;
@@ -124,6 +144,8 @@ pub fn GetTextColor(hdc: usize) callconv(w32cc.WINAPI) u32 {
     return 0; // Black
 }
 
+/// Sets the stretching mode for bitmaps in the specified device context.
+/// Implementation status: Fully implemented.
 pub fn SetStretchBltMode(hdc: usize, mode: i32) callconv(w32cc.WINAPI) i32 {
     var old_mode: i32 = 1; // BLACKONWHITE
     if (gdi32.getDc(hdc)) |dc| {
@@ -133,6 +155,8 @@ pub fn SetStretchBltMode(hdc: usize, mode: i32) callconv(w32cc.WINAPI) i32 {
     return old_mode;
 }
 
+/// Sets the mapping mode of the specified device context.
+/// Implementation status: Fully implemented.
 pub fn SetMapMode(hdc: usize, iMode: i32) callconv(w32cc.WINAPI) i32 {
     var old_mode: i32 = 1; // MM_TEXT
     if (gdi32.getDc(hdc)) |dc| {
@@ -142,6 +166,8 @@ pub fn SetMapMode(hdc: usize, iMode: i32) callconv(w32cc.WINAPI) i32 {
     return old_mode;
 }
 
+/// Sets the current foreground mix mode of the specified device context.
+/// Implementation status: Fully implemented.
 pub fn SetROP2(hdc: usize, rop2: i32) callconv(w32cc.WINAPI) i32 {
     var old_rop: i32 = 13; // R2_COPYPEN
     if (gdi32.getDc(hdc)) |dc| {
@@ -151,6 +177,8 @@ pub fn SetROP2(hdc: usize, rop2: i32) callconv(w32cc.WINAPI) i32 {
     return old_rop;
 }
 
+/// Retrieves the metrics for the currently selected font.
+/// Implementation status: Partially implemented (returns fixed metrics).
 pub fn GetTextMetricsA(hdc: usize, lptm: usize) callconv(w32cc.WINAPI) i32 {
     _ = hdc;
     if (lptm != 0) {
@@ -167,10 +195,14 @@ pub fn GetTextMetricsA(hdc: usize, lptm: usize) callconv(w32cc.WINAPI) i32 {
     return 1;
 }
 
+/// Retrieves the metrics for the currently selected font (Unicode).
+/// Implementation status: Partially implemented (alias to ANSI).
 pub fn GetTextMetricsW(hdc: usize, lptm: usize) callconv(w32cc.WINAPI) i32 {
     return GetTextMetricsA(hdc, lptm);
 }
 
+/// Computes the width and height of the specified string of text.
+/// Implementation status: Partially implemented (uses fixed character width).
 pub fn GetTextExtentPoint32A(hdc: usize, lpString: usize, c: i32, lpSize: usize) callconv(w32cc.WINAPI) i32 {
     _ = hdc;
     _ = lpString;
@@ -182,10 +214,14 @@ pub fn GetTextExtentPoint32A(hdc: usize, lpString: usize, c: i32, lpSize: usize)
     return 1;
 }
 
+/// Computes the width and height of the specified string of text (Unicode).
+/// Implementation status: Partially implemented (alias to ANSI).
 pub fn GetTextExtentPoint32W(hdc: usize, lpString: usize, c: i32, lpSize: usize) callconv(w32cc.WINAPI) i32 {
     return GetTextExtentPoint32A(hdc, lpString, c, lpSize);
 }
 
+/// Sets the text-alignment flags for the specified device context.
+/// Implementation status: Fully implemented.
 pub fn SetTextAlign(hdc: usize, fMode: u32) callconv(w32cc.WINAPI) u32 {
     var old_align: u32 = 0;
     if (gdi32.getDc(hdc)) |dc| {
@@ -195,6 +231,8 @@ pub fn SetTextAlign(hdc: usize, fMode: u32) callconv(w32cc.WINAPI) u32 {
     return old_align;
 }
 
+/// Creates a device context (DC) for a device using the specified name.
+/// Implementation status: Partially implemented (registers a generic DC).
 pub fn CreateDCA(lpszDriver: usize, lpszDevice: usize, lpszOutput: usize, lpInitData: usize) callconv(w32cc.WINAPI) usize {
     _ = lpszDriver;
     _ = lpszDevice;
@@ -206,16 +244,22 @@ pub fn CreateDCA(lpszDriver: usize, lpszDevice: usize, lpszOutput: usize, lpInit
     return handle;
 }
 
+/// Retrieves the color that most closely matches the specified color.
+/// Implementation status: Stub.
 pub fn stub_GetNearestColor(hdc: usize, color: u32) callconv(w32cc.WINAPI) u32 {
     _ = hdc;
     return color;
 }
 
+/// Updates the colors in the client area of the specified DC.
+/// Implementation status: Stub.
 pub fn stub_UpdateColors(hdc: usize) callconv(w32cc.WINAPI) i32 {
     _ = hdc;
     return 0;
 }
 
+/// Retrieves the number of characters in a string that will fit within a specified space.
+/// Implementation status: Partially implemented.
 pub fn GetTextExtentExPointA(hdc: usize, lpszString: usize, cchString: i32, nMaxExtent: i32, lpnFit: usize, lpnDx: usize, lpSize: usize) callconv(w32cc.WINAPI) i32 {
     _ = hdc;
     _ = lpszString;
@@ -236,6 +280,8 @@ pub fn GetTextExtentExPointA(hdc: usize, lpszString: usize, cchString: i32, nMax
     return 1;
 }
 
+/// Retrieves character placement information (Unicode).
+/// Implementation status: Stub.
 pub fn stub_GetCharacterPlacementW(hdc: usize, lpString: usize, nCount: i32, nMexExtent: i32, lpResults: usize, dwFlags: u32, extra: usize) callconv(w32cc.WINAPI) u32 {
     _ = hdc;
     _ = lpString;
@@ -247,6 +293,8 @@ pub fn stub_GetCharacterPlacementW(hdc: usize, lpString: usize, nCount: i32, nMe
     return 0;
 }
 
+/// Translates charset information.
+/// Implementation status: Stub.
 pub fn stub_TranslateCharsetInfo(lpSrc: usize, lpCs: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = lpSrc;
     _ = lpCs;
@@ -254,6 +302,8 @@ pub fn stub_TranslateCharsetInfo(lpSrc: usize, lpCs: usize, dwFlags: u32) callco
     return 0;
 }
 
+/// Retrieves the widths of consecutive characters in a specified range.
+/// Implementation status: Partially implemented (uses fixed width).
 pub fn GetCharWidthA(hdc: usize, iFirst: u32, iLast: u32, lpBuffer: usize) callconv(w32cc.WINAPI) i32 {
     _ = hdc;
     if (lpBuffer != 0 and iLast >= iFirst) {
@@ -266,6 +316,8 @@ pub fn GetCharWidthA(hdc: usize, iFirst: u32, iLast: u32, lpBuffer: usize) callc
     return 1;
 }
 
+/// Sets the window extent for the specified DC.
+/// Implementation status: Partially implemented.
 pub fn SetWindowExtEx(hdc: usize, x: i32, y: i32, lpSize: usize) callconv(w32cc.WINAPI) i32 {
     _ = hdc;
     _ = x;
@@ -278,6 +330,8 @@ pub fn SetWindowExtEx(hdc: usize, x: i32, y: i32, lpSize: usize) callconv(w32cc.
     return 1;
 }
 
+/// Sets the viewport extent for the specified DC.
+/// Implementation status: Partially implemented.
 pub fn SetViewportExtEx(hdc: usize, x: i32, y: i32, lpSize: usize) callconv(w32cc.WINAPI) i32 {
     _ = hdc;
     _ = x;
@@ -290,15 +344,15 @@ pub fn SetViewportExtEx(hdc: usize, x: i32, y: i32, lpSize: usize) callconv(w32c
     return 1;
 }
 
-// RectVisible: is any part of the given rect visible in the clip region?
-// Always return TRUE since we don't track clipping
+/// Determines whether any part of the specified rectangle is within the clipping region of a DC.
+/// Implementation status: Stub (always returns 1).
 pub fn stub_RectVisible(hdc: usize, lprc: usize) callconv(w32cc.WINAPI) i32 {
     _ = hdc; _ = lprc;
     return 1; // TRUE — rect is visible
 }
 
-// GetBkMode: returns background mix mode
-// OPAQUE = 2, TRANSPARENT = 1
+/// Retrieves the background mix mode of the specified DC.
+/// Implementation status: Fully implemented.
 pub fn GetBkMode(hdc: usize) callconv(w32cc.WINAPI) i32 {
     if (gdi32.getDc(hdc)) |dc_entry| {
         return dc_entry.bk_mode;
@@ -306,8 +360,8 @@ pub fn GetBkMode(hdc: usize) callconv(w32cc.WINAPI) i32 {
     return 2; // OPAQUE
 }
 
-// GetBkColor: returns background color as COLORREF
-// Default is white
+/// Retrieves the background color of the specified DC.
+/// Implementation status: Fully implemented.
 pub fn GetBkColor(hdc: usize) callconv(w32cc.WINAPI) u32 {
     if (gdi32.getDc(hdc)) |dc_entry| {
         return dc_entry.bk_color;

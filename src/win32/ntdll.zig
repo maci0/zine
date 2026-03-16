@@ -1,8 +1,12 @@
+//! NTDLL.dll registration.
+
 const env = @import("../loader/env.zig");
 
 const kernel32 = @import("kernel32.zig");
 const stubs = @import("ntdll/ntapi.zig");
 
+/// Registers NTDLL.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "ntdll.dll";
 

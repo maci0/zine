@@ -3,8 +3,8 @@ const trace = @import("../../trace.zig");
 const user32 = @import("../user32.zig");
 const kernel32 = @import("../kernel32.zig");
 const renderer = @import("../../gui/renderer.zig");
-const w32 = @import("../../win32_constants.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32 = @import("../constants.zig");
+const w32cc = @import("../calling_convention.zig");
 
 pub fn SetRect(lprc: *user32.RECT, xLeft: i32, yTop: i32, xRight: i32, yBottom: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: SetRect\n", .{});

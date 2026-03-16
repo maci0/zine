@@ -1,7 +1,7 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32 = @import("../../win32_constants.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32 = @import("../constants.zig");
+const w32cc = @import("../calling_convention.zig");
 
 pub fn RegisterClassExA(lpwcx: usize) callconv(w32cc.WINAPI) u16 {
     if (lpwcx != 0) {

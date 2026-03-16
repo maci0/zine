@@ -1,27 +1,50 @@
+//! PE dialog resource parser.
+//!
+//! This module handles parsing binary Win32 dialog (and DIALOGEX) resources
+//! into a JSON structure for rendering on the GUI backend.
+
 const std = @import("std");
 const Module = @import("module.zig").Module;
 
+/// Represents a single control within a dialog.
 pub const DialogItem = struct {
+    /// Control identifier (ID).
     id: u16,
+    /// X coordinate in dialog units.
     x: u16,
+    /// Y coordinate in dialog units.
     y: u16,
+    /// Width in dialog units.
     cx: u16,
+    /// Height in dialog units.
     cy: u16,
+    /// Win32 window style flags.
     style: u32,
+    /// Text content (e.g., button label).
     text: []const u8,
+    /// Window class name (e.g., "Button", "Static").
     class: []const u8,
 };
 
+/// Represents the metadata for an entire dialog.
 pub const DialogData = struct {
+    /// The message type for the GUI backend.
     type: []const u8 = "custom_dialog",
+    /// Title of the dialog window.
     title: []const u8,
+    /// Preferred X coordinate.
     x: u16,
+    /// Preferred Y coordinate.
     y: u16,
+    /// Width in dialog units.
     cx: u16,
+    /// Height in dialog units.
     cy: u16,
+    /// List of controls in the dialog.
     items: []DialogItem,
 };
 
+/// Parses a binary dialog resource from a PE module and returns its JSON representation.
 pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog_id: u32) !?[]const u8 {
     const data = module.getResource(5, dialog_id) orelse return null; // RT_DIALOG = 5
     

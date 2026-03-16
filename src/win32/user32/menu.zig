@@ -1,6 +1,6 @@
 const trace = @import("../../trace.zig");
 const user32 = @import("../user32.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 
 pub fn stub_GetMenu(hWnd: usize) callconv(w32cc.WINAPI) usize {
     _ = hWnd;

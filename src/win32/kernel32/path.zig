@@ -1,10 +1,14 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 
+/// The current working directory stored in narrow form.
 pub var current_directory: [1024]u8 = undefined;
+/// The length of the current working directory string.
 pub var current_directory_len: usize = 0;
 
+/// Retrieves the current directory for the current process.
+/// Implementation status: Partially implemented (returns C:\ by default).
 pub fn GetCurrentDirectoryA(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCurrentDirectoryA(len={d})\n", .{nBufferLength});
     if (current_directory_len == 0) {
@@ -22,6 +26,8 @@ pub fn GetCurrentDirectoryA(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.
     return @intCast(current_directory_len + 1);
 }
 
+/// Retrieves the current directory for the current process (Unicode version).
+/// Implementation status: Partially implemented (returns C:\ by default).
 pub fn GetCurrentDirectoryW(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCurrentDirectoryW(len={d})\n", .{nBufferLength});
     if (current_directory_len == 0) {
@@ -40,6 +46,8 @@ pub fn GetCurrentDirectoryW(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.
     return @intCast(current_directory_len + 1);
 }
 
+/// Changes the current directory for the current process.
+/// Implementation status: Partially implemented.
 pub fn SetCurrentDirectoryA(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
     if (lpPathName == 0) return 0;
     const path = trace.c_span(lpPathName);
@@ -52,11 +60,11 @@ pub fn SetCurrentDirectoryA(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
     return 1;
 }
 
-// SetCurrentDirectoryW: properly handle wide string paths
+/// Changes the current directory for the current process (Unicode version).
+/// Implementation status: Partially implemented (handles basic path conversion).
 pub fn SetCurrentDirectoryW(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
     if (lpPathName == 0) return 0;
     const wstr = @as([*]const u16, @ptrFromInt(lpPathName));
-    // Convert wide to narrow
     var narrow: [1024]u8 = undefined;
     var i: usize = 0;
     while (i < 1023 and wstr[i] != 0) : (i += 1) {
@@ -70,6 +78,8 @@ pub fn SetCurrentDirectoryW(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
     return 1;
 }
 
+/// Retrieves the path of the Windows directory.
+/// Implementation status: Partially implemented (returns C:\WINDOWS).
 pub fn GetWindowsDirectoryA(lpBuffer: usize, uSize: u32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetWindowsDirectoryA(buffer={x}, size={d})\n", .{ lpBuffer, uSize });
     const win_dir = "C:\\WINDOWS";
@@ -82,6 +92,8 @@ pub fn GetWindowsDirectoryA(lpBuffer: usize, uSize: u32) callconv(w32cc.WINAPI) 
     return @intCast(win_dir.len + 1);
 }
 
+/// Retrieves the full path and file name of the specified file.
+/// Implementation status: Partially implemented.
 pub fn GetFullPathNameA(lpFileName: usize, nBufferLength: u32, lpBuffer: usize, lpFilePart: usize) callconv(w32cc.WINAPI) u32 {
     if (lpFileName == 0) return 0;
     const name = trace.c_span(lpFileName);
@@ -102,6 +114,34 @@ pub fn GetFullPathNameA(lpFileName: usize, nBufferLength: u32, lpBuffer: usize, 
     return @intCast(name.len + 1);
 }
 
+/// Retrieves the full path and file name of the specified file (Unicode version).
+/// Implementation status: Partially implemented.
+pub fn GetFullPathNameW(lpFileName: usize, nBufferLength: u32, lpBuffer: usize, lpFilePart: usize) callconv(w32cc.WINAPI) u32 {
+    if (lpFileName == 0) return 0;
+    const src = @as([*]const u16, @ptrFromInt(lpFileName));
+    var len: u32 = 0;
+    while (src[len] != 0) : (len += 1) {
+        if (len >= 1024) break;
+    }
+    if (trace.enable_tracing) trace.print("KERNEL32: GetFullPathNameW(len={d})\n", .{len});
+    if (lpBuffer != 0 and nBufferLength > len) {
+        const buf = @as([*]u16, @ptrFromInt(lpBuffer));
+        for (0..len) |i| buf[i] = src[i];
+        buf[len] = 0;
+        if (lpFilePart != 0) {
+            var last_sep: u32 = 0;
+            for (0..len) |i| {
+                if (src[i] == '\\' or src[i] == '/') last_sep = @intCast(i + 1);
+            }
+            @as(*align(1) u32, @ptrFromInt(lpFilePart)).* = @intCast(lpBuffer + last_sep * 2);
+        }
+        return len;
+    }
+    return len + 1;
+}
+
+/// Creates a new directory.
+/// Implementation status: Partially implemented (maps to Zig's makeDir).
 pub fn CreateDirectoryA(lpPathName: usize, lpSecurityAttributes: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpSecurityAttributes;
     if (lpPathName == 0) return 0;
@@ -116,19 +156,22 @@ pub fn CreateDirectoryA(lpPathName: usize, lpSecurityAttributes: usize) callconv
     return 1;
 }
 
+/// Determines whether a disk drive is a removable, fixed, CD-ROM, RAM disk, or network drive.
+/// Implementation status: No-op fallback (returns DRIVE_FIXED).
 pub fn stub_GetDriveTypeA(lpRootPathName: usize) callconv(w32cc.WINAPI) u32 {
     _ = lpRootPathName;
     return 3; // DRIVE_FIXED
 }
 
-// GetDriveTypeW: returns drive type for a root path
-// DRIVE_FIXED = 3 (typical for hard drives)
+/// Determines whether a disk drive is a removable, fixed, CD-ROM, RAM disk, or network drive (Unicode version).
+/// Implementation status: Stub (returns DRIVE_FIXED).
 pub fn stub_GetDriveTypeW(lpRootPathName: usize) callconv(w32cc.WINAPI) u32 {
     _ = lpRootPathName;
     return 3; // DRIVE_FIXED
 }
 
-// GetLongPathNameW: just copies the input to the output (identity mapping)
+/// Converts the specified path to its long form (Unicode version).
+/// Implementation status: Partially implemented (currently performs identity mapping).
 pub fn GetLongPathNameW(lpszShortPath: usize, lpszLongPath: usize, cchBuffer: u32) callconv(w32cc.WINAPI) u32 {
     if (lpszShortPath == 0) return 0;
     const src = @as([*]const u16, @ptrFromInt(lpszShortPath));

@@ -1,7 +1,7 @@
 const trace = @import("../../trace.zig");
 const renderer = @import("../../gui/renderer.zig");
-const w32 = @import("../../win32_constants.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32 = @import("../constants.zig");
+const w32cc = @import("../calling_convention.zig");
 
 pub fn GetKeyboardState(lpKeyState: usize) callconv(w32cc.WINAPI) i32 {
     if (lpKeyState != 0) {

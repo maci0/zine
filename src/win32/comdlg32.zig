@@ -1,7 +1,11 @@
+//! COMDLG32.dll registration.
+
 const env = @import("../loader/env.zig");
 const kernel32 = @import("kernel32.zig");
 const stubs = @import("comdlg32/dialogs.zig");
 
+/// Registers COMDLG32.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "comdlg32.dll";
     try environment.addBuiltinExportComptime(m, "GetOpenFileNameA", stubs.GetOpenFileNameA);

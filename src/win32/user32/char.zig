@@ -1,6 +1,6 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 
 pub fn CharNextA(lpsz: [*:0]const u8) callconv(w32cc.WINAPI) [*:0]const u8 {
     if (lpsz[0] == 0) return lpsz;

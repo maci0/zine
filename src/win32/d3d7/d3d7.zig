@@ -9,8 +9,8 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const renderer = @import("../../gui/renderer.zig");
 const kernel32 = @import("../kernel32.zig");
-const w32 = @import("../../win32_constants.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32 = @import("../constants.zig");
+const w32cc = @import("../calling_convention.zig");
 const ddraw_stubs = @import("../ddraw/ddraw.zig");
 
 // ===== IDirect3D7 =====
@@ -239,7 +239,7 @@ const IDirect3DLightVtbl = extern struct {
 // ===== Instances =====
 
 pub var global_d3d7: IDirect3D7 = undefined;
-pub var global_d3d3: IDirect3D7 = undefined;  // IDirect3D3-compatible vtable, same struct type
+pub var global_d3d3: IDirect3D7 = undefined; // IDirect3D3-compatible vtable, same struct type
 var global_d3d7_device: IDirect3DDevice7 = undefined;
 var global_d3d3_device: IDirect3DDevice3 = undefined;
 var global_viewport3: IDirect3DViewport3 = undefined;
@@ -375,8 +375,7 @@ fn d3d7_EnumDevices(this: *IDirect3D7, lpEnumDevicesCallback: usize, lpUserArg: 
 
         const device_desc_str = "Zine HAL Device\x00";
         const device_name_str = "HAL\x00";
-        const result = cb(@intFromPtr(device_desc_str.ptr), @intFromPtr(device_name_str.ptr),
-            @intFromPtr(&desc7), lpUserArg);
+        const result = cb(@intFromPtr(device_desc_str.ptr), @intFromPtr(device_name_str.ptr), @intFromPtr(&desc7), lpUserArg);
         _ = result;
     }
     return w32.D3D_OK;
@@ -475,15 +474,16 @@ fn d3d3_EnumDevices(this: *IDirect3D7, lpEnumDevicesCallback: usize, lpUserArg: 
         const device_desc_str = "Zine HAL Device\x00";
         const device_name_str = "HAL\x00";
         if (trace.enable_tracing) trace.print("D3D7: EnumDevices callback=0x{x} calling with HAL guid\n", .{lpEnumDevicesCallback});
-        const result = cb(@intFromPtr(&hal_guid), @intFromPtr(device_desc_str.ptr), @intFromPtr(device_name_str.ptr),
-            @intFromPtr(&hw_desc), @intFromPtr(&hel_desc), lpUserArg);
+        const result = cb(@intFromPtr(&hal_guid), @intFromPtr(device_desc_str.ptr), @intFromPtr(device_name_str.ptr), @intFromPtr(&hw_desc), @intFromPtr(&hel_desc), lpUserArg);
         if (trace.enable_tracing) trace.print("D3D7: EnumDevices callback returned {d}\n", .{result});
     }
     return w32.D3D_OK;
 }
 
 fn d3d7_CreateDevice(this: *IDirect3D7, rclsid: usize, lpDDS: usize, lplpD3DDevice: *?*anyopaque) callconv(w32cc.WINAPI) i32 {
-    _ = this; _ = rclsid; _ = lpDDS;
+    _ = this;
+    _ = rclsid;
+    _ = lpDDS;
     if (trace.enable_tracing) trace.print("D3D7: IDirect3D7::CreateDevice\n", .{});
     renderer.setResolution(ddraw_stubs.display_mode_w, ddraw_stubs.display_mode_h);
     lplpD3DDevice.* = @ptrCast(&global_d3d7_device);
@@ -492,7 +492,10 @@ fn d3d7_CreateDevice(this: *IDirect3D7, rclsid: usize, lpDDS: usize, lplpD3DDevi
 
 /// IDirect3D3::CreateDevice(this, rclsid, pDDS, ppDevice, pUnkOuter)
 fn d3d3_CreateDevice(this: *IDirect3D7, rclsid: usize, lpDDS: usize, lplpD3DDevice: *?*anyopaque, pUnkOuter: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this; _ = rclsid; _ = lpDDS; _ = pUnkOuter;
+    _ = this;
+    _ = rclsid;
+    _ = lpDDS;
+    _ = pUnkOuter;
     if (trace.enable_tracing) trace.print("D3D7: IDirect3D3::CreateDevice\n", .{});
     renderer.setResolution(ddraw_stubs.display_mode_w, ddraw_stubs.display_mode_h);
     lplpD3DDevice.* = @ptrCast(&global_d3d3_device);
@@ -504,14 +507,17 @@ fn d3d3_CreateDevice(this: *IDirect3D7, rclsid: usize, lpDDS: usize, lplpD3DDevi
 }
 
 fn d3d7_CreateVertexBuffer(this: *IDirect3D7, lpVBDesc: usize, lplpD3DVertexBuffer: *?*anyopaque, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
-    _ = this; _ = lpVBDesc; _ = dwFlags;
+    _ = this;
+    _ = lpVBDesc;
+    _ = dwFlags;
     if (trace.enable_tracing) trace.print("D3D7: CreateVertexBuffer\n", .{});
     lplpD3DVertexBuffer.* = @ptrFromInt(0xBEEF7000);
     return w32.D3D_OK;
 }
 
 fn d3d7_EnumZBufferFormats(this: *IDirect3D7, riidDevice: usize, lpEnumCallback: usize, lpContext: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this; _ = riidDevice;
+    _ = this;
+    _ = riidDevice;
     if (trace.enable_tracing) trace.print("D3D7: EnumZBufferFormats\n", .{});
     if (lpEnumCallback != 0) {
         const cb = @as(*const fn (usize, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(lpEnumCallback));
@@ -533,21 +539,24 @@ fn d3d7_EvictManagedTextures(this: *IDirect3D7) callconv(w32cc.WINAPI) i32 {
 // ===== IDirect3D3 Specific Stubs =====
 
 fn d3d3_CreateLight(this: *IDirect3D7, ppLight: *?*anyopaque, pUnk: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this; _ = pUnk;
+    _ = this;
+    _ = pUnk;
     if (trace.enable_tracing) trace.print("D3D7: IDirect3D3::CreateLight\n", .{});
     ppLight.* = @ptrCast(&global_light);
     return w32.D3D_OK;
 }
 
 fn d3d3_CreateMaterial(this: *IDirect3D7, ppMaterial: *?*anyopaque, pUnk: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this; _ = pUnk;
+    _ = this;
+    _ = pUnk;
     if (trace.enable_tracing) trace.print("D3D7: IDirect3D3::CreateMaterial\n", .{});
     ppMaterial.* = @ptrCast(&global_material3);
     return w32.D3D_OK;
 }
 
 fn d3d3_CreateViewport(this: *IDirect3D7, ppViewport: *?*anyopaque, pUnk: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this; _ = pUnk;
+    _ = this;
+    _ = pUnk;
     if (trace.enable_tracing) trace.print("D3D7: IDirect3D3::CreateViewport\n", .{});
     ppViewport.* = @ptrCast(&global_viewport3);
     return w32.D3D_OK;
@@ -555,7 +564,7 @@ fn d3d3_CreateViewport(this: *IDirect3D7, ppViewport: *?*anyopaque, pUnk: usize)
 
 fn d3d3_FindDevice(this: *IDirect3D7, pSearch: usize, pResult: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
-    if (trace.enable_tracing) trace.print("D3D7: IDirect3D3::FindDevice(search=0x{x}, result=0x{x})\n", .{pSearch, pResult});
+    if (trace.enable_tracing) trace.print("D3D7: IDirect3D3::FindDevice(search=0x{x}, result=0x{x})\n", .{ pSearch, pResult });
     if (pResult != 0) {
         const hal_guid = [16]u8{ 0xE0, 0x3D, 0xE6, 0x84, 0xAA, 0x46, 0xCF, 0x11, 0x81, 0x6F, 0x00, 0x00, 0xC0, 0x20, 0x15, 0x6E };
         const dest = @as([*]u8, @ptrFromInt(pResult + 4));
@@ -661,7 +670,12 @@ fn device7_EndScene(this: *IDirect3DDevice7) callconv(w32cc.WINAPI) i32 {
 }
 
 fn device7_Clear(this: *IDirect3DDevice7, dwCount: u32, lpRects: usize, dwFlags: u32, dwColor: u32, dvZ: f32, dwStencil: u32) callconv(w32cc.WINAPI) i32 {
-    _ = this; _ = dwCount; _ = lpRects; _ = dwFlags; _ = dvZ; _ = dwStencil;
+    _ = this;
+    _ = dwCount;
+    _ = lpRects;
+    _ = dwFlags;
+    _ = dvZ;
+    _ = dwStencil;
     if (trace.enable_tracing) trace.print("D3D7: Clear(color=0x{x:0>8})\n", .{dwColor});
 
     const vw = renderer.global_width;
@@ -685,56 +699,151 @@ fn device7_Clear(this: *IDirect3DDevice7, dwCount: u32, lpRects: usize, dwFlags:
 // Traced N-ary no-ops for D3D Device3 method tracing
 fn tn1(comptime name: []const u8) *const fn (usize) callconv(w32cc.WINAPI) usize {
     return &struct {
-        fn func(a: usize) callconv(w32cc.WINAPI) usize { _ = a; if (trace.enable_tracing) trace.print("D3D3Dev: " ++ name ++ "\n", .{}); return 0; }
+        fn func(a: usize) callconv(w32cc.WINAPI) usize {
+            _ = a;
+            if (trace.enable_tracing) trace.print("D3D3Dev: " ++ name ++ "\n", .{});
+            return 0;
+        }
     }.func;
 }
 fn tn2(comptime name: []const u8) *const fn (usize, usize) callconv(w32cc.WINAPI) usize {
     return &struct {
-        fn func(a: usize, b: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; if (trace.enable_tracing) trace.print("D3D3Dev: " ++ name ++ "\n", .{}); return 0; }
+        fn func(a: usize, b: usize) callconv(w32cc.WINAPI) usize {
+            _ = a;
+            _ = b;
+            if (trace.enable_tracing) trace.print("D3D3Dev: " ++ name ++ "\n", .{});
+            return 0;
+        }
     }.func;
 }
 fn tn3(comptime name: []const u8) *const fn (usize, usize, usize) callconv(w32cc.WINAPI) usize {
     return &struct {
-        fn func(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; _ = c; if (trace.enable_tracing) trace.print("D3D3Dev: " ++ name ++ "\n", .{}); return 0; }
+        fn func(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize {
+            _ = a;
+            _ = b;
+            _ = c;
+            if (trace.enable_tracing) trace.print("D3D3Dev: " ++ name ++ "\n", .{});
+            return 0;
+        }
     }.func;
 }
 fn tn4(comptime name: []const u8) *const fn (usize, usize, usize, usize) callconv(w32cc.WINAPI) usize {
     return &struct {
-        fn func(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; _ = c; _ = d; if (trace.enable_tracing) trace.print("D3D3Dev: " ++ name ++ "\n", .{}); return 0; }
+        fn func(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize {
+            _ = a;
+            _ = b;
+            _ = c;
+            _ = d;
+            if (trace.enable_tracing) trace.print("D3D3Dev: " ++ name ++ "\n", .{});
+            return 0;
+        }
     }.func;
 }
 fn tn6(comptime name: []const u8) *const fn (usize, usize, usize, usize, usize, usize) callconv(w32cc.WINAPI) usize {
     return &struct {
-        fn func(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; _ = c; _ = d; _ = e; _ = f; if (trace.enable_tracing) trace.print("D3D3Dev: " ++ name ++ "\n", .{}); return 0; }
+        fn func(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) usize {
+            _ = a;
+            _ = b;
+            _ = c;
+            _ = d;
+            _ = e;
+            _ = f;
+            if (trace.enable_tracing) trace.print("D3D3Dev: " ++ name ++ "\n", .{});
+            return 0;
+        }
     }.func;
 }
 fn tn8(comptime name: []const u8) *const fn (usize, usize, usize, usize, usize, usize, usize, usize) callconv(w32cc.WINAPI) usize {
     return &struct {
-        fn func(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; _ = c; _ = d; _ = e; _ = f; _ = g; _ = h; if (trace.enable_tracing) trace.print("D3D3Dev: " ++ name ++ "\n", .{}); return 0; }
+        fn func(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize) callconv(w32cc.WINAPI) usize {
+            _ = a;
+            _ = b;
+            _ = c;
+            _ = d;
+            _ = e;
+            _ = f;
+            _ = g;
+            _ = h;
+            if (trace.enable_tracing) trace.print("D3D3Dev: " ++ name ++ "\n", .{});
+            return 0;
+        }
     }.func;
 }
 
 // Typed no-ops (stdcall)
-fn n1(a: usize) callconv(w32cc.WINAPI) usize { _ = a; return 0; }
-fn n2(a: usize, b: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; return 0; }
-fn n3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; _ = c; return 0; }
-fn n4(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; _ = c; _ = d; return 0; }
-fn n5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; _ = c; _ = d; _ = e; return 0; }
-fn n6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; _ = c; _ = d; _ = e; _ = f; return 0; }
-fn n7(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; _ = c; _ = d; _ = e; _ = f; _ = g; return 0; }
-fn n8(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize) callconv(w32cc.WINAPI) usize { _ = a; _ = b; _ = c; _ = d; _ = e; _ = f; _ = g; _ = h; return 0; }
+fn n1(a: usize) callconv(w32cc.WINAPI) usize {
+    _ = a;
+    return 0;
+}
+fn n2(a: usize, b: usize) callconv(w32cc.WINAPI) usize {
+    _ = a;
+    _ = b;
+    return 0;
+}
+fn n3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize {
+    _ = a;
+    _ = b;
+    _ = c;
+    return 0;
+}
+fn n4(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize {
+    _ = a;
+    _ = b;
+    _ = c;
+    _ = d;
+    return 0;
+}
+fn n5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) usize {
+    _ = a;
+    _ = b;
+    _ = c;
+    _ = d;
+    _ = e;
+    return 0;
+}
+fn n6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) usize {
+    _ = a;
+    _ = b;
+    _ = c;
+    _ = d;
+    _ = e;
+    _ = f;
+    return 0;
+}
+fn n7(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize) callconv(w32cc.WINAPI) usize {
+    _ = a;
+    _ = b;
+    _ = c;
+    _ = d;
+    _ = e;
+    _ = f;
+    _ = g;
+    return 0;
+}
+fn n8(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize) callconv(w32cc.WINAPI) usize {
+    _ = a;
+    _ = b;
+    _ = c;
+    _ = d;
+    _ = e;
+    _ = f;
+    _ = g;
+    _ = h;
+    return 0;
+}
 
-// ===== Registration =====
-
+/// ===== Registration =====
+/// Implementation status: Partially implemented
 pub fn init() void {
-    const N1 = @intFromPtr(&n1);
-    const N2 = @intFromPtr(&n2);
-    const N3 = @intFromPtr(&n3);
-    const N4 = @intFromPtr(&n4);
-    const N6 = @intFromPtr(&n6);
-    const N7 = @intFromPtr(&n7);
-    const N8 = @intFromPtr(&n8);
+    const comPtr = @import("../../x86/thunks.zig").comPtr;
 
+    const N1 = comPtr(n1, "IDirect3DDevice7::noop1");
+    const N2 = comPtr(n2, "IDirect3DDevice7::noop2");
+    const N3 = comPtr(n3, "IDirect3DDevice7::noop3");
+    const N4 = comPtr(n4, "IDirect3DDevice7::noop4");
+    const N6 = comPtr(n6, "IDirect3DDevice7::noop6");
+    const N7 = comPtr(n7, "IDirect3DDevice7::noop7");
+    const N8 = comPtr(n8, "IDirect3DDevice7::noop8");
 
     d3d7_vtbl = .{
         .QueryInterface = d3d7_QueryInterface,
@@ -764,48 +873,48 @@ pub fn init() void {
 
     // IDirect3DDevice3 vtable — 42 methods (traced stubs)
     device3_vtbl = .{
-        .QueryInterface = @intFromPtr(tn3("QueryInterface")),     // 0
-        .AddRef = @intFromPtr(tn1("AddRef")),             // 1
-        .Release = @intFromPtr(tn1("Release")),            // 2
-        .GetCaps = @intFromPtr(tn3("GetCaps")),            // 3
-        .GetStats = @intFromPtr(tn2("GetStats")),           // 4
-        .AddViewport = @intFromPtr(tn2("AddViewport")),        // 5
-        .DeleteViewport = @intFromPtr(tn2("DeleteViewport")),     // 6
-        .NextViewport = @intFromPtr(tn4("NextViewport")),       // 7
-        .EnumTextureFormats = @intFromPtr(&device3_EnumTextureFormats), // 8
+        .QueryInterface = comPtr(tn3("QueryInterface").*, "IDirect3DDevice3::QueryInterface"), // 0
+        .AddRef = comPtr(tn1("AddRef").*, "IDirect3DDevice3::AddRef"), // 1
+        .Release = comPtr(tn1("Release").*, "IDirect3DDevice3::Release"), // 2
+        .GetCaps = comPtr(tn3("GetCaps").*, "IDirect3DDevice3::GetCaps"), // 3
+        .GetStats = comPtr(tn2("GetStats").*, "IDirect3DDevice3::GetStats"), // 4
+        .AddViewport = comPtr(tn2("AddViewport").*, "IDirect3DDevice3::AddViewport"), // 5
+        .DeleteViewport = comPtr(tn2("DeleteViewport").*, "IDirect3DDevice3::DeleteViewport"), // 6
+        .NextViewport = comPtr(tn4("NextViewport").*, "IDirect3DDevice3::NextViewport"), // 7
+        .EnumTextureFormats = comPtr(device3_EnumTextureFormats, "IDirect3DDevice3::EnumTextureFormats"), // 8
         .BeginScene = device3_BeginScene, // 9
-        .EndScene = device3_EndScene,     // 10
-        .GetDirect3D = @intFromPtr(tn2("GetDirect3D")),  // 11
-        .SetCurrentViewport = @intFromPtr(tn2("SetCurrentViewport")), // 12
-        .GetCurrentViewport = @intFromPtr(tn2("GetCurrentViewport")), // 13
-        .SetRenderTarget = @intFromPtr(tn3("SetRenderTarget")),    // 14
-        .GetRenderTarget = @intFromPtr(tn2("GetRenderTarget")),    // 15
-        .Begin = @intFromPtr(tn4("Begin")),              // 16
-        .BeginIndexed = @intFromPtr(tn6("BeginIndexed")),       // 17
-        .Vertex = @intFromPtr(tn2("Vertex")),             // 18
-        .Index = @intFromPtr(tn2("Index")),              // 19
-        .End = @intFromPtr(tn2("End")),                // 20
-        .GetRenderState = @intFromPtr(tn3("GetRenderState")),     // 21
-        .SetRenderState = @intFromPtr(tn3("SetRenderState")),     // 22
-        .GetLightState = @intFromPtr(tn3("GetLightState")),      // 23
-        .SetLightState = @intFromPtr(tn3("SetLightState")),      // 24
-        .SetTransform = @intFromPtr(tn3("SetTransform")),       // 25
-        .GetTransform = @intFromPtr(tn3("GetTransform")),       // 26
-        .MultiplyTransform = @intFromPtr(tn3("MultiplyTransform")),  // 27
-        .DrawPrimitive = @intFromPtr(tn6("DrawPrimitive")),      // 28
-        .DrawIndexedPrimitive = @intFromPtr(tn8("DrawIndexedPrimitive")), // 29
-        .SetClipStatus = @intFromPtr(tn2("SetClipStatus")),      // 30
-        .GetClipStatus = @intFromPtr(tn2("GetClipStatus")),      // 31
-        .DrawPrimitiveStrided = @intFromPtr(tn6("DrawPrimitiveStrided")), // 32
-        .DrawIndexedPrimitiveStrided = @intFromPtr(tn8("DrawIndexedPrimitiveStrided")), // 33
-        .DrawPrimitiveVB = @intFromPtr(tn6("DrawPrimitiveVB")),    // 34
-        .DrawIndexedPrimitiveVB = @intFromPtr(tn6("DrawIndexedPrimitiveVB")), // 35
-        .ComputeSphereVisibility = @intFromPtr(tn6("ComputeSphereVisibility")), // 36
-        .GetTexture = @intFromPtr(tn3("GetTexture")),         // 37
-        .SetTexture = @intFromPtr(tn3("SetTexture")),         // 38
-        .GetTextureStageState = @intFromPtr(tn4("GetTextureStageState")), // 39
-        .SetTextureStageState = @intFromPtr(tn4("SetTextureStageState")), // 40
-        .ValidateDevice = @intFromPtr(tn2("ValidateDevice")),     // 41
+        .EndScene = device3_EndScene, // 10
+        .GetDirect3D = comPtr(tn2("GetDirect3D").*, "IDirect3DDevice3::GetDirect3D"), // 11
+        .SetCurrentViewport = comPtr(tn2("SetCurrentViewport").*, "IDirect3DDevice3::SetCurrentViewport"), // 12
+        .GetCurrentViewport = comPtr(tn2("GetCurrentViewport").*, "IDirect3DDevice3::GetCurrentViewport"), // 13
+        .SetRenderTarget = comPtr(tn3("SetRenderTarget").*, "IDirect3DDevice3::SetRenderTarget"), // 14
+        .GetRenderTarget = comPtr(tn2("GetRenderTarget").*, "IDirect3DDevice3::GetRenderTarget"), // 15
+        .Begin = comPtr(tn4("Begin").*, "IDirect3DDevice3::Begin"), // 16
+        .BeginIndexed = comPtr(tn6("BeginIndexed").*, "IDirect3DDevice3::BeginIndexed"), // 17
+        .Vertex = comPtr(tn2("Vertex").*, "IDirect3DDevice3::Vertex"), // 18
+        .Index = comPtr(tn2("Index").*, "IDirect3DDevice3::Index"), // 19
+        .End = comPtr(tn2("End").*, "IDirect3DDevice3::End"), // 20
+        .GetRenderState = comPtr(tn3("GetRenderState").*, "IDirect3DDevice3::GetRenderState"), // 21
+        .SetRenderState = comPtr(tn3("SetRenderState").*, "IDirect3DDevice3::SetRenderState"), // 22
+        .GetLightState = comPtr(tn3("GetLightState").*, "IDirect3DDevice3::GetLightState"), // 23
+        .SetLightState = comPtr(tn3("SetLightState").*, "IDirect3DDevice3::SetLightState"), // 24
+        .SetTransform = comPtr(tn3("SetTransform").*, "IDirect3DDevice3::SetTransform"), // 25
+        .GetTransform = comPtr(tn3("GetTransform").*, "IDirect3DDevice3::GetTransform"), // 26
+        .MultiplyTransform = comPtr(tn3("MultiplyTransform").*, "IDirect3DDevice3::MultiplyTransform"), // 27
+        .DrawPrimitive = comPtr(tn6("DrawPrimitive").*, "IDirect3DDevice3::DrawPrimitive"), // 28
+        .DrawIndexedPrimitive = comPtr(tn8("DrawIndexedPrimitive").*, "IDirect3DDevice3::DrawIndexedPrimitive"), // 29
+        .SetClipStatus = comPtr(tn2("SetClipStatus").*, "IDirect3DDevice3::SetClipStatus"), // 30
+        .GetClipStatus = comPtr(tn2("GetClipStatus").*, "IDirect3DDevice3::GetClipStatus"), // 31
+        .DrawPrimitiveStrided = comPtr(tn6("DrawPrimitiveStrided").*, "IDirect3DDevice3::DrawPrimitiveStrided"), // 32
+        .DrawIndexedPrimitiveStrided = comPtr(tn8("DrawIndexedPrimitiveStrided").*, "IDirect3DDevice3::DrawIndexedPrimitiveStrided"), // 33
+        .DrawPrimitiveVB = comPtr(tn6("DrawPrimitiveVB").*, "IDirect3DDevice3::DrawPrimitiveVB"), // 34
+        .DrawIndexedPrimitiveVB = comPtr(tn6("DrawIndexedPrimitiveVB").*, "IDirect3DDevice3::DrawIndexedPrimitiveVB"), // 35
+        .ComputeSphereVisibility = comPtr(tn6("ComputeSphereVisibility").*, "IDirect3DDevice3::ComputeSphereVisibility"), // 36
+        .GetTexture = comPtr(tn3("GetTexture").*, "IDirect3DDevice3::GetTexture"), // 37
+        .SetTexture = comPtr(tn3("SetTexture").*, "IDirect3DDevice3::SetTexture"), // 38
+        .GetTextureStageState = comPtr(tn4("GetTextureStageState").*, "IDirect3DDevice3::GetTextureStageState"), // 39
+        .SetTextureStageState = comPtr(tn4("SetTextureStageState").*, "IDirect3DDevice3::SetTextureStageState"), // 40
+        .ValidateDevice = comPtr(tn2("ValidateDevice").*, "IDirect3DDevice3::ValidateDevice"), // 41
     };
 
     // IDirect3DDevice7 vtable — 48 methods
@@ -863,26 +972,26 @@ pub fn init() void {
     // IDirect3DViewport3 vtable — 21 methods
     viewport3_vtbl = .{
         .QueryInterface = N3, // 0
-        .AddRef = N1,         // 1
-        .Release = N1,        // 2
-        .Initialize = N2,     // 3
-        .GetViewport = @intFromPtr(&vp_GetViewport), // 4
-        .SetViewport = @intFromPtr(&vp_SetViewport), // 5
+        .AddRef = N1, // 1
+        .Release = N1, // 2
+        .Initialize = N2, // 3
+        .GetViewport = comPtr(vp_GetViewport, "IDirect3DViewport3::GetViewport"), // 4
+        .SetViewport = comPtr(vp_SetViewport, "IDirect3DViewport3::SetViewport"), // 5
         .TransformVertices = N4, // 6
-        .LightElements = N3,  // 7
-        .SetBackground = N2,  // 8
-        .GetBackground = N3,  // 9
+        .LightElements = N3, // 7
+        .SetBackground = N2, // 8
+        .GetBackground = N3, // 9
         .SetBackgroundDepth = N2, // 10
         .GetBackgroundDepth = N3, // 11
-        .Clear = N4,          // 12: this, count, rects, flags
-        .AddLight = N2,       // 13
-        .DeleteLight = N2,    // 14
-        .NextLight = N4,      // 15
-        .GetViewport2 = @intFromPtr(&vp_GetViewport2), // 16
-        .SetViewport2 = @intFromPtr(&vp_SetViewport2), // 17
+        .Clear = N4, // 12: this, count, rects, flags
+        .AddLight = N2, // 13
+        .DeleteLight = N2, // 14
+        .NextLight = N4, // 15
+        .GetViewport2 = comPtr(vp_GetViewport2, "IDirect3DViewport3::GetViewport2"), // 16
+        .SetViewport2 = comPtr(vp_SetViewport2, "IDirect3DViewport3::SetViewport2"), // 17
         .SetBackgroundDepth2 = N2, // 18
         .GetBackgroundDepth2 = N3, // 19
-        .Clear2 = N7,         // 20: this, count, rects, flags, color, z, stencil
+        .Clear2 = N7, // 20: this, count, rects, flags, color, z, stencil
     };
 
     // IDirect3DMaterial3 vtable — 6 methods
@@ -914,6 +1023,8 @@ pub fn init() void {
     global_light.lpVtbl = &light_vtbl;
 }
 
+/// registerVtables
+/// Implementation status: Partially implemented
 pub fn registerVtables(environment: anytype) void {
     environment.addBuiltinVtableComptime(IDirect3D7Vtbl, &d3d7_vtbl);
     environment.addBuiltinVtableComptime(IDirect3D3Vtbl, &d3d3_vtbl);

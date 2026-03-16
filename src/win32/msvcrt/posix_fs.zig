@@ -1,27 +1,24 @@
-const std = @import("std");
+//! POSIX filesystem primitives for Win32 stubs.
+//!
+//! This module provides a minimal POSIX-like filesystem layer that performs
+//! Win32-to-POSIX path translation and handles case-insensitive file access
+//! on platforms that don't support it natively (like Linux).
 
+const std = @import("std");
 const path_utils = @import("../../path_utils.zig");
 
-// Platform-independent open flag constants.
-// These are only used internally by posix_fs.open() and its callers —
-// not passed to real POSIX syscalls.  Callers should reference these
-// (e.g. posix_fs.O_RDWR) instead of std.posix.O which varies by target.
+/// Read-only access.
 pub const O_RDONLY: u32 = 0;
+/// Write-only access.
 pub const O_WRONLY: u32 = 1;
+/// Read-write access.
 pub const O_RDWR: u32 = 2;
+/// Create file if it does not exist.
 pub const O_CREAT: u32 = 0x40;
+/// Truncate file to zero length.
 pub const O_TRUNC: u32 = 0x200;
+/// Append data to the end of the file.
 pub const O_APPEND: u32 = 0x400;
-
-// ============================================================================
-// POSIX filesystem primitives for Win32 stubs.
-//
-// Path resolution flow:
-//   1. path_utils.toHostPath() translates Win32→POSIX (drive letters, CWD, etc)
-//   2. Functions here try the exact path, then case-insensitive fallback
-// ============================================================================
-
-// --- Low-level file helpers (operate on already-resolved host paths) --------
 
 fn fsStat(path: []const u8) ?std.fs.File.Stat {
     if (std.fs.path.isAbsolute(path)) {
@@ -60,9 +57,6 @@ fn fsOpenFile(path: []const u8, flags: std.fs.File.OpenFlags) !std.fs.File {
     }
 }
 
-// --- Case-insensitive helpers -----------------------------------------------
-
-/// Try lowercasing just the filename component.
 fn tryLower(path: []const u8, buf: []u8) ?[]const u8 {
     if (path.len > buf.len) return null;
     @memcpy(buf[0..path.len], path);
@@ -76,8 +70,8 @@ fn tryLower(path: []const u8, buf: []u8) ?[]const u8 {
     return buf[0..path.len];
 }
 
-// --- Public API (accepts Win32 paths, resolves via path_utils) ---------------
-
+/// Get status information on a file.
+/// Implementation status: Partially implemented
 pub fn stat(path: [*:0]const u8) ?std.fs.File.Stat {
     const span = std.mem.span(path);
     var host_buf: [1024]u8 = undefined;
@@ -103,6 +97,8 @@ pub fn stat(path: [*:0]const u8) ?std.fs.File.Stat {
     return null;
 }
 
+/// Determine file-access permissions.
+/// Implementation status: Partially implemented
 pub fn access(path: [*:0]const u8, mode: i32) i32 {
     _ = mode;
     const span = std.mem.span(path);
@@ -129,6 +125,8 @@ pub fn access(path: [*:0]const u8, mode: i32) i32 {
     return -1;
 }
 
+/// Opens a file.
+/// Implementation status: Partially implemented
 pub fn open(path: [*:0]const u8, flags: u32, mode: u32) i32 {
     _ = mode;
     const span = std.mem.span(path);
@@ -139,23 +137,17 @@ pub fn open(path: [*:0]const u8, flags: u32, mode: u32) i32 {
     const trace = @import("../../trace.zig");
     if (trace.enable_tracing) trace.print("POSIX_FS OPEN: {s} (flags {d})\n", .{ host_buf[0..host_len], flags });
 
-    // Use our own platform-independent flag constants (defined at file scope)
-
     const is_write = (flags & O_WRONLY) != 0 or (flags & O_RDWR) != 0;
     const is_create = (flags & O_CREAT) != 0;
     const is_trunc = (flags & O_TRUNC) != 0;
     const is_append = (flags & O_APPEND) != 0;
 
-    // Try with the resolved path, then lowercase fallback, then case-insensitive scan
-    const paths_to_try = [_][]const u8{host_buf[0..host_len]};
     var lower_buf: [1024]u8 = undefined;
     var ci_buf: [1024]u8 = undefined;
 
-    // Build list of candidate paths
     const p0 = host_buf[0..host_len];
     const p1 = tryLower(p0, &lower_buf);
     const p2 = path_utils.tryCaseInsensitiveResolve(p0, &ci_buf);
-    _ = paths_to_try;
 
     const candidates = [_]?[]const u8{ p0, p1, p2 };
 

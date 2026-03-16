@@ -1,3 +1,9 @@
+//! Win32 PE module representation.
+//!
+//! This module defines the `Module` struct, which represents a loaded PE
+//! executable or DLL in the guest address space, and provides functions for
+//! loading, mapping, and resolving exports.
+
 const std = @import("std");
 const pe = @import("../pe.zig");
 const log = @import("../log.zig");
@@ -37,17 +43,41 @@ fn openFilePortable(path: []const u8) !std.fs.File {
     return std.fs.cwd().openFile(path, .{});
 }
 
+/// Represents a loaded Win32 PE module (executable or DLL) in the guest address space.
+///
+/// A Module encapsulates the raw file data, the mapped memory image, its
+/// metadata (parsed PE headers), and state related to its lifecycle in the
+/// guest environment (such as whether imports have been resolved).
 pub const Module = struct {
+    /// The allocator used for this module's metadata.
     allocator: std.mem.Allocator,
+    /// The name of the module (e.g., "kernel32.dll").
     name: []const u8,
+    /// Raw bytes of the PE file as loaded from disk.
     file_data: []u8,
+    /// The mapped PE image in guest memory (aligned to 4096).
     mapped_memory: []align(4096) u8,
+    /// The actual base address where the image was mapped.
     image_base: usize,
+    /// Virtual address of the entry point, if any.
     entry_point: ?usize,
+    /// The PE parser instance for this module.
     parser: pe.PEParser,
+    /// Whether this module's imports have been resolved.
     imports_resolved: bool = false,
+    /// Whether this module is attached to the environment.
     attached: bool = false,
 
+    /// Loads a PE module from the specified path and prepares it for execution.
+    ///
+    /// This function:
+    ///   1. Reads the file data into memory.
+    ///   2. Parses the PE headers.
+    ///   3. Allocates executable guest memory for the image (attempting to match its preferred ImageBase).
+    ///   4. Maps all PE sections into the newly allocated memory.
+    ///   5. Applies base relocations if the mapping base address differs from the preferred ImageBase.
+    ///
+    /// Returns a pointer to the initialized Module.
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !*Module {
         const file = openFilePortable(path) catch |err| {
             log.err("Module.load: failed to open '{s}': {}", .{ path, err });
@@ -147,6 +177,7 @@ pub const Module = struct {
         return mod;
     }
 
+    /// Frees all memory associated with the module, including the mapped image.
     pub fn deinit(self: *Module) void {
         const platform = @import("../platform.zig");
         platform.munmap(self.mapped_memory);
@@ -155,6 +186,9 @@ pub const Module = struct {
         self.allocator.destroy(self);
     }
 
+    /// Resolves an exported symbol by name and returns its virtual address.
+    /// This function handles named exports but returns null for forwarded exports
+    /// (e.g. NTDLL.RtlAllocateHeap -> KERNEL32.HeapAlloc).
     pub fn getExport(self: *Module, name: []const u8) ?usize {
         const opt_header = &self.parser.getNtHeaders().OptionalHeader;
         const export_dir_rva = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
@@ -184,7 +218,8 @@ pub const Module = struct {
                 if (func_rva >= export_dir_rva and func_rva < export_dir_rva + export_dir_size) {
                     const forwarder = std.mem.span(@as([*:0]const u8, @ptrCast(&self.mapped_memory[func_rva])));
                     log.warn("Forwarded export {s} -> {s}", .{ name, forwarder });
-                    return null; // TODO: resolve forwarder
+                    // Forwarded export (not yet implemented)
+                    return null;
                 }
 
                 return self.image_base + func_rva;
@@ -194,6 +229,9 @@ pub const Module = struct {
         return null;
     }
 
+    /// Returns the raw data of the first resource of a given type.
+    /// Used when the resource ID is unknown or the first available resource
+    /// of that type is needed (e.g. the first icon in a module).
     pub fn getFirstResource(self: *Module, resource_type: u32) ?[]const u8 {
         const opt_header = &self.parser.getNtHeaders().OptionalHeader;
         const res_dir_rva = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
@@ -232,6 +270,9 @@ pub const Module = struct {
         return self.mapped_memory[data_entry.OffsetToData .. data_entry.OffsetToData + data_entry.Size];
     }
 
+    /// Returns the raw data of a specific resource by type and ID.
+    /// Traverses the PE resource directory tree: Type -> Name/ID -> Language.
+    /// Always returns the first language entry found for the given ID.
     pub fn getResource(self: *Module, resource_type: u32, resource_id: u32) ?[]const u8 {
         const opt_header = &self.parser.getNtHeaders().OptionalHeader;
         const res_dir_rva = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;

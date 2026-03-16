@@ -1,7 +1,14 @@
-// x86 instruction execution dispatch for the software interpreter.
-//
-// Implements the decode-and-dispatch loop and execution handlers for
-// all supported x86 instructions.
+//! x86 instruction execution loop and dispatcher.
+//!
+//! This module implements a simple fetch-decode-execute interpreter loop.
+//! It does not use any advanced optimizations like basic-block caching,
+//! threaded interpretation, or JIT compilation in its core dispatch loop.
+//!
+//! Execution flows through:
+//!   1. Instruction fetching from guest memory
+//!   2. Instruction decoding into structured Instruction representation
+//!   3. Opcode dispatching to specific execution handlers
+//!   4. Flag updates and PC advancement
 
 const std = @import("std");
 const cpu_mod = @import("cpu.zig");
@@ -25,14 +32,19 @@ const Segment = cpu_mod.Segment;
 // Entry point
 // -----------------------------------------------------------------------
 
-/// Run the decode-and-dispatch loop until the CPU halts.
+/// Continually executes instructions in the provided CPU context until the `halted` flag is set.
 pub fn run(cpu: *Cpu) void {
     while (!cpu.halted) {
         step(cpu);
     }
 }
 
-/// Execute one instruction.
+/// Executes a single x86 instruction at the current EIP.
+/// This function handles:
+///   1. Checking for native imports (thunks).
+///   2. Decoding the instruction at the current memory location.
+///   3. Advancing EIP.
+///   4. Dispatching to the appropriate execution handler via `executeInsn`.
 pub fn step(cpu: *Cpu) void {
     const eip = cpu.eip;
 
@@ -43,6 +55,18 @@ pub fn step(cpu: *Cpu) void {
     if (thunks.isNativeImport(eip)) {
         dispatchNativeCall(cpu);
         return;
+    }
+
+    // On x86-linux: if EIP is in a loaded DLL (not the main exe, not a thunk),
+    // execute natively via stack switching. DLL code may use SSE/MMX/FPU
+    // instructions that the interpreter cannot handle.
+    if (cpu.memory.native_linear) {
+        const k32 = @import("../win32/kernel32.zig");
+        const is_main_exe = (eip >= k32.app_code_start and eip < k32.app_code_end);
+        if (!is_main_exe and eip >= 0x10000 and eip < 0x70000000) {
+            callDllNative(cpu);
+            return;
+        }
     }
 
     const code = cpu.memory.readSlice(eip, 16) orelse {
@@ -73,6 +97,67 @@ pub fn step(cpu: *Cpu) void {
     executeInsn(cpu, &insn, eip);
 }
 
+/// Execute DLL code natively by calling through a cdecl trampoline.
+/// The trampoline switches to the guest stack, calls the DLL function,
+/// and returns with the result.
+fn callDllNative(cpu: *Cpu) void {
+    const target = cpu.eip;
+    const ret_addr = cpu.pop32();
+
+    if (trace.enable_tracing) {
+        trace.print("x86: callDllNative target=0x{X:0>8} ret=0x{X:0>8} ESP=0x{X:0>8}\n", .{ target, ret_addr, cpu.esp });
+    }
+
+    const result = callWithGuestStack(target, cpu.esp);
+    cpu.eax = result.eax;
+    cpu.esp = result.esp;
+    cpu.eip = ret_addr;
+
+    if (trace.enable_tracing) {
+        trace.print("x86: callDllNative returned EAX=0x{X} ESP=0x{X:0>8}\n", .{ cpu.eax, cpu.esp });
+    }
+}
+
+const NativeCallResult = struct { eax: u32, esp: u32 };
+
+/// Noinline to ensure the compiler doesn't inline the asm into a complex function.
+noinline fn callWithGuestStack(target: u32, guest_esp: u32) NativeCallResult {
+    var result_eax: u32 = 0;
+    var new_esp: u32 = 0;
+    if (comptime @import("../platform.zig").is_x86) {
+        asm volatile (
+            // Save callee-saved regs on host stack
+            \\pushl %%ebp
+            \\pushl %%ebx
+            \\pushl %%esi
+            \\pushl %%edi
+            // Save host ESP in ESI (callee-saved, will be restored after)
+            \\movl %%esp, %%esi
+            // Switch to guest stack and call DLL function
+            \\movl %%eax, %%esp
+            \\call *%%ecx
+            // Save new guest ESP to memory (before restoring host stack)
+            \\movl %%esp, %[out_esp]
+            // Restore host stack
+            \\movl %%esi, %%esp
+            \\popl %%edi
+            \\popl %%esi
+            \\popl %%ebx
+            \\popl %%ebp
+            : [out_eax] "={eax}" (result_eax),
+              [out_esp] "=m" (new_esp),
+            : [in_esp] "{eax}" (guest_esp),
+              [in_target] "{ecx}" (target)
+            : .{ .memory = true, .cc = true }
+        );
+    } else {
+        _ = .{ target, guest_esp };
+        // This path is never reached on non-x86 because callDllNative is guarded
+        // by cpu.memory.native_linear, which is only true on x86.
+    }
+    return .{ .eax = result_eax, .esp = new_esp };
+}
+
 /// Handle the case where EIP points outside guest memory.
 /// This happens when x86 code CALLs through the IAT — the IAT contains
 /// native function pointers (Zig stubs compiled into the host binary).
@@ -86,13 +171,13 @@ fn dispatchNativeCall(cpu: *Cpu) void {
     // Null function pointer — unresolved or data-address import
     if (target_addr == 0) {
         log.warn("x86: CALL to null function pointer", .{});
-        cpu.eip = cpu.pop32(); // return address
+        cpu.eip = cpu.pop32();
         cpu.eax = 0;
         return;
     }
 
     // The return address was pushed by the CALL instruction
-    const ret_addr = cpu.pop32(); trace.print("GUEST STACK POPPED {X}.\n", .{ret_addr});
+    const ret_addr = cpu.pop32();
 
     // Read up to 16 dword arguments from guest stack for the native call.
     // Stdcall/cdecl functions won't read more than they need.
@@ -120,9 +205,14 @@ fn dispatchNativeCall(cpu: *Cpu) void {
                 if (bytes[0] == 0xE8) {
                     const rel32 = @as(*align(1) const i32, @ptrCast(bytes[1..5])).*;
                     const thunk_addr = @as(u32, @bitCast(@as(i32, @bitCast(ret_addr)) +% rel32));
-                    if (cpu.memory.readSlice(thunk_addr, 6)) |thunk_bytes| {
-                        if (thunk_bytes[0] == 0xFF and thunk_bytes[1] == 0x25) {
-                            iat_slot = @as(*align(1) const u32, @ptrCast(thunk_bytes[2..6])).*;
+                    // Guard: only read if thunk_addr is in a plausible PE code range
+                    // In native_linear mode, readSlice never returns null and would
+                    // SIGSEGV on unmapped memory.
+                    if (thunk_addr >= 0x10000 and thunk_addr < 0x70000000) {
+                        if (cpu.memory.readSlice(thunk_addr, 6)) |thunk_bytes| {
+                            if (thunk_bytes[0] == 0xFF and thunk_bytes[1] == 0x25) {
+                                iat_slot = @as(*align(1) const u32, @ptrCast(thunk_bytes[2..6])).*;
+                            }
                         }
                     }
                 }
@@ -134,6 +224,50 @@ fn dispatchNativeCall(cpu: *Cpu) void {
                 log.fatal("Unimplemented Win32 API: {s} (called from guest 0x{X})", .{ name, ret_addr });
             }
         }
+    }
+
+    // Special case: _EH_prolog is a naked function with non-standard calling
+    // convention — it reads EAX (scope table), manipulates ESP/EBP/FS directly.
+    // Can't dispatch through the generic native call mechanism.
+    const msvcrt_except = @import("../win32/msvcrt/except.zig");
+    if (target_addr == @intFromPtr(msvcrt_except.stub_EH_prolog)) {
+        // Emulate what _EH_prolog does:
+        //   push -1             ; try_level = -1
+        //   push eax            ; scope table (passed by caller in eax)
+        //   push fs:[0]         ; old SEH chain head
+        //   mov fs:[0], esp     ; install new SEH frame
+        //   mov eax, [esp+12]   ; original return address
+        //   mov [esp+12], ebp   ; save caller's EBP
+        //   lea ebp, [esp+12]   ; EBP = frame base
+        //   push eax            ; push return address
+        //   ret                 ; "return" to original caller
+        // Net effect: 3 dwords pushed before ret_addr, EBP set to frame base.
+        // The 'push eax; ret' at the end jumps back to ret_addr.
+        cpu.push32(0xFFFFFFFF); // push -1
+        cpu.push32(cpu.eax); // push scope table
+        const old_seh = cpu.memory.read32(cpu.fs_base); // fs:[0]
+        cpu.push32(old_seh);
+        cpu.memory.write32(cpu.fs_base, cpu.esp); // mov fs:[0], esp
+        // [esp+12] is where ret_addr was before we pushed 3 values.
+        // But we already popped ret_addr at line 180, so we need to
+        // simulate: the return address is ret_addr, and [esp+12] should
+        // get EBP stored there. Since we popped ret_addr, the 3 pushes
+        // put us 12 bytes below where ret_addr would have been. The
+        // original code reads [esp+12] which is the slot above our 3 pushes.
+        // That slot is the first guest arg (args[0]) which was below ret_addr.
+        // But actually, _EH_prolog is called with the stack:
+        //   [ESP] = ret_addr (already popped by us)
+        //   [ESP+4..] = caller's locals
+        // After our 3 pushes: [ESP+12] = where ret_addr was = now args[0].
+        // But we already popped ret_addr, so [ESP+12] is actually the
+        // caller's EBP save slot. We just write EBP there.
+        cpu.memory.write32(cpu.esp +% 12, cpu.ebp);
+        cpu.ebp = cpu.esp +% 12;
+        cpu.eip = ret_addr;
+        if (trace.enable_tracing) {
+            trace.print("x86_execute: _EH_prolog emulated (scope_table=0x{X}, old_seh=0x{X}, ebp=0x{X})\n", .{ cpu.eax, old_seh, cpu.ebp });
+        }
+        return;
     }
 
     // Special case: _ftol reads from x87 FPU stack (ST0), but in interpreter
@@ -201,7 +335,7 @@ fn dispatchNativeCall(cpu: *Cpu) void {
     // On WASM, check if _initterm enqueued any guest init functions.
     // If so, build an x86 trampoline in guest memory to execute them.
     if (comptime !@import("../platform.zig").is_native) {
-        const sc = @import("../win32/stub_common.zig");
+        const sc = @import("../win32/shared.zig");
         if (sc.pending_initterm_count > 0) {
             buildInittermTrampoline(cpu);
         }
@@ -213,7 +347,7 @@ fn dispatchNativeCall(cpu: *Cpu) void {
 /// The current EIP (CRT return address) is pushed onto the guest stack so the
 /// trampoline's RET returns control to the CRT startup code.
 pub fn buildInittermTrampoline(cpu: *Cpu) void {
-    const stub_common = @import("../win32/stub_common.zig");
+    const stub_common = @import("../win32/shared.zig");
     const count = stub_common.pending_initterm_count;
     if (count == 0) return;
 
@@ -518,13 +652,10 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         // NOP
         0x90 => {},
 
-        // HLT
         0xF4 => cpu.halted = true,
 
-        // INT 3 (breakpoint — ignore)
         0xCC => {},
 
-        // INT imm8
         0xCD => {
             if (insn.imm == 0xFE) {
                 // Thunk trap — dispatch to Win32 stub
@@ -565,6 +696,12 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             } else {
                 cpu.setReg(@enumFromInt(reg), cpu.pop32());
             }
+        },
+
+        // POP r/m32 (0x8F /0) — e.g. POP DWORD PTR FS:[0] for SEH epilogue
+        0x8F => {
+            const val = cpu.pop32();
+            writeOperand(cpu, insn, 0, val);
         },
 
         // PUSH imm32/16 (0x68) and PUSH imm8 sign-extended (0x6A)
@@ -987,9 +1124,92 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             }
         },
 
+        // RDTSC (0F 31) — read timestamp counter
+        0x0F31 => {
+            const tsc: u64 = @intCast(@as(i128, std.time.nanoTimestamp()));
+            cpu.eax = @truncate(tsc);
+            cpu.edx = @truncate(tsc >> 32);
+        },
+
         // PUSH FS (0F A0) / POP FS (0F A1)
         0x0FA0 => cpu.push32(cpu.fs),
         0x0FA1 => cpu.fs = @truncate(cpu.pop32()),
+        // CPUID (0F A2)
+        0x0FA2 => {
+            const leaf = cpu.eax;
+            switch (leaf) {
+                0 => {
+                    // Max basic CPUID leaf + vendor "GenuineIntel"
+                    cpu.eax = 2; // max supported leaf
+                    cpu.ebx = 0x756E6547; // "Genu"
+                    cpu.edx = 0x49656E69; // "ineI"
+                    cpu.ecx = 0x6C65746E; // "ntel"
+                },
+                1 => {
+                    // Processor info: Family 6, Model 3, Stepping 3 (Pentium II-ish)
+                    cpu.eax = 0x00000633;
+                    cpu.ebx = 0x00010800; // CLFLUSH=8, LogicalProcessors=1
+                    cpu.ecx = 0; // no SSE3/etc
+                    // Feature flags: FPU, TSC, MSR, CX8, SEP, CMOV, MMX, FXSR, SSE, SSE2
+                    cpu.edx = (1 << 0) | // FPU
+                        (1 << 4) | // TSC
+                        (1 << 5) | // MSR
+                        (1 << 8) | // CX8
+                        (1 << 11) | // SEP
+                        (1 << 15) | // CMOV
+                        (1 << 23) | // MMX
+                        (1 << 24) | // FXSR
+                        (1 << 25) | // SSE
+                        (1 << 26); // SSE2
+                },
+                2 => {
+                    // Cache descriptors - minimal
+                    cpu.eax = 0x00000001; // 1 call needed
+                    cpu.ebx = 0;
+                    cpu.ecx = 0;
+                    cpu.edx = 0;
+                },
+                0x80000000 => {
+                    // Max extended CPUID leaf
+                    cpu.eax = 0x80000004;
+                    cpu.ebx = 0;
+                    cpu.ecx = 0;
+                    cpu.edx = 0;
+                },
+                0x80000001 => {
+                    cpu.eax = 0;
+                    cpu.ebx = 0;
+                    cpu.ecx = 0;
+                    cpu.edx = 0;
+                },
+                // Processor brand string "Intel Pentium II"
+                0x80000002 => {
+                    cpu.eax = 0x65746E49; // "Inte"
+                    cpu.ebx = 0x6E65206C; // "l en"
+                    cpu.ecx = 0x756C6174; // "talu"
+                    cpu.edx = 0x4950206D; // "m PI"
+                },
+                0x80000003 => {
+                    cpu.eax = 0x00000000;
+                    cpu.ebx = 0x00000000;
+                    cpu.ecx = 0x00000000;
+                    cpu.edx = 0x00000000;
+                },
+                0x80000004 => {
+                    cpu.eax = 0x00000000;
+                    cpu.ebx = 0x00000000;
+                    cpu.ecx = 0x00000000;
+                    cpu.edx = 0x00000000;
+                },
+                else => {
+                    // Unknown leaf — return zeros
+                    cpu.eax = 0;
+                    cpu.ebx = 0;
+                    cpu.ecx = 0;
+                    cpu.edx = 0;
+                },
+            }
+        },
         0x0FA8 => cpu.push32(cpu.gs),
         0x0FA9 => cpu.gs = @truncate(cpu.pop32()),
 
@@ -1149,7 +1369,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             cpu.edi = cpu.pop32();
             cpu.esi = cpu.pop32();
             cpu.ebp = cpu.pop32();
-            _ = cpu.pop32(); // skip ESP
+            _ = cpu.pop32();
             cpu.ebx = cpu.pop32();
             cpu.edx = cpu.pop32();
             cpu.ecx = cpu.pop32();
@@ -1270,9 +1490,86 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             log.warn("x86: LSL/LAR stubbed at 0x{X}", .{eip});
         },
 
+        // ============================================================
+        // SSE / SSE2 / MMX — dispatch to sse.zig
+        // ============================================================
+        0x0F10, 0x0F11, 0x0F12, 0x0F13, 0x0F14, 0x0F15, 0x0F16, 0x0F17, // MOV* / UNPCK*
+        0x0F28, 0x0F29, 0x0F2A, 0x0F2B, 0x0F2C, 0x0F2D, 0x0F2E, 0x0F2F, // MOV* / CVT* / UCOMI*
+        0x0F50, 0x0F51, 0x0F52, 0x0F53, 0x0F54, 0x0F55, 0x0F56, 0x0F57, // MOVMSK / SQRT / AND / OR / XOR
+        0x0F58, 0x0F59, 0x0F5A, 0x0F5B, 0x0F5C, 0x0F5D, 0x0F5E, 0x0F5F, // ADD / MUL / CVT / SUB / MIN / DIV / MAX
+        0x0F60, 0x0F61, 0x0F62, 0x0F63, 0x0F64, 0x0F65, 0x0F66, 0x0F67, // PUNPCK / PACK / PCMPGT
+        0x0F68, 0x0F69, 0x0F6A, 0x0F6B, 0x0F6C, 0x0F6D, 0x0F6E, 0x0F6F, // PUNPCK / PACK / MOVD / MOVQ
+        0x0F70, 0x0F71, 0x0F72, 0x0F73, 0x0F74, 0x0F75, 0x0F76, 0x0F77, // PSHUF / PSxx / PCMPEQ / EMMS
+        0x0F7E, 0x0F7F, // MOVD/MOVQ store / MOVDQA/MOVDQU store
+        0x0FC2, 0x0FC3, 0x0FC4, 0x0FC5, 0x0FC6, // CMP* / MOVNTI / PINSRW / PEXTRW / SHUF*
+        0x0FD0, 0x0FD1, 0x0FD2, 0x0FD3, 0x0FD4, 0x0FD5, 0x0FD6, 0x0FD7, // PSRL / PADDQ / PMULL / MOVQ / PMOVMSKB
+        0x0FD8, 0x0FD9, 0x0FDA, 0x0FDB, 0x0FDC, 0x0FDD, 0x0FDE, 0x0FDF, // PSUBUS / PMIN / PAND / PADDUS / PMAX / PANDN
+        0x0FE0, 0x0FE1, 0x0FE2, 0x0FE3, 0x0FE4, 0x0FE5, 0x0FE6, 0x0FE7, // PAVG / PSRA / PMULH / CVT / MOVNTDQ
+        0x0FE8, 0x0FE9, 0x0FEA, 0x0FEB, 0x0FEC, 0x0FED, 0x0FEE, 0x0FEF, // PSUBS / PMIN / POR / PADDS / PMAX / PXOR
+        0x0FF0, 0x0FF1, 0x0FF2, 0x0FF3, 0x0FF4, 0x0FF5, 0x0FF6, 0x0FF7, // PSLL / PMULUDQ / PMADDWD / PSADBW
+        0x0FF8, 0x0FF9, 0x0FFA, 0x0FFB, 0x0FFC, 0x0FFD, 0x0FFE, // PSUB / PADD
+        0x0FAE, // LDMXCSR / STMXCSR / LFENCE / MFENCE / SFENCE
+        => @import("sse.zig").execute(cpu, insn, eip),
+
         else => {
-            log.err("x86: unimplemented opcode 0x{X:0>2} at 0x{X} (byte: 0x{X:0>2})", .{ insn.opcode, eip, if (insn.length > 0) cpu.memory.read8(eip) else 0 });
-            cpu.halted = true;
+            // Check if guest has an SEH handler — if so, this is likely a deliberate
+            // CPU feature probe (e.g., cpuidsdk uses 0F 3F to trigger #UD and catch
+            // it via SEH). Dispatch the exception to SEH so the handler runs properly.
+            const teb_mod = @import("../win32/teb.zig");
+            var seh_head: u32 = 0;
+            if (teb_mod.teb_base_addr != 0) {
+                seh_head = @as(*const u32, @ptrFromInt(teb_mod.teb_base_addr)).*;
+            }
+            if (seh_head != 0 and seh_head != 0xFFFFFFFF) {
+                log.info("x86: unimplemented opcode 0x{X:0>2} at 0x{X}, dispatching to SEH", .{ insn.opcode, eip });
+                // Build EXCEPTION_RECORD and CONTEXT from interpreter CPU state
+                var record = std.mem.zeroes(teb_mod.EXCEPTION_RECORD);
+                record.ExceptionCode = 0xC000001D; // EXCEPTION_ILLEGAL_INSTRUCTION
+                record.ExceptionAddress = eip;
+                var context = std.mem.zeroes(teb_mod.CONTEXT);
+                context.ContextFlags = 0x10007; // CONTEXT_FULL
+                context.Eax = cpu.eax;
+                context.Ecx = cpu.ecx;
+                context.Edx = cpu.edx;
+                context.Ebx = cpu.ebx;
+                context.Esi = cpu.esi;
+                context.Edi = cpu.edi;
+                context.Ebp = cpu.ebp;
+                context.Esp = cpu.esp;
+                context.Eip = eip; // faulting instruction address
+                // Walk SEH chain — on x86-linux, handler code is native x86
+                var node = seh_head;
+                while (node != 0 and node != 0xFFFFFFFF) {
+                    const handler_addr = @as(*const u32, @ptrFromInt(@as(usize, node) + 4)).*;
+                    if (handler_addr != 0) {
+                        const HandlerFn = *const fn (*teb_mod.EXCEPTION_RECORD, u32, *teb_mod.CONTEXT, u32) callconv(.c) u32;
+                        const handler_fn = @as(HandlerFn, @ptrFromInt(@as(usize, handler_addr)));
+                        const disp = handler_fn(&record, node, &context, 0);
+                        if (disp == 0) { // ExceptionContinueExecution
+                            cpu.eax = context.Eax;
+                            cpu.ecx = context.Ecx;
+                            cpu.edx = context.Edx;
+                            cpu.ebx = context.Ebx;
+                            cpu.esi = context.Esi;
+                            cpu.edi = context.Edi;
+                            cpu.ebp = context.Ebp;
+                            cpu.esp = context.Esp;
+                            cpu.eip = context.Eip;
+                            if (trace.enable_tracing) {
+                                trace.print("x86: SEH handler ContinueExecution, EIP=0x{X}\n", .{cpu.eip});
+                            }
+                            return;
+                        }
+                    }
+                    node = @as(*const u32, @ptrFromInt(@as(usize, node))).*;
+                }
+                // No handler handled it
+                log.err("x86: unimplemented opcode 0x{X:0>2} at 0x{X}, SEH chain exhausted", .{ insn.opcode, eip });
+                cpu.halted = true;
+            } else {
+                log.err("x86: unimplemented opcode 0x{X:0>2} at 0x{X} (byte: 0x{X:0>2})", .{ insn.opcode, eip, if (insn.length > 0) cpu.memory.read8(eip) else 0 });
+                cpu.halted = true;
+            }
         },
     }
 }
@@ -1362,7 +1659,7 @@ fn readMemAddr(cpu: *const Cpu, op: Operand) u32 {
     };
 }
 
-fn computeEffectiveAddress(cpu: *const Cpu, m: *const MemOperand) u32 {
+pub fn computeEffectiveAddress(cpu: *const Cpu, m: *const MemOperand) u32 {
     var addr: u32 = 0;
     if (m.base) |base| addr +%= cpu.getReg(@enumFromInt(base));
     if (m.index) |index| {
@@ -1377,6 +1674,8 @@ fn computeEffectiveAddress(cpu: *const Cpu, m: *const MemOperand) u32 {
 // ALU execution
 // -----------------------------------------------------------------------
 
+/// Executes a generic ALU instruction (ADD, OR, ADC, SBB, AND, SUB, XOR, CMP).
+/// Updates flags based on the operation and operand size.
 fn execAlu(cpu: *Cpu, insn: *const Instruction) void {
     // Decode which ALU operation from the opcode
     // Opcodes are grouped: 00-05=ADD, 08-0D=OR, 10-15=ADC, 18-1D=SBB,
@@ -1421,6 +1720,7 @@ fn execAlu(cpu: *Cpu, insn: *const Instruction) void {
     }
 }
 
+/// Executes Group 1 ALU instructions with immediate operands (80, 81, 83).
 fn execGroup1(cpu: *Cpu, insn: *const Instruction) void {
     if (insn.modrm == null) return;
     const sub_op = insn.modrm.?.reg;
@@ -1462,6 +1762,8 @@ fn execGroup1(cpu: *Cpu, insn: *const Instruction) void {
     }
 }
 
+/// Executes Group 3 unary/arithmetic instructions (F6, F7).
+/// Handles TEST, NOT, NEG, MUL, IMUL, DIV, IDIV.
 fn execGroup3(cpu: *Cpu, insn: *const Instruction) void {
     if (insn.modrm == null) return;
     const sub_op = insn.modrm.?.reg;
@@ -1545,8 +1847,8 @@ fn execGroup3(cpu: *Cpu, insn: *const Instruction) void {
                     return;
                 }
                 const v16: u16 = @truncate(val);
-                cpu.setReg8(0, @truncate(dividend / v16)); // AL = quotient
-                cpu.setReg8(4, @truncate(dividend % v16)); // AH = remainder
+                cpu.setReg8(0, @truncate(dividend / v16));
+                cpu.setReg8(4, @truncate(dividend % v16));
             } else {
                 const dividend: u64 = (@as(u64, cpu.edx) << 32) | cpu.eax;
                 if (val == 0) {
@@ -1583,6 +1885,8 @@ fn execGroup3(cpu: *Cpu, insn: *const Instruction) void {
     }
 }
 
+/// Executes Group 5 indirect control flow and arithmetic (FF).
+/// Handles INC, DEC, CALL, JMP, PUSH.
 fn execGroup5(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
     _ = eip;
     if (insn.modrm == null) return;
@@ -1618,6 +1922,7 @@ fn execGroup5(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
     }
 }
 
+/// Executes Group 2 shift and rotate instructions (C0, C1, D0-D3).
 fn execShift(cpu: *Cpu, insn: *const Instruction) void {
     if (insn.modrm == null) return;
     const sub_op = insn.modrm.?.reg;
@@ -1651,7 +1956,7 @@ fn execShift(cpu: *Cpu, insn: *const Instruction) void {
     cpu.flags.update(fop, insn.op_size, result, val, @as(u32, count));
 }
 
-// String operations
+/// Executes the MOVSB string instruction (copy byte from ESI to EDI).
 fn execMovsb(cpu: *Cpu, insn: *const Instruction) void {
     const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
     if (insn.prefixes.rep) {
@@ -1677,6 +1982,7 @@ fn execMovsb(cpu: *Cpu, insn: *const Instruction) void {
     }
 }
 
+/// Executes the MOVSD string instruction (copy dword from ESI to EDI).
 fn execMovsd(cpu: *Cpu, insn: *const Instruction) void {
     const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
     if (insn.prefixes.rep) {
@@ -1702,6 +2008,7 @@ fn execMovsd(cpu: *Cpu, insn: *const Instruction) void {
     }
 }
 
+/// Executes the STOSB string instruction (store AL at EDI).
 fn execStosb(cpu: *Cpu, insn: *const Instruction) void {
     const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
     const val = cpu.getReg8(0);
@@ -1716,6 +2023,7 @@ fn execStosb(cpu: *Cpu, insn: *const Instruction) void {
     }
 }
 
+/// Executes the STOSD string instruction (store EAX at EDI).
 fn execStosd(cpu: *Cpu, insn: *const Instruction) void {
     const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
     if (insn.prefixes.rep) {
@@ -1763,9 +2071,9 @@ test "execute: MOV EAX, 0x12345678 + NOP + HLT" {
 
 test "execute: PUSH/POP" {
     var mem: [256]u8 = .{0} ** 256;
-    mem[0] = 0x50; // PUSH EAX
-    mem[1] = 0x5B; // POP EBX
-    mem[2] = 0xF4; // HLT
+    mem[0] = 0x50;
+    mem[1] = 0x5B;
+    mem[2] = 0xF4;
 
     var cpu = makeCpu(&mem);
     cpu.eax = 0xDEAD;

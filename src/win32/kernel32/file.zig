@@ -1,10 +1,14 @@
+
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const kernel32_mem = @import("mem.zig");
-const w32 = @import("../../win32_constants.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32 = @import("../constants.zig");
+const w32cc = @import("../calling_convention.zig");
 const platform = @import("../../platform.zig");
 
+// KERNEL32.dll file I/O functions.
+/// Retrieves file system attributes for a specified file or directory.
+/// Implementation status: Partially implemented (supports basic attributes and directory detection).
 pub fn GetFileAttributesA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) u32 {
     if (lpFileName_ptr == 0) return w32.INVALID_FILE_ATTRIBUTES;
     const filename = trace.c_span(lpFileName_ptr);
@@ -26,6 +30,8 @@ pub fn GetFileAttributesA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) u32 {
     return w32.INVALID_FILE_ATTRIBUTES;
 }
 
+/// Retrieves the size of the specified file.
+/// Implementation status: Partially implemented.
 pub fn GetFileSize(hFile: usize, lpFileSizeHigh: usize) callconv(w32cc.WINAPI) u32 {
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     if (trace.enable_tracing) trace.print("KERNEL32: GetFileSize(hFile={d})\n", .{fd});
@@ -43,6 +49,8 @@ pub fn GetFileSize(hFile: usize, lpFileSizeHigh: usize) callconv(w32cc.WINAPI) u
     return w32.INVALID_FILE_SIZE;
 }
 
+/// Retrieves the type of the specified file.
+/// Implementation status: Partially implemented.
 pub fn GetFileType(hFile: usize) callconv(w32cc.WINAPI) u32 {
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     if (trace.enable_tracing) trace.print("KERNEL32: GetFileType(hFile={d})\n", .{fd});
@@ -50,6 +58,8 @@ pub fn GetFileType(hFile: usize) callconv(w32cc.WINAPI) u32 {
     return w32.FILE_TYPE_DISK;
 }
 
+/// Retrieves file information for the specified file.
+/// Implementation status: Partially implemented.
 pub fn GetFileInformationByHandle(hFile: usize, lpFileInformation_ptr: usize) callconv(w32cc.WINAPI) i32 {
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     if (trace.enable_tracing) trace.print("KERNEL32: GetFileInformationByHandle(hFile={d})\n", .{fd});
@@ -71,6 +81,8 @@ pub fn GetFileInformationByHandle(hFile: usize, lpFileInformation_ptr: usize) ca
     return 0;
 }
 
+/// Creates or opens a file or I/O device.
+/// Implementation status: Partially implemented (supports basic file creation and opening).
 pub fn CreateFileA(lpFileName_ptr: usize, dwDesiredAccess: u32, dwShareMode: u32, lpSecurityAttributes: usize, dwCreationDisposition: u32, dwFlagsAndAttributes: u32, hTemplateFile: usize) callconv(w32cc.WINAPI) usize {
     _ = dwDesiredAccess;
     _ = dwShareMode;
@@ -88,6 +100,19 @@ pub fn CreateFileA(lpFileName_ptr: usize, dwDesiredAccess: u32, dwShareMode: u32
     fixed_path[len] = 0;
 
     if (trace.enable_tracing) trace.print("KERNEL32: CreateFileA('{s}', disp={d})\n", .{ fixed_slice, dwCreationDisposition });
+
+    // Device paths (\\.\DeviceName) — return fake handles for known devices
+    if (name.len > 4 and name[0] == '\\' and name[1] == '\\' and name[2] == '.' and name[3] == '\\') {
+        if (trace.enable_tracing) trace.print("KERNEL32: CreateFileA device: '{s}'\n", .{name[4..]});
+        // cpuidsdk driver device — return a fake handle
+        if (std.ascii.eqlIgnoreCase(name[4..], "CpuidSDK") or
+            std.ascii.eqlIgnoreCase(name[4..], "cpuz135"))
+        {
+            if (trace.enable_tracing) trace.print("KERNEL32: CreateFileA -> fake device handle 0xFE000100\n", .{});
+            return 0xFE000100; // Fake device handle
+        }
+        return w32.INVALID_HANDLE_VALUE;
+    }
 
     // 1=CREATE_NEW, 2=CREATE_ALWAYS, 3=OPEN_EXISTING, 4=OPEN_ALWAYS, 5=TRUNCATE_EXISTING
     const posix_fs = @import("../msvcrt/posix_fs.zig");
@@ -156,6 +181,8 @@ fn alloc_mapping(fd: i32) ?usize {
     return null;
 }
 
+/// Creates or opens a named or unnamed file mapping object for a specified file.
+/// Implementation status: Partially implemented.
 pub fn CreateFileMappingA(hFile: usize, lpFileMappingAttributes: usize, flProtect: u32, dwMaximumSizeHigh: u32, dwMaximumSizeLow: u32, lpName_ptr: usize) callconv(w32cc.WINAPI) usize {
     _ = lpFileMappingAttributes;
     _ = flProtect;
@@ -183,6 +210,8 @@ pub fn CreateFileMappingA(hFile: usize, lpFileMappingAttributes: usize, flProtec
     return 0; // NULL
 }
 
+/// Maps a view of a file mapping into the address space of a calling process.
+/// Implementation status: Partially implemented.
 pub fn MapViewOfFileEx(hFileMappingObject: usize, dwDesiredAccess: u32, dwFileOffsetHigh: u32, dwFileOffsetLow: u32, dwNumberOfBytesToMap: usize, lpBaseAddress: usize) callconv(w32cc.WINAPI) usize {
     if ((hFileMappingObject & 0xFFFF0000) == 0x40000000) {
         const idx = hFileMappingObject & 0xFFFF;
@@ -228,11 +257,45 @@ pub fn MapViewOfFileEx(hFileMappingObject: usize, dwDesiredAccess: u32, dwFileOf
     return 0;
 }
 
+/// DeviceIoControl — send a control code to a device driver.
+/// Implementation status: Partially implemented (cpuidsdk device stub).
+pub fn DeviceIoControl(hDevice: usize, dwIoControlCode: u32, lpInBuffer: usize, nInBufferSize: u32, lpOutBuffer: usize, nOutBufferSize: u32, lpBytesReturned: usize, lpOverlapped: usize) callconv(w32cc.WINAPI) i32 {
+    _ = lpOverlapped;
+    if (trace.enable_tracing) trace.print("KERNEL32: DeviceIoControl(dev={x}, ioctl={x}, inSz={d}, outSz={d})\n", .{ hDevice, dwIoControlCode, nInBufferSize, nOutBufferSize });
+
+    // cpuidsdk device handle
+    if (hDevice == 0xFE000100) {
+        // Log input buffer for analysis
+        if (lpInBuffer != 0 and nInBufferSize >= 4) {
+            const inp = @as([*]const u32, @ptrFromInt(lpInBuffer));
+            const n = @min(nInBufferSize / 4, 8);
+            trace.print("  DeviceIoControl input:", .{});
+            for (0..n) |i| trace.print(" {x}", .{inp[i]});
+            trace.print("\n", .{});
+        }
+
+        // Return success with 0 bytes returned — cpuidsdk will check the output
+        if (lpBytesReturned != 0) @as(*u32, @ptrFromInt(lpBytesReturned)).* = 0;
+        // Zero the output buffer
+        if (lpOutBuffer != 0 and nOutBufferSize > 0) {
+            @memset(@as([*]u8, @ptrFromInt(lpOutBuffer))[0..nOutBufferSize], 0);
+        }
+        return 1; // TRUE = success
+    }
+
+    // Generic stub: return FALSE
+    return 0;
+}
+
+/// Unmaps a mapped view of a file from the calling process's address space.
+/// Implementation status: Stub.
 pub fn UnmapViewOfFile(lpBaseAddress: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: UnmapViewOfFile({x})\n", .{lpBaseAddress});
     return 1;
 }
 
+/// Closes an open object handle.
+/// Implementation status: Fully implemented (handles both real fds and synthetic handles).
 pub fn CloseHandle(hObject: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: CloseHandle({x})\n", .{hObject});
 
@@ -249,6 +312,8 @@ pub fn CloseHandle(hObject: usize) callconv(w32cc.WINAPI) i32 {
     return 1; // TRUE
 }
 
+/// Moves the file pointer of the specified file.
+/// Implementation status: Partially implemented.
 pub fn SetFilePointer(hFile: usize, lDistanceToMove: i32, lpDistanceToMoveHigh: usize, dwMoveMethod: u32) callconv(w32cc.WINAPI) u32 {
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     if (trace.enable_tracing) trace.print("KERNEL32: SetFilePointer(hFile={d}, dist={d}, method={d})\n", .{ fd, lDistanceToMove, dwMoveMethod });
@@ -285,6 +350,8 @@ pub fn SetFilePointer(hFile: usize, lDistanceToMove: i32, lpDistanceToMoveHigh: 
     return @intCast(final_pos & 0xFFFFFFFF);
 }
 
+/// Reads data from the specified file or I/O device.
+/// Implementation status: Fully implemented.
 pub fn ReadFile(hFile: usize, lpBuffer: usize, nNumberOfBytesToRead: u32, lpNumberOfBytesRead: usize, lpOverlapped: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpOverlapped;
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
@@ -306,6 +373,8 @@ pub fn ReadFile(hFile: usize, lpBuffer: usize, nNumberOfBytesToRead: u32, lpNumb
     return 0; // FALSE
 }
 
+/// Retrieves a handle for the specified standard device (standard input, standard output, or standard error).
+/// Implementation status: Fully implemented.
 pub fn GetStdHandle(nStdHandle: u32) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: GetStdHandle({d})\n", .{nStdHandle});
     const STD_INPUT_HANDLE: u32 = @bitCast(@as(i32, -10));
@@ -319,6 +388,8 @@ pub fn GetStdHandle(nStdHandle: u32) callconv(w32cc.WINAPI) usize {
     };
 }
 
+/// Retrieves the path of the directory designated for temporary files.
+/// Implementation status: Partially implemented (returns hardcoded path).
 pub fn GetTempPathA(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.WINAPI) u32 {
     const temp_path = ".\\\x00";
     if (trace.enable_tracing) trace.print("KERNEL32: GetTempPathA(len={d})\n", .{nBufferLength});
@@ -332,6 +403,8 @@ pub fn GetTempPathA(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.WINAPI) 
 
 var temp_counter: u32 = 0;
 
+/// Creates a name for a temporary file.
+/// Implementation status: Partially implemented.
 pub fn GetTempFileNameA(lpPathName: usize, lpPrefixString: usize, uUnique: u32, lpTempFileName: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) {
         const path = if (lpPathName != 0) trace.c_span(lpPathName) else "null";
@@ -363,6 +436,8 @@ pub fn GetTempFileNameA(lpPathName: usize, lpPrefixString: usize, uUnique: u32, 
     return 0;
 }
 
+/// Deletes an existing file.
+/// Implementation status: Fully implemented.
 pub fn DeleteFileA(lpFileName: usize) callconv(w32cc.WINAPI) i32 {
     if (lpFileName == 0) return 0;
     const name = trace.c_span(lpFileName);
@@ -387,6 +462,8 @@ pub fn DeleteFileA(lpFileName: usize) callconv(w32cc.WINAPI) i32 {
     return 1; // TRUE
 }
 
+/// Sets the physical file size for the specified file to the current position of the file pointer.
+/// Implementation status: Fully implemented.
 pub fn SetEndOfFile(hFile: usize) callconv(w32cc.WINAPI) i32 {
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     if (trace.enable_tracing) trace.print("KERNEL32: SetEndOfFile(hFile={d})\n", .{fd});
@@ -396,6 +473,8 @@ pub fn SetEndOfFile(hFile: usize) callconv(w32cc.WINAPI) i32 {
     return 1; // TRUE
 }
 
+/// Searches for a specified file in a specified path.
+/// Implementation status: Partially implemented.
 pub fn SearchPathA(lpPath_ptr: usize, lpFileName_ptr: usize, lpExtension_ptr: usize, nBufferLength: u32, lpBuffer_ptr: usize, lpFilePart_ptr: usize) callconv(w32cc.WINAPI) u32 {
     _ = lpPath_ptr;
     if (lpFileName_ptr == 0) return 0;
@@ -554,6 +633,8 @@ fn matchWildcard(name: []const u8, pattern: []const u8) bool {
     return std.ascii.eqlIgnoreCase(name, pattern);
 }
 
+/// Searches a directory for a file or subdirectory with a name that matches a specific name.
+/// Implementation status: Partially implemented.
 pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: usize) callconv(w32cc.WINAPI) usize {
     if (lpFileName_ptr == 0 or lpFindFileData_ptr == 0) return w32.INVALID_HANDLE_VALUE;
 
@@ -653,6 +734,8 @@ pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: usize) callconv
     return w32.INVALID_HANDLE_VALUE;
 }
 
+/// Continues a file search from a previous call to the FindFirstFileA function.
+/// Implementation status: Partially implemented.
 pub fn FindNextFileA(hFindFile: usize, lpFindFileData_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (lpFindFileData_ptr == 0) return 0;
 
@@ -676,6 +759,8 @@ pub fn FindNextFileA(hFindFile: usize, lpFindFileData_ptr: usize) callconv(w32cc
     return 0; // No more files
 }
 
+/// Closes a file search handle.
+/// Implementation status: Fully implemented.
 pub fn FindClose(hFindFile: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: FindClose({x})\n", .{hFindFile});
     if (getFindHandle(hFindFile)) |state| {
@@ -685,6 +770,8 @@ pub fn FindClose(hFindFile: usize) callconv(w32cc.WINAPI) i32 {
     return 1; // Still return TRUE even if not found
 }
 
+/// Retrieves the full path of the system directory.
+/// Implementation status: Stub (returns hardcoded path).
 pub fn GetSystemDirectoryA(lpBuffer: usize, uSize: u32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetSystemDirectoryA(buffer={x}, size={d})\n", .{ lpBuffer, uSize });
     const sys_dir = "C:\\WINDOWS\\SYSTEM32";
@@ -697,13 +784,15 @@ pub fn GetSystemDirectoryA(lpBuffer: usize, uSize: u32) callconv(w32cc.WINAPI) u
     return @intCast(sys_dir.len + 1);
 }
 
+/// Writes data to the specified file or I/O device.
+/// Implementation status: Fully implemented.
 pub fn WriteFile(hFile: usize, lpBuffer_ptr: usize, nNumberOfBytesToWrite: u32, lpNumberOfBytesWritten_ptr: usize, lpOverlapped: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpOverlapped;
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     if (trace.enable_tracing) trace.print("KERNEL32: WriteFile(hFile={d}, size={d})\n", .{ fd, nNumberOfBytesToWrite });
 
     if (lpBuffer_ptr == 0) return 0;
-    const buf = @as([*]const u8, @ptrFromInt(lpBuffer_ptr))[0..nNumberOfBytesToWrite];
+    const buf = @as([*]const u8, @ptrFromInt(trace.addr(lpBuffer_ptr)))[0..nNumberOfBytesToWrite];
 
     const file = std.fs.File{ .handle = fd };
     const written = file.write(buf) catch return 0;
@@ -714,6 +803,8 @@ pub fn WriteFile(hFile: usize, lpBuffer_ptr: usize, nNumberOfBytesToWrite: u32, 
     return 1;
 }
 
+/// Creates or opens a file or I/O device (wide-string version).
+/// Implementation status: Partially implemented (delegates to CreateFileA).
 pub fn CreateFileW(lpFileName_ptr: usize, dwDesiredAccess: u32, dwShareMode: u32, lpSecurityAttributes: usize, dwCreationDisposition: u32, dwFlagsAndAttributes: u32, hTemplateFile: usize) callconv(w32cc.WINAPI) usize {
     if (lpFileName_ptr == 0) return w32.INVALID_HANDLE_VALUE;
     // Convert wide string to narrow
@@ -729,11 +820,15 @@ pub fn CreateFileW(lpFileName_ptr: usize, dwDesiredAccess: u32, dwShareMode: u32
     return CreateFileA(@intFromPtr(&narrow_buf), dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
 }
 
+/// Maps a view of a file mapping into the address space of a calling process.
+/// Implementation status: Partially implemented (delegates to MapViewOfFileEx).
 pub fn MapViewOfFile(hFileMappingObject: usize, dwDesiredAccess: u32, dwFileOffsetHigh: u32, dwFileOffsetLow: u32, dwNumberOfBytesToMap: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: MapViewOfFile -> delegating to MapViewOfFileEx\n", .{});
     return MapViewOfFileEx(hFileMappingObject, dwDesiredAccess, dwFileOffsetHigh, dwFileOffsetLow, dwNumberOfBytesToMap, 0);
 }
 
+/// Opens a named file mapping object.
+/// Implementation status: Stub.
 pub fn stub_OpenFileMappingA(dwDesiredAccess: u32, bInheritHandle: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
     _ = dwDesiredAccess;
     _ = bInheritHandle;
@@ -742,6 +837,8 @@ pub fn stub_OpenFileMappingA(dwDesiredAccess: u32, bInheritHandle: i32, lpName: 
     return 0;
 }
 
+/// Retrieves file system attributes for a specified file or directory (wide-string version).
+/// Implementation status: Partially implemented (delegates to GetFileAttributesA).
 pub fn GetFileAttributesW(lpFileName_ptr: usize) callconv(w32cc.WINAPI) u32 {
     if (lpFileName_ptr == 0) return w32.INVALID_FILE_ATTRIBUTES;
     // Convert wide to narrow
@@ -757,6 +854,8 @@ pub fn GetFileAttributesW(lpFileName_ptr: usize) callconv(w32cc.WINAPI) u32 {
     return GetFileAttributesA(@intFromPtr(&narrow_buf));
 }
 
+/// Retrieves information about the amount of space that is available on a disk volume.
+/// Implementation status: Partially implemented (returns fixed values).
 pub fn GetDiskFreeSpaceA(
     lpRootPathName: usize,
     lpSectorsPerCluster: usize,
@@ -775,8 +874,8 @@ pub fn GetDiskFreeSpaceA(
     return 1; // TRUE = success
 }
 
-// --- DxWrapper / MSVC CRT stubs ---
-
+/// Retrieves the size of the specified file.
+/// Implementation status: Partially implemented.
 pub fn GetFileSizeEx(hFile: usize, lpFileSize: usize) callconv(w32cc.WINAPI) i32 {
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     if (trace.enable_tracing) trace.print("KERNEL32: GetFileSizeEx(hFile={d})\n", .{fd});
@@ -791,6 +890,8 @@ pub fn GetFileSizeEx(hFile: usize, lpFileSize: usize) callconv(w32cc.WINAPI) i32
     return 0; // FALSE
 }
 
+/// Moves the file pointer of the specified file.
+/// Implementation status: Partially implemented.
 pub fn SetFilePointerEx(hFile: usize, liDistanceToMove_lo: u32, liDistanceToMove_hi: u32, lpNewFilePointer: usize, dwMoveMethod: u32) callconv(w32cc.WINAPI) i32 {
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     const distance = @as(i64, @bitCast((@as(u64, liDistanceToMove_hi) << 32) | @as(u64, liDistanceToMove_lo)));
@@ -825,12 +926,16 @@ pub fn SetFilePointerEx(hFile: usize, liDistanceToMove_lo: u32, liDistanceToMove
     return 1; // TRUE
 }
 
+/// Searches a directory for a file or subdirectory with a name that matches a specific name and additional attributes (wide-string version).
+/// Implementation status: Partially implemented (delegates to FindFirstFileW).
 pub fn FindFirstFileExW(lpFileName: usize, fInfoLevelId: u32, lpFindFileData: usize, fSearchOp: u32, lpSearchFilter: usize, dwAdditionalFlags: u32) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: FindFirstFileExW(level={d}, op={d}, filter={X}, flags={X})\n", .{ fInfoLevelId, fSearchOp, lpSearchFilter, dwAdditionalFlags });
     // Delegate to FindFirstFileW (ignoring extended parameters)
     return FindFirstFileW(lpFileName, lpFindFileData);
 }
 
+/// Searches a directory for a file or subdirectory with a name that matches a specific name and additional attributes.
+/// Implementation status: Partially implemented (delegates to FindFirstFileA).
 pub fn FindFirstFileExA(lpFileName: usize, fInfoLevelId: u32, lpFindFileData: usize, fSearchOp: u32, lpSearchFilter: usize, dwAdditionalFlags: u32) callconv(w32cc.WINAPI) usize {
     _ = fInfoLevelId;
     _ = fSearchOp;
@@ -840,8 +945,8 @@ pub fn FindFirstFileExA(lpFileName: usize, fInfoLevelId: u32, lpFindFileData: us
     return FindFirstFileA(lpFileName, lpFindFileData);
 }
 
-// --- Additional file stubs ---
-
+/// Sets the attributes for a file or directory.
+/// Implementation status: Stub.
 pub fn stub_SetFileAttributesA(lpFileName_ptr: usize, dwFileAttributes: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) {
         if (lpFileName_ptr != 0) {
@@ -851,6 +956,8 @@ pub fn stub_SetFileAttributesA(lpFileName_ptr: usize, dwFileAttributes: u32) cal
     return 1; // TRUE = success (no-op)
 }
 
+/// Flushes the buffers of a specified file and causes all buffered data to be written to a file.
+/// Implementation status: Partially implemented (native sync, no-op otherwise).
 pub fn FlushFileBuffers(hFile: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: FlushFileBuffers({x})\n", .{hFile});
     // Actually flush the fd if possible (not available on WASM/WASI)
@@ -862,6 +969,8 @@ pub fn FlushFileBuffers(hFile: usize) callconv(w32cc.WINAPI) i32 {
     return 1; // TRUE
 }
 
+/// Retrieves the date and time that a file was created, last accessed, and last modified.
+/// Implementation status: Partially implemented (uses mtime for all).
 pub fn GetFileTime(hFile: usize, lpCreationTime: usize, lpLastAccessTime: usize, lpLastWriteTime: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetFileTime({x})\n", .{hFile});
 
@@ -902,6 +1011,8 @@ pub fn GetFileTime(hFile: usize, lpCreationTime: usize, lpLastAccessTime: usize,
     return 1; // TRUE
 }
 
+/// Sets the date and time that a file was created, last accessed, or last modified.
+/// Implementation status: Stub.
 pub fn stub_SetFileTime(hFile: usize, lpCreationTime: usize, lpLastAccessTime: usize, lpLastWriteTime: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpCreationTime;
     _ = lpLastAccessTime;
@@ -910,6 +1021,8 @@ pub fn stub_SetFileTime(hFile: usize, lpCreationTime: usize, lpLastAccessTime: u
     return 1; // TRUE = success (no-op)
 }
 
+/// Copies an existing file to a new file.
+/// Implementation status: Fully implemented.
 pub fn CopyFileA(lpExistingFileName: usize, lpNewFileName: usize, bFailIfExists: i32) callconv(w32cc.WINAPI) i32 {
     _ = bFailIfExists;
     if (lpExistingFileName == 0 or lpNewFileName == 0) return 0;
@@ -939,18 +1052,22 @@ pub fn CopyFileA(lpExistingFileName: usize, lpNewFileName: usize, bFailIfExists:
     return 1; // TRUE
 }
 
+/// Sets the handle for the specified standard device.
+/// Implementation status: Stub.
 pub fn stub_SetStdHandle(nStdHandle: u32, hHandle: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: SetStdHandle({d}, {x})\n", .{ nStdHandle, hHandle });
     return 1; // TRUE
 }
 
+/// Sets the number of handles that a process can use.
+/// Implementation status: Stub (returns requested number).
 pub fn SetHandleCount(uNumber: u32) callconv(w32cc.WINAPI) u32 {
     // Legacy API — just return the requested number
     return uNumber;
 }
 
-// --- Wide (W) file search functions ---
-
+/// Searches a directory for a file or subdirectory with a name that matches a specific name (wide-string version).
+/// Implementation status: Partially implemented.
 pub fn FindFirstFileW(lpFileName: usize, lpFindFileData: usize) callconv(w32cc.WINAPI) usize {
     if (lpFileName == 0 or lpFindFileData == 0) return 0xFFFFFFFF;
 
@@ -999,6 +1116,8 @@ pub fn FindFirstFileW(lpFileName: usize, lpFindFileData: usize) callconv(w32cc.W
     return result;
 }
 
+/// Continues a file search from a previous call to the FindFirstFileW function.
+/// Implementation status: Partially implemented.
 pub fn FindNextFileW(hFindFile: usize, lpFindFileData: usize) callconv(w32cc.WINAPI) i32 {
     if (lpFindFileData == 0) return 0;
 

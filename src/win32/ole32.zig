@@ -1,6 +1,10 @@
+//! OLE32.dll registration.
+
 const env = @import("../loader/env.zig");
 const stubs = @import("ole32/com.zig");
 
+/// Registers OLE32.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     // ole32.dll
     const m = "ole32.dll";
@@ -29,4 +33,8 @@ pub fn register(environment: *env.Environment) !void {
     // --- Notepad2 OLE32 stubs ---
     try environment.addBuiltinExportComptime(m, "RegisterDragDrop", kernel32.stub_args2);
     try environment.addBuiltinExportComptime(m, "RevokeDragDrop", kernel32.stub_args1);
+
+    // Geekbench stubs
+    try environment.addBuiltinExportComptime(m, "CoInitializeSecurity", kernel32.stub_args9);
+    try environment.addBuiltinExportComptime(m, "CoSetProxyBlanket", kernel32.stub_args8);
 }

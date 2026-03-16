@@ -1,47 +1,51 @@
-// Win32 API named constants — matches official Microsoft SDK naming.
-// Use these instead of magic numbers throughout stubs.
+//! Win32 API named constants — matches official Microsoft SDK naming.
+//!
+//! Use these instead of magic numbers throughout stubs.
 
-// ============================================================
-// HRESULT / General COM
-// ============================================================
-
+/// HRESULT / General COM: Operation successful.
 pub const S_OK: i32 = 0;
 
-// ============================================================
-// DirectDraw
-// ============================================================
-
+/// DirectDraw: Operation successful.
 pub const DD_OK: i32 = 0;
 
-// DDSURFACEDESC dwFlags
+/// DDSURFACEDESC dwFlags: dwCaps field is valid.
 pub const DDSD_CAPS: u32 = 0x00000001;
+/// DDSURFACEDESC dwFlags: dwHeight field is valid.
 pub const DDSD_HEIGHT: u32 = 0x00000002;
+/// DDSURFACEDESC dwFlags: dwWidth field is valid.
 pub const DDSD_WIDTH: u32 = 0x00000004;
+/// DDSURFACEDESC dwFlags: lPitch field is valid.
 pub const DDSD_PITCH: u32 = 0x00000008;
+/// DDSURFACEDESC dwFlags: dwBackBufferCount field is valid.
 pub const DDSD_BACKBUFFERCOUNT: u32 = 0x00000020;
+/// DDSURFACEDESC dwFlags: ddpfPixelFormat field is valid.
 pub const DDSD_PIXELFORMAT: u32 = 0x00001000;
 
-// DDPIXELFORMAT dwFlags
+/// DDPIXELFORMAT dwFlags: Surface contains RGB data.
 pub const DDPF_RGB: u32 = 0x00000040;
 
-// DDSCAPS dwCaps
+/// DDSCAPS dwCaps: Surface is the primary surface.
 pub const DDSCAPS_PRIMARYSURFACE: u32 = 0x00000200;
+/// DDSCAPS dwCaps: Surface is part of a flipping chain.
 pub const DDSCAPS_FLIP: u32 = 0x00000010;
+/// DDSCAPS dwCaps: Complex surface.
 pub const DDSCAPS_COMPLEX: u32 = 0x00000008;
+/// DDSCAPS dwCaps: Offscreen plain surface.
 pub const DDSCAPS_OFFSCREENPLAIN: u32 = 0x00000040;
+/// DDSCAPS dwCaps: Surface is a back buffer.
 pub const DDSCAPS_BACKBUFFER: u32 = 0x00000004;
 
 // ============================================================
 // DirectDraw Struct Definitions (32-bit layout)
 // ============================================================
 
-/// DDCOLORKEY — 8 bytes
+/// DDCOLORKEY — 8 bytes.
 pub const DDCOLORKEY = extern struct {
     dwColorSpaceLowValue: u32 = 0,
     dwColorSpaceHighValue: u32 = 0,
 };
 
-/// DDPIXELFORMAT — 32 bytes
+/// DDPIXELFORMAT — 32 bytes.
 pub const DDPIXELFORMAT = extern struct {
     dwSize: u32 = 32,
     dwFlags: u32 = 0,
@@ -53,12 +57,12 @@ pub const DDPIXELFORMAT = extern struct {
     dwRGBAlphaBitMask: u32 = 0,
 };
 
-/// DDSCAPS — 4 bytes
+/// DDSCAPS — 4 bytes.
 pub const DDSCAPS = extern struct {
     dwCaps: u32 = 0,
 };
 
-/// DDSURFACEDESC — 108 bytes (DirectDraw 1/2 variant used by 32-bit apps)
+/// DDSURFACEDESC — 108 bytes (DirectDraw 1/2 variant used by 32-bit apps).
 pub const DDSURFACEDESC = extern struct {
     dwSize: u32 = 108,
     dwFlags: u32 = 0,
@@ -82,28 +86,32 @@ pub const DDSURFACEDESC = extern struct {
 // DirectSound
 // ============================================================
 
+/// DirectSound: Operation successful.
 pub const DS_OK: i32 = 0;
 
-// DSBUFFERDESC dwFlags
+/// DSBUFFERDESC dwFlags: Buffer is the primary buffer.
 pub const DSBCAPS_PRIMARYBUFFER: u32 = 0x00000001;
 
-// IDirectSoundBuffer::Lock dwFlags
+/// IDirectSoundBuffer::Lock dwFlags: Lock from the write cursor.
 pub const DSBLOCK_FROMWRITECURSOR: u32 = 0x00000001;
+/// IDirectSoundBuffer::Lock dwFlags: Lock the entire buffer.
 pub const DSBLOCK_ENTIREBUFFER: u32 = 0x00000002;
 
-// IDirectSoundBuffer::GetStatus
+/// IDirectSoundBuffer::GetStatus: Buffer is playing.
 pub const DSBSTATUS_PLAYING: u32 = 0x00000001;
+/// IDirectSoundBuffer::GetStatus: Buffer is looping.
 pub const DSBSTATUS_LOOPING: u32 = 0x00000004;
 
-// IDirectSoundBuffer::SetVolume range (hundredths of dB)
+/// IDirectSoundBuffer::SetVolume range minimum.
 pub const DSBVOLUME_MIN: i32 = -10000;
+/// IDirectSoundBuffer::SetVolume range maximum.
 pub const DSBVOLUME_MAX: i32 = 0;
 
 // ============================================================
 // DirectSound Struct Definitions (32-bit layout)
 // ============================================================
 
-/// WAVEFORMATEX — 18 bytes
+/// WAVEFORMATEX — 18 bytes.
 pub const WAVEFORMATEX = extern struct {
     wFormatTag: u16 = 0,
     nChannels: u16 = 0,
@@ -114,7 +122,7 @@ pub const WAVEFORMATEX = extern struct {
     cbSize: u16 = 0,
 };
 
-/// DSBUFFERDESC — 20 bytes (DirectSound 1)
+/// DSBUFFERDESC — 20 bytes (DirectSound 1).
 pub const DSBUFFERDESC = extern struct {
     dwSize: u32 = 20,
     dwFlags: u32 = 0,
@@ -127,21 +135,24 @@ pub const DSBUFFERDESC = extern struct {
 // Direct3D 8
 // ============================================================
 
+/// Direct3D 8: Operation successful.
 pub const D3D_OK: i32 = 0;
+/// Direct3D 8: Invalid call.
 pub const D3DERR_INVALIDCALL: u32 = 0x80070057;
+/// Direct3D 8: Out of video memory.
 pub const D3DERR_OUTOFVIDEOMEMORY: u32 = 0x8876086C;
 
-// D3DFORMAT
+/// D3DFORMAT: X8R8G8B8 format.
 pub const D3DFMT_X8R8G8B8: u32 = 22;
 
-// D3DDEVTYPE
+/// D3DDEVTYPE: HAL device type.
 pub const D3DDEVTYPE_HAL: u32 = 1;
 
 // ============================================================
 // Direct3D 8 Struct Definitions (32-bit layout)
 // ============================================================
 
-/// D3DDISPLAYMODE — 16 bytes
+/// D3DDISPLAYMODE — 16 bytes.
 pub const D3DDISPLAYMODE = extern struct {
     Width: u32 = 0,
     Height: u32 = 0,
@@ -149,7 +160,7 @@ pub const D3DDISPLAYMODE = extern struct {
     Format: u32 = 0,
 };
 
-/// D3DPRESENT_PARAMETERS — 56 bytes
+/// D3DPRESENT_PARAMETERS — 56 bytes.
 pub const D3DPRESENT_PARAMETERS = extern struct {
     BackBufferWidth: u32 = 0,
     BackBufferHeight: u32 = 0,
@@ -166,7 +177,7 @@ pub const D3DPRESENT_PARAMETERS = extern struct {
     FullScreen_PresentationInterval: u32 = 0,
 };
 
-/// D3DVIEWPORT8 — 24 bytes
+/// D3DVIEWPORT8 — 24 bytes.
 pub const D3DVIEWPORT8 = extern struct {
     X: u32 = 0,
     Y: u32 = 0,
@@ -176,7 +187,7 @@ pub const D3DVIEWPORT8 = extern struct {
     MaxZ: f32 = 1.0,
 };
 
-/// D3DLOCKED_RECT — 8 bytes (32-bit: Pitch + pBits pointer)
+/// D3DLOCKED_RECT — 8 bytes (32-bit: Pitch + pBits pointer).
 pub const D3DLOCKED_RECT = extern struct {
     Pitch: u32 = 0,
     pBits: u32 = 0, // 32-bit pointer in guest memory
@@ -186,108 +197,160 @@ pub const D3DLOCKED_RECT = extern struct {
 // Window Messages (WM_*)
 // ============================================================
 
+/// Window destroyed.
 pub const WM_DESTROY: u32 = 0x0002;
+/// Window size changed.
 pub const WM_SIZE: u32 = 0x0005;
+/// Window activated.
 pub const WM_ACTIVATE: u32 = 0x0006;
+/// Application activated.
 pub const WM_ACTIVATEAPP: u32 = 0x001C;
+/// Window needs painting.
 pub const WM_PAINT: u32 = 0x000F;
+/// Window closed.
 pub const WM_CLOSE: u32 = 0x0010;
+/// Exit the message loop.
 pub const WM_QUIT: u32 = 0x0012;
+/// Timer expired.
 pub const WM_TIMER: u32 = 0x0113;
+/// Non-system key pressed.
 pub const WM_KEYDOWN: u32 = 0x0100;
+/// Non-system key released.
 pub const WM_KEYUP: u32 = 0x0101;
+/// System key pressed.
 pub const WM_SYSKEYDOWN: u32 = 0x0104;
+/// System key released.
 pub const WM_SYSKEYUP: u32 = 0x0105;
+/// Command from a menu or control.
 pub const WM_COMMAND: u32 = 0x0111;
+/// Initialize a dialog box.
 pub const WM_INITDIALOG: u32 = 0x0110;
 
 // Mouse messages
+/// Mouse moved.
 pub const WM_MOUSEMOVE: u32 = 0x0200;
+/// Left mouse button down.
 pub const WM_LBUTTONDOWN: u32 = 0x0201;
+/// Left mouse button up.
 pub const WM_LBUTTONUP: u32 = 0x0202;
+/// Right mouse button down.
 pub const WM_RBUTTONDOWN: u32 = 0x0204;
+/// Right mouse button up.
 pub const WM_RBUTTONUP: u32 = 0x0205;
+/// Middle mouse button down.
 pub const WM_MBUTTONDOWN: u32 = 0x0207;
+/// Middle mouse button up.
 pub const WM_MBUTTONUP: u32 = 0x0208;
 
 // Mouse key flags (wParam for mouse messages)
+/// Left button is down.
 pub const MK_LBUTTON: usize = 0x0001;
+/// Right button is down.
 pub const MK_RBUTTON: usize = 0x0002;
 
 // PeekMessage wRemoveMsg
+/// Remove message after processing.
 pub const PM_REMOVE: u32 = 0x0001;
 
 // WM_ACTIVATE wParam
+/// Window activated.
 pub const WA_ACTIVE: usize = 1;
 
 // WM_SIZE wParam
+/// Window restored.
 pub const SIZE_RESTORED: usize = 0;
 
 // ============================================================
 // Window Styles
 // ============================================================
 
+/// Child window.
 pub const WS_CHILD: u32 = 0x40000000;
 
 // Edit control styles
+/// Multi-line edit control.
 pub const ES_MULTILINE: u32 = 0x0004;
 
 // CreateWindowEx special position
+/// Use default window position.
 pub const CW_USEDEFAULT: i32 = @bitCast(@as(u32, 0x80000000));
 
 // ============================================================
 // GetWindowLong / SetWindowLong indices
 // ============================================================
 
+/// Offset to the window procedure.
 pub const GWL_WNDPROC: i32 = -4;
+/// Offset to the parent window handle.
 pub const GWL_HWNDPARENT: i32 = -8;
+/// Offset to the identifier of the window.
 pub const GWL_ID: i32 = -12;
+/// Offset to the user data associated with the window.
 pub const GWL_USERDATA: i32 = -21;
+/// Offset to the instance handle.
 pub const GWL_HINSTANCE: i32 = -6;
+/// Offset to the window style.
 pub const GWL_STYLE: i32 = -16;
+/// Offset to the extended window style.
 pub const GWL_EXSTYLE: i32 = -20;
 
 // ============================================================
 // SetWindowPos flags
 // ============================================================
 
+/// Do not resize the window.
 pub const SWP_NOSIZE: u32 = 0x0001;
 
 // ============================================================
 // SystemParametersInfo actions
 // ============================================================
 
+/// Retrieve non-client metrics.
 pub const SPI_GETNONCLIENTMETRICS: u32 = 0x0029;
+/// Retrieve the work area of the primary monitor.
 pub const SPI_GETWORKAREA: u32 = 0x0030;
 
 // ============================================================
 // GDI Device Caps indices
 // ============================================================
 
+/// Device technology.
 pub const TECHNOLOGY: i32 = 2;
+/// Horizontal resolution.
 pub const HORZRES: i32 = 8;
+/// Vertical resolution.
 pub const VERTRES: i32 = 10;
+/// Bits per pixel.
 pub const BITSPIXEL: i32 = 12;
+/// Number of planes.
 pub const PLANES: i32 = 14;
+/// Number of colors.
 pub const NUMCOLORS: i32 = 24;
+/// Logical pixels per inch (horizontal).
 pub const LOGPIXELSX: i32 = 88;
+/// Logical pixels per inch (vertical).
 pub const LOGPIXELSY: i32 = 90;
+/// Size of the palette.
 pub const SIZEPALETTE: i32 = 104;
+/// Vertical resolution of the desktop.
 pub const DESKTOPVERTRES: i32 = 117;
+/// Horizontal resolution of the desktop.
 pub const DESKTOPHORZRES: i32 = 118;
 
 // ============================================================
 // Common Dialog flags (OPENFILENAME)
 // ============================================================
 
+/// Do not change the current directory.
 pub const OFN_NOCHANGEDIR: u32 = 0x00000008;
+/// Enable hook function.
 pub const OFN_ENABLEHOOK: u32 = 0x00000020;
 
 // ============================================================
 // User32 Struct Definitions (32-bit layout)
 // ============================================================
 
-/// WNDCLASSA — 40 bytes
+/// WNDCLASSA — 40 bytes.
 pub const WNDCLASSA = extern struct {
     style: u32 = 0,
     lpfnWndProc: u32 = 0, // 32-bit function pointer
@@ -301,7 +364,7 @@ pub const WNDCLASSA = extern struct {
     lpszClassName: u32 = 0, // 32-bit string pointer
 };
 
-/// LOGFONTA — 60 bytes
+/// LOGFONTA — 60 bytes.
 pub const LOGFONTA = extern struct {
     lfHeight: i32 = 0,
     lfWidth: i32 = 0,
@@ -319,7 +382,7 @@ pub const LOGFONTA = extern struct {
     lfFaceName: [32]u8 = [_]u8{0} ** 32,
 };
 
-/// NONCLIENTMETRICSA — 340 bytes (Win2K)
+/// NONCLIENTMETRICSA — 340 bytes (Win2K).
 pub const NONCLIENTMETRICSA = extern struct {
     cbSize: u32 = 340,
     iBorderWidth: i32 = 0,
@@ -342,7 +405,7 @@ pub const NONCLIENTMETRICSA = extern struct {
 // GDI32 Struct Definitions (32-bit layout)
 // ============================================================
 
-/// TEXTMETRICA — 56 bytes
+/// TEXTMETRICA — 56 bytes.
 pub const TEXTMETRICA = extern struct {
     tmHeight: i32 = 0,
     tmAscent: i32 = 0,
@@ -367,7 +430,7 @@ pub const TEXTMETRICA = extern struct {
     _pad: [3]u8 = .{ 0, 0, 0 },
 };
 
-/// SIZE — 8 bytes
+/// SIZE — 8 bytes.
 pub const SIZE = extern struct {
     cx: i32 = 0,
     cy: i32 = 0,
@@ -377,7 +440,7 @@ pub const SIZE = extern struct {
 // Common Dialog Struct Definitions (32-bit layout)
 // ============================================================
 
-/// OPENFILENAMEA — 76 bytes (Win2K 32-bit)
+/// OPENFILENAMEA — 76 bytes (Win2K 32-bit).
 pub const OPENFILENAMEA = extern struct {
     lStructSize: u32 = 76,
     hwndOwner: u32 = 0,
@@ -405,13 +468,13 @@ pub const OPENFILENAMEA = extern struct {
 // Additional Structs
 // ============================================================
 
-/// POINT — 8 bytes
+/// POINT — 8 bytes.
 pub const POINT = extern struct {
     x: i32 = 0,
     y: i32 = 0,
 };
 
-/// MONITORINFO — 40 bytes
+/// MONITORINFO — 40 bytes.
 pub const MONITORINFO = extern struct {
     cbSize: u32 = 40,
     rcMonitor: RECT = .{},
@@ -419,10 +482,10 @@ pub const MONITORINFO = extern struct {
     dwFlags: u32 = 0,
 };
 
-/// MONITORINFOF_PRIMARY
+/// MONITORINFOF_PRIMARY: Primary monitor flag.
 pub const MONITORINFOF_PRIMARY: u32 = 1;
 
-/// RECT — 16 bytes  (also in user32.zig but defined here for cross-module use)
+/// RECT — 16 bytes.
 pub const RECT = extern struct {
     left: i32 = 0,
     top: i32 = 0,
@@ -430,7 +493,7 @@ pub const RECT = extern struct {
     bottom: i32 = 0,
 };
 
-/// WINDOWPLACEMENT — 44 bytes
+/// WINDOWPLACEMENT — 44 bytes.
 pub const WINDOWPLACEMENT = extern struct {
     length: u32 = 44,
     flags: u32 = 0,
@@ -440,7 +503,7 @@ pub const WINDOWPLACEMENT = extern struct {
     rcNormalPosition: RECT = .{},
 };
 
-/// WNDCLASSEXA — 48 bytes (has cbSize prefix unlike WNDCLASSA)
+/// WNDCLASSEXA — 48 bytes.
 pub const WNDCLASSEXA = extern struct {
     cbSize: u32 = 48,
     style: u32 = 0,
@@ -456,20 +519,20 @@ pub const WNDCLASSEXA = extern struct {
     hIconSm: u32 = 0,
 };
 
-/// UNICODE_STRING — 8 bytes (32-bit)
+/// UNICODE_STRING — 8 bytes (32-bit).
 pub const UNICODE_STRING = extern struct {
     Length: u16 = 0,
     MaximumLength: u16 = 0,
     Buffer: u32 = 0, // 32-bit pointer
 };
 
-/// TIMECAPS — 8 bytes
+/// TIMECAPS — 8 bytes.
 pub const TIMECAPS = extern struct {
     wPeriodMin: u32 = 0,
     wPeriodMax: u32 = 0,
 };
 
-/// WSADATA — 400 bytes (Winsock 2)
+/// WSADATA — 400 bytes (Winsock 2).
 pub const WSADATA = extern struct {
     wVersion: u16 = 0,
     wHighVersion: u16 = 0,
@@ -484,13 +547,13 @@ pub const WSADATA = extern struct {
 // Kernel32 Structs
 // ============================================================
 
-/// FILETIME — 8 bytes
+/// FILETIME — 8 bytes.
 pub const FILETIME = extern struct {
     dwLowDateTime: u32 = 0,
     dwHighDateTime: u32 = 0,
 };
 
-/// SYSTEMTIME — 16 bytes
+/// SYSTEMTIME — 16 bytes.
 pub const SYSTEMTIME = extern struct {
     wYear: u16 = 0,
     wMonth: u16 = 0,
@@ -502,7 +565,7 @@ pub const SYSTEMTIME = extern struct {
     wMilliseconds: u16 = 0,
 };
 
-/// OSVERSIONINFOA — 148 bytes
+/// OSVERSIONINFOA — 148 bytes.
 pub const OSVERSIONINFOA = extern struct {
     dwOSVersionInfoSize: u32 = 148,
     dwMajorVersion: u32 = 0,
@@ -512,10 +575,10 @@ pub const OSVERSIONINFOA = extern struct {
     szCSDVersion: [128]u8 = [_]u8{0} ** 128,
 };
 
-/// VER_PLATFORM_WIN32_NT
+/// VER_PLATFORM_WIN32_NT constant.
 pub const VER_PLATFORM_WIN32_NT: u32 = 2;
 
-/// MEMORYSTATUS — 32 bytes
+/// MEMORYSTATUS — 32 bytes.
 pub const MEMORYSTATUS = extern struct {
     dwLength: u32 = 32,
     dwMemoryLoad: u32 = 0,
@@ -527,7 +590,7 @@ pub const MEMORYSTATUS = extern struct {
     dwAvailVirtual: u32 = 0,
 };
 
-/// MEMORY_BASIC_INFORMATION — 28 bytes (32-bit)
+/// MEMORY_BASIC_INFORMATION — 28 bytes (32-bit).
 pub const MEMORY_BASIC_INFORMATION = extern struct {
     BaseAddress: u32 = 0,
     AllocationBase: u32 = 0,
@@ -538,14 +601,14 @@ pub const MEMORY_BASIC_INFORMATION = extern struct {
     Type: u32 = 0,
 };
 
-/// PAGE_READWRITE
+/// Page protection: Read/Write.
 pub const PAGE_READWRITE: u32 = 0x04;
-/// MEM_COMMIT
+/// Memory state: Commit.
 pub const MEM_COMMIT: u32 = 0x1000;
-/// MEM_MAPPED
+/// Memory type: Mapped.
 pub const MEM_MAPPED: u32 = 0x40000;
 
-/// PROCESS_INFORMATION — 16 bytes
+/// PROCESS_INFORMATION — 16 bytes.
 pub const PROCESS_INFORMATION = extern struct {
     hProcess: u32 = 0,
     hThread: u32 = 0,
@@ -553,7 +616,7 @@ pub const PROCESS_INFORMATION = extern struct {
     dwThreadId: u32 = 0,
 };
 
-/// STARTUPINFOA — 68 bytes
+/// STARTUPINFOA — 68 bytes.
 pub const STARTUPINFOA = extern struct {
     cb: u32 = 68,
     lpReserved: u32 = 0,
@@ -575,7 +638,7 @@ pub const STARTUPINFOA = extern struct {
     hStdError: u32 = 0,
 };
 
-/// DEVMODEA — 156 bytes (Win2K, no dmDriverExtra)
+/// DEVMODEA — 156 bytes (Win2K, no dmDriverExtra).
 /// Only the fields we actually fill are named; the rest goes in padding arrays.
 pub const DEVMODEA = extern struct {
     dmDeviceName: [32]u8 = [_]u8{0} ** 32, // offset 0
@@ -593,17 +656,20 @@ pub const DEVMODEA = extern struct {
     _pad3: [32]u8 = [_]u8{0} ** 32, // offsets 124–155 (ICM, media, etc.)
 };
 
-/// DEVMODE field flags
+/// DEVMODE field flag: dmBitsPerPel is valid.
 pub const DM_BITSPERPEL: u32 = 0x00040000;
+/// DEVMODE field flag: dmPelsWidth is valid.
 pub const DM_PELSWIDTH: u32 = 0x00080000;
+/// DEVMODE field flag: dmPelsHeight is valid.
 pub const DM_PELSHEIGHT: u32 = 0x00100000;
+/// DEVMODE field flag: dmDisplayFrequency is valid.
 pub const DM_DISPLAYFREQUENCY: u32 = 0x00400000;
 
 // ============================================================
 // GDI32 Structs
 // ============================================================
 
-/// BITMAPINFOHEADER — 40 bytes
+/// BITMAPINFOHEADER — 40 bytes.
 pub const BITMAPINFOHEADER = extern struct {
     biSize: u32 = 40,
     biWidth: i32 = 0,
@@ -622,28 +688,44 @@ pub const BITMAPINFOHEADER = extern struct {
 // File I/O Constants
 // ============================================================
 
+/// Invalid handle value.
 pub const INVALID_HANDLE_VALUE: usize = 0xFFFFFFFF;
+/// Invalid file attributes.
 pub const INVALID_FILE_ATTRIBUTES: u32 = 0xFFFFFFFF;
+/// Invalid file size.
 pub const INVALID_FILE_SIZE: u32 = 0xFFFFFFFF;
+/// Invalid set file pointer result.
 pub const INVALID_SET_FILE_POINTER: u32 = 0xFFFFFFFF;
 
+/// File attribute: Normal.
 pub const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
+/// File attribute: Directory.
 pub const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
 
+/// File type: Disk.
 pub const FILE_TYPE_DISK: u32 = 1;
+/// File type: Character.
 pub const FILE_TYPE_CHAR: u32 = 2;
 
+/// File pointer: Beginning.
 pub const FILE_BEGIN: u32 = 0;
+/// File pointer: Current.
 pub const FILE_CURRENT: u32 = 1;
+/// File pointer: End.
 pub const FILE_END: u32 = 2;
 
+/// Create disposition: Create new.
 pub const CREATE_NEW: u32 = 1;
+/// Create disposition: Create always.
 pub const CREATE_ALWAYS: u32 = 2;
+/// Create disposition: Open existing.
 pub const OPEN_EXISTING: u32 = 3;
+/// Create disposition: Open always.
 pub const OPEN_ALWAYS: u32 = 4;
+/// Create disposition: Truncate existing.
 pub const TRUNCATE_EXISTING: u32 = 5;
 
-/// BY_HANDLE_FILE_INFORMATION — 52 bytes
+/// BY_HANDLE_FILE_INFORMATION — 52 bytes.
 pub const BY_HANDLE_FILE_INFORMATION = extern struct {
     dwFileAttributes: u32 = 0,
     ftCreationTime: FILETIME = .{},
@@ -657,7 +739,7 @@ pub const BY_HANDLE_FILE_INFORMATION = extern struct {
     nFileIndexLow: u32 = 0,
 };
 
-/// WIN32_FIND_DATAA — 320 bytes
+/// WIN32_FIND_DATAA — 320 bytes.
 pub const WIN32_FIND_DATAA = extern struct {
     dwFileAttributes: u32 = 0,
     ftCreationTime: FILETIME = .{},
@@ -675,7 +757,7 @@ pub const WIN32_FIND_DATAA = extern struct {
 // NTDLL Structs
 // ============================================================
 
-/// SYSTEM_BASIC_INFORMATION — 44 bytes
+/// SYSTEM_BASIC_INFORMATION — 44 bytes.
 pub const SYSTEM_BASIC_INFORMATION = extern struct {
     Reserved: u32 = 0,
     TimerResolution: u32 = 0,

@@ -1,3 +1,5 @@
+//! x86 FPU emulation.
+
 // Minimal x87 FPU state for the x86 interpreter.
 //
 // Most Win32 apps use only basic floating point.  This provides enough

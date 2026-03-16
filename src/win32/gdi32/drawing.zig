@@ -2,9 +2,12 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const renderer = @import("../../gui/renderer.zig");
 const gdi32 = @import("../gdi32.zig");
-const w32 = @import("../../win32_constants.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32 = @import("../constants.zig");
+const w32cc = @import("../calling_convention.zig");
 
+/// Performs a bit-block transfer of the color data corresponding to a rectangle of pixels 
+/// from the specified source device context into a destination device context.
+/// Implementation status: Partially implemented (supports basic raster operations: SRCCOPY, SRCPAINT, SRCAND, SRCINVERT).
 pub fn BitBlt(hdcDest: usize, x: i32, y: i32, cx: i32, cy: i32, hdcSrc: usize, x1: i32, y1: i32, rop: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("GDI32: BitBlt({d}x{d} @ {d},{d} -> {d},{d} srcDC={x} dstDC={x} rop={x})\n", .{ cx, cy, x1, y1, x, y, hdcSrc, hdcDest, rop });
 

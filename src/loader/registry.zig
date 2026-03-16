@@ -1,3 +1,8 @@
+//! Module registry and search path management.
+//!
+//! This module implements the `Registry` struct, which tracks loaded modules
+//! and handles case-insensitive DLL lookups across configurable search paths.
+
 const std = @import("std");
 const pe = @import("../pe.zig");
 const Module = @import("module.zig").Module;
@@ -82,11 +87,16 @@ fn openDirPortable(path: []const u8, args: std.fs.Dir.OpenOptions) !std.fs.Dir {
 }
 
 
+/// The module registry manages loaded PE modules and search paths.
 pub const Registry = struct {
+    /// The allocator used for registry metadata.
     allocator: std.mem.Allocator,
+    /// Mapping from lowercase DLL name to loaded Module instance.
     modules: std.StringHashMap(*Module),
+    /// List of directories to search for DLLs.
     search_paths: std.ArrayListUnmanaged([]const u8),
 
+    /// Initializes a new module registry.
     pub fn init(allocator: std.mem.Allocator) Registry {
         return Registry{
             .allocator = allocator,
@@ -95,6 +105,7 @@ pub const Registry = struct {
         };
     }
 
+    /// Frees all loaded modules and search path strings.
     pub fn deinit(self: *Registry) void {
         var it = self.modules.iterator();
         while (it.next()) |entry| {
@@ -108,10 +119,13 @@ pub const Registry = struct {
         self.search_paths.deinit(self.allocator);
     }
 
+    /// Adds a directory to the search path list.
     pub fn addSearchPath(self: *Registry, path: []const u8) !void {
         try self.search_paths.append(self.allocator, try self.allocator.dupe(u8, path));
     }
 
+    /// Loads a PE module by name (or path), searching through registered search paths.
+    /// Returns the loaded Module or an error if not found.
     pub fn loadModule(self: *Registry, name: []const u8) !*Module {
         const lower_name = try self.allocator.alloc(u8, name.len);
         defer self.allocator.free(lower_name);
@@ -252,6 +266,7 @@ pub const Registry = struct {
         return error.ModuleNotFound;
     }
 
+    /// Resolves an export from a loaded PE module.
     pub fn getExport(self: *Registry, dll_name: []const u8, func_name: []const u8) ?usize {
         const lower_name = self.allocator.alloc(u8, dll_name.len) catch return null;
         defer self.allocator.free(lower_name);

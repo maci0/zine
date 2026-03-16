@@ -1,13 +1,13 @@
-// Lightweight profiling infrastructure for the x86 interpreter and JIT.
-//
-// Three counters, all behind a runtime `enabled` flag (zero overhead when off):
-//
-//   1. EIP Heat Map   — per-4KB-page instruction execution counts
-//   2. Opcode Table   — per-opcode execution frequency
-//   3. Stub Counters  — per-thunk-ID call counts
-//
-// Enable via CLI (--profile) or env (ZINE_PROFILE).
-// Reports top-N entries to stderr on dump().
+//! Lightweight profiling infrastructure for the x86 interpreter and JIT.
+//!
+//! Three counters, all behind a runtime `enabled` flag (zero overhead when off):
+//!
+//!   1. EIP Heat Map   — per-4KB-page instruction execution counts
+//!   2. Opcode Table   — per-opcode execution frequency
+//!   3. Stub Counters  — per-thunk-ID call counts
+//!
+//! Enable via CLI (--profile) or env (ZINE_PROFILE).
+//! Reports top-N entries to stderr on dump().
 
 const std = @import("std");
 
@@ -73,6 +73,7 @@ pub inline fn tickThunk(thunk_id: u32) void {
     }
 }
 
+/// Registers a human-readable name for a thunk ID.
 pub fn registerThunkName(thunk_id: u32, name: []const u8) void {
     if (thunk_id < MAX_THUNKS) {
         thunk_names[thunk_id] = name;

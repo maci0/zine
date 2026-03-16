@@ -1,14 +1,22 @@
+//! PE icon resource parser.
+//!
+//! This module provides functions to extract icon resources from PE files
+//! and convert them to ICO format or base64-encoded strings for the UI.
+
 const std = @import("std");
 const Module = @import("module.zig").Module;
 const log = @import("../log.zig");
+const res = @import("../pe_resources.zig");
 
+/// Extracts an icon resource from a PE module and returns it as a base64-encoded JSON message.
+/// If icon_group_id is null, the first available icon group is used.
 pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_group_id: ?u32) !?[]const u8 {
     var group_data: ?[]const u8 = null;
 
     if (icon_group_id) |id| {
-        group_data = module.getResource(14, id); // RT_GROUP_ICON = 14
+        group_data = module.getResource(res.RT_GROUP_ICON, id);
     } else {
-        group_data = module.getFirstResource(14);
+        group_data = module.getFirstResource(res.RT_GROUP_ICON);
     }
 
     if (group_data) |data| {
@@ -35,7 +43,7 @@ pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_gro
         const dwBytesInRes = try reader.readInt(u32, .little);
         const nId = try reader.readInt(u16, .little);
         
-        const icon_data = module.getResource(3, nId) orelse return null; // RT_ICON = 3
+        const icon_data = module.getResource(res.RT_ICON, nId) orelse return null;
         
         if (icon_data.len != dwBytesInRes) {
             log.warn("Icon data length mismatch: expected {}, got {}", .{dwBytesInRes, icon_data.len});
@@ -49,7 +57,7 @@ pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_gro
         var writer = ico_buf.writer(allocator);
         try writer.writeInt(u16, 0, .little);
         try writer.writeInt(u16, 1, .little);
-        try writer.writeInt(u16, 1, .little); // 1 icon
+        try writer.writeInt(u16, 1, .little);
         
         try writer.writeByte(bWidth);
         try writer.writeByte(bHeight);
@@ -58,7 +66,7 @@ pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_gro
         try writer.writeInt(u16, wPlanes, .little);
         try writer.writeInt(u16, wBitCount, .little);
         try writer.writeInt(u32, @intCast(icon_data.len), .little);
-        try writer.writeInt(u32, 22, .little); // Offset to image data
+        try writer.writeInt(u32, 22, .little);
         
         try writer.writeAll(icon_data);
         

@@ -1,6 +1,6 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 
 pub fn wsprintfA(lpOut: [*]u8, lpFmt: [*:0]const u8, a1: usize, a2: usize, a3: usize, a4: usize) callconv(w32cc.WINAPI) i32 {
     // Simple sprintf implementation supporting %d, %s, %x, %X, %u, %%

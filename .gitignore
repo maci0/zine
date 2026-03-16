@@ -6,3 +6,10 @@ tests/
 .zig-cache/
 winmine_trace.txt
 hello.c
+NNET.DAT
+cli-review.md
+code-review.md
+doc-review.md
+docs/doc-review-report.md
+test_archive.7z
+zig-out-jit/

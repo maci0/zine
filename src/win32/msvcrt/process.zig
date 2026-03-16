@@ -1,9 +1,9 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
-const platform = @import("../../platform.zig");
-const io = @import("io.zig");
 
+const io = @import("io.zig");
+const platform = @import("../../platform.zig");
 
 // --- Guest-accessible MSVCRT globals (WASM) ---
 // On WASM, the x86 interpreter can only read guest memory. The `__p_xxx`
@@ -25,7 +25,7 @@ var guest_globals_addr: u32 = 0; // guest virtual address of globals block
 
 fn ensureGuestGlobals() u32 {
     if (guest_globals_addr != 0) return guest_globals_addr;
-    const stub_common = @import("../stub_common.zig");
+    const stub_common = @import("../shared.zig");
     if (stub_common.guest_memory) |gmem| {
         const addr = gmem.guestAlloc(guest_globals_size);
         if (addr == 0) return 0;
@@ -47,9 +47,10 @@ fn ensureGuestGlobals() u32 {
 }
 
 /// Update guest globals after argv/envp are built
+/// Implementation status: Partially implemented
 pub fn updateGuestGlobals() void {
     if (guest_globals_addr == 0) return;
-    const stub_common = @import("../stub_common.zig");
+    const stub_common = @import("../shared.zig");
     if (stub_common.guest_memory) |gmem| {
         gmem.write32(guest_globals_addr + g_argc, @bitCast(msvcrt.global_argc));
         gmem.write32(guest_globals_addr + g_argv, guest_argv_addr);
@@ -57,12 +58,16 @@ pub fn updateGuestGlobals() void {
     }
 }
 
+/// p_argc
+/// Implementation status: Partially implemented
 pub fn p_argc() callconv(.c) usize {
     const g = ensureGuestGlobals();
     if (g != 0) return g + g_argc;
     return @intFromPtr(&msvcrt.global_argc);
 }
 
+/// p_argv
+/// Implementation status: Partially implemented
 pub fn p_argv() callconv(.c) usize {
     const g = ensureGuestGlobals();
     if (g != 0) {
@@ -74,6 +79,8 @@ pub fn p_argv() callconv(.c) usize {
     return @intFromPtr(&msvcrt.global_argv);
 }
 
+/// p_environ
+/// Implementation status: Partially implemented
 pub fn p_environ() callconv(.c) usize {
     const g = ensureGuestGlobals();
     if (g != 0) {
@@ -100,7 +107,7 @@ fn ensureGuestArgs() void {
     if (guest_args_buf != null) return;
 
     const plt = @import("../../platform.zig");
-    const stub_common = @import("../stub_common.zig");
+    const stub_common = @import("../shared.zig");
 
     var base_addr: u32 = guest_args_base;
     const buf_size: usize = 256 * 1024; // 256KB
@@ -116,7 +123,11 @@ fn ensureGuestArgs() void {
         const block = plt.mmap(
             @ptrFromInt(guest_args_base),
             buf_size,
-            false, -1, 0, false, false,
+            false,
+            -1,
+            0,
+            false,
+            false,
         ) catch return;
         guest_args_buf = block;
     }
@@ -178,6 +189,8 @@ fn ensureGuestArgs() void {
     if (trace.enable_tracing) trace.print("MSVCRT: built guest args at 0x{X} ({d} bytes)\n", .{ base_addr, gpos });
 }
 
+/// getmainargs
+/// Implementation status: Partially implemented
 pub fn getmainargs(
     argc_ptr: usize,
     argv_ptr: usize,
@@ -219,11 +232,33 @@ pub fn getmainargs(
     return 0;
 }
 
+/// exit
+/// Implementation status: Partially implemented
 pub fn exit(status: i32) callconv(.c) noreturn {
     if (trace.enable_tracing) trace.print("MSVCRT: exit({d}) called from 0x{X}\n", .{ status, @returnAddress() });
     platform.exitProcess(@intCast(@as(u32, @bitCast(status)) & 0xFF));
 }
 
+/// _beginthreadex: MSVC CRT thread creation (wraps CreateThread)
+/// Implementation status: Partially implemented
+pub fn beginthreadex(
+    security: usize,
+    stack_size: u32,
+    start_address: usize,
+    arglist: usize,
+    initflag: u32,
+    thrdaddr: usize,
+) callconv(.c) usize {
+    _ = security;
+    _ = initflag;
+    if (trace.enable_tracing) trace.print("MSVCRT: _beginthreadex(start={x}, arg={x})\n", .{ start_address, arglist });
+
+    const kernel32_process = @import("../kernel32/process.zig");
+    return kernel32_process.CreateThread(0, stack_size, start_address, arglist, 0, thrdaddr);
+}
+
+/// spawnvp
+/// Implementation status: Partially implemented
 pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 {
     if (comptime !platform.is_native) {
         _ = .{ mode, cmdname_ptr, argv_ptr };
@@ -239,8 +274,8 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
 
     const raw_loader_exe = std.fs.selfExePathAlloc(std.heap.page_allocator) catch "winloader";
     const loader_exe = std.fmt.allocPrint(std.heap.page_allocator, "{s}\x00", .{raw_loader_exe}) catch return -1;
-    
-    args.append(std.heap.page_allocator, loader_exe[0..loader_exe.len - 1]) catch return -1;
+
+    args.append(std.heap.page_allocator, loader_exe[0 .. loader_exe.len - 1]) catch return -1;
     if (trace.enable_tracing) {
         args.append(std.heap.page_allocator, "--trace") catch return -1;
     }
@@ -298,7 +333,8 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         args.append(std.heap.page_allocator, clean_cmd) catch return -1;
     }
 
-    if (argv_ptr != 0) {        const argv = @as([*]const usize, @ptrFromInt(argv_ptr));
+    if (argv_ptr != 0) {
+        const argv = @as([*]const usize, @ptrFromInt(argv_ptr));
         var i: usize = 0;
         while (argv[i] != 0) : (i += 1) {
             if (i > 0) {
@@ -318,7 +354,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         c_args.append(std.heap.page_allocator, @as([*:0]const u8, @ptrCast(arg.ptr))) catch return -1;
 
         if (arg.len > 1 and arg[0] == '@') {
-            const rsp_file = arg[1..arg.len - 1]; // remove null char? arg is [*:0] but arg.len doesn't include null
+            const rsp_file = arg[1 .. arg.len - 1]; // remove null char? arg is [*:0] but arg.len doesn't include null
             if (std.fs.cwd().openFile(rsp_file, .{})) |file| {
                 var buf: [4096]u8 = undefined;
                 const rb = file.readAll(&buf) catch 0;
@@ -327,7 +363,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
             } else |_| {}
         }
     }
-    
+
     var new_env_map = std.process.EnvMap.init(std.heap.page_allocator);
     defer new_env_map.deinit();
 
@@ -354,16 +390,18 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     }
 }
 
+/// getenv
+/// Implementation status: Partially implemented
 pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
     if (name_ptr == 0) return null;
     const name = trace.c_span(name_ptr);
-    
+
     if (trace.enable_tracing) trace.print("MSVCRT: getenv('{s}')\n", .{name});
 
     for (msvcrt.msvcrt_env_vars.items) |v| {
         if (std.ascii.eqlIgnoreCase(v.key, name)) {
-            if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> '{s}'\n", .{name, v.val});
-            const stub_common = @import("../stub_common.zig");
+            if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> '{s}'\n", .{ name, v.val });
+            const stub_common = @import("../shared.zig");
             const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(v.val.len + 1) orelse return null));
             @memcpy(ptr[0..v.val.len], v.val);
             ptr[v.val.len] = 0;
@@ -378,8 +416,8 @@ pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
             const env_str = trace.c_span(@intFromPtr(env_ptr));
             if (std.ascii.startsWithIgnoreCase(env_str, name) and env_str.len > name.len and env_str[name.len] == '=') {
                 const val = env_str[name.len + 1 ..];
-                if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> '{s}' (inherited)\n", .{name, val});
-                const stub_common = @import("../stub_common.zig");
+                if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> '{s}' (inherited)\n", .{ name, val });
+                const stub_common = @import("../shared.zig");
                 const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(val.len + 1) orelse return null));
                 @memcpy(ptr[0..val.len], val);
                 ptr[val.len] = 0;
@@ -394,7 +432,7 @@ pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
     // environment, we'll provide a generic fallback since CLI tools frequently require it.
     if (std.ascii.eqlIgnoreCase(name, "TMP") or std.ascii.eqlIgnoreCase(name, "TEMP")) {
         const tmp_str = "tmp\x00";
-        const stub_common = @import("../stub_common.zig");
+        const stub_common = @import("../shared.zig");
         const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(4096) orelse return null));
         @memset(ptr[0..4096], 0);
         @memcpy(ptr[0..tmp_str.len], tmp_str);
@@ -404,6 +442,8 @@ pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
     return null;
 }
 
+/// putenv
+/// Implementation status: Partially implemented
 pub fn putenv(envstring_ptr: usize) callconv(.c) i32 {
     if (envstring_ptr == 0) return -1;
     const envstring = trace.c_span(envstring_ptr);
@@ -434,13 +474,15 @@ pub fn putenv(envstring_ptr: usize) callconv(.c) i32 {
     return 0;
 }
 
+/// p_pgmptr
+/// Implementation status: Partially implemented
 pub fn p_pgmptr() callconv(.c) usize {
     const g = ensureGuestGlobals();
     if (g != 0) {
         // Make sure argv[0] is available in guest memory for pgmptr
         ensureGuestArgs();
         // pgmptr = argv[0]
-        const stub_common = @import("../stub_common.zig");
+        const stub_common = @import("../shared.zig");
         if (stub_common.guest_memory) |gmem| {
             if (guest_argv_addr != 0) {
                 const first_arg = gmem.read32(guest_argv_addr);
@@ -457,6 +499,8 @@ pub fn p_pgmptr() callconv(.c) usize {
     return @intFromPtr(&msvcrt.msvcrt_pgmptr);
 }
 
+/// stub_XcptFilter
+/// Implementation status: Stub
 pub fn stub_XcptFilter(xcptnum: u32, pxcptinfoptrs: *anyopaque) callconv(.c) i32 {
     _ = xcptnum;
     _ = pxcptinfoptrs;
@@ -466,11 +510,17 @@ pub fn stub_XcptFilter(xcptnum: u32, pxcptinfoptrs: *anyopaque) callconv(.c) i32
 /// Pending init function callbacks for WASM — shared through stub_common
 /// so x86/execute.zig can read them without importing msvcrt directly.
 const initterm_state = struct {
-    const sc = @import("../stub_common.zig");
-    fn callbacks() *[64]u32 { return &sc.pending_initterm_callbacks; }
-    fn count() *usize { return &sc.pending_initterm_count; }
+    const sc = @import("../shared.zig");
+    fn callbacks() *[64]u32 {
+        return &sc.pending_initterm_callbacks;
+    }
+    fn count() *usize {
+        return &sc.pending_initterm_count;
+    }
 };
 
+/// initterm
+/// Implementation status: Partially implemented
 pub fn initterm(pfbegin: [*]const ?*const fn () callconv(.c) void, pfend: [*]const ?*const fn () callconv(.c) void) callconv(.c) void {
     if (comptime !platform.is_native) {
         // On WASM, the function pointers are guest x86 addresses stored as
@@ -500,18 +550,54 @@ pub fn initterm(pfbegin: [*]const ?*const fn () callconv(.c) void, pfend: [*]con
     }
 }
 
+/// _initterm_e — like _initterm but callbacks return int (0 = success)
+/// Implementation status: Partially implemented
+pub fn initterm_e(pfbegin: [*]const ?*const fn () callconv(.c) i32, pfend: [*]const ?*const fn () callconv(.c) i32) callconv(.c) i32 {
+    if (comptime !platform.is_native) {
+        // WASM path: collect like initterm
+        const begin_addr = @intFromPtr(pfbegin);
+        const end_addr = @intFromPtr(pfend);
+        if (trace.enable_tracing) trace.print("MSVCRT: _initterm_e({x}, {x}) [WASM collect]\n", .{ begin_addr, end_addr });
+        var current = begin_addr;
+        while (current < end_addr) : (current += 4) {
+            const func_ptr = @as(*const u32, @ptrFromInt(current)).*;
+            if (func_ptr != 0) {
+                if (initterm_state.count().* < 64) {
+                    initterm_state.callbacks().*[initterm_state.count().*] = func_ptr;
+                    initterm_state.count().* += 1;
+                }
+            }
+        }
+        return 0;
+    }
+    var p = pfbegin;
+    while (@intFromPtr(p) < @intFromPtr(pfend)) : (p += 1) {
+        if (p[0]) |func| {
+            const ret = func();
+            if (ret != 0) return ret;
+        }
+    }
+    return 0;
+}
+
+/// p_fmode
+/// Implementation status: Partially implemented
 pub fn p_fmode() callconv(.c) usize {
     const g = ensureGuestGlobals();
     if (g != 0) return g + g_fmode;
     return @intFromPtr(&msvcrt.msvcrt_fmode);
 }
 
+/// p_commode
+/// Implementation status: Partially implemented
 pub fn p_commode() callconv(.c) usize {
     const g = ensureGuestGlobals();
     if (g != 0) return g + g_commode;
     return @intFromPtr(&msvcrt.msvcrt_commode);
 }
 
+/// p_initenv
+/// Implementation status: Partially implemented
 pub fn p_initenv() callconv(.c) usize {
     const g = ensureGuestGlobals();
     if (g != 0) return g + g_initenv;
@@ -522,26 +608,35 @@ pub fn p_initenv() callconv(.c) usize {
     return @intFromPtr(@as(*const anyopaque, @ptrCast(@constCast(&static_p.p))));
 }
 
+/// p_timezone
+/// Implementation status: Partially implemented
 pub fn p_timezone() callconv(.c) *i32 {
     return &msvcrt.msvcrt_timezone;
 }
 
+/// p_daylight
+/// Implementation status: Partially implemented
 pub fn p_daylight() callconv(.c) *i32 {
     return &msvcrt.msvcrt_daylight;
 }
 
+/// p_tzname
+/// Implementation status: Partially implemented
 pub fn p_tzname() callconv(.c) *[2]?*anyopaque {
     return &msvcrt.msvcrt_tzname;
 }
 
+/// stub_set_app_type
+/// Implementation status: Stub
 pub fn stub_set_app_type(app_type: i32) callconv(.c) void {
     _ = app_type;
 }
 
-// Wide version of __getmainargs for Unicode CRT apps
 var wargv_ptrs: [64]?[*:0]u16 = [_]?[*:0]u16{null} ** 64;
 var wargv_bufs: [64][512]u16 = undefined;
 
+/// Wide version of __getmainargs for Unicode CRT apps
+/// Implementation status: Partially implemented
 pub fn wgetmainargs(
     argc: *i32,
     argv: *[*]?[*:0]u16,
@@ -574,4 +669,14 @@ pub fn wgetmainargs(
 
     if (trace.enable_tracing) trace.print("MSVCRT: __wgetmainargs argc={d}\n", .{msvcrt.global_argc});
     return 0;
+}
+
+pub fn abort() callconv(.c) void {
+    
+    platform.exitProcess(3);
+}
+
+pub fn stub_crt_atexit(func: usize) callconv(.c) i32 {
+    _ = func;
+    return 0; // success
 }

@@ -1,3 +1,9 @@
+//! MSVCRT.dll (Microsoft C Runtime) implementation.
+//!
+//! This module provides a subset of the standard C runtime library functions
+//! required by Win32 applications, including memory management, string
+//! manipulation, file I/O, and process control.
+
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const io = @import("msvcrt/io.zig");
@@ -5,36 +11,59 @@ const trace = @import("../trace.zig");
 
 // --- Global State ---
 
+/// Argument count for the guest process (argc).
 pub var global_argc: i32 = 0;
+/// Argument vector for the guest process (argv).
 pub var global_argv: [*]?[*:0]u8 = undefined;
+/// Environment variables for the guest process (envp).
 pub var global_envp: [*]const ?[*:0]const u8 = undefined;
+/// Whether the guest environment has been fully initialized.
 pub var global_env_initialized: bool = false;
 
+/// MSVCRT _fmode (file translation mode) global.
 pub var msvcrt_fmode: u32 = 0;
+/// MSVCRT _commode (commit mode) global.
 pub var msvcrt_commode: u16 = 0;
+/// MSVCRT __initenv global.
 pub var msvcrt_initenv: ?*anyopaque = null;
+/// MSVCRT _pgmptr (program name) global.
 pub var msvcrt_pgmptr: ?*anyopaque = null;
+/// MSVCRT _adjust_fdiv (Pentium FDIV bug workaround) global.
 pub var msvcrt_adjust_fdiv: i32 = 0;
+/// MSVCRT _errno global.
 pub var msvcrt_errno_val: i32 = 0;
+/// MSVCRT __mb_cur_max (max bytes in multi-byte character) global.
 pub var msvcrt_mb_cur_max: i32 = 1;
 
-// _acmdln / _wcmdln data exports: these are char*/wchar_t* pointers
-// Initialized to point to empty strings; main.zig sets _acmdln to the real command line
+/// MSVCRT _acmdln / _wcmdln data exports: these are char*/wchar_t* pointers
+/// Initialized to point to empty strings; main.zig sets _acmdln to the real command line
 var acmdln_default: [1]u8 = .{0};
+/// MSVCRT _acmdln (ANSI command line) global pointer.
 pub var msvcrt_acmdln: usize = 0;
+/// Guest virtual address of _acmdln on WASM.
 pub var msvcrt_acmdln_guest: usize = 0; // Guest VA on WASM
 var wcmdln_default: [2]u8 = .{ 0, 0 };
+/// MSVCRT _wcmdln (Unicode command line) global pointer.
 pub var msvcrt_wcmdln: usize = 0;
 
+/// MSVCRT _timezone global.
 pub var msvcrt_timezone: i32 = 0;
+/// MSVCRT _daylight global.
 pub var msvcrt_daylight: i32 = 0;
+/// MSVCRT _tzname (timezone name) global.
 pub var msvcrt_tzname: [2]?*anyopaque = [_]?*anyopaque{ @ptrCast(@constCast("PST\x00")), @ptrCast(@constCast("PDT\x00")) };
 
+/// MSVCRT _pctype table.
 pub var msvcrt_pctype: [257]u16 = [_]u16{0} ** 257;
+/// Pointer to the _pctype table.
 pub var msvcrt_pctype_ptr: *u16 = &msvcrt_pctype[1];
+/// MSVCRT _mbctype table.
 pub var msvcrt_mbctype: [257]u8 = [_]u8{0} ** 257;
+/// Pointer to the _mbctype table.
 pub var msvcrt_mbctype_ptr: *u8 = &msvcrt_mbctype[1];
+/// Represents an environment variable key-value pair.
 pub const EnvVar = struct { key: []const u8, val: []const u8 };
+/// List of environment variables.
 pub var msvcrt_env_vars: std.ArrayListUnmanaged(EnvVar) = .{};
 
 const string = @import("msvcrt/string.zig");
@@ -48,6 +77,8 @@ const time_mod = @import("msvcrt/time.zig");
 const file = @import("msvcrt/file.zig");
 const fmt = @import("msvcrt/fmt.zig");
 
+/// Registers MSVCRT built-in exports in the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     string.init_pctype();
     io.initPioinfo();
@@ -78,8 +109,10 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "_exit", process.exit);
     try environment.addBuiltinExportComptime(m, "_XcptFilter", process.stub_XcptFilter);
     try environment.addBuiltinExportComptime(m, "_initterm", process.initterm);
+    try environment.addBuiltinExportComptime(m, "_initterm_e", process.initterm_e);
     try environment.addBuiltinExportComptime(m, "_controlfp", math.controlfp);
     try environment.addBuiltinExportComptime(m, "__set_app_type", process.stub_set_app_type);
+    try environment.addBuiltinExportComptime(m, "_set_app_type", process.stub_set_app_type);
     try environment.addBuiltinExportComptime(m, "__setusermatherr", math.stub_setusermatherr);
     try environment.addBuiltinExportComptime(m, "__p__fmode", process.p_fmode);
     try environment.addBuiltinExportComptime(m, "__p__commode", process.p_commode);
@@ -93,10 +126,10 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "_spawnv", process.spawnvp);
     try environment.addBuiltinExportComptime(m, "signal", misc.stub_ignore_ptr);
     try environment.addBuiltinExportComptime(m, "__dllonexit", misc.stub_ignore_ptr);
-    try environment.addBuiltinExportComptime(m, "_onexit", misc.stub_ignore_ptr);
+    try environment.addBuiltinExportComptime(m, "_onexit", onexit);
     try environment.addBuiltinExportComptime(m, "_purecall", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "_seh_longjmp_unwind", misc.stub_ignore_i32);
-    try environment.addBuiltinExportComptime(m, "__CxxFrameHandler", misc.stub_ignore_i32);
+    try environment.addBuiltinExportComptime(m, "__CxxFrameHandler", @import("msvcrt_cxxeh.zig").CxxFrameHandler);
 
     // Memory
     try environment.addBuiltinExportComptime(m, "malloc", mem.malloc);
@@ -138,6 +171,23 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "strtoul", string.strtoul);
     try environment.addBuiltinExportComptime(m, "strtol", string.strtol);
     try environment.addBuiltinExportComptime(m, "strerror", misc.stub_ignore_ptr);
+
+    // UCRT compatibility (for MinGW-compiled binaries that link against api-ms-win-crt-*)
+    try environment.addBuiltinExportComptime(m, "atof", string.atof);
+    try environment.addBuiltinExportComptime(m, "abort", process.abort);
+    try environment.addBuiltinExportComptime(m, "_crt_atexit", process.stub_crt_atexit);
+    try environment.addBuiltinExportComptime(m, "__acrt_iob_func", file.acrt_iob_func);
+    try environment.addBuiltinExportComptime(m, "__stdio_common_vfprintf", fmt.stdio_common_vfprintf);
+    try environment.addBuiltinExportComptime(m, "__stdio_common_vsprintf", fmt.stdio_common_vsprintf);
+    try environment.addBuiltinExportComptime(m, "__stdio_common_vfscanf", fmt.stdio_common_vfscanf);
+    try environment.addBuiltinExportComptime(m, "_configure_narrow_argv", process.stub_set_app_type);
+    try environment.addBuiltinExportComptime(m, "_initialize_narrow_environment", process.stub_set_app_type);
+    try environment.addBuiltinExportComptime(m, "_set_new_mode", process.stub_set_app_type);
+    try environment.addBuiltinExportComptime(m, "_set_invalid_parameter_handler", process.stub_set_app_type);
+    try environment.addBuiltinExportComptime(m, "asctime", time_mod.asctime);
+    try environment.addBuiltinExportComptime(m, "_time64", time_mod.time64);
+    try environment.addBuiltinExportComptime(m, "_localtime64", time_mod.localtime64);
+    try environment.addBuiltinExportComptime(m, "pow", math.pow);
     try environment.addBuiltinExportComptime(m, "_strerror", misc.stub_ignore_ptr);
 
     // Wide String
@@ -360,23 +410,42 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "_swab", misc.stub_noop3);
     try environment.addBuiltinExportComptime(m, "mktime", time_mod.mktime);
     try environment.addBuiltinExportComptime(m, "wcsftime", misc.stub_ignore_i32);
+
+    // 7-Zip imports
+    try environment.addBuiltinExportComptime(m, "_fileno", file.fileno);
+    try environment.addBuiltinExportComptime(m, "_beginthreadex", process.beginthreadex);
 }
 
 // =============================================================================
 // Faithful implementations — Tier 6: C++ Exception Handling
 // =============================================================================
 
-// _CxxThrowException: C++ throw implementation
-// This is called when C++ code does `throw expr;`
-// Since we can't handle C++ exceptions, we log and terminate
-fn CxxThrowException(pExceptionObject: usize, pThrowInfo: usize) callconv(.c) noreturn {
-    _ = pThrowInfo;
-    if (trace.enable_tracing) trace.print("MSVCRT: _CxxThrowException(object={x}) — terminating\n", .{pExceptionObject});
-    process.exit(3);
+/// _onexit: register an exit handler. Returns the function pointer on success.
+fn onexit(func: usize) callconv(.c) usize {
+    // We don't actually track exit handlers, but return non-NULL (success)
+    // so the CRT doesn't treat this as a fatal initialization failure.
+    return func;
 }
 
-// ?terminate@@YAXXZ: C++ std::terminate()
-// Called when exception handling fails or unexpected exception
+/// _CxxThrowException: C++ throw implementation
+/// Raises a Win32 SEH exception with code 0xE06D7363 ("msc") so the
+/// MSVC C++ exception handler (__CxxFrameHandler) can process it.
+/// The SEH handler in the app's code does the actual catch/unwind.
+fn CxxThrowException(pExceptionObject: usize, pThrowInfo: usize) callconv(.c) void {
+    if (trace.enable_tracing) trace.print("MSVCRT: _CxxThrowException(object={x}, info={x})\n", .{ pExceptionObject, pThrowInfo });
+    // MSVC C++ exception: code = 0xE06D7363, 3 parameters:
+    // [0] = magic (0x19930520), [1] = pExceptionObject, [2] = pThrowInfo
+    const kernel32_error = @import("kernel32/error.zig");
+    var args = [3]u32{ 0x19930520, @truncate(pExceptionObject), @truncate(pThrowInfo) };
+    kernel32_error.RaiseException(0xE06D7363, 1, 3, @intFromPtr(&args));
+    // If RaiseException returns, the SEH handler handled it via RtlUnwind+longjmp.
+    // The handler already transferred control to the catch block.
+    // This return path is a no-op — the caller's code is no longer on the real
+    // execution path (the catch block took over).
+}
+
+/// ?terminate@@YAXXZ: C++ std::terminate()
+/// Called when exception handling fails or unexpected exception
 fn terminate() callconv(.c) noreturn {
     if (trace.enable_tracing) trace.print("MSVCRT: terminate() — aborting\n", .{});
     process.exit(3);

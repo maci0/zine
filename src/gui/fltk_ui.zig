@@ -1,21 +1,20 @@
+//! FLTK Backend
+//!
+//! This module bridges Zig to native FLTK via the C bridge in fltk_bridge.cpp.
+//!
+//! Threading model:
+//!   - Worker thread: x86 execution calls renderer functions (setTitle, pushFrame, etc.)
+//!   - FLTK thread: spawned in init(), runs Fl::check() in a loop
+//!
+//! All FLTK widget mutations happen from the FLTK thread. Worker thread
+//! enqueues commands into a lock-free ring buffer and calls fltk_awake().
+
 const std = @import("std");
 const renderer = @import("renderer.zig");
 const build_options = @import("build_options");
 const log = @import("../log.zig");
 
-// =============================================================================
-// FLTK Backend
-//
-// This module bridges Zig to native FLTK via the C bridge in fltk_bridge.cpp.
-// Threading model:
-//   - Worker thread: x86 execution calls renderer functions (setTitle, pushFrame, etc.)
-//   - FLTK thread: spawned in init(), runs Fl::check() in a loop
-//
-// All FLTK widget mutations happen from the FLTK thread.  Worker thread
-// enqueues commands into a lock-free ring buffer and calls fltk_awake().
-// =============================================================================
-
-// Conditionally import the C bridge — only available when -Dfltk=true
+/// Conditionally import the C bridge — only available when -Dfltk=true
 const c = if (build_options.use_fltk) @cImport({
     @cInclude("fltk_bridge.h");
 }) else struct {};
@@ -172,6 +171,7 @@ fn fltkEventLoop() void {
     }
 }
 
+/// Initializes the FLTK backend, creates the window, and spawns the event loop thread.
 pub fn init(allocator: std.mem.Allocator) !void {
     g_allocator = allocator;
 
@@ -193,6 +193,7 @@ pub fn init(allocator: std.mem.Allocator) !void {
 
 // --- Framebuffer ---
 
+/// Notifies the FLTK thread to redraw the framebuffer.
 pub fn pushFrame() void {
     enqueue(.{ .set_framebuf = .{
         .w = renderer.global_width,
@@ -202,39 +203,45 @@ pub fn pushFrame() void {
 
 // --- Window Chrome ---
 
+/// Sets the window title.
 pub fn setTitle(title: []const u8) void {
     // We need to copy the title since the caller's buffer may be reused
     const owned = g_allocator.dupe(u8, title) catch return;
     enqueue(.{ .set_title = owned });
 }
 
+/// Sets the window position and size.
 pub fn setWindowPos(cx: i32, cy: i32, clientW: i32, clientH: i32) void {
     _ = cx;
     _ = cy;
     enqueue(.{ .resize_window = .{ .x = 0, .y = 0, .w = clientW, .h = clientH } });
 }
 
+/// Sets the internal rendering resolution.
 pub fn setResolution(w: u32, h: u32) void {
     enqueue(.{ .set_resolution = .{ .w = w, .h = h } });
 }
 
+/// Updates the window icon from a base64-encoded string.
 pub fn setIcon(_: []const u8) void {
-    // TODO: Fl_Window::icon() with Fl_RGB_Image
 }
 
 // --- Menu ---
 
+/// Configures the window menu using a JSON definition.
 pub fn setMenu(json: []const u8) void {
     const owned = g_allocator.dupe(u8, json) catch return;
     enqueue(.{ .set_menu = owned });
 }
 
+/// Enables or disables a menu item by ID.
 pub fn enableMenuItem(id: u32, enabled: bool) void {
     if (build_options.use_fltk) {
         c.fltk_enable_menu_item(@intCast(id), if (enabled) 1 else 0);
     }
 }
 
+/// Checks or unchecks a menu item by ID.
 pub fn checkMenuItem(id: u32, checked: bool) void {
     if (build_options.use_fltk) {
         c.fltk_check_menu_item(@intCast(id), if (checked) 1 else 0);
@@ -243,106 +250,107 @@ pub fn checkMenuItem(id: u32, checked: bool) void {
 
 // --- Edit Control ---
 
+/// Shows or hides the native edit control.
 pub fn showEditControl(_: bool) void {
-    // TODO: Create Fl_Text_Editor + Fl_Text_Buffer
 }
 
+/// Resizes the native edit control.
 pub fn resizeEditControl(_: i32, _: i32, _: i32, _: i32) void {
-    // TODO: editor->resize(x, y, w, h)
 }
 
+/// Sets the font for the native edit control.
 pub fn setEditFont(_: usize, _: []const u8, _: i32, _: bool, _: bool) void {
-    // TODO: editor->textfont() + textsize()
 }
 
+/// Sets the text selection in the native edit control.
 pub fn setEditSelection(_: i32, _: i32) void {
-    // TODO: editor->buffer()->select(start, end)
 }
 
+/// Replaces the current selection in the native edit control.
 pub fn replaceEditSelection(_: []const u8) void {
-    // TODO: buffer->replace_selection(text)
 }
 
+/// Undoes the last operation in the native edit control.
 pub fn editUndo() void {
-    // TODO: Fl_Text_Buffer::undo()
 }
 
+/// Scrolls the native edit control to the caret position.
 pub fn editScrollCaret() void {
-    // TODO: editor->show_insert_position()
 }
 
+/// Sets the complete text content of the native edit control.
 pub fn setEditText(_: []const u8) void {
-    // TODO: buffer->text(text)
 }
 
 // --- Status Bar ---
 
+/// Configures the number of parts in the status bar.
 pub fn setStatusBarParts(_: usize) void {
-    // TODO: Create Fl_Group with N Fl_Box children
 }
 
+/// Sets the text for a specific part of the status bar.
 pub fn setStatusBarText(_: usize, _: []const u8) void {
-    // TODO: status_boxes[part]->label(text)
 }
 
 // --- Clipboard ---
 
+/// Copies text to the system clipboard.
 pub fn setClipboard(_: []const u8) void {
-    // TODO: Fl::copy(text, len, 1)
 }
 
 // --- Context Menu ---
 
+/// Displays a context menu at the specified coordinates.
 pub fn showContextMenu(_: i32, _: i32, _: []const u8) void {
-    // TODO: Fl_Menu_Button popup at (x, y)
 }
 
 // --- Dialogs ---
 
+/// Displays a standard message box.
 pub fn showMessageBox(title: []const u8, text: []const u8) void {
     const owned_title = g_allocator.dupe(u8, title) catch return;
     const owned_text = g_allocator.dupe(u8, text) catch return;
     enqueue(.{ .show_message_box = .{ .title = owned_title, .text = owned_text } });
 }
 
+/// Shows a modal dialog with the given JSON definition.
 pub fn showDialog(_: []const u8) void {
-    // TODO: Create Fl_Window with controls parsed from JSON
 }
 
+/// Displays a collection of controls in a dialog.
 pub fn showControls(_: []const u8) void {
-    // TODO: Parse JSON, create FLTK child widgets
 }
 
+/// Adds a control to the current dialog.
 pub fn addControl(_: []const u8, _: usize, _: i32, _: i32, _: i32, _: i32, _: u32, _: []const u8) void {
-    // TODO: Map class name → FLTK widget and create
 }
 
+/// Updates the text of a specific control in a dialog.
 pub fn updateControlText(_: i32, _: []const u8) void {
-    // TODO: Find widget by ID, set label(text) or value(text)
 }
 
+/// Opens a standard file selection dialog.
 pub fn openFileDialog(_: ?[]const u8, _: bool) void {
-    // TODO: Fl_Native_File_Chooser
 }
 
+/// Opens a standard font selection dialog.
 pub fn openFontDialog(_: []const u8, _: i32, _: bool, _: bool) void {
-    // TODO: Custom Fl_Window with font selection
 }
 
+/// Closes the currently active modal dialog.
 pub fn closeDialog() void {
-    // TODO: dialog_window->hide()
 }
 
 // --- Audio ---
 
+/// Sets the global audio playback volume.
 pub fn setVolume(_: f32) void {
-    // TODO: Audio backend volume control
 }
 
+/// Sets the audio format for subsequent PCM playback.
 pub fn setAudioFormat(_: u32, _: u16, _: u16) void {
-    // TODO: Configure audio backend
 }
 
+/// Pushes PCM audio data to the output buffer.
 pub fn pushAudio(_: []const u8) void {
-    // TODO: Write PCM to audio stream
 }

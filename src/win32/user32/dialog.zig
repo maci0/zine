@@ -2,8 +2,8 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const user32 = @import("../user32.zig");
 const renderer = @import("../../gui/renderer.zig");
-const w32 = @import("../../win32_constants.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32 = @import("../constants.zig");
+const w32cc = @import("../calling_convention.zig");
 
 const DIALOG_HWND: usize = 0x00000456;
 

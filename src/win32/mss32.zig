@@ -1,6 +1,10 @@
+//! MSS32.dll registration.
+
 const env = @import("../loader/env.zig");
 const stubs = @import("mss32/miles.zig");
 
+/// Registers MSS32.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "mss32.dll";
 

@@ -1,7 +1,10 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 
+/// Retrieves the current input mode of a console's input buffer or the current
+/// output mode of a console screen buffer.
+/// Implementation status: Stub (returns a dummy mode).
 pub fn GetConsoleMode(hConsoleHandle: usize, lpMode_ptr: usize) callconv(w32cc.WINAPI) i32 {
     _ = hConsoleHandle;
     if (lpMode_ptr != 0) {
@@ -12,6 +15,8 @@ pub fn GetConsoleMode(hConsoleHandle: usize, lpMode_ptr: usize) callconv(w32cc.W
     return 0; // FALSE
 }
 
+/// Retrieves information about the specified console screen buffer.
+/// Implementation status: Partially implemented (returns fixed 80x25 metrics).
 pub fn GetConsoleScreenBufferInfo(hConsoleOutput: usize, lpConsoleScreenBufferInfo: usize) callconv(w32cc.WINAPI) i32 {
     _ = hConsoleOutput;
     if (trace.enable_tracing) trace.print("KERNEL32: GetConsoleScreenBufferInfo\n", .{});
@@ -34,6 +39,8 @@ pub fn GetConsoleScreenBufferInfo(hConsoleOutput: usize, lpConsoleScreenBufferIn
     return 0;
 }
 
+/// Reads character input from the console input buffer and removes it from the buffer.
+/// Implementation status: Partially implemented (reads from host stdin).
 pub fn ReadConsoleW(hConsoleInput: usize, lpBuffer: usize, nNumberOfCharsToRead: u32, lpNumberOfCharsRead: usize, pInputControl: usize) callconv(w32cc.WINAPI) i32 {
     _ = hConsoleInput;
     _ = pInputControl;
@@ -59,6 +66,9 @@ pub fn ReadConsoleW(hConsoleInput: usize, lpBuffer: usize, nNumberOfCharsToRead:
     return 1;
 }
 
+/// Writes a character string to a console screen buffer beginning at the current
+/// cursor location.
+/// Implementation status: Partially implemented (writes to host stdout/stderr).
 pub fn WriteConsoleW(hConsoleOutput: usize, lpBuffer_ptr: usize, nNumberOfCharsToWrite: u32, lpNumberOfCharsWritten_ptr: usize, lpReserved: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpReserved;
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hConsoleOutput))));
@@ -79,6 +89,9 @@ pub fn WriteConsoleW(hConsoleOutput: usize, lpBuffer_ptr: usize, nNumberOfCharsT
     return 0; // FALSE
 }
 
+/// Writes a character string to a console screen buffer beginning at the current
+/// cursor location.
+/// Implementation status: Partially implemented (writes to host stdout/stderr).
 pub fn WriteConsoleA(hConsoleOutput: usize, lpBuffer: usize, nNumberOfCharsToWrite: u32, lpNumberOfCharsWritten: usize, lpReserved: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpReserved;
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hConsoleOutput))));
@@ -94,17 +107,22 @@ pub fn WriteConsoleA(hConsoleOutput: usize, lpBuffer: usize, nNumberOfCharsToWri
     return 0;
 }
 
-// GetConsoleOutputCP: returns console output code page
+/// Retrieves the output code page used by the console associated with the
+/// calling process.
+/// Implementation status: Stub (returns 437).
 pub fn stub_GetConsoleOutputCP() callconv(w32cc.WINAPI) u32 {
     return 437; // OEM United States
 }
 
-// --- Return TRUE helpers (for functions that must succeed) ---
+/// Dummy helper that always returns TRUE (1).
+/// Implementation status: Stub.
 pub fn stub_ret_true_1(a: usize) callconv(w32cc.WINAPI) i32 {
     _ = a;
     return 1; // TRUE
 }
 
+/// Dummy helper that always returns TRUE (1).
+/// Implementation status: Stub.
 pub fn stub_ret_true_2(a: usize, b: usize) callconv(w32cc.WINAPI) i32 {
     _ = a;
     _ = b;

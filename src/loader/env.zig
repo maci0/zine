@@ -1,3 +1,9 @@
+//! Win32 environment and module management.
+//!
+//! This module defines the Win32 environment, which handles module registration,
+//! built-in export management, and import resolution for both native and WASM
+//! execution.
+
 const std = @import("std");
 const pe = @import("../pe.zig");
 pub const Module = @import("module.zig").Module;
@@ -8,13 +14,17 @@ const platform = @import("../platform.zig");
 
 const Cpu = x86_cpu.Cpu;
 
+/// Represents a built-in export from a stub DLL.
 pub const BuiltinExport = struct {
+    /// Host address of the stub function, or guest VA of the relocated data.
     addr: usize,
+    /// Number of bytes to pop from the guest stack (for stdcall).
     param_bytes: u32,
     /// On WASM, a comptime-generated handler that reads args from the guest
     /// stack and calls the actual stub function with the correct signature.
     /// Null on native (where we can use @ptrFromInt to call directly).
     thunk_handler: ?*const fn (*Cpu) void = null,
+    /// Whether this export is a host native stub (true) or a guest PE export (false).
     is_native: bool = true,
     /// True if this is a data export (e.g., _iob, _adjust_fdiv) as opposed to
     /// a function export. On WASM, data exports are written directly to the IAT
@@ -24,18 +34,24 @@ pub const BuiltinExport = struct {
     data_size: u32 = 0,
 };
 
+/// Represents a built-in module (DLL) with its registered exports.
 pub const BuiltinModule = struct {
+    /// Handle to the fake PE header page for this module.
     handle: usize,
+    /// Mapping from function name to export metadata.
     exports: std.StringHashMap(BuiltinExport),
 };
 
+/// The Win32 environment, managing module registration and import resolution.
 pub const Environment = struct {
+    /// The allocator used for environment metadata.
     allocator: std.mem.Allocator,
+    /// The module registry for loading PEs from disk.
     registry: Registry,
-
-    // Fallback static map for built-in/stubbed exports
+    /// Mapping from DLL name to built-in/stubbed module metadata.
     builtins: std.StringHashMap(BuiltinModule),
 
+    /// Initializes a new Win32 environment.
     pub fn init(allocator: std.mem.Allocator) Environment {
         return .{
             .allocator = allocator,
@@ -44,6 +60,7 @@ pub const Environment = struct {
         };
     }
 
+    /// Frees all resources associated with the environment.
     pub fn deinit(self: *Environment) void {
         var it = self.builtins.iterator();
         while (it.next()) |entry| {
@@ -72,11 +89,11 @@ pub const Environment = struct {
 
         // Minimal MZ/PE header
         const mz = @as(*align(1) u16, @ptrCast(&header[0]));
-        mz.* = 0x5A4D; // "MZ"
+        mz.* = 0x5A4D;
         const e_lfanew = @as(*align(1) u32, @ptrCast(&header[0x3C]));
         e_lfanew.* = 0x40;
         const pe_sig = @as(*align(1) u32, @ptrCast(&header[0x40]));
-        pe_sig.* = 0x00004550; // "PE\0\0"
+        pe_sig.* = 0x00004550;
 
         const new_builtin = BuiltinModule{
             .handle = @intFromPtr(header.ptr),
@@ -198,7 +215,11 @@ pub const Environment = struct {
                                     break :blk @intCast(val);
                                 }
                             } else {
-                                break :blk @truncate(val);
+                                if (int_info.signedness == .signed) {
+                                    break :blk @bitCast(@as(i32, @truncate(@as(i64, val))));
+                                } else {
+                                    break :blk @truncate(@as(u64, @intCast(val)));
+                                }
                             }
                         },
                         .bool => @intFromBool(val),
@@ -251,13 +272,22 @@ pub const Environment = struct {
                             break :blk @bitCast(val);
                         },
                         .int => |int_info| blk: {
+                            // On WASM, usize parameters are often guest pointers
+                            // (Win32 stubs use usize for pointer args). Translate
+                            // values that fall within the guest VA range.
+                            if (T == usize and comptime !platform.is_native) {
+                                break :blk translateGuestAddr(val, cpu);
+                            }
                             if (int_info.signedness == .signed) {
                                 if (int_info.bits <= 32) {
                                     break :blk @truncate(@as(i32, @bitCast(val)));
                                 }
                                 break :blk @as(T, @as(i32, @bitCast(val)));
                             } else {
-                                break :blk @truncate(val);
+                                if (int_info.bits <= 32) {
+                                    break :blk @truncate(val);
+                                }
+                                break :blk @as(T, val);
                             }
                         },
                         .bool => val != 0,
@@ -401,13 +431,22 @@ pub const Environment = struct {
                             break :blk @bitCast(val);
                         },
                         .int => |int_info| blk: {
+                            // On WASM, usize parameters are often guest pointers
+                            // (Win32 stubs use usize for pointer args). Translate
+                            // values that fall within the guest VA range.
+                            if (T == usize and comptime !platform.is_native) {
+                                break :blk translateGuestAddr(val, cpu);
+                            }
                             if (int_info.signedness == .signed) {
                                 if (int_info.bits <= 32) {
                                     break :blk @truncate(@as(i32, @bitCast(val)));
                                 }
                                 break :blk @as(T, @as(i32, @bitCast(val)));
                             } else {
-                                break :blk @truncate(val);
+                                if (int_info.bits <= 32) {
+                                    break :blk @truncate(val);
+                                }
+                                break :blk @as(T, val);
                             }
                         },
                         .bool => val != 0,
@@ -505,8 +544,8 @@ pub const Environment = struct {
                         }
                     },
                     .int => {
-                        // Sometimes dummy entries are typed as usize
-                        target_ptr = @intCast(func_ptr);
+                        // u32 COM vtable entries — registered individually via
+                        // thunks.comPtr() with correct param counts. Skip here.
                     },
                     else => {},
                 }
@@ -702,6 +741,22 @@ pub const Environment = struct {
         if (self.registry.modules.get(search_dll)) |mod| {
             if (mod.getExport(func_name)) |exported_addr| {
                 return .{ .addr = exported_addr, .param_bytes = 0, .is_native = false };
+            }
+        }
+
+        // Windows API set DLLs: redirect api-ms-win-crt-* to MSVCRT.dll
+        // and api-ms-win-core-* to kernel32.dll (Universal CRT forwarding).
+        if (std.ascii.startsWithIgnoreCase(search_dll, "api-ms-win-crt-")) {
+            if (self.builtins.get("msvcrt.dll")) |builtin| {
+                if (builtin.exports.get(func_name)) |exp| {
+                    return exp;
+                }
+            }
+        } else if (std.ascii.startsWithIgnoreCase(search_dll, "api-ms-win-core-")) {
+            if (self.builtins.get("kernel32.dll")) |builtin| {
+                if (builtin.exports.get(func_name)) |exp| {
+                    return exp;
+                }
             }
         }
 

@@ -1,21 +1,25 @@
-/// Miscellaneous MSVCRT stubs: rand/srand, qsort, bsearch, errno,
-/// setlocale, _strupr, abs, and generic no-op/ignore stubs.
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
 
+/// Miscellaneous MSVCRT stubs: rand/srand, qsort, bsearch, errno,
+/// setlocale, _strupr, abs, and generic no-op/ignore stubs.
+/// Implementation status: Partially implemented
 pub fn log_call(comptime name: []const u8) void {
     if (trace.enable_tracing) trace.print("MSVCRT: {s}\n", .{name});
 }
 
-// --- rand / srand (MSVC LCG) ---
 var rand_seed: u32 = 1;
 
+/// --- rand / srand (MSVC LCG) ---
+/// Implementation status: Partially implemented
 pub fn srand(seed: u32) callconv(.c) void {
     rand_seed = seed;
     if (trace.enable_tracing) trace.print("MSVCRT: srand({d})\n", .{seed});
 }
 
+/// rand
+/// Implementation status: Partially implemented
 pub fn rand() callconv(.c) i32 {
     rand_seed = rand_seed *% 214013 +% 2531011;
     const result = @as(i32, @intCast((rand_seed >> 16) & 0x7fff));
@@ -23,6 +27,8 @@ pub fn rand() callconv(.c) i32 {
     return result;
 }
 
+/// stub_ignore_i32
+/// Implementation status: Stub
 pub fn stub_ignore_i32() callconv(.c) i32 {
     if (trace.enable_tracing) {
         trace.print("MSVCRT: ignored call (i32) from 0x{X}\n", .{@returnAddress()});
@@ -30,14 +36,16 @@ pub fn stub_ignore_i32() callconv(.c) i32 {
     return 0;
 }
 
+/// stub_ignore_ptr
+/// Implementation status: No-op fallback
 pub fn stub_ignore_ptr() callconv(.c) ?*anyopaque {
     const ra = @returnAddress();
     if (trace.enable_tracing) trace.print("MSVCRT: ignored call (ptr) from 0x{X}\n", .{ra});
     return null;
 }
 
-// --- qsort / bsearch ---
-
+/// --- qsort / bsearch ---
+/// Implementation status: Partially implemented
 pub fn qsort(base: usize, num: usize, width: usize, compare_ptr: usize) callconv(.c) void {
     if (base == 0 or num == 0 or width == 0 or compare_ptr == 0) return;
     const compare = @as(*const fn (usize, usize) callconv(.c) i32, @ptrFromInt(compare_ptr));
@@ -61,6 +69,8 @@ pub fn qsort(base: usize, num: usize, width: usize, compare_ptr: usize) callconv
     }
 }
 
+/// bsearch
+/// Implementation status: Partially implemented
 pub fn bsearch(key: usize, base: usize, num: usize, width: usize, compare_ptr: usize) callconv(.c) usize {
     if (key == 0 or base == 0 or num == 0 or width == 0 or compare_ptr == 0) return 0;
     const compare = @as(*const fn (usize, usize) callconv(.c) i32, @ptrFromInt(compare_ptr));
@@ -80,16 +90,16 @@ pub fn bsearch(key: usize, base: usize, num: usize, width: usize, compare_ptr: u
     return 0;
 }
 
-// --- errno ---
-
+/// --- errno ---
+/// Implementation status: Partially implemented
 pub fn errno() callconv(.c) *i32 {
     return &msvcrt.msvcrt_errno_val;
 }
 
-// --- Locale ---
-
 var setlocale_buf: [2]u8 = .{ 'C', 0 };
 
+/// --- Locale ---
+/// Implementation status: Partially implemented
 pub fn setlocale(category: i32, locale_ptr: usize) callconv(.c) usize {
     if (trace.enable_tracing) {
         if (locale_ptr >= 0x10000) {
@@ -102,6 +112,8 @@ pub fn setlocale(category: i32, locale_ptr: usize) callconv(.c) usize {
     return @intFromPtr(&setlocale_buf);
 }
 
+/// strupr
+/// Implementation status: Partially implemented
 pub fn strupr(str_ptr: usize) callconv(.c) usize {
     if (str_ptr < 0x10000) return 0;
     const s = @as([*]u8, @ptrFromInt(trace.addr(str_ptr)));
@@ -112,12 +124,18 @@ pub fn strupr(str_ptr: usize) callconv(.c) usize {
     return str_ptr;
 }
 
-// --- Simple stubs ---
-
+/// --- Simple stubs ---
+/// Implementation status: Partially implemented
 pub fn abs(n: i32) callconv(.c) i32 {
     return if (n < 0) -n else n;
 }
 
+/// stub_noop0
+/// Implementation status: Stub
 pub fn stub_noop0() callconv(.c) void {}
+/// stub_noop1
+/// Implementation status: Stub
 pub fn stub_noop1(_: usize) callconv(.c) void {}
+/// stub_noop3
+/// Implementation status: Stub
 pub fn stub_noop3(_: usize, _: usize, _: usize) callconv(.c) void {}

@@ -1,5 +1,5 @@
-// JIT instruction translation helpers.
-// Factored out of compiler.zig to keep individual files manageable.
+//! JIT instruction translation helpers.
+//! Factored out of compiler.zig to keep individual files manageable.
 
 const std = @import("std");
 const wasm = @import("wasm.zig");
@@ -8,32 +8,40 @@ const decoder = @import("../x86/decoder.zig");
 
 const Body = emitter.Buffer;
 
-// Local variable indices (Wasm locals):
-// 0-7:  EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI
-// 8:    CF (Carry Flag)
-// 9:    ZF (Zero Flag)
-// 10:   SF (Sign Flag)
-// 11:   OF (Overflow Flag)
-// 12:   Scratch
-// 13:   DF (Direction Flag)
-// 14:   PF (Parity Flag)
+/// Carry Flag (CF) local variable index.
 pub const LOCAL_CF: u32 = 8;
+/// Zero Flag (ZF) local variable index.
 pub const LOCAL_ZF: u32 = 9;
+/// Sign Flag (SF) local variable index.
 pub const LOCAL_SF: u32 = 10;
+/// Overflow Flag (OF) local variable index.
 pub const LOCAL_OF: u32 = 11;
+/// Scratch local variable index.
 pub const LOCAL_SCRATCH: u32 = 12;
+/// Direction Flag (DF) local variable index.
 pub const LOCAL_DF: u32 = 13;
+/// Parity Flag (PF) local variable index.
 pub const LOCAL_PF: u32 = 14;
-pub const LOCAL_COUNT: u32 = 15;
+/// Memory base local variable index.
+pub const LOCAL_MEM_BASE: u32 = 15;
+/// Total number of local variables.
+pub const LOCAL_COUNT: u32 = 16;
 
-// Register indices matching x86 encoding
+/// EAX register index.
 pub const REG_EAX: u32 = 0;
+/// ECX register index.
 pub const REG_ECX: u32 = 1;
+/// EDX register index.
 pub const REG_EDX: u32 = 2;
+/// EBX register index.
 pub const REG_EBX: u32 = 3;
+/// ESP register index.
 pub const REG_ESP: u32 = 4;
+/// EBP register index.
 pub const REG_EBP: u32 = 5;
+/// ESI register index.
 pub const REG_ESI: u32 = 6;
+/// EDI register index.
 pub const REG_EDI: u32 = 7;
 
 /// Emit code to push the effective address of a memory operand onto the Wasm stack.
@@ -92,6 +100,10 @@ pub fn emitLoadOperand(body: *Body, insn: *const decoder.Instruction, idx: u1) !
         },
         .mem => {
             try emitEffectiveAddress(body, insn, idx);
+            // Translate guest VA to WASM linear memory address
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_MEM_BASE);
+            try body.appendOpcode(.i32_add);
             switch (insn.op_size) {
                 .byte => {
                     try body.appendOpcode(.i32_load8_u);
@@ -135,10 +147,14 @@ pub fn emitStoreOperand(body: *Body, insn: *const decoder.Instruction, idx: u1) 
         },
         .mem => {
             // Value is on stack. We need address below it.
-            // Save value to scratch, push addr, push value back, store.
+            // Save value to scratch, push addr + mem_base, push value back, store.
             try body.appendOpcode(.local_set);
             try body.appendUleb128(LOCAL_SCRATCH);
             try emitEffectiveAddress(body, insn, idx);
+            // Translate guest VA to WASM linear memory address
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_MEM_BASE);
+            try body.appendOpcode(.i32_add);
             try body.appendOpcode(.local_get);
             try body.appendUleb128(LOCAL_SCRATCH);
             switch (insn.op_size) {
@@ -332,7 +348,7 @@ pub fn aluGroupToWasmOp(group: u3) ?wasm.Opcode {
     };
 }
 
-/// Emit PUSH: decrement ESP, store value at [ESP].
+/// Emit PUSH: decrement ESP, store value at [ESP + mem_base].
 /// Value must already be on the Wasm stack.
 pub fn emitPush32(body: *Body) !void {
     try body.appendOpcode(.local_set);
@@ -345,7 +361,11 @@ pub fn emitPush32(body: *Body) !void {
     try body.appendOpcode(.i32_sub);
     try body.appendOpcode(.local_tee);
     try body.appendUleb128(REG_ESP);
-    // store [ESP] = value
+    // Translate guest VA to WASM linear memory address
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(LOCAL_MEM_BASE);
+    try body.appendOpcode(.i32_add);
+    // store [ESP + mem_base] = value
     try body.appendOpcode(.local_get);
     try body.appendUleb128(LOCAL_SCRATCH);
     try body.appendOpcode(.i32_store);
@@ -353,10 +373,14 @@ pub fn emitPush32(body: *Body) !void {
     try body.appendUleb128(0);
 }
 
-/// Emit POP: load from [ESP], increment ESP. Result on Wasm stack.
+/// Emit POP: load from [ESP + mem_base], increment ESP. Result on Wasm stack.
 pub fn emitPop32(body: *Body) !void {
     try body.appendOpcode(.local_get);
     try body.appendUleb128(REG_ESP);
+    // Translate guest VA to WASM linear memory address
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(LOCAL_MEM_BASE);
+    try body.appendOpcode(.i32_add);
     try body.appendOpcode(.i32_load);
     try body.appendUleb128(2);
     try body.appendUleb128(0);

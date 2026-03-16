@@ -1,15 +1,11 @@
-// Import thunk mechanism for the x86 interpreter.
-//
-// When PE import tables are resolved for interpreter targets (WASM or
-// native --interpret), each imported function gets a thunk slot in guest
-// memory.  The thunk is a short x86 code sequence (INT 0xFE + thunk_id)
-// that traps into the interpreter, which dispatches to the corresponding
-// Zig stub.
-//
-// This module provides:
-//   - registerThunk(): registration of stub functions by thunk ID
-//   - dispatch(): called from execute.zig when INT 0xFE is hit
-//   - writeThunkCode(): generate thunk code in guest memory
+//! x86 thunking and Win32 API bridge.
+//!
+//! This module manages the registration and execution of "thunks" — short
+//! x86 code sequences that transition from guest code to native host
+//! functions (Win32 API stubs). It provides:
+//!   - registerThunk(): registration of stub functions by thunk ID
+//!   - dispatch(): called from execute.zig when INT 0xFE is hit
+//!   - writeThunkCode(): generate thunk code in guest memory
 
 const std = @import("std");
 const cpu_mod = @import("cpu.zig");
@@ -69,8 +65,8 @@ pub fn writeThunkCode(memory: *cpu_mod.GuestMemory, addr: u32, thunk_id: u32) u3
             @import("../trace.zig").print("WATCHPOINT: writeThunkCode to {X} (thunk {d})\n", .{ addr, thunk_id });
         }
     }
-    memory.write8(addr, 0xCD); // INT
-    memory.write8(addr +% 1, 0xFE); // 0xFE
+    memory.write8(addr, 0xCD);
+    memory.write8(addr +% 1, 0xFE);
     memory.write32(addr +% 2, thunk_id);
     return addr +% 6;
 }
@@ -82,7 +78,7 @@ pub fn writeThunkCode(memory: *cpu_mod.GuestMemory, addr: u32, thunk_id: u32) u3
 pub fn dispatch(cpu: *Cpu) void {
     // Read thunk_id from code stream (4 bytes after INT 0xFE)
     const thunk_id = cpu.memory.read32(cpu.eip);
-    cpu.eip +%= 4; // skip past the thunk_id
+    cpu.eip +%= 4;
 
     if (thunk_id >= MAX_THUNKS) {
         log.err("x86 thunks: invalid thunk ID {d}", .{thunk_id});
@@ -103,7 +99,7 @@ pub fn dispatch(cpu: *Cpu) void {
         // Build an x86 trampoline to execute them before returning
         // to the guest CRT startup code.
         if (comptime !@import("../platform.zig").is_native) {
-            const sc = @import("../win32/stub_common.zig");
+            const sc = @import("../win32/shared.zig");
             if (sc.pending_initterm_count > 0) {
                 @import("execute.zig").buildInittermTrampoline(cpu);
             }
@@ -241,7 +237,7 @@ fn FnTypeForArity(comptime n: usize) type {
         params[i] = .{ .is_generic = false, .is_noalias = false, .type = u32 };
     }
     return @Type(.{ .@"fn" = .{
-        .calling_convention = @import("../calling_convention.zig").WINAPI,
+        .calling_convention = @import("../win32/calling_convention.zig").WINAPI,
         .is_generic = false,
         .is_var_args = false,
         .return_type = u32,
@@ -268,6 +264,23 @@ const ImportEntry = struct {
 var import_registry: [MAX_IMPORTS]ImportEntry = undefined;
 var import_count: u32 = 0;
 var imports_sorted: bool = false;
+
+/// Register a COM vtable method with param count derived from the function type.
+/// Returns the truncated 32-bit address for use in COM vtable u32 fields.
+/// Deduplicates: shared stubs (Dummy, noop) are only registered once.
+pub fn comPtr(comptime func: anytype, comptime name: []const u8) u32 {
+    const addr: u32 = @truncate(@intFromPtr(&func));
+    if (comptime @import("../platform.zig").is_native) {
+        const param_count: u32 = comptime blk: {
+            const info = @typeInfo(@TypeOf(func));
+            break :blk if (info == .@"fn") @intCast(info.@"fn".params.len) else 4;
+        };
+        if (!isNativeImport(addr)) {
+            registerNativeImport(addr, "COM", name, param_count * 4);
+        }
+    }
+    return addr;
+}
 
 /// Register a resolved import address with its stdcall parameter byte count.
 /// Called from loader.zig during import resolution.
@@ -317,14 +330,17 @@ fn findImport(addr: u32) ?*const ImportEntry {
     return if (idx) |i| &slice[i] else null;
 }
 
+/// Retrieves the number of bytes to pop from the stack for a stdcall function.
 pub fn getParamBytes(addr: u32) u32 {
     return if (findImport(addr)) |entry| entry.param_bytes else 0;
 }
 
+/// Returns true if the function at the given address uses the cdecl calling convention.
 pub fn isTargetCdecl(addr: u32) bool {
     return if (findImport(addr)) |entry| entry.is_cdecl else false;
 }
 
+/// Returns true if the address corresponds to a registered native import.
 pub fn isNativeImport(addr: u32) bool {
     return findImport(addr) != null;
 }
@@ -350,6 +366,7 @@ var unresolved_registry: [MAX_UNRESOLVED]UnresolvedEntry = undefined;
 var unresolved_count: u32 = 0;
 var unresolved_sorted: bool = false;
 
+/// Registers an unresolved import for diagnostic purposes.
 pub fn registerUnresolvedImport(iat_slot_addr: u32, dll_name: []const u8, func_name: []const u8) void {
     if (unresolved_count >= MAX_UNRESOLVED) return;
     var entry = &unresolved_registry[unresolved_count];

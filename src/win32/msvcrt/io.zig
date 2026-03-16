@@ -1,3 +1,9 @@
+//! MSVCRT stream-based I/O implementation.
+//!
+//! This module implements the C standard library's FILE* stream functions and
+//! the underlying MSVC CRT internal file descriptor table structures required
+//! for formatted I/O and low-level descriptor validation.
+
 const std = @import("std");
 const trace = @import("../../trace.zig");
 
@@ -5,6 +11,7 @@ fn log_call(comptime name: []const u8) void {
     trace.print("MSVCRT_IO: {s}\n", .{name});
 }
 
+/// MSVC CRT FILE structure (32-bit).
 pub const MSVCRT_FILE = extern struct {
     _ptr: u32,
     _cnt: i32,
@@ -16,14 +23,11 @@ pub const MSVCRT_FILE = extern struct {
     _tmpfname: u32,
 };
 
-// Ensure our size matches what MSVCRT expects (32 bytes on x86)
 comptime {
     std.debug.assert(@sizeOf(MSVCRT_FILE) == 32);
 }
 
-// MSVC CRT _flag constants:
-// _IOREAD = 0x0001, _IOWRT = 0x0002, _IONBF = 0x0004, _IOMYBUF = 0x0008
-// BUFSIZ = 512
+/// Standard I/O stream table (stdin, stdout, stderr).
 pub var msvcrt_iob: [3]MSVCRT_FILE = [_]MSVCRT_FILE{
     // stdin:  _IOREAD, bufsiz=512
     MSVCRT_FILE{ ._ptr = 0, ._cnt = 0, ._base = 0, ._flag = 0x0001, ._file = 0, ._charbuf = 0, ._bufsiz = 512, ._tmpfname = 0 },
@@ -34,21 +38,7 @@ pub var msvcrt_iob: [3]MSVCRT_FILE = [_]MSVCRT_FILE{
 };
 
 /// On WASM, _iob is allocated in guest memory at this virtual address.
-/// Set by wasm_main.zig during startup.
 pub var iob_guest_addr: usize = 0;
-
-// ---------------------------------------------------------------------------
-// MSVC CRT internal file descriptor table (__pioinfo / _osfile)
-//
-// The CRT's _flsbuf validates fd via _osfile(fd) & FOPEN before writing.
-// Without this, fprintf/printf produce zero output. _ioinit() normally
-// initializes this during CRT startup, but since our MSVCRT is stubs
-// (not a real PE), _ioinit never runs.  We pre-initialize fd 0/1/2.
-//
-// struct ioinfo { long osfhnd; char osfile; char pipech; /* pad to 8 */ };
-// __pioinfo is an array of 64 pointers; [0] points to ioinfo[32] for fd 0-31.
-// _nhandle is the total number of file handles available.
-// ---------------------------------------------------------------------------
 
 const IOINFO_SIZE = 8; // sizeof(ioinfo) on x86
 const IOINFO_TABLE_SIZE = 32; // entries per __pioinfo slot
@@ -58,41 +48,49 @@ const FOPEN: u8 = 0x01;
 const FTEXT: u8 = 0x80;
 const FDEV: u8 = 0x40;
 
-// Pre-initialized ioinfo table for fd 0-31
-// Layout: [osfhnd: i32, osfile: u8, pipech: u8, pad: u16] × 32
+/// Pre-initialized ioinfo table for fd 0-31.
+/// Layout: [osfhnd: i32, osfile: u8, pipech: u8, pad: u16] × 32
 pub var ioinfo_table0: [IOINFO_TABLE_SIZE * IOINFO_SIZE]u8 = init_ioinfo: {
     var buf: [IOINFO_TABLE_SIZE * IOINFO_SIZE]u8 = [_]u8{0} ** (IOINFO_TABLE_SIZE * IOINFO_SIZE);
     // fd 0 (stdin):  osfhnd=0, osfile=FOPEN|FTEXT|FDEV
-    buf[0] = 0; buf[1] = 0; buf[2] = 0; buf[3] = 0; // osfhnd = 0
+    buf[0] = 0;
+    buf[1] = 0;
+    buf[2] = 0;
+    buf[3] = 0; // osfhnd = 0
     buf[4] = FOPEN | FTEXT | FDEV; // osfile
     // fd 1 (stdout): osfhnd=1, osfile=FOPEN|FTEXT|FDEV
-    buf[8] = 1; buf[9] = 0; buf[10] = 0; buf[11] = 0; // osfhnd = 1
+    buf[8] = 1;
+    buf[9] = 0;
+    buf[10] = 0;
+    buf[11] = 0; // osfhnd = 1
     buf[12] = FOPEN | FTEXT | FDEV; // osfile
     // fd 2 (stderr): osfhnd=2, osfile=FOPEN|FTEXT|FDEV
-    buf[16] = 2; buf[17] = 0; buf[18] = 0; buf[19] = 0; // osfhnd = 2
+    buf[16] = 2;
+    buf[17] = 0;
+    buf[18] = 0;
+    buf[19] = 0; // osfhnd = 2
     buf[20] = FOPEN | FTEXT | FDEV; // osfile
     break :init_ioinfo buf;
 };
 
-// __pioinfo: array of 64 pointers to ioinfo tables
-// [0] will be set to &ioinfo_table0 at runtime (can't take address at comptime)
+/// __pioinfo: array of 64 pointers to ioinfo tables.
 pub var pioinfo: [64]usize = [_]usize{0} ** 64;
 
 /// Initialize __pioinfo[0] to point to ioinfo_table0.
-/// Must be called before the PE starts executing.
+/// Implementation status: Partially implemented
 pub fn initPioinfo() void {
     pioinfo[0] = @intFromPtr(&ioinfo_table0);
 }
 
-// _nhandle: total available file handles
+/// Total available file handles.
 pub var nhandle: i32 = 256;
 
-// We need a way to map MSVCRT_FILE pointers to Zig File handles.
-// Since we don't want to use malloc/free for everything, we can keep a simple array of open files.
 const max_files = 64;
 var file_handles: [max_files]?std.fs.File = [_]?std.fs.File{null} ** max_files;
 var file_structs: [max_files]MSVCRT_FILE = [_]MSVCRT_FILE{std.mem.zeroes(MSVCRT_FILE)} ** max_files;
 
+/// Map MSVCRT_FILE pointers to Zig File handles.
+/// Implementation status: Partially implemented
 pub fn getFile(ptr: ?*anyopaque) ?std.fs.File {
     if (ptr) |p| {
         const ptr_val = @intFromPtr(p);
@@ -147,6 +145,8 @@ fn allocateFileSlot() ?usize {
     return null;
 }
 
+/// Retrieves the base address of the standard I/O stream table.
+/// Implementation status: Partially implemented
 pub fn p_iob() callconv(.c) usize {
     // On WASM, return the guest VA so the x86 interpreter can correctly
     // access the FILE structs through its guest memory translation.
@@ -156,9 +156,7 @@ pub fn p_iob() callconv(.c) usize {
 }
 
 /// Initialize guest-memory _iob with pre-allocated stdout/stderr buffers.
-/// Called by wasm_main.zig after relocateDataExports() has placed _iob in
-/// guest memory.  Allocates CRT-style I/O buffers and sets FILE flags so
-/// that the CRT's _flsbuf / _write path works without running _ioinit.
+/// Implementation status: Partially implemented
 pub fn initGuestIob(gmem: anytype, combined_buf: []u8, base_addr: u32, guest_va: u32) void {
     iob_guest_addr = guest_va;
     const iob_offset = guest_va - base_addr;
@@ -201,8 +199,10 @@ pub fn initGuestIob(gmem: anytype, combined_buf: []u8, base_addr: u32, guest_va:
     msvcrt_iob[2]._bufsiz = 2;
 }
 
+/// Set file translation mode.
+/// Implementation status: Stub
 pub fn stub_setmode(fd: i32, mode: i32) callconv(.c) i32 {
-    if (trace.enable_tracing) trace.print("MSVCRT: _setmode(fd={d}, mode={x})\n", .{fd, mode});
+    if (trace.enable_tracing) trace.print("MSVCRT: _setmode(fd={d}, mode={x})\n", .{ fd, mode });
     // Stub: always returns 0 (previous mode). Does not change translation mode.
     return 0;
 }
@@ -210,11 +210,15 @@ pub fn stub_setmode(fd: i32, mode: i32) callconv(.c) i32 {
 var global_filename_buf: [4096]u8 align(16) = undefined;
 var global_mode_buf: [32]u8 align(16) = undefined;
 
+/// Opens a file with shared access.
+/// Implementation status: Partially implemented
 pub fn fsopen(filename_ptr: usize, mode_ptr: usize, shflag: i32) callconv(.c) ?*anyopaque {
     _ = shflag;
     return fopen(filename_ptr, mode_ptr);
 }
 
+/// Opens a file.
+/// Implementation status: Partially implemented
 pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
     if (filename_ptr == 0 or mode_ptr == 0) return null;
 
@@ -224,14 +228,14 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
     const len = @min(filename.len, 4095);
     const name_slice = global_filename_buf[0..len];
     @memcpy(name_slice, filename[0..len]);
-    
+
     // Convert backslashes to forward slashes for Linux
     std.mem.replaceScalar(u8, name_slice, '\\', '/');
 
     const mode_len = @min(mode.len, 31);
     const mode_slice = global_mode_buf[0..mode_len];
     @memcpy(mode_slice, mode[0..mode_len]);
-    
+
     trace.print("MSVCRT_IO: fopen {s} (mode: {s})\n", .{ name_slice, mode_slice });
     trace.print("  raw hex: ", .{});
     for (name_slice) |b| trace.print("{x:0>2} ", .{b});
@@ -300,6 +304,8 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
     }
 }
 
+/// Closes a file.
+/// Implementation status: Partially implemented
 pub fn fclose(f: ?*anyopaque) callconv(.c) i32 {
     trace.print("MSVCRT_IO: fclose\n", .{});
     if (getFile(f)) |file| {
@@ -316,6 +322,8 @@ pub fn fclose(f: ?*anyopaque) callconv(.c) i32 {
     return -1;
 }
 
+/// Reads data from a stream.
+/// Implementation status: Partially implemented
 pub fn fread(buffer: [*]u8, size: usize, count: usize, f: ?*anyopaque) callconv(.c) usize {
     if (getFile(f)) |file| {
         const bytes_to_read = size * count;
@@ -338,6 +346,8 @@ pub fn fread(buffer: [*]u8, size: usize, count: usize, f: ?*anyopaque) callconv(
     return 0;
 }
 
+/// Writes data to a stream.
+/// Implementation status: Partially implemented
 pub fn fwrite(buffer: [*]const u8, size: usize, count: usize, f: ?*anyopaque) callconv(.c) usize {
     const bytes_to_write = size *% count;
     trace.print("MSVCRT_IO: fwrite (size: {d}, count: {d}, total: {d})\n", .{ size, count, bytes_to_write });
@@ -359,6 +369,8 @@ pub fn fwrite(buffer: [*]const u8, size: usize, count: usize, f: ?*anyopaque) ca
     return 0;
 }
 
+/// Moves the file pointer to a specified location.
+/// Implementation status: Partially implemented
 pub fn fseek(f: ?*anyopaque, offset: i32, origin: i32) callconv(.c) i32 {
     trace.print("MSVCRT_IO: fseek(offset={d}, origin={d})\n", .{ offset, origin });
     if (getFile(f)) |file| {
@@ -381,6 +393,8 @@ pub fn fseek(f: ?*anyopaque, offset: i32, origin: i32) callconv(.c) i32 {
     return -1;
 }
 
+/// Gets the current position of a file pointer.
+/// Implementation status: Partially implemented
 pub fn ftell(f: ?*anyopaque) callconv(.c) i32 {
     if (getFile(f)) |file| {
         const pos = file.getPos() catch return -1;
@@ -391,6 +405,8 @@ pub fn ftell(f: ?*anyopaque) callconv(.c) i32 {
     return -1;
 }
 
+/// Gets a string from a stream.
+/// Implementation status: Partially implemented
 pub fn fgets(buf_ptr: usize, max_count: i32, f: ?*anyopaque) callconv(.c) usize {
     if (buf_ptr == 0 or max_count <= 1) return 0;
     if (getFile(f)) |file| {
@@ -414,6 +430,8 @@ pub fn fgets(buf_ptr: usize, max_count: i32, f: ?*anyopaque) callconv(.c) usize 
     return 0;
 }
 
+/// Gets a character from a stream.
+/// Implementation status: Partially implemented
 pub fn fgetc(f: ?*anyopaque) callconv(.c) i32 {
     if (getFile(f)) |file| {
         var buf: [1]u8 = undefined;
@@ -433,6 +451,8 @@ pub fn fgetc(f: ?*anyopaque) callconv(.c) i32 {
     return -1;
 }
 
+/// Writes a character to a stream.
+/// Implementation status: Partially implemented
 pub fn fputc(c: i32, f: ?*anyopaque) callconv(.c) i32 {
     if (getFile(f)) |file| {
         var buf: [1]u8 = undefined;
@@ -444,6 +464,8 @@ pub fn fputc(c: i32, f: ?*anyopaque) callconv(.c) i32 {
     return -1;
 }
 
+/// Writes a character to stdout.
+/// Implementation status: Partially implemented
 pub fn putchar(c: i32) callconv(.c) i32 {
     var buf: [1]u8 = undefined;
     buf[0] = @intCast(c & 0xFF);
@@ -453,9 +475,10 @@ pub fn putchar(c: i32) callconv(.c) i32 {
 }
 
 const fmt_mod = @import("fmt.zig");
-
 const platform_mod = @import("../../platform.zig");
 
+/// Prints formatted data to a stream.
+/// Implementation status: Partially implemented
 pub const fprintf = if (platform_mod.is_wasm) stub_fprintf_wasm else stub_fprintf_native;
 
 fn stub_fprintf_wasm(f: ?*anyopaque, format_ptr: usize, ap: usize) callconv(.c) i32 {
@@ -482,13 +505,15 @@ fn fprintf_impl(f: ?*anyopaque, format_ptr: usize, ap: usize) i32 {
     return -1;
 }
 
+/// Writes formatted data to a stream.
+/// Implementation status: Partially implemented
 pub fn fwprintf(f: ?*anyopaque, format_ptr: usize) callconv(.c) i32 {
     if (getFile(f)) |file| {
         if (format_ptr != 0) {
             const fmt = @as([*]const u16, @ptrFromInt(format_ptr));
             const max_len = 4096;
             const len = std.mem.indexOfScalar(u16, fmt[0..max_len], 0) orelse max_len;
-            
+
             var buf: [4096]u8 = undefined;
             for (0..len) |i| {
                 buf[i] = @intCast(fmt[i] & 0xFF);

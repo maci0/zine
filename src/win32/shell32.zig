@@ -1,6 +1,11 @@
+//! SHELL32.dll registration.
+
 const env = @import("../loader/env.zig");
 const stubs = @import("shell32/shell.zig");
+const ord = @import("ordinals.zig").SHELL32;
 
+/// Registers SHELL32.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "SHELL32.dll";
     try environment.addBuiltinExportComptime(m, "ShellExecuteA", stubs.stub_ShellExecuteA);
@@ -18,13 +23,13 @@ pub fn register(environment: *env.Environment) !void {
     // --- Remaining SHELL32 stubs for 100% win2k coverage ---
     const kernel32 = @import("kernel32.zig");
     try environment.addBuiltinExportComptime(m, "SHAppBarMessage", kernel32.stub_args2);
-    try environment.addBuiltinExportComptime(m, "ordinal_258", kernel32.stub_args2);
+    try environment.addBuiltinExportComptime(m, ord.SHGetSpecialFolderPathA, kernel32.stub_args2);
     try environment.addBuiltinExportComptime(m, "ShellExecuteW", stubs.stub_ShellExecuteA);
     try environment.addBuiltinExportComptime(m, "ExtractIconW", stubs.stub_ExtractIconA);
     try environment.addBuiltinExportComptime(m, "CommandLineToArgvW", kernel32.stub_args2);
     try environment.addBuiltinExportComptime(m, "Shell_NotifyIconW", stubs.stub_Shell_NotifyIconA);
-    try environment.addBuiltinExportComptime(m, "ordinal_100", kernel32.stub_args0);
-    try environment.addBuiltinExportComptime(m, "ordinal_61", kernel32.stub_args5);
+    try environment.addBuiltinExportComptime(m, ord.SHFreeNameMappings, kernel32.stub_args0);
+    try environment.addBuiltinExportComptime(m, ord.RunFileDlg, kernel32.stub_args5);
     try environment.addBuiltinExportComptime(m, "SHGetSpecialFolderPathW", kernel32.stub_args4);
 
     // --- Notepad2 SHELL32 stubs ---
@@ -37,5 +42,5 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "SHGetFileInfoW", kernel32.stub_args5);
     try environment.addBuiltinExportComptime(m, "SHGetFolderPathW", kernel32.stub_args5);
     try environment.addBuiltinExportComptime(m, "SHGetPathFromIDListW", kernel32.stub_args2);
-    try environment.addBuiltinExportComptime(m, "ordinal_180", kernel32.stub_args5);
+    try environment.addBuiltinExportComptime(m, ord.SHBrowseForFolder, kernel32.stub_args5);
 }

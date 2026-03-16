@@ -65,8 +65,10 @@ pub fn build(b: *std.Build) void {
         wasm_lib.export_memory = true;
 
         // Pass build options to WASM build (FLTK is never used on WASM)
+        const enable_jit_host = b.option(bool, "jit_host", "Enable JIT host imports for WASM (requires zine-host or browser JS glue)") orelse false;
         const wasm_options = b.addOptions();
         wasm_options.addOption(bool, "use_fltk", false);
+        wasm_options.addOption(bool, "enable_jit_host", enable_jit_host);
         wasm_lib.root_module.addOptions("build_options", wasm_options);
 
         b.installArtifact(wasm_lib);
@@ -134,6 +136,22 @@ pub fn build(b: *std.Build) void {
         if (b.args) |args| {
             run_cmd.addArgs(args);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // zine-host: native wrapper for running zine.wasm with JIT support
+    // -----------------------------------------------------------------------
+    const build_host = b.option(bool, "host", "Build zine-host (wasmtime wrapper with JIT support)") orelse false;
+    if (build_host) {
+        const host_exe = b.addExecutable(.{
+            .name = "zine-host",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/host_main.zig"),
+                .target = b.graph.host,
+                .optimize = optimize,
+            }),
+        });
+        b.installArtifact(host_exe);
     }
 
     // -----------------------------------------------------------------------

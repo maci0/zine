@@ -1,12 +1,23 @@
+//! PE menu resource parser.
+//!
+//! This module handles parsing binary Win32 menu resources into a hierarchical
+//! JSON structure suitable for the GUI backend.
+
 const std = @import("std");
 
+/// Represents a single item in a menu, which may be a command or a popup submenu.
 pub const MenuItem = struct {
+    /// Command identifier (0 for popups).
     id: u16,
+    /// Display name of the menu item.
     name: []const u8,
+    /// Menu item flags (e.g., MF_POPUP, MF_END).
     flags: u16,
+    /// Optional list of children if this item is a popup submenu.
     popup: ?[]MenuItem,
 };
 
+/// Parses a binary menu resource and returns a JSON string representing the menu.
 pub fn parseMenuResource(allocator: std.mem.Allocator, data: []const u8) ![]const u8 {
     var offset: usize = 0;
     

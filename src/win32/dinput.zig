@@ -1,6 +1,10 @@
+//! DINPUT.dll registration.
+
 const env = @import("../loader/env.zig");
 const stubs = @import("dinput/dinput.zig");
 
+/// Registers DINPUT.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     stubs.initVtables();
 

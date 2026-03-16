@@ -1,7 +1,7 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32 = @import("../../win32_constants.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32 = @import("../constants.zig");
+const w32cc = @import("../calling_convention.zig");
 
 pub fn stub_MessageBeep(uType: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: MessageBeep(type=0x{X})\n", .{uType});

@@ -1,3 +1,5 @@
+//! Web-based graphical user interface.
+
 const std = @import("std");
 const platform = @import("../platform.zig");
 const renderer = @import("renderer.zig");
@@ -10,6 +12,7 @@ var clients_mutex: if (platform.is_native) std.Thread.Mutex else struct {
 var g_allocator: std.mem.Allocator = undefined;
 var selected_file_path: [1024]u8 = undefined;
 
+/// Initializes the Web UI backend.
 pub fn init(allocator: std.mem.Allocator) !void {
     // Use page allocator for internal web UI data to avoid alignment issues
     // with the game's custom HeapAlloc-based allocator
@@ -30,6 +33,7 @@ pub fn init(allocator: std.mem.Allocator) !void {
     }
 }
 
+/// Pushes the current framebuffer to all connected Web UI clients.
 pub fn pushFrame() void {
     if (comptime !platform.is_native) return;
     clients_mutex.lock();
@@ -57,6 +61,7 @@ pub fn pushFrame() void {
     }
 }
 
+/// Sends a JSON-encoded message to all connected Web UI clients.
 pub fn pushMessage(json: []const u8) void {
     if (comptime !platform.is_native) return;
     clients_mutex.lock();
@@ -100,6 +105,7 @@ pub fn pushMessage(json: []const u8) void {
     }
 }
 
+/// Sends PCM audio data to all connected Web UI clients.
 pub fn pushAudio(data: []const u8) void {
     if (comptime !platform.is_native) return;
     clients_mutex.lock();
@@ -372,7 +378,7 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                                 const x: i32 = @intCast(x_val.?.integer);
                                 const y: i32 = @intCast(y_val.?.integer);
                                 const button: i32 = if (btn_val != null and btn_val.? == .integer) @intCast(btn_val.?.integer) else 0;
-                                const w32 = @import("../win32_constants.zig");
+                                const w32 = @import("../win32/constants.zig");
                                 var msg_id: u32 = w32.WM_MOUSEMOVE;
                                 if (std.mem.eql(u8, type_val.?.string, "mousedown")) {
                                     msg_id = if (button == 2) w32.WM_RBUTTONDOWN else w32.WM_LBUTTONDOWN;

@@ -1,3 +1,5 @@
+//! ADVAPI32.dll registration.
+
 const env = @import("../loader/env.zig");
 const kernel32 = @import("kernel32.zig");
 
@@ -5,6 +7,8 @@ const registry = @import("advapi32/registry.zig");
 const security = @import("advapi32/security.zig");
 const misc = @import("advapi32/misc.zig");
 
+/// Registers ADVAPI32.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const advapi32 = "ADVAPI32.dll";
     try environment.addBuiltinExportComptime(advapi32, "RegOpenKeyExA", &registry.RegOpenKeyExA);
@@ -46,10 +50,10 @@ pub fn register(environment: *env.Environment) !void {
 
     // --- Remaining ADVAPI32 stubs for 100% win2k coverage ---
     // Faithful implementations
-    try environment.addBuiltinExportComptime(advapi32, "QueryServiceStatus", &kernel32.stub_args3);
+    try environment.addBuiltinExportComptime(advapi32, "QueryServiceStatus", &misc.QueryServiceStatus);
     try environment.addBuiltinExportComptime(advapi32, "EqualSid", &security.EqualSid);
-    try environment.addBuiltinExportComptime(advapi32, "OpenServiceA", &kernel32.stub_args3);
-    try environment.addBuiltinExportComptime(advapi32, "OpenSCManagerA", &kernel32.stub_args3);
+    try environment.addBuiltinExportComptime(advapi32, "OpenServiceA", &misc.OpenServiceA);
+    try environment.addBuiltinExportComptime(advapi32, "OpenSCManagerA", &misc.OpenSCManagerA);
     try environment.addBuiltinExportComptime(advapi32, "CloseServiceHandle", &misc.stub_ret_true_1);
     try environment.addBuiltinExportComptime(advapi32, "GetAce", &kernel32.stub_args3);
     try environment.addBuiltinExportComptime(advapi32, "InitializeSecurityDescriptor", &misc.stub_ret_true_2);
@@ -67,4 +71,25 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(advapi32, "IsTokenRestricted", &kernel32.stub_args1);
     try environment.addBuiltinExportComptime(advapi32, "LookupAccountSidW", &kernel32.stub_args7);
     try environment.addBuiltinExportComptime(advapi32, "FreeSid", &security.FreeSid);
+
+    // Geekbench stubs
+    try environment.addBuiltinExportComptime(advapi32, "CheckTokenMembership", &misc.stub_ret_true_3);
+    try environment.addBuiltinExportComptime(advapi32, "AllocateAndInitializeSid", &security.stub_AllocateAndInitializeSid);
+    try environment.addBuiltinExportComptime(advapi32, "DeregisterEventSource", &misc.stub_ret_true_1);
+    try environment.addBuiltinExportComptime(advapi32, "ReportEventW", &kernel32.stub_args9);
+    try environment.addBuiltinExportComptime(advapi32, "RegisterEventSourceW", &kernel32.stub_args2);
+    try environment.addBuiltinExportComptime(advapi32, "ImpersonateSelf", &misc.stub_ret_true_1);
+    try environment.addBuiltinExportComptime(advapi32, "SetSecurityDescriptorGroup", &misc.stub_ret_true_3);
+    try environment.addBuiltinExportComptime(advapi32, "SetSecurityDescriptorOwner", &misc.stub_ret_true_3);
+    try environment.addBuiltinExportComptime(advapi32, "AccessCheck", &kernel32.stub_args8);
+    try environment.addBuiltinExportComptime(advapi32, "RevertToSelf", &misc.stub_ret_true_1);
+    try environment.addBuiltinExportComptime(advapi32, "InitializeSecurityDescriptor", &misc.stub_ret_true_2);
+    try environment.addBuiltinExportComptime(advapi32, "SetSecurityDescriptorDacl", &misc.stub_ret_true_4);
+    try environment.addBuiltinExportComptime(advapi32, "ControlService", &misc.ControlService);
+    try environment.addBuiltinExportComptime(advapi32, "StartServiceA", &misc.StartServiceA);
+    try environment.addBuiltinExportComptime(advapi32, "DeleteService", &misc.stub_ret_true_1);
+    try environment.addBuiltinExportComptime(advapi32, "CreateServiceA", &misc.CreateServiceA);
+    try environment.addBuiltinExportComptime(advapi32, "OpenSCManagerA", &misc.OpenSCManagerA);
+    try environment.addBuiltinExportComptime(advapi32, "OpenServiceA", &misc.OpenServiceA);
+    try environment.addBuiltinExportComptime(advapi32, "CloseServiceHandle", &kernel32.stub_args1);
 }

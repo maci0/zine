@@ -1,1 +1,5 @@
-// Root module for the zine library, imported as "zine" by main.zig and wasm_main.zig.
+//! Library root for the Zine x86 interpreter.
+//!
+//! This module provides common exports and re-exports the main interpreter
+//! logic, allowing Zine to be used as a library or via its native/WASM
+//! wrappers.

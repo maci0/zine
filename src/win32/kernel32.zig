@@ -1,12 +1,32 @@
+//! KERNEL32.dll function stubs and state.
+//!
+//! This module provides the registration logic for KERNEL32 API stubs.
+//! Most implementations are delegated to sub-modules in `win32/kernel32/`.
+//! It also maintains global state such as the main module handle and
+//! application code bounds for error recovery.
+//!
+//! Stubs are categorized into:
+//! - File I/O: CreateFile, ReadFile, WriteFile, etc.
+//! - Memory: VirtualAlloc, HeapAlloc, GlobalAlloc, etc.
+//! - Process/Thread: GetCurrentProcess, GetProcAddress, CreateThread (stub), etc.
+//! - System Info: GetVersion, GetSystemTime, GetLocaleInfo, etc.
+//! - Synchronization: CreateEvent, EnterCriticalSection, etc.
+
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
-const w32 = @import("../win32_constants.zig");
+const w32 = @import("constants.zig");
 
 pub var global_env: ?*env.Environment = null;
 pub var main_module_handle: usize = 0;
 pub var main_exe_dir: [512]u8 = undefined;
 pub var main_exe_dir_len: usize = 0;
+
+/// Bounds of the main PE's executable code (.text section).
+/// Set during PE loading so the SIGSEGV handler can distinguish
+/// code addresses from data addresses during stack recovery.
+pub var app_code_start: usize = 0x401000;
+pub var app_code_end: usize = 0x700000;
 
 const kernel32_file = @import("kernel32/file.zig");
 const kernel32_mem = @import("kernel32/mem.zig");
@@ -21,8 +41,10 @@ const kernel32_sysinfo = @import("kernel32/sysinfo.zig");
 const kernel32_resource = @import("kernel32/resource.zig");
 const kernel32_profile = @import("kernel32/profile.zig");
 const kernel32_path = @import("kernel32/path.zig");
-const w32cc = @import("../calling_convention.zig");
+const w32cc = @import("calling_convention.zig");
 
+/// Registers KERNEL32.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     global_env = environment;
     const m = "KERNEL32.dll";
@@ -77,7 +99,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "HeapAlloc", kernel32_mem.HeapAlloc);
     try environment.addBuiltinExportComptime(m, "HeapReAlloc", kernel32_mem.HeapReAlloc);
     try environment.addBuiltinExportComptime(m, "HeapFree", kernel32_mem.HeapFree);
-    try environment.addBuiltinExportComptime(m, "HeapSetInformation", stub_args4); // no-op, returns nonzero (TRUE)
+    try environment.addBuiltinExportComptime(m, "HeapSetInformation", stub_args4);
     try environment.addBuiltinExportComptime(m, "HeapSize", kernel32_sysinfo.HeapSize);
     try environment.addBuiltinExportComptime(m, "HeapValidate", kernel32_sysinfo.stub_HeapValidate);
     try environment.addBuiltinExportComptime(m, "GetProcessHeap", kernel32_mem.GetProcessHeap);
@@ -237,10 +259,10 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "RaiseException", kernel32_error.RaiseException);
     try environment.addBuiltinExportComptime(m, "SetUnhandledExceptionFilter", kernel32_error.SetUnhandledExceptionFilter);
     try environment.addBuiltinExportComptime(m, "UnhandledExceptionFilter", kernel32_process.UnhandledExceptionFilter);
-    try environment.addBuiltinExportComptime(m, "RtlUnwind", stub_args4);
+    try environment.addBuiltinExportComptime(m, "RtlUnwind", kernel32_error.RtlUnwind);
     try environment.addBuiltinExportComptime(m, "FatalAppExitA", kernel32_error.FatalAppExitA);
     try environment.addBuiltinExportComptime(m, "SetLastError", kernel32_error.SetLastError);
-    try environment.addBuiltinExportComptime(m, "GetLastError", stub_args0);
+    try environment.addBuiltinExportComptime(m, "GetLastError", kernel32_error.GetLastError);
     try environment.addBuiltinExportComptime(m, "SetErrorMode", kernel32_error.stub_SetErrorMode);
     try environment.addBuiltinExportComptime(m, "GetSystemInfo", kernel32_sysinfo.GetSystemInfo);
     try environment.addBuiltinExportComptime(m, "IsProcessorFeaturePresent", kernel32_sysinfo.IsProcessorFeaturePresent);
@@ -267,6 +289,8 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetFullPathNameA", kernel32_path.GetFullPathNameA);
     try environment.addBuiltinExportComptime(m, "CreateDirectoryA", kernel32_path.CreateDirectoryA);
     try environment.addBuiltinExportComptime(m, "SetFileApisToOEM", kernel32_sysinfo.stub_SetFileApisToOEM);
+    try environment.addBuiltinExportComptime(m, "AreFileApisANSI", kernel32_console.stub_ret_true_1); // Returns TRUE
+    try environment.addBuiltinExportComptime(m, "LoadLibraryExA", kernel32_process.LoadLibraryExA);
     try environment.addBuiltinExportComptime(m, "GetDriveTypeA", kernel32_path.stub_GetDriveTypeA);
     try environment.addBuiltinExportComptime(m, "MoveFileA", stub_args2); // returns TRUE (1 -> stub_args2 returns 0, need real stub)
     try environment.addBuiltinExportComptime(m, "FindFirstFileExA", kernel32_file.FindFirstFileExA);
@@ -282,7 +306,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "SizeofResource", kernel32_resource.stub_SizeofResource);
     try environment.addBuiltinExportComptime(m, "LockResource", kernel32_resource.LockResource);
     try environment.addBuiltinExportComptime(m, "OpenFile", kernel32_misc.stub_OpenFile);
-    try environment.addBuiltinExportComptime(m, "DeviceIoControl", stub_args8);
+    try environment.addBuiltinExportComptime(m, "DeviceIoControl", kernel32_file.DeviceIoControl);
 
     // W variants needed by win2k apps
     try environment.addBuiltinExportComptime(m, "GetModuleHandleW", kernel32_process.GetModuleHandleW);
@@ -312,7 +336,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "OutputDebugStringW", kernel32_error.OutputDebugStringA);
     try environment.addBuiltinExportComptime(m, "SetConsoleTitleW", stub_args1);
     try environment.addBuiltinExportComptime(m, "GetWindowsDirectoryW", kernel32_path.GetWindowsDirectoryA);
-    try environment.addBuiltinExportComptime(m, "GetFullPathNameW", stub_args4);
+    try environment.addBuiltinExportComptime(m, "GetFullPathNameW", kernel32_path.GetFullPathNameW);
     try environment.addBuiltinExportComptime(m, "GetSystemDirectoryW", kernel32_file.GetSystemDirectoryA);
 
     // --- Remaining KERNEL32 stubs for 100% win2k coverage ---
@@ -337,6 +361,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "SetFileAttributesW", stub_args2);
     try environment.addBuiltinExportComptime(m, "CopyFileW", stub_args3);
     try environment.addBuiltinExportComptime(m, "RemoveDirectoryW", stub_args1);
+    try environment.addBuiltinExportComptime(m, "RemoveDirectoryA", stub_args1);
     try environment.addBuiltinExportComptime(m, "CompareFileTime", kernel32_time.CompareFileTime);
     try environment.addBuiltinExportComptime(m, "GetConsoleOutputCP", kernel32_console.stub_GetConsoleOutputCP);
     try environment.addBuiltinExportComptime(m, "SetThreadLocale", kernel32_console.stub_ret_true_1);
@@ -348,8 +373,8 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "CreateMutexW", kernel32_sync.stub_CreateMutexA);
     try environment.addBuiltinExportComptime(m, "SetProcessShutdownParameters", kernel32_console.stub_ret_true_2);
     try environment.addBuiltinExportComptime(m, "GetPriorityClass", kernel32_process.stub_GetPriorityClass);
-    try environment.addBuiltinExportComptime(m, "SetProcessAffinityMask", stub_args2);
-    try environment.addBuiltinExportComptime(m, "GetProcessAffinityMask", stub_args3);
+    try environment.addBuiltinExportComptime(m, "SetProcessAffinityMask", kernel32_console.stub_ret_true_2);
+    try environment.addBuiltinExportComptime(m, "GetProcessAffinityMask", kernel32_sysinfo.GetProcessAffinityMask);
     try environment.addBuiltinExportComptime(m, "VerifyVersionInfoW", stub_args4);
     try environment.addBuiltinExportComptime(m, "GetPrivateProfileStringW", stub_args6);
     try environment.addBuiltinExportComptime(m, "DeleteAtom", stub_args1);
@@ -392,10 +417,34 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "FindFirstFileExW", kernel32_file.FindFirstFileExW);
     try environment.addBuiltinExportComptime(m, "LCMapStringEx", kernel32_locale.LCMapStringEx);
     try environment.addBuiltinExportComptime(m, "EnumSystemLocalesW", kernel32_locale.EnumSystemLocalesW);
+
+    // SRW locks (used by MinGW UCRT for thread-safe printf)
+    try environment.addBuiltinExportComptime(m, "AcquireSRWLockExclusive", stub_args1);
+    try environment.addBuiltinExportComptime(m, "ReleaseSRWLockExclusive", stub_args1);
+    try environment.addBuiltinExportComptime(m, "AcquireSRWLockShared", stub_args1);
+    try environment.addBuiltinExportComptime(m, "ReleaseSRWLockShared", stub_args1);
+    try environment.addBuiltinExportComptime(m, "InitializeSRWLock", stub_args1);
+
+    // Toolhelp (used by MinGW CRT startup for module enumeration)
+    try environment.addBuiltinExportComptime(m, "CreateToolhelp32Snapshot", stub_args2);
+    try environment.addBuiltinExportComptime(m, "Module32First", stub_args2);
+    try environment.addBuiltinExportComptime(m, "Module32Next", stub_args2);
+    try environment.addBuiltinExportComptime(m, "K32GetModuleFileNameExW", stub_args4);
+    try environment.addBuiltinExportComptime(m, "RtlCaptureContext", stub_args1);
+    try environment.addBuiltinExportComptime(m, "RtlCaptureStackBackTrace", stub_args4);
+
+    // --- 7-Zip KERNEL32 stubs ---
+    try environment.addBuiltinExportComptime(m, "OpenEventW", kernel32_sync.stub_CreateEventA);
+    try environment.addBuiltinExportComptime(m, "OpenFileMappingW", stub_args3);
+    try environment.addBuiltinExportComptime(m, "GetDiskFreeSpaceW", stub_args5);
+    try environment.addBuiltinExportComptime(m, "GetLogicalDriveStringsW", stub_args2);
+    try environment.addBuiltinExportComptime(m, "CreateSemaphoreW", kernel32_sync.stub_CreateSemaphoreA);
+    try environment.addBuiltinExportComptime(m, "LocalFileTimeToFileTime", kernel32_time.FileTimeToLocalFileTime);
+    try environment.addBuiltinExportComptime(m, "DosDateTimeToFileTime", stub_args3);
 }
 
 // Re-export generic stubs from stub_common for backward compatibility
-const stub_common = @import("stub_common.zig");
+const stub_common = @import("shared.zig");
 pub const stub_args0 = stub_common.stub_args0;
 pub const stub_args1 = stub_common.stub_args1;
 pub const stub_args2 = stub_common.stub_args2;
@@ -407,4 +456,3 @@ pub const stub_args7 = stub_common.stub_args7;
 pub const stub_args8 = stub_common.stub_args8;
 pub const stub_args9 = stub_common.stub_args9;
 pub const stub_args10 = stub_common.stub_args10;
-

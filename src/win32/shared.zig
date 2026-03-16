@@ -1,12 +1,17 @@
-/// Generic stub functions for unimplemented Win32 APIs.
-///
-/// These are variadic no-op stubs that accept N arguments and return 0.
-/// Used as placeholders in DLL export tables when a function hasn't been
-/// implemented yet but needs a valid entry point.
+//! Shared Win32 API stubs and memory management utilities.
+//!
+//! This module provides common functionality used across multiple Win32 DLL
+//! implementations, including a shared guest heap allocator and generic
+//! no-op stubs for unimplemented APIs.
 
 const std = @import("std");
 const trace = @import("../trace.zig");
-const w32cc = @import("../calling_convention.zig");
+
+/// Generic stub functions for unimplemented Win32 APIs.
+/// These are variadic no-op stubs that accept N arguments and return 0.
+/// Used as placeholders in DLL export tables when a function hasn't been
+/// implemented yet but needs a valid entry point.
+const w32cc = @import("calling_convention.zig");
 const x86_memory = @import("../x86/memory.zig");
 
 /// Shared guest memory reference. Set by wasm_main.zig at startup.
@@ -15,22 +20,22 @@ const x86_memory = @import("../x86/memory.zig");
 /// stub_common instead of reaching into kernel32/mem.zig.
 pub var guest_memory: ?*x86_memory.GuestMemory = null;
 
-// -----------------------------------------------------------------------
-// Shared heap allocator
-// -----------------------------------------------------------------------
-// Used by both MSVCRT (malloc, strdup, getenv) and kernel32 (HeapAlloc,
-// GlobalAlloc, VirtualAlloc) stubs.  On WASM, all allocations go through
-// the guest heap bump allocator; on native x86-64, we pre-allocate large
-// chunks at low addresses so guest 32-bit code can address them.
-
 const heap_chunk_size: usize = 16 * 1024 * 1024; // 16 MB per chunk
 var heap_base: ?[*]u8 = null;
 var heap_pos: usize = 0;
 var heap_cap: usize = 0;
 
-// Keep a rolling hint for 64KB aligned allocations to satisfy Windows memory assumptions
 var next_alloc_hint: usize = 0x60000000;
 
+/// Returns a 64KB aligned memory address hint for allocations.
+///
+/// Used by both MSVCRT (malloc, strdup, getenv) and kernel32 (HeapAlloc,
+/// GlobalAlloc, VirtualAlloc) stubs. On WASM, all allocations go through
+/// the guest heap bump allocator; on native x86-64, we pre-allocate large
+/// chunks at low addresses so guest 32-bit code can address them.
+///
+/// Keeps a rolling hint for 64KB aligned allocations to satisfy Windows memory assumptions.
+/// Implementation status: Partially implemented.
 pub fn get_aligned_hint(size: usize) usize {
     const hint = next_alloc_hint;
     const aligned_size = (size + 0xFFFF) & ~@as(usize, 0xFFFF);
@@ -55,6 +60,13 @@ fn heapAlloc(size: usize) ?[*]u8 {
     return ptr;
 }
 
+/// Allocates memory from the shared guest heap.
+///
+/// On WASM, it uses the guest heap allocator to keep addresses in range and
+/// returns a guest virtual address. On native, it bump-allocates from a
+/// low-address heap.
+///
+/// Implementation status: Partially implemented.
 pub fn raw_alloc(size: usize) ?*anyopaque {
     const actual_size = if (size == 0) @as(usize, 64) else size;
 
@@ -78,6 +90,11 @@ pub fn raw_alloc(size: usize) ?*anyopaque {
     return @ptrCast(ptr + 8);
 }
 
+/// Reallocates memory from the shared guest heap.
+///
+/// If `old_ptr` is null, this is equivalent to `raw_alloc`.
+///
+/// Implementation status: Partially implemented.
 pub fn raw_realloc(old_ptr: ?*anyopaque, new_size: usize) ?*anyopaque {
     if (new_size == 0) return null;
     if (old_ptr == null) return raw_alloc(new_size);
@@ -119,14 +136,14 @@ pub fn raw_realloc(old_ptr: ?*anyopaque, new_size: usize) ?*anyopaque {
     return @ptrCast(new_data);
 }
 
-// -----------------------------------------------------------------------
-// Shared _initterm callback queue (WASM only)
-// -----------------------------------------------------------------------
-// On WASM, _initterm collects guest x86 function addresses here.
-// After the stub returns, x86/execute.zig reads them to build a
-// trampoline.  Previously this state lived in msvcrt/process.zig,
-// creating a layer violation (x86 interpreter → CRT stubs).
+/// Shared _initterm callback queue (WASM only).
+///
+/// On WASM, _initterm collects guest x86 function addresses here.
+/// After the stub returns, x86/execute.zig reads them to build a
+/// trampoline. Previously this state lived in msvcrt/process.zig,
+/// creating a layer violation (x86 interpreter → CRT stubs).
 pub var pending_initterm_callbacks: [64]u32 = [_]u32{0} ** 64;
+/// The number of pending _initterm callbacks.
 pub var pending_initterm_count: usize = 0;
 
 /// Shared tracing logic for all stubs. Must be `inline` so that
@@ -160,65 +177,87 @@ inline fn traceStub(comptime n: comptime_int) void {
     }
 }
 
+/// No-op stub taking 0 arguments.
+/// Implementation status: No-op fallback
 pub fn stub_args0() callconv(w32cc.WINAPI) usize {
     traceStub(0);
     return 0;
 }
 
+/// No-op stub taking 1 argument.
+/// Implementation status: No-op fallback
 pub fn stub_args1(a: usize) callconv(w32cc.WINAPI) u32 {
     _ = a;
     traceStub(1);
     return 0;
 }
 
+/// No-op stub taking 2 arguments.
+/// Implementation status: No-op fallback
 pub fn stub_args2(a: usize, b: usize) callconv(w32cc.WINAPI) usize {
     _ = .{ a, b };
     traceStub(2);
     return 0;
 }
 
+/// No-op stub taking 3 arguments.
+/// Implementation status: No-op fallback
 pub fn stub_args3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize {
     _ = .{ a, b, c };
     traceStub(3);
     return 0;
 }
 
+/// No-op stub taking 4 arguments.
+/// Implementation status: No-op fallback
 pub fn stub_args4(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize {
     _ = .{ a, b, c, d };
     traceStub(4);
     return 0;
 }
 
+/// No-op stub taking 5 arguments.
+/// Implementation status: No-op fallback
 pub fn stub_args5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) usize {
     _ = .{ a, b, c, d, e };
     traceStub(5);
     return 0;
 }
 
+/// No-op stub taking 6 arguments.
+/// Implementation status: No-op fallback
 pub fn stub_args6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) usize {
     _ = .{ a, b, c, d, e, f };
     traceStub(6);
     return 0;
 }
 
+/// No-op stub taking 7 arguments.
+/// Implementation status: No-op fallback
 pub fn stub_args7(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize) callconv(w32cc.WINAPI) usize {
     _ = .{ a, b, c, d, e, f, g };
     traceStub(7);
     return 0;
 }
 
+/// No-op stub taking 8 arguments.
+/// Implementation status: No-op fallback
 pub fn stub_args8(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize) callconv(w32cc.WINAPI) usize {
     _ = .{ a, b, c, d, e, f, g, h };
     traceStub(8);
     return 0;
 }
 
+/// No-op stub taking 9 arguments.
+/// Implementation status: No-op fallback
 pub fn stub_args9(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize, i: usize) callconv(w32cc.WINAPI) usize {
     _ = .{ a, b, c, d, e, f, g, h, i };
     traceStub(9);
     return 0;
 }
 
+/// No-op stub taking 10 arguments.
+/// Implementation status: No-op fallback
 pub fn stub_args10(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize, i: usize, j: usize) callconv(w32cc.WINAPI) usize {
     _ = .{ a, b, c, d, e, f, g, h, i, j };
     traceStub(10);

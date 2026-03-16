@@ -161,7 +161,7 @@ pub fn posixToWin32(posix_path: []const u8, out: []u8) usize {
             out[2] = '\\';
             pos = 3;
         }
-        for (posix_path[1..]) |c| { // skip leading /
+        for (posix_path[1..]) |c| {
             if (pos >= out.len) break;
             out[pos] = if (c == '/') '\\' else c;
             pos += 1;

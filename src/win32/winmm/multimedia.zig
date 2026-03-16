@@ -3,11 +3,12 @@ const trace = @import("../../trace.zig");
 const renderer = @import("../../gui/renderer.zig");
 const dsound_stubs = @import("../dsound/dsound.zig");
 const platform = @import("../../platform.zig");
-const w32 = @import("../../win32_constants.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32 = @import("../constants.zig");
+const w32cc = @import("../calling_convention.zig");
 const winmm = @import("../winmm.zig");
 
-
+/// timeGetTime
+/// Implementation status: Partially implemented
 pub fn timeGetTime() callconv(w32cc.WINAPI) u32 {
     // Called in tight timing loops; yield to avoid 100% CPU usage.
     platform.yield();
@@ -16,6 +17,8 @@ pub fn timeGetTime() callconv(w32cc.WINAPI) u32 {
     return @intCast(ts & 0xFFFFFFFF);
 }
 
+/// waveOutSetVolume
+/// Implementation status: Partially implemented
 pub fn waveOutSetVolume(hwo: u32, dwVolume: u32) callconv(w32cc.WINAPI) u32 {
     _ = hwo;
     winmm.waveout_volume = dwVolume;
@@ -39,6 +42,8 @@ pub fn waveOutSetVolume(hwo: u32, dwVolume: u32) callconv(w32cc.WINAPI) u32 {
     return 0; // MMSYSERR_NOERROR
 }
 
+/// waveOutGetVolume
+/// Implementation status: Partially implemented
 pub fn waveOutGetVolume(hwo: u32, pdwVolume: usize) callconv(w32cc.WINAPI) u32 {
     _ = hwo;
     if (pdwVolume != 0) {
@@ -48,6 +53,8 @@ pub fn waveOutGetVolume(hwo: u32, pdwVolume: usize) callconv(w32cc.WINAPI) u32 {
     return 0; // MMSYSERR_NOERROR
 }
 
+/// stub_PlaySoundA
+/// Implementation status: No-op fallback
 pub fn stub_PlaySoundA(pszSound: usize, hmod: usize, fdwSound: u32) callconv(w32cc.WINAPI) i32 {
     _ = pszSound;
     _ = hmod;
@@ -56,23 +63,27 @@ pub fn stub_PlaySoundA(pszSound: usize, hmod: usize, fdwSound: u32) callconv(w32
     return 1;
 }
 
-// --- Timer functions for Europa 1400 ---
-
+/// --- Timer functions for Europa 1400 ---
+/// Implementation status: Stub
 pub fn stub_timeGetDevCaps(ptc: usize, cbtc: u32) callconv(w32cc.WINAPI) u32 {
     _ = cbtc;
     if (ptc != 0) {
         const tc = @as(*w32.TIMECAPS, @ptrFromInt(ptc));
-        tc.wPeriodMin = 1;       // 1ms
+        tc.wPeriodMin = 1; // 1ms
         tc.wPeriodMax = 1000000;
     }
     return 0; // TIMERR_NOERROR
 }
 
+/// stub_timeBeginPeriod
+/// Implementation status: Stub
 pub fn stub_timeBeginPeriod(uPeriod: u32) callconv(w32cc.WINAPI) u32 {
     _ = uPeriod;
     return 0; // TIMERR_NOERROR
 }
 
+/// stub_timeEndPeriod
+/// Implementation status: Stub
 pub fn stub_timeEndPeriod(uPeriod: u32) callconv(w32cc.WINAPI) u32 {
     _ = uPeriod;
     return 0; // TIMERR_NOERROR
@@ -98,7 +109,7 @@ pub var mm_timers: [MAX_MM_TIMERS]MmTimer = [_]MmTimer{.{}} ** MAX_MM_TIMERS;
 fn mmTimerThread(idx: usize) void {
     const timer = &mm_timers[idx];
     const delay_ns: u64 = @as(u64, timer.delay_ms) * 1_000_000;
-    const teb = @import("../../teb.zig");
+    const teb = @import("../teb.zig");
     const builtin = @import("builtin");
 
     while (timer.active) {
@@ -118,8 +129,7 @@ fn mmTimerThread(idx: usize) void {
                         : [num] "{rax}" (@as(usize, 158)), // __NR_arch_prctl
                           [arg1] "{rdi}" (@as(usize, 0x1003)), // ARCH_GET_FS
                           [arg2] "{rsi}" (@intFromPtr(&saved_fs)),
-                        : .{ .rax = true, .rcx = true, .r11 = true, .memory = true }
-                    );
+                        : .{ .rax = true, .rcx = true, .r11 = true, .memory = true });
 
                     // Set TEB as FS base
                     asm volatile ("syscall"
@@ -127,8 +137,7 @@ fn mmTimerThread(idx: usize) void {
                         : [num] "{rax}" (@as(usize, 158)), // __NR_arch_prctl
                           [arg1] "{rdi}" (@as(usize, 0x1002)), // ARCH_SET_FS
                           [arg2] "{rsi}" (teb.teb_address),
-                        : .{ .rax = true, .rcx = true, .r11 = true, .memory = true }
-                    );
+                        : .{ .rax = true, .rcx = true, .r11 = true, .memory = true });
 
                     // Call the game's timer callback
                     const cb = @as(*const fn (u32, u32, usize, usize, usize) callconv(w32cc.WINAPI) void, @ptrFromInt(timer.callback));
@@ -137,36 +146,31 @@ fn mmTimerThread(idx: usize) void {
                         // Read re-entrancy flag via asm to avoid Zig optimizing away the read
                         var flag_val: u32 = undefined;
                         asm volatile ("movl 0x6333dc, %[out]"
-                            : [out] "=r" (flag_val)
+                            : [out] "=r" (flag_val),
                             :
-                            : .{.memory = true}
-                        );
+                            : .{ .memory = true });
                         // Read gui_gate (0x75e8c0), resource table first entry (0xf8f0a0), DAT_006f22bc
                         var gui_gate: u32 = undefined;
                         var res_ptr: u32 = undefined;
                         var dat_6f22bc: u32 = undefined;
                         asm volatile ("movl 0x75e8c0, %[out]"
-                            : [out] "=r" (gui_gate)
+                            : [out] "=r" (gui_gate),
                             :
-                            : .{.memory = true}
-                        );
+                            : .{ .memory = true });
                         asm volatile ("movl 0xf8f0a0, %[out]"
-                            : [out] "=r" (res_ptr)
+                            : [out] "=r" (res_ptr),
                             :
-                            : .{.memory = true}
-                        );
+                            : .{ .memory = true });
                         asm volatile ("movl 0x6f22bc, %[out]"
-                            : [out] "=r" (dat_6f22bc)
+                            : [out] "=r" (dat_6f22bc),
                             :
-                            : .{.memory = true}
-                        );
+                            : .{ .memory = true });
                         // If resource pointer is non-null, read byte 0
                         var res_byte0: u8 = 0;
                         if (res_ptr != 0) {
                             res_byte0 = @as(*const u8, @ptrFromInt(res_ptr)).*;
                         }
-                        trace.print("WINMM: TimeProc cb (timer {d}) flag={d} gui_gate={d} res_ptr=0x{x} res_byte0=0x{x} dat_6f22bc=0x{x}\n",
-                            .{timer.id, flag_val, gui_gate, res_ptr, res_byte0, dat_6f22bc});
+                        trace.print("WINMM: TimeProc cb (timer {d}) flag={d} gui_gate={d} res_ptr=0x{x} res_byte0=0x{x} dat_6f22bc=0x{x}\n", .{ timer.id, flag_val, gui_gate, res_ptr, res_byte0, dat_6f22bc });
                     }
 
                     // Restore Zig's FS base
@@ -175,8 +179,7 @@ fn mmTimerThread(idx: usize) void {
                         : [num] "{rax}" (@as(usize, 158)), // __NR_arch_prctl
                           [arg1] "{rdi}" (@as(usize, 0x1002)), // ARCH_SET_FS
                           [arg2] "{rsi}" (saved_fs),
-                        : .{ .rax = true, .rcx = true, .r11 = true, .memory = true }
-                    );
+                        : .{ .rax = true, .rcx = true, .r11 = true, .memory = true });
                 }
             } else if (comptime builtin.target.cpu.arch == .x86) {
                 // x86 (32-bit): Save/restore FS selector for game's TEB
@@ -184,7 +187,7 @@ fn mmTimerThread(idx: usize) void {
                     // Save current Zig FS selector
                     var saved_fs: u16 = undefined;
                     asm volatile ("mov %%fs, %[out]"
-                        : [out] "=r" (saved_fs)
+                        : [out] "=r" (saved_fs),
                     );
 
                     // Set FS to TEB selector
@@ -196,7 +199,10 @@ fn mmTimerThread(idx: usize) void {
                     if (trace.enable_tracing) {
                         trace.print("WINMM: TimeProc (timer {d}) callback=0x{x}\n", .{ timer.id, timer.callback });
                         // One-shot dump of game function table after 500 ticks
-                        const FTDump = struct { var tick: u32 = 0; var dumped: bool = false; };
+                        const FTDump = struct {
+                            var tick: u32 = 0;
+                            var dumped: bool = false;
+                        };
                         FTDump.tick += 1;
                         if (!FTDump.dumped and FTDump.tick >= 500) {
                             FTDump.dumped = true;
@@ -373,6 +379,8 @@ fn mmTimerThread(idx: usize) void {
     }
 }
 
+/// timeSetEvent
+/// Implementation status: Partially implemented
 pub fn timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usize, fuEvent: u32) callconv(w32cc.WINAPI) u32 {
     _ = uResolution;
     if (trace.enable_tracing) trace.print("WINMM: timeSetEvent(delay={d}, callback=0x{x}, flags=0x{x})\n", .{ uDelay, fptc, fuEvent });
@@ -416,6 +424,8 @@ pub fn timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usize, f
     return id;
 }
 
+/// timeKillEvent
+/// Implementation status: Partially implemented
 pub fn timeKillEvent(uTimerID: u32) callconv(w32cc.WINAPI) u32 {
     for (&mm_timers) |*t| {
         if (t.active and t.id == uTimerID) {
@@ -432,16 +442,21 @@ pub fn timeKillEvent(uTimerID: u32) callconv(w32cc.WINAPI) u32 {
     return 0; // TIMERR_NOERROR
 }
 
-// --- waveOut stubs for MSS32.DLL ---
-
+/// --- waveOut stubs for MSS32.DLL ---
+/// Implementation status: No-op fallback
 pub fn stub_waveOutGetNumDevs() callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("WINMM: waveOutGetNumDevs -> 1\n", .{});
     return 1; // One audio device available
 }
 
-// MMRESULT waveOutOpen(LPHWAVEOUT phwo, UINT uDeviceID, LPCWAVEFORMATEX pwfx, DWORD_PTR dwCallback, DWORD_PTR dwInstance, DWORD fdwOpen)
+/// MMRESULT waveOutOpen(LPHWAVEOUT phwo, UINT uDeviceID, LPCWAVEFORMATEX pwfx, DWORD_PTR dwCallback, DWORD_PTR dwInstance, DWORD fdwOpen)
+/// Implementation status: Partially implemented
 pub fn waveOutOpen(phwo: usize, uDeviceID: u32, pwfx: usize, dwCallback: usize, dwInstance: usize, fdwOpen: u32) callconv(w32cc.WINAPI) u32 {
-    _ = uDeviceID; _ = pwfx; _ = dwCallback; _ = dwInstance; _ = fdwOpen;
+    _ = uDeviceID;
+    _ = pwfx;
+    _ = dwCallback;
+    _ = dwInstance;
+    _ = fdwOpen;
     if (trace.enable_tracing) trace.print("WINMM: waveOutOpen\n", .{});
     // Write a fake handle to *phwo
     if (phwo != 0) {
@@ -450,20 +465,26 @@ pub fn waveOutOpen(phwo: usize, uDeviceID: u32, pwfx: usize, dwCallback: usize, 
     return 0; // MMSYSERR_NOERROR
 }
 
+/// stub_waveOutClose_
+/// Implementation status: Stub
 pub fn stub_waveOutClose_(hwo: u32) callconv(w32cc.WINAPI) u32 {
     _ = hwo;
     if (trace.enable_tracing) trace.print("WINMM: waveOutClose\n", .{});
     return 0; // MMSYSERR_NOERROR
 }
 
+/// stub_waveOutReset
+/// Implementation status: Stub
 pub fn stub_waveOutReset(hwo: u32) callconv(w32cc.WINAPI) u32 {
     _ = hwo;
     return 0;
 }
 
-// MMRESULT waveOutWrite(HWAVEOUT hwo, LPWAVEHDR pwh, UINT cbwh)
+/// MMRESULT waveOutWrite(HWAVEOUT hwo, LPWAVEHDR pwh, UINT cbwh)
+/// Implementation status: Partially implemented
 pub fn waveOutWrite(hwo: u32, pwh: usize, cbwh: u32) callconv(w32cc.WINAPI) u32 {
-    _ = hwo; _ = cbwh;
+    _ = hwo;
+    _ = cbwh;
     // Mark the buffer as done immediately (set WHDR_DONE flag = 0x1)
     if (pwh != 0) {
         const flags_ptr = @as(*align(1) u32, @ptrFromInt(pwh + 16)); // dwFlags offset in WAVEHDR
@@ -472,9 +493,11 @@ pub fn waveOutWrite(hwo: u32, pwh: usize, cbwh: u32) callconv(w32cc.WINAPI) u32 
     return 0;
 }
 
-// MMRESULT waveOutPrepareHeader(HWAVEOUT hwo, LPWAVEHDR pwh, UINT cbwh)
+/// MMRESULT waveOutPrepareHeader(HWAVEOUT hwo, LPWAVEHDR pwh, UINT cbwh)
+/// Implementation status: Partially implemented
 pub fn waveOutPrepareHeader(hwo: u32, pwh: usize, cbwh: u32) callconv(w32cc.WINAPI) u32 {
-    _ = hwo; _ = cbwh;
+    _ = hwo;
+    _ = cbwh;
     // Set WHDR_PREPARED flag
     if (pwh != 0) {
         const flags_ptr = @as(*align(1) u32, @ptrFromInt(pwh + 16));
@@ -483,8 +506,11 @@ pub fn waveOutPrepareHeader(hwo: u32, pwh: usize, cbwh: u32) callconv(w32cc.WINA
     return 0;
 }
 
+/// stub_waveOutUnprepareHeader
+/// Implementation status: Stub
 pub fn stub_waveOutUnprepareHeader(hwo: u32, pwh: usize, cbwh: u32) callconv(w32cc.WINAPI) u32 {
-    _ = hwo; _ = cbwh;
+    _ = hwo;
+    _ = cbwh;
     if (pwh != 0) {
         const flags_ptr = @as(*align(1) u32, @ptrFromInt(pwh + 16));
         flags_ptr.* &= ~@as(u32, 0x2); // Clear WHDR_PREPARED
@@ -492,7 +518,8 @@ pub fn stub_waveOutUnprepareHeader(hwo: u32, pwh: usize, cbwh: u32) callconv(w32
     return 0;
 }
 
-// MMRESULT waveOutGetDevCapsA(UINT uDeviceID, LPWAVEOUTCAPS pwoc, UINT cbwoc)
+/// MMRESULT waveOutGetDevCapsA(UINT uDeviceID, LPWAVEOUTCAPS pwoc, UINT cbwoc)
+/// Implementation status: Partially implemented
 pub fn waveOutGetDevCapsA(uDeviceID: u32, pwoc: usize, cbwoc: u32) callconv(w32cc.WINAPI) u32 {
     _ = uDeviceID;
     if (trace.enable_tracing) trace.print("WINMM: waveOutGetDevCapsA\n", .{});
@@ -515,6 +542,8 @@ pub fn waveOutGetDevCapsA(uDeviceID: u32, pwoc: usize, cbwoc: u32) callconv(w32c
     return 0;
 }
 
+/// stub_waveOutGetID
+/// Implementation status: Stub
 pub fn stub_waveOutGetID(hwo: u32, puDeviceID: usize) callconv(w32cc.WINAPI) u32 {
     _ = hwo;
     if (puDeviceID != 0) {
@@ -523,9 +552,13 @@ pub fn stub_waveOutGetID(hwo: u32, puDeviceID: usize) callconv(w32cc.WINAPI) u32
     return 0;
 }
 
-// MMRESULT midiOutOpen(LPHMIDIOUT phmo, UINT uDeviceID, DWORD_PTR dwCallback, DWORD_PTR dwInstance, DWORD fdwOpen)
+/// MMRESULT midiOutOpen(LPHMIDIOUT phmo, UINT uDeviceID, DWORD_PTR dwCallback, DWORD_PTR dwInstance, DWORD fdwOpen)
+/// Implementation status: Partially implemented
 pub fn midiOutOpen(phmo: usize, uDeviceID: u32, dwCallback: usize, dwInstance: usize, fdwOpen: u32) callconv(w32cc.WINAPI) u32 {
-    _ = uDeviceID; _ = dwCallback; _ = dwInstance; _ = fdwOpen;
+    _ = uDeviceID;
+    _ = dwCallback;
+    _ = dwInstance;
+    _ = fdwOpen;
     if (phmo != 0) {
         @as(*align(1) u32, @ptrFromInt(phmo)).* = 0xBEEF0050;
     }

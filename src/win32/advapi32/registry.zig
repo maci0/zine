@@ -1,35 +1,96 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 
 var next_reg_handle: u32 = 0xDE000001;
 
+const CPU_REG_HANDLE: u32 = 0xDE00C000;
+
+/// Opens the specified registry key.
+/// Implementation status: Stub (always returns ERROR_FILE_NOT_FOUND).
+/// Fake registry handle for HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0
 pub fn RegOpenKeyExA(hKey: usize, lpSubKey: usize, ulOptions: u32, samDesired: u32, phkResult: usize) callconv(w32cc.WINAPI) u32 {
     _ = ulOptions;
     _ = samDesired;
-    if (trace.enable_tracing) {
-        const key = if (lpSubKey != 0) trace.c_span(lpSubKey) else "(null)";
-        trace.print("ADVAPI32: RegOpenKeyExA(0x{X}, '{s}') -> ERROR_FILE_NOT_FOUND\n", .{ hKey, key });
+    const key = if (lpSubKey != 0) trace.c_span(lpSubKey) else "";
+
+    // Support CPU info registry key that cpuidsdk.dll reads
+    if (isCpuRegKey(hKey, key)) {
+        if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExA(0x{X}, '{s}') -> OK (CPU)\n", .{ hKey, key });
+        if (phkResult != 0) @as(*u32, @ptrFromInt(phkResult)).* = CPU_REG_HANDLE;
+        return 0; // ERROR_SUCCESS
     }
-    if (phkResult != 0) {
-        @as(*u32, @ptrFromInt(phkResult)).* = 0;
-    }
+
+    if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExA(0x{X}, '{s}') -> ERROR_FILE_NOT_FOUND\n", .{ hKey, key });
+    if (phkResult != 0) @as(*u32, @ptrFromInt(phkResult)).* = 0;
     return 2; // ERROR_FILE_NOT_FOUND
 }
 
+fn isCpuRegKey(hKey: usize, key: []const u8) bool {
+    // HKLM = 0x80000002
+    if (hKey == 0x80000002) {
+        if (std.ascii.eqlIgnoreCase(key, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0")) return true;
+        if (std.ascii.eqlIgnoreCase(key, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor")) return true;
+    }
+    return false;
+}
+
+/// Retrieves the type and data for a specified value name associated with an open registry key.
+/// Implementation status: Stub (always returns ERROR_FILE_NOT_FOUND).
 pub fn RegQueryValueExA(hKey: usize, lpValueName: usize, lpReserved: usize, lpType: usize, lpData: usize, lpcbData: usize) callconv(w32cc.WINAPI) u32 {
-    _ = hKey;
     _ = lpReserved;
-    _ = lpType;
-    _ = lpData;
-    _ = lpcbData;
-    if (trace.enable_tracing) {
-        const name = if (lpValueName != 0) trace.c_span(lpValueName) else "(null)";
-        trace.print("ADVAPI32: RegQueryValueExA('{s}') -> ERROR_FILE_NOT_FOUND\n", .{name});
+    const name = if (lpValueName != 0) trace.c_span(lpValueName) else "";
+
+    // CPU registry values
+    if (hKey == CPU_REG_HANDLE) {
+        const REG_SZ: u32 = 1;
+        const REG_DWORD: u32 = 4;
+        if (std.ascii.eqlIgnoreCase(name, "ProcessorNameString")) {
+            return writeRegString(lpType, lpData, lpcbData, REG_SZ, "Intel Pentium III");
+        } else if (std.ascii.eqlIgnoreCase(name, "Identifier")) {
+            return writeRegString(lpType, lpData, lpcbData, REG_SZ, "x86 Family 6 Model 8 Stepping 3");
+        } else if (std.ascii.eqlIgnoreCase(name, "VendorIdentifier")) {
+            return writeRegString(lpType, lpData, lpcbData, REG_SZ, "GenuineIntel");
+        } else if (std.ascii.eqlIgnoreCase(name, "~MHz")) {
+            return writeRegDword(lpType, lpData, lpcbData, REG_DWORD, 1000);
+        } else if (std.ascii.eqlIgnoreCase(name, "FeatureSet")) {
+            return writeRegDword(lpType, lpData, lpcbData, REG_DWORD, 0x2FFF);
+        }
+        if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExA(CPU, '{s}') -> NOT_FOUND\n", .{name});
+        return 2;
     }
+
+    if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExA('{s}') -> ERROR_FILE_NOT_FOUND\n", .{name});
     return 2; // ERROR_FILE_NOT_FOUND
 }
 
+fn writeRegString(lpType: usize, lpData: usize, lpcbData: usize, regType: u32, value: []const u8) u32 {
+    const needed: u32 = @intCast(value.len + 1);
+    if (lpType != 0) @as(*u32, @ptrFromInt(lpType)).* = regType;
+    if (lpcbData != 0) {
+        const buf_size = @as(*u32, @ptrFromInt(lpcbData)).*;
+        @as(*u32, @ptrFromInt(lpcbData)).* = needed;
+        if (lpData != 0 and buf_size >= needed) {
+            const dst = @as([*]u8, @ptrFromInt(lpData));
+            @memcpy(dst[0..value.len], value);
+            dst[value.len] = 0;
+            return 0; // ERROR_SUCCESS
+        }
+        if (lpData == 0) return 0; // just querying size
+        return 234; // ERROR_MORE_DATA
+    }
+    return 0;
+}
+
+fn writeRegDword(lpType: usize, lpData: usize, lpcbData: usize, regType: u32, value: u32) u32 {
+    if (lpType != 0) @as(*u32, @ptrFromInt(lpType)).* = regType;
+    if (lpcbData != 0) @as(*u32, @ptrFromInt(lpcbData)).* = 4;
+    if (lpData != 0) @as(*align(1) u32, @ptrFromInt(lpData)).* = value;
+    return 0; // ERROR_SUCCESS
+}
+
+/// Creates the specified registry key.
+/// Implementation status: Stub (always returns ERROR_SUCCESS, creates a synthetic handle).
 pub fn RegCreateKeyExA(hKey: usize, lpSubKey: usize, reserved: u32, lpClass: usize, dwOptions: u32, samDesired: u32, lpSecurityAttributes: usize, phkResult: usize, lpdwDisposition: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = reserved;
@@ -51,6 +112,8 @@ pub fn RegCreateKeyExA(hKey: usize, lpSubKey: usize, reserved: u32, lpClass: usi
     return 0; // ERROR_SUCCESS
 }
 
+/// Sets the data and type of a specified value under a registry key.
+/// Implementation status: Stub (always returns ERROR_SUCCESS).
 pub fn RegSetValueExA(hKey: usize, lpValueName: usize, reserved: u32, dwType: u32, lpData: usize, cbData: u32) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = reserved;
@@ -64,6 +127,8 @@ pub fn RegSetValueExA(hKey: usize, lpValueName: usize, reserved: u32, dwType: u3
     return 0;
 }
 
+/// Deletes a subkey and its values from the specified platform-specific view of the registry.
+/// Implementation status: Stub (always returns ERROR_SUCCESS).
 pub fn RegDeleteKeyA(hKey: usize, lpSubKey: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = lpSubKey;
@@ -71,6 +136,8 @@ pub fn RegDeleteKeyA(hKey: usize, lpSubKey: usize) callconv(w32cc.WINAPI) u32 {
     return 0;
 }
 
+/// Removes a named value from the specified registry key.
+/// Implementation status: Stub (always returns ERROR_SUCCESS).
 pub fn stub_RegDeleteValueA(hKey: usize, lpValueName: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = lpValueName;
@@ -78,28 +145,39 @@ pub fn stub_RegDeleteValueA(hKey: usize, lpValueName: usize) callconv(w32cc.WINA
     return 0;
 }
 
+/// Enumerates the subkeys of the specified open registry key.
+/// Implementation status: Stub (always returns ERROR_NO_MORE_ITEMS).
 pub fn stub_RegEnumKeyExA(hKey: usize, dwIndex: u32, lpName: usize, lpcchName: usize, lpReserved: usize, lpClass: usize, lpcchClass: usize, lpftLastWriteTime: usize) callconv(w32cc.WINAPI) u32 {
-    _ = hKey;
-    _ = dwIndex;
-    _ = lpName;
-    _ = lpcchName;
     _ = lpReserved;
     _ = lpClass;
     _ = lpcchClass;
     _ = lpftLastWriteTime;
-    if (trace.enable_tracing) trace.print("ADVAPI32: RegEnumKeyExA -> ERROR_NO_MORE_ITEMS\n", .{});
+    // For CPU registry key, report one subkey "0" (processor 0)
+    if (hKey == CPU_REG_HANDLE and dwIndex == 0) {
+        if (lpName != 0 and lpcchName != 0) {
+            @as([*]u8, @ptrFromInt(lpName))[0] = '0';
+            @as([*]u8, @ptrFromInt(lpName))[1] = 0;
+            @as(*u32, @ptrFromInt(lpcchName)).* = 1;
+        }
+        return 0; // ERROR_SUCCESS
+    }
+    if (trace.enable_tracing) trace.print("ADVAPI32: RegEnumKeyExA(idx={d}) -> ERROR_NO_MORE_ITEMS\n", .{dwIndex});
     return 259; // ERROR_NO_MORE_ITEMS
 }
 
+/// Enumerates the subkeys of the specified open registry key.
+/// Implementation status: Stub (always returns ERROR_NO_MORE_ITEMS).
 pub fn RegEnumKeyA(hKey: usize, dwIndex: u32, lpName: usize, cchName: u32) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = dwIndex;
     _ = lpName;
     _ = cchName;
     if (trace.enable_tracing) trace.print("ADVAPI32: RegEnumKeyA -> ERROR_NO_MORE_ITEMS\n", .{});
-    return 259;
+    return 259; // ERROR_NO_MORE_ITEMS
 }
 
+/// RegQueryInfoKeyA
+/// Implementation status: Partially implemented
 pub fn RegQueryInfoKeyA(hKey: usize, lpClass: usize, lpcchClass: usize, lpReserved: usize, lpcSubKeys: usize, lpcbMaxSubKeyLen: usize, lpcbMaxClassLen: usize, lpcValues: usize, lpcbMaxValueNameLen: usize, lpcbMaxValueLen: usize, lpcbSecurityDescriptor: usize, lpftLastWriteTime: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = lpClass;
@@ -118,12 +196,16 @@ pub fn RegQueryInfoKeyA(hKey: usize, lpClass: usize, lpcchClass: usize, lpReserv
     return 0;
 }
 
+/// stub_RegFlushKey
+/// Implementation status: Stub
 pub fn stub_RegFlushKey(hKey: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     if (trace.enable_tracing) trace.print("ADVAPI32: RegFlushKey\n", .{});
     return 0;
 }
 
+/// stub_RegOpenKeyA
+/// Implementation status: No-op fallback
 pub fn stub_RegOpenKeyA(hKey: usize, lpSubKey: usize, phkResult: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = phkResult;
@@ -134,17 +216,63 @@ pub fn stub_RegOpenKeyA(hKey: usize, lpSubKey: usize, phkResult: usize) callconv
     return 2; // ERROR_FILE_NOT_FOUND
 }
 
+/// RegQueryValueExW
+/// Implementation status: Partially implemented
 pub fn RegQueryValueExW(hKey: usize, lpValueName: usize, lpReserved: usize, lpType: usize, lpData: usize, lpcbData: usize) callconv(w32cc.WINAPI) u32 {
-    _ = hKey;
-    _ = lpValueName;
     _ = lpReserved;
-    _ = lpType;
-    _ = lpData;
-    _ = lpcbData;
-    if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExW -> ERROR_FILE_NOT_FOUND\n", .{});
+    // Convert wide value name
+    var narrow: [128]u8 = undefined;
+    var nlen: usize = 0;
+    if (lpValueName != 0) {
+        const src = @as([*]const u16, @ptrFromInt(lpValueName));
+        while (nlen < 127 and src[nlen] != 0) : (nlen += 1) {
+            narrow[nlen] = @truncate(src[nlen]);
+        }
+    }
+    const name = narrow[0..nlen];
+
+    if (hKey == CPU_REG_HANDLE) {
+        const REG_SZ: u32 = 1;
+        const REG_DWORD: u32 = 4;
+        if (std.ascii.eqlIgnoreCase(name, "ProcessorNameString")) {
+            return writeRegStringW(lpType, lpData, lpcbData, REG_SZ, "Intel Pentium III");
+        } else if (std.ascii.eqlIgnoreCase(name, "Identifier")) {
+            return writeRegStringW(lpType, lpData, lpcbData, REG_SZ, "x86 Family 6 Model 8 Stepping 3");
+        } else if (std.ascii.eqlIgnoreCase(name, "VendorIdentifier")) {
+            return writeRegStringW(lpType, lpData, lpcbData, REG_SZ, "GenuineIntel");
+        } else if (std.ascii.eqlIgnoreCase(name, "~MHz")) {
+            return writeRegDword(lpType, lpData, lpcbData, REG_DWORD, 1000);
+        } else if (std.ascii.eqlIgnoreCase(name, "FeatureSet")) {
+            return writeRegDword(lpType, lpData, lpcbData, REG_DWORD, 0x2FFF);
+        }
+        if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExW(CPU, '{s}') -> NOT_FOUND\n", .{name});
+        return 2;
+    }
+
+    if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExW('{s}') -> ERROR_FILE_NOT_FOUND\n", .{name});
     return 2; // ERROR_FILE_NOT_FOUND
 }
 
+fn writeRegStringW(lpType: usize, lpData: usize, lpcbData: usize, regType: u32, value: []const u8) u32 {
+    const needed: u32 = @intCast((value.len + 1) * 2); // UTF-16 bytes
+    if (lpType != 0) @as(*u32, @ptrFromInt(lpType)).* = regType;
+    if (lpcbData != 0) {
+        const buf_size = @as(*u32, @ptrFromInt(lpcbData)).*;
+        @as(*u32, @ptrFromInt(lpcbData)).* = needed;
+        if (lpData != 0 and buf_size >= needed) {
+            const dst = @as([*]u16, @ptrFromInt(lpData));
+            for (0..value.len) |i| dst[i] = value[i];
+            dst[value.len] = 0;
+            return 0;
+        }
+        if (lpData == 0) return 0;
+        return 234; // ERROR_MORE_DATA
+    }
+    return 0;
+}
+
+/// RegSetValueExW
+/// Implementation status: Partially implemented
 pub fn RegSetValueExW(hKey: usize, lpValueName: usize, reserved: u32, dwType: u32, lpData: usize, cbData: u32) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = lpValueName;
@@ -156,6 +284,8 @@ pub fn RegSetValueExW(hKey: usize, lpValueName: usize, reserved: u32, dwType: u3
     return 0;
 }
 
+/// stub_RegCreateKeyA
+/// Implementation status: Stub
 pub fn stub_RegCreateKeyA(hKey: usize, lpSubKey: usize, phkResult: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     if (trace.enable_tracing) {
@@ -169,6 +299,8 @@ pub fn stub_RegCreateKeyA(hKey: usize, lpSubKey: usize, phkResult: usize) callco
     return 0; // ERROR_SUCCESS
 }
 
+/// stub_RegCreateKeyW
+/// Implementation status: Stub
 pub fn stub_RegCreateKeyW(hKey: usize, lpSubKey: usize, phkResult: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = lpSubKey;
@@ -180,18 +312,35 @@ pub fn stub_RegCreateKeyW(hKey: usize, lpSubKey: usize, phkResult: usize) callco
     return 0; // ERROR_SUCCESS
 }
 
-// --- W variant stubs for win2k apps ---
-
+/// --- W variant stubs for win2k apps ---
+/// Implementation status: Partially implemented
 pub fn RegOpenKeyExW(hKey: usize, lpSubKey: usize, ulOptions: u32, samDesired: u32, phkResult: usize) callconv(w32cc.WINAPI) u32 {
     _ = ulOptions;
     _ = samDesired;
-    _ = hKey;
-    _ = lpSubKey;
-    if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExW -> ERROR_FILE_NOT_FOUND\n", .{});
+    // Convert wide string to narrow for comparison
+    var narrow: [256]u8 = undefined;
+    var nlen: usize = 0;
+    if (lpSubKey != 0) {
+        const src = @as([*]const u16, @ptrFromInt(lpSubKey));
+        while (nlen < 255 and src[nlen] != 0) : (nlen += 1) {
+            narrow[nlen] = @truncate(src[nlen]);
+        }
+    }
+    const key = narrow[0..nlen];
+
+    if (isCpuRegKey(hKey, key)) {
+        if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExW(0x{X}, '{s}') -> OK (CPU)\n", .{ hKey, key });
+        if (phkResult != 0) @as(*u32, @ptrFromInt(phkResult)).* = CPU_REG_HANDLE;
+        return 0;
+    }
+
+    if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExW(0x{X}, '{s}') -> ERROR_FILE_NOT_FOUND\n", .{ hKey, key });
     if (phkResult != 0) @as(*u32, @ptrFromInt(phkResult)).* = 0;
     return 2; // ERROR_FILE_NOT_FOUND
 }
 
+/// RegCreateKeyExW
+/// Implementation status: Partially implemented
 pub fn RegCreateKeyExW(hKey: usize, lpSubKey: usize, reserved: u32, lpClass: usize, dwOptions: u32, samDesired: u32, lpSecurityAttributes: usize, phkResult: usize, lpdwDisposition: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = lpSubKey;
@@ -211,6 +360,8 @@ pub fn RegCreateKeyExW(hKey: usize, lpSubKey: usize, reserved: u32, lpClass: usi
     return 0;
 }
 
+/// stub_RegOpenKeyW
+/// Implementation status: No-op fallback
 pub fn stub_RegOpenKeyW(hKey: usize, lpSubKey: usize, phkResult: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = lpSubKey;
@@ -219,6 +370,8 @@ pub fn stub_RegOpenKeyW(hKey: usize, lpSubKey: usize, phkResult: usize) callconv
     return 2;
 }
 
+/// RegDeleteKeyW
+/// Implementation status: Partially implemented
 pub fn RegDeleteKeyW(hKey: usize, lpSubKey: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = lpSubKey;
@@ -226,6 +379,8 @@ pub fn RegDeleteKeyW(hKey: usize, lpSubKey: usize) callconv(w32cc.WINAPI) u32 {
     return 0;
 }
 
+/// stub_RegDeleteValueW
+/// Implementation status: Stub
 pub fn stub_RegDeleteValueW(hKey: usize, lpValueName: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = lpValueName;
@@ -233,6 +388,8 @@ pub fn stub_RegDeleteValueW(hKey: usize, lpValueName: usize) callconv(w32cc.WINA
     return 0;
 }
 
+/// stub_RegSetValueW
+/// Implementation status: Stub
 pub fn stub_RegSetValueW(hKey: usize, lpSubKey: usize, dwType: u32, lpData: usize, cbData: u32) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = lpSubKey;
@@ -243,6 +400,8 @@ pub fn stub_RegSetValueW(hKey: usize, lpSubKey: usize, dwType: u32, lpData: usiz
     return 0;
 }
 
+/// RegEnumKeyW
+/// Implementation status: Partially implemented
 pub fn RegEnumKeyW(hKey: usize, dwIndex: u32, lpName: usize, cchName: u32) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = dwIndex;
@@ -252,6 +411,8 @@ pub fn RegEnumKeyW(hKey: usize, dwIndex: u32, lpName: usize, cchName: u32) callc
     return 259;
 }
 
+/// stub_RegQueryValueW
+/// Implementation status: No-op fallback
 pub fn stub_RegQueryValueW(hKey: usize, lpSubKey: usize, lpData: usize, lpcbData: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = lpSubKey;

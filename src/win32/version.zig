@@ -1,8 +1,12 @@
+//! VERSION.dll registration.
+
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
-const w32cc = @import("../calling_convention.zig");
+const w32cc = @import("calling_convention.zig");
 
+/// Registers VERSION.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "VERSION.dll";
     try environment.addBuiltinExportComptime(m, "GetFileVersionInfoSizeA", stub_GetFileVersionInfoSizeA);

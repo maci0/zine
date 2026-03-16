@@ -1,51 +1,62 @@
-/// NTDLL stub implementations — NT Native API and CRT intrinsics.
-///
-/// Contains: NtQuerySystemInformation, RtlInitUnicodeString, SID functions,
-/// _chkstk/_allmul/_alldiv (x86 inline asm), string helpers, RtlUnwind.
-
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32 = @import("../../win32_constants.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32 = @import("../constants.zig");
+const w32cc = @import("../calling_convention.zig");
 const platform = @import("../../platform.zig");
 const mem_alloc = @import("../kernel32/mem.zig");
 
-// =============================================================================
-// Simple stubs
-// =============================================================================
-
+/// NTDLL stub implementations — NT Native API and CRT intrinsics.
+/// Contains: NtQuerySystemInformation, RtlInitUnicodeString, SID functions,
+/// _chkstk/_allmul/_alldiv (x86 inline asm), string helpers, RtlUnwind.
+/// =============================================================================
+/// Simple stubs
+/// =============================================================================
+/// Implementation status: Stub
 pub fn stub_RtlFreeAnsiString(ansiString: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("NTDLL: RtlFreeAnsiString({x})\n", .{ansiString});
 }
 
+/// stub_RtlUnicodeStringToAnsiString
+/// Implementation status: Stub
 pub fn stub_RtlUnicodeStringToAnsiString(destinationString: usize, sourceString: usize, allocateDestinationString: u32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("NTDLL: RtlUnicodeStringToAnsiString({x}, {x}, {d})\n", .{ destinationString, sourceString, allocateDestinationString });
     return 0; // STATUS_SUCCESS
 }
 
+/// stub_RtlTimeToElapsedTimeFields
+/// Implementation status: Stub
 pub fn stub_RtlTimeToElapsedTimeFields(time: usize, timeFields: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("NTDLL: RtlTimeToElapsedTimeFields({x}, {x})\n", .{ time, timeFields });
 }
 
+/// stub_NtClose
+/// Implementation status: Stub
 pub fn stub_NtClose(handle: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("NTDLL: NtClose({x})\n", .{handle});
     return 0; // STATUS_SUCCESS
 }
 
+/// stub_RtlFreeSid
+/// Implementation status: Stub
 pub fn stub_RtlFreeSid(sid: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("NTDLL: RtlFreeSid({x})\n", .{sid});
     return 0;
 }
 
+/// stub_RtlUnwind
+/// Implementation status: No-op fallback
 pub fn stub_RtlUnwind(targetFrame: usize, targetIp: usize, exceptionRecord: usize, returnValue: usize) callconv(w32cc.WINAPI) void {
-    _ = targetFrame; _ = targetIp; _ = exceptionRecord; _ = returnValue;
+    _ = targetFrame;
+    _ = targetIp;
+    _ = exceptionRecord;
+    _ = returnValue;
     if (trace.enable_tracing) trace.print("NTDLL: RtlUnwind (no-op)\n", .{});
 }
 
-// =============================================================================
-// NtQuerySystemInformation
-// =============================================================================
-
+/// =============================================================================
+/// NtQuerySystemInformation
+/// =============================================================================
+/// Implementation status: Partially implemented
 pub fn NtQuerySystemInformation(systemInformationClass: u32, systemInformation: usize, systemInformationLength: u32, returnLength: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("NTDLL: NtQuerySystemInformation(class={d}, info={x}, len={d}, ret_len={x})\n", .{ systemInformationClass, systemInformation, systemInformationLength, returnLength });
     if (systemInformationClass == 0) { // SystemBasicInformation
@@ -139,10 +150,10 @@ pub fn NtQuerySystemInformation(systemInformationClass: u32, systemInformation: 
     return 0xC0000002; // STATUS_NOT_IMPLEMENTED
 }
 
-// =============================================================================
-// VerSetConditionMask
-// =============================================================================
-
+/// =============================================================================
+/// VerSetConditionMask
+/// =============================================================================
+/// Implementation status: Partially implemented
 pub fn VerSetConditionMask(mask_lo: u32, mask_hi: u32, typeMask: u32, condition: u8) callconv(w32cc.WINAPI) u64 {
     _ = mask_hi;
     if (trace.enable_tracing) trace.print("NTDLL: VerSetConditionMask(mask=0x{x}, type=0x{x}, cond={d})\n", .{ mask_lo, typeMask, condition });
@@ -151,10 +162,10 @@ pub fn VerSetConditionMask(mask_lo: u32, mask_hi: u32, typeMask: u32, condition:
     var mask: u64 = mask_lo;
     const cond3: u64 = @as(u64, condition & 0x07);
 
-    if (typeMask & 0x0000002 != 0) mask |= cond3 << 0;  // VER_MINORVERSION
-    if (typeMask & 0x0000001 != 0) mask |= cond3 << 3;  // VER_MAJORVERSION
-    if (typeMask & 0x0000004 != 0) mask |= cond3 << 6;  // VER_BUILDNUMBER
-    if (typeMask & 0x0000008 != 0) mask |= cond3 << 9;  // VER_PLATFORMID
+    if (typeMask & 0x0000002 != 0) mask |= cond3 << 0; // VER_MINORVERSION
+    if (typeMask & 0x0000001 != 0) mask |= cond3 << 3; // VER_MAJORVERSION
+    if (typeMask & 0x0000004 != 0) mask |= cond3 << 6; // VER_BUILDNUMBER
+    if (typeMask & 0x0000008 != 0) mask |= cond3 << 9; // VER_PLATFORMID
     if (typeMask & 0x0000010 != 0) mask |= cond3 << 12; // VER_SERVICEPACKMINOR
     if (typeMask & 0x0000020 != 0) mask |= cond3 << 15; // VER_SERVICEPACKMAJOR
     if (typeMask & 0x0000040 != 0) mask |= cond3 << 18; // VER_SUITENAME
@@ -163,10 +174,10 @@ pub fn VerSetConditionMask(mask_lo: u32, mask_hi: u32, typeMask: u32, condition:
     return mask;
 }
 
-// =============================================================================
-// Unicode strings
-// =============================================================================
-
+/// =============================================================================
+/// Unicode strings
+/// =============================================================================
+/// Implementation status: Partially implemented
 pub fn RtlInitUnicodeString(dest: usize, source: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("NTDLL: RtlInitUnicodeString(dest={x}, source={x})\n", .{ dest, source });
     if (dest == 0) return;
@@ -188,16 +199,26 @@ pub fn RtlInitUnicodeString(dest: usize, source: usize) callconv(w32cc.WINAPI) v
     us.Buffer = @intCast(source);
 }
 
-// =============================================================================
-// SID functions
-// =============================================================================
-
+/// =============================================================================
+/// SID functions
+/// =============================================================================
+/// Implementation status: Partially implemented
 pub fn RtlAllocateAndInitializeSid(
-    identAuth: usize, subAuthCount: u8,
-    sa0: u32, sa1: u32, sa2: u32, sa3: u32,
-    sa4: u32, sa5: u32, sa6: u32, sa7: u32,
+    identAuth: usize,
+    subAuthCount: u8,
+    sa0: u32,
+    sa1: u32,
+    sa2: u32,
+    sa3: u32,
+    sa4: u32,
+    sa5: u32,
+    sa6: u32,
+    sa7: u32,
 ) callconv(w32cc.WINAPI) u32 {
-    _ = sa4; _ = sa5; _ = sa6; _ = sa7;
+    _ = sa4;
+    _ = sa5;
+    _ = sa6;
+    _ = sa7;
     if (trace.enable_tracing) trace.print("NTDLL: RtlAllocateAndInitializeSid(count={d})\n", .{subAuthCount});
 
     const count = @min(subAuthCount, 8);
@@ -224,6 +245,8 @@ pub fn RtlAllocateAndInitializeSid(
     return 0; // STATUS_SUCCESS
 }
 
+/// RtlEqualSid
+/// Implementation status: Partially implemented
 pub fn RtlEqualSid(sid1: usize, sid2: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("NTDLL: RtlEqualSid({x}, {x})\n", .{ sid1, sid2 });
     if (sid1 == 0 or sid2 == 0) return 0;
@@ -368,10 +391,10 @@ fn alldiv_generic() callconv(w32cc.WINAPI) usize {
     return 0;
 }
 
-// =============================================================================
-// String/memory helpers (exported from NTDLL)
-// =============================================================================
-
+/// =============================================================================
+/// String/memory helpers (exported from NTDLL)
+/// =============================================================================
+/// Implementation status: Partially implemented
 pub fn strrchr(str_ptr: usize, c: i32) callconv(w32cc.WINAPI) usize {
     if (str_ptr == 0) return 0;
     const s = @as([*]const u8, @ptrFromInt(str_ptr));
@@ -386,6 +409,8 @@ pub fn strrchr(str_ptr: usize, c: i32) callconv(w32cc.WINAPI) usize {
     return last;
 }
 
+/// wcsicmp
+/// Implementation status: Partially implemented
 pub fn wcsicmp(s1_ptr: usize, s2_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
     const s1 = @as([*]const u16, @ptrFromInt(s1_ptr));
@@ -405,6 +430,8 @@ fn toLowerW(c: u16) u16 {
     return c;
 }
 
+/// memmove
+/// Implementation status: Partially implemented
 pub fn memmove(dest_ptr: usize, src_ptr: usize, count: usize) callconv(w32cc.WINAPI) usize {
     if (dest_ptr == 0 or src_ptr == 0 or count == 0) return dest_ptr;
     const dst = @as([*]u8, @ptrFromInt(dest_ptr));

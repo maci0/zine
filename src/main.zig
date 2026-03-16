@@ -1,6 +1,19 @@
+//! Main entry point for the Zine x86 interpreter (Native CLI).
+//!
+//! This module provides the standard `main()` function for the native Linux
+//! build. It parses command-line arguments, loads a Win32 PE executable,
+//! initializes the guest environment (memory, stack, TEB), and starts the
+//! x86 interpreter loop.
+//!
+//! It supports both direct native execution (using the host CPU) and
+//! software interpretation.
+//!
+//! Usage:
+//!   zine [options] [--] <target.exe> [args...]
+
 const std = @import("std");
 const pe = @import("pe.zig");
-const teb = @import("teb.zig");
+const teb = @import("win32/teb.zig");
 const Module = @import("loader/module.zig").Module;
 const Environment = @import("loader/env.zig").Environment;
 const loader = @import("loader/loader.zig");
@@ -35,6 +48,7 @@ const stubs_cards = @import("win32/cards.zig");
 const stubs_icmp = @import("win32/icmp.zig");
 const stubs_vdmdbg = @import("win32/vdmdbg.zig");
 const stubs_mag_hook = @import("win32/mag_hook.zig");
+const stubs_setupapi = @import("win32/setupapi.zig");
 const stubs_shlwapi = @import("win32/shlwapi.zig");
 const stubs_msvcp60 = @import("win32/msvcp60.zig");
 const BatEnv = @import("bat.zig").BatEnv;
@@ -49,6 +63,8 @@ const trace = @import("trace.zig");
 const log = @import("log.zig");
 const profiler = @import("profiler.zig");
 
+/// Fallback function for unimplemented Win32 APIs.
+/// It attempts to resolve the name of the missing API and logs a fatal error.
 fn not_implemented() callconv(.c) void {
     const ra = @returnAddress();
     const name = x86_thunks.lookupUnresolvedName(ra);
@@ -89,11 +105,12 @@ fn not_implemented() callconv(.c) void {
     std.process.exit(1);
 }
 
+/// The entry point for the native Zine executable.
+/// It handles CLI argument parsing, environment setup, and starts the emulation.
 pub fn main() !void {
     // Pre-initialize vDSO for time functions so they don't crash when FS is changed
     _ = std.time.timestamp();
 
-    // Platform-specific process setup
     platform.installSegfaultHandler();
     platform.mapNullPage();
     platform.raiseStackLimit();
@@ -107,7 +124,7 @@ pub fn main() !void {
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
 
-    _ = args.next(); // Skip executable name
+    _ = args.next();
 
     var target_exe_opt: ?[]const u8 = null;
     var argv0_opt: ?[]const u8 = null;
@@ -295,7 +312,6 @@ pub fn main() !void {
     // Setup base fallback export for unresolved symbols
     try environment.addBuiltinExport("builtin", "not_implemented", @intFromPtr(&not_implemented));
 
-    // Register built-in DLL stubs
     try stubs_msvcrt.register(&environment);
     try stubs_kernel32.register(&environment);
     try stubs_advapi32.register(&environment);
@@ -329,6 +345,7 @@ pub fn main() !void {
     try stubs_mag_hook.register(&environment);
     try stubs_shlwapi.register(&environment);
     try stubs_msvcp60.register(&environment);
+    try stubs_setupapi.register(&environment);
 
     // Allow loader to search current dir and the target exe's directory
     try environment.registry.addSearchPath(".");
@@ -361,15 +378,38 @@ pub fn main() !void {
         }
     }
 
-    // Note: We intentionally do NOT add the host Unix PATH here.
-    // Unix paths like /usr/bin will never contain Windows DLLs and just
-    // produce noisy failed searches. Only . , the exe dir, and any
-    // BAT-defined PATH entries are useful search locations.
+    // When no BAT environment was loaded, fall back to the host PATH.
+    // This is needed when the test harness exports PATH=.../VC98/Bin:...
+    // so that LoadLibraryA can find DLLs like MSDIS110.DLL at runtime.
+    if (bat_env_opt == null) {
+        if (std.process.getEnvVarOwned(allocator, "PATH")) |host_path| {
+            defer allocator.free(host_path);
+            var it = std.mem.tokenizeScalar(u8, host_path, ':');
+            while (it.next()) |p| {
+                if (p.len == 0) continue;
+                try environment.registry.addSearchPath(try allocator.dupe(u8, p));
+            }
+        } else |_| {}
+    }
 
-    // Load the main executable
     const exe_name = std.fs.path.basename(target_exe);
     const main_module = try environment.registry.loadModule(exe_name);
     stubs_kernel32.main_module_handle = @intFromPtr(main_module.mapped_memory.ptr);
+
+    // Set app code bounds from the PE's .text section for SIGSEGV recovery
+    {
+        const pe_base = @intFromPtr(main_module.mapped_memory.ptr);
+        {
+            const sections = main_module.parser.sections;
+            for (sections) |sec| {
+                if (sec.Characteristics & 0x20 != 0) { // IMAGE_SCN_CNT_CODE
+                    stubs_kernel32.app_code_start = pe_base + sec.VirtualAddress;
+                    stubs_kernel32.app_code_end = pe_base + sec.VirtualAddress + sec.Misc.VirtualSize;
+                    break;
+                }
+            }
+        }
+    }
 
     // Store the exe's directory as a Windows-style path for GetModuleFileNameA
     {
@@ -440,7 +480,6 @@ pub fn main() !void {
         }
     }
 
-    // Pre-load all imported DLLs
     // Resolve imports iteratively until all modules are processed
     var resolved_count: usize = 0;
     while (true) {
@@ -460,7 +499,6 @@ pub fn main() !void {
         resolved_count = to_resolve.items.len;
     }
 
-    // Initialize MSVCRT global vars
     try app_args.append(allocator, null);
 
     stubs_msvcrt.global_argc = @intCast(app_args.items.len - 1);
@@ -547,6 +585,7 @@ pub fn main() !void {
 
     // Initialize TEB/PEB
     const thread_env = try teb.initTEB(allocator);
+    teb.teb_base_addr = @intFromPtr(thread_env);
     
     // Build PEB Environment block (Must be UTF-16 on NT)
     var env_total_chars: usize = 1; // Final null
@@ -615,7 +654,8 @@ pub fn main() !void {
         cpu.eip = @truncate(ep);
         cpu.esp = @intCast(@intFromPtr(stack_mem.ptr) + stack_size - 16);
         cpu.ebp = cpu.esp;
-        trace.print("Interpreter: EIP=0x{X} ESP=0x{X} (image base=0x{X}, stack base=0x{X})\n", .{ cpu.eip, cpu.esp, base, @intFromPtr(stack_mem.ptr) });
+        cpu.fs_base = @truncate(teb.teb_base_addr);
+        trace.print("Interpreter: EIP=0x{X} ESP=0x{X} fs_base=0x{X} (image base=0x{X}, stack base=0x{X})\n", .{ cpu.eip, cpu.esp, cpu.fs_base, base, @intFromPtr(stack_mem.ptr) });
 
         if (use_jit) {
             log.warn("JIT on native x86: blocks will be compiled to WASM for validation but NOT executed", .{});
@@ -647,6 +687,9 @@ pub fn main() !void {
         const rc = invoke(stubs_msvcrt.global_argc, stubs_msvcrt.global_argv, @as([*]?[*:0]u8, @ptrCast(@constCast(stubs_msvcrt.global_envp))));
         std.process.exit(@intCast(rc & 0xFF));
     } else if (main_module.entry_point) |ep| {
+        // AppCompat: patch known executables that need runtime fixes
+        applyAppCompatPatches(main_module);
+
         const EntryPointFn = *const fn () callconv(.c) void;
         const entry_point = @as(EntryPointFn, @ptrFromInt(ep));
         entry_point();
@@ -660,6 +703,36 @@ pub fn main() !void {
 }
 
 // ---------------------------------------------------------------------------
+// AppCompat: runtime patches for known executables
+// ---------------------------------------------------------------------------
+
+fn applyAppCompatPatches(module: *@import("loader/module.zig").Module) void {
+    const mem = module.mapped_memory;
+
+    _ = mem;
+}
+
+fn scanAndPatch(mem: []align(4096) u8, pattern: []const u8, patch_offset: usize, patch: []const u8) bool {
+    if (mem.len < pattern.len) return false;
+    var i: usize = 0;
+    while (i + pattern.len <= mem.len) : (i += 1) {
+        if (std.mem.eql(u8, mem[i .. i + pattern.len], pattern)) {
+            log.info("AppCompat: Pattern found at mem offset 0x{X} (VA 0x{X})", .{ i, @intFromPtr(mem.ptr) + i });
+            log.info("AppCompat: Before patch: {X:0>2} {X:0>2} -> {X:0>2} {X:0>2}", .{
+                mem[i + patch_offset],
+                mem[i + patch_offset + 1],
+                patch[0],
+                patch[1],
+            });
+            const dest = mem[i + patch_offset .. i + patch_offset + patch.len];
+            @memcpy(dest, patch);
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // JIT-integrated execution loop
 // ---------------------------------------------------------------------------
 
@@ -667,8 +740,10 @@ const jit_compiler = @import("jit/compiler.zig");
 const jit_emitter = @import("jit/emitter.zig");
 const x86_decoder = @import("x86/decoder.zig");
 
+/// JIT-integrated execution loop.
+/// Runs the interpreter and compiles basic blocks as they are encountered.
 fn runWithJit(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
-    var jit = jit_compiler.JitCompiler.init(allocator);
+    var jit = jit_compiler.JitCompiler.init(allocator, 0);
     defer jit.deinit();
 
     var blocks_compiled: u32 = 0;
@@ -712,6 +787,8 @@ fn runWithJit(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
     log.info("JIT: compiled {d} unique basic blocks", .{blocks_compiled});
 }
 
+/// Scans x86 code to find the end of a basic block.
+/// Basic blocks are terminated by control flow instructions like JMP or RET.
 fn scanBlock(code: []const u8) usize {
     var offset: usize = 0;
     while (offset < code.len) {

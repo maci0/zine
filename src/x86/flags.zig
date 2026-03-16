@@ -1,8 +1,8 @@
-// Lazy EFLAGS implementation for the x86 interpreter.
-//
-// x86 sets FLAGS on almost every ALU instruction but they're rarely read.
-// Computing all 6 status flags on every instruction is ~30% overhead.
-// Instead, we store the operation context and compute flags on demand.
+//! Lazy EFLAGS implementation for the x86 interpreter.
+//!
+//! x86 sets FLAGS on almost every ALU instruction but they're rarely read.
+//! Computing all 6 status flags on every instruction is ~30% overhead.
+//! Instead, we store the operation context and compute flags on demand.
 
 /// What operation produced the current flag state.
 pub const FlagOp = enum {
@@ -26,6 +26,7 @@ pub const OpSize = enum {
     word,
     dword,
 
+    /// Return the number of bits for this operand size.
     pub fn bits(self: OpSize) u6 {
         return switch (self) {
             .byte => 8,
@@ -34,6 +35,7 @@ pub const OpSize = enum {
         };
     }
 
+    /// Return a bitmask for this operand size.
     pub fn mask(self: OpSize) u32 {
         return switch (self) {
             .byte => 0xFF,
@@ -42,6 +44,7 @@ pub const OpSize = enum {
         };
     }
 
+    /// Return the sign bit for this operand size.
     pub fn signBit(self: OpSize) u32 {
         return switch (self) {
             .byte => 0x80,
@@ -64,19 +67,19 @@ pub const LazyFlags = struct {
     // When op == .none, these hold the raw EFLAGS bits
     raw_flags: u32 = 0x202, // IF set, reserved bit 1 set
 
-    /// Zero Flag
+    /// Return the Zero Flag (ZF).
     pub fn getZF(self: *const LazyFlags) bool {
         if (self.op == .none) return (self.raw_flags & FLAG_ZF) != 0;
         return (self.result & self.size.mask()) == 0;
     }
 
-    /// Sign Flag
+    /// Return the Sign Flag (SF).
     pub fn getSF(self: *const LazyFlags) bool {
         if (self.op == .none) return (self.raw_flags & FLAG_SF) != 0;
         return (self.result & self.size.signBit()) != 0;
     }
 
-    /// Carry Flag
+    /// Return the Carry Flag (CF).
     pub fn getCF(self: *const LazyFlags) bool {
         if (self.op == .none) return (self.raw_flags & FLAG_CF) != 0;
         const m = self.size.mask();
@@ -104,7 +107,7 @@ pub const LazyFlags = struct {
         };
     }
 
-    /// Overflow Flag
+    /// Return the Overflow Flag (OF).
     pub fn getOF(self: *const LazyFlags) bool {
         if (self.op == .none) return (self.raw_flags & FLAG_OF) != 0;
         const sb = self.size.signBit();
@@ -120,14 +123,14 @@ pub const LazyFlags = struct {
         };
     }
 
-    /// Parity Flag — set if low byte of result has even number of set bits
+    /// Return the Parity Flag (PF) — set if low byte of result has even number of set bits.
     pub fn getPF(self: *const LazyFlags) bool {
         if (self.op == .none) return (self.raw_flags & FLAG_PF) != 0;
         const low_byte: u8 = @truncate(self.result);
         return (@popCount(low_byte) & 1) == 0;
     }
 
-    /// Auxiliary Carry Flag (BCD half-carry from bit 3 to bit 4)
+    /// Return the Auxiliary Carry Flag (AF) (BCD half-carry from bit 3 to bit 4).
     pub fn getAF(self: *const LazyFlags) bool {
         if (self.op == .none) return (self.raw_flags & FLAG_AF) != 0;
         return switch (self.op) {
@@ -161,7 +164,7 @@ pub const LazyFlags = struct {
         };
     }
 
-    /// Materialize full EFLAGS value (for PUSHFD, LAHF, etc.)
+    /// Materialize full EFLAGS value (for PUSHFD, LAHF, etc.).
     pub fn toEflags(self: *const LazyFlags) u32 {
         if (self.op == .none) return self.raw_flags;
 
@@ -175,7 +178,7 @@ pub const LazyFlags = struct {
         return flags;
     }
 
-    /// Restore flags from a raw EFLAGS value (for POPFD, SAHF, etc.)
+    /// Restore flags from a raw EFLAGS value (for POPFD, SAHF, etc.).
     pub fn fromEflags(self: *LazyFlags, eflags: u32) void {
         self.op = .none;
         self.raw_flags = eflags | 0x2; // Ensure reserved bit 1 is always set
@@ -223,15 +226,23 @@ pub const LazyFlags = struct {
     }
 };
 
-// EFLAGS bit positions
+/// Carry Flag (CF) bit position.
 pub const FLAG_CF: u32 = 1 << 0;
+/// Parity Flag (PF) bit position.
 pub const FLAG_PF: u32 = 1 << 2;
+/// Auxiliary Carry Flag (AF) bit position.
 pub const FLAG_AF: u32 = 1 << 4;
+/// Zero Flag (ZF) bit position.
 pub const FLAG_ZF: u32 = 1 << 6;
+/// Sign Flag (SF) bit position.
 pub const FLAG_SF: u32 = 1 << 7;
+/// Trap Flag (TF) bit position.
 pub const FLAG_TF: u32 = 1 << 8;
+/// Interrupt Enable Flag (IF) bit position.
 pub const FLAG_IF: u32 = 1 << 9;
+/// Direction Flag (DF) bit position.
 pub const FLAG_DF: u32 = 1 << 10;
+/// Overflow Flag (OF) bit position.
 pub const FLAG_OF: u32 = 1 << 11;
 
 // -----------------------------------------------------------------------

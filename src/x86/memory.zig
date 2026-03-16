@@ -1,8 +1,9 @@
-// Guest memory access for the x86 interpreter.
-//
-// The guest x86 address space lives inside WASM linear memory (or a
-// host-allocated buffer on native).  All memory reads/writes go through
-// this module for bounds checking and address translation.
+//! x86 guest memory abstraction.
+//!
+//! This module provides the `GuestMemory` struct, which maps 32-bit virtual
+//! guest addresses to the host's address space (WASM linear memory or native
+//! buffer). It handles bounds-checked reading, writing, and guest heap
+//! allocation.
 
 /// Bounds-checked guest memory accessor.
 pub const GuestMemory = struct {
@@ -17,6 +18,11 @@ pub const GuestMemory = struct {
     /// For unit tests: 0 (addresses are buffer indices directly).
     base_addr: u32 = 0,
     native_linear: bool = false,
+
+    /// PE section write protection (offsets 0 = start VA, 1 = end VA).
+    pe_image_end: u32 = 0,
+    writable_sections: [8][2]u32 = .{.{ 0, 0 }} ** 8,
+    writable_section_count: u8 = 0,
 
     /// Guest heap bump allocator (used in WASM mode).
     /// heap_start is the buffer offset where the heap area begins.
@@ -50,6 +56,7 @@ pub const GuestMemory = struct {
 
     // --- Read operations ---
 
+    /// Reads an 8-bit value from guest memory at `addr`.
     pub fn read8(self: *const GuestMemory, addr: u32) u8 {
         if (self.native_linear) { if (addr < 4096) return 0; return @as(*const u8, @ptrFromInt(addr)).*; }
         const a = self.translate(addr);
@@ -57,6 +64,7 @@ pub const GuestMemory = struct {
         return self.base[a];
     }
 
+    /// Reads a 16-bit little-endian value from guest memory at `addr`.
     pub fn read16(self: *const GuestMemory, addr: u32) u16 {
         if (self.native_linear) { if (addr < 4096) return 0; return @as(*align(1) const u16, @ptrFromInt(addr)).*; }
         const a = self.translate(addr);
@@ -64,6 +72,7 @@ pub const GuestMemory = struct {
         return @as(u16, self.base[a]) | (@as(u16, self.base[a + 1]) << 8);
     }
 
+    /// Reads a 32-bit little-endian value from guest memory at `addr`.
     pub fn read32(self: *const GuestMemory, addr: u32) u32 {
         if (self.native_linear) { if (addr < 4096) return 0; return @as(*align(1) const u32, @ptrFromInt(addr)).*; }
         const a = self.translate(addr);
@@ -76,29 +85,57 @@ pub const GuestMemory = struct {
 
     // --- Write operations ---
 
+    /// Writes an 8-bit value to guest memory at `addr`.
     pub fn write8(self: *GuestMemory, addr: u32, val: u8) void {
         if (self.native_linear) { if (addr >= 4096) @as(*u8, @ptrFromInt(addr)).* = val; return; }
+        if (self.isWriteProtected(addr)) return;
         const a = self.translate(addr);
         if (a >= self.base.len) return;
         self.base[a] = val;
     }
 
+    /// Writes a 16-bit little-endian value to guest memory at `addr`.
     pub fn write16(self: *GuestMemory, addr: u32, val: u16) void {
         if (self.native_linear) { if (addr >= 4096) @as(*align(1) u16, @ptrFromInt(addr)).* = val; return; }
+        if (self.isWriteProtected(addr)) return;
         const a = self.translate(addr);
         if (self.base.len < 2 or a > self.base.len - 2) return;
         self.base[a] = @truncate(val);
         self.base[a + 1] = @truncate(val >> 8);
     }
 
+    /// Writes a 32-bit little-endian value to guest memory at `addr`.
     pub fn write32(self: *GuestMemory, addr: u32, val: u32) void {
         if (self.native_linear) { if (addr >= 4096) @as(*align(1) u32, @ptrFromInt(addr)).* = val; return; }
+        if (self.isWriteProtected(addr)) return;
         const a = self.translate(addr);
         if (self.base.len < 4 or a > self.base.len - 4) return;
         self.base[a] = @truncate(val);
         self.base[a + 1] = @truncate(val >> 8);
         self.base[a + 2] = @truncate(val >> 16);
         self.base[a + 3] = @truncate(val >> 24);
+    }
+
+    /// Reads a 64-bit little-endian value from guest memory at `addr`.
+    pub fn read64(self: *const GuestMemory, addr: u32) u64 {
+        return @as(u64, self.read32(addr)) | (@as(u64, self.read32(addr +% 4)) << 32);
+    }
+
+    /// Writes a 64-bit little-endian value to guest memory at `addr`.
+    pub fn write64(self: *GuestMemory, addr: u32, val: u64) void {
+        self.write32(addr, @truncate(val));
+        self.write32(addr +% 4, @truncate(val >> 32));
+    }
+
+    /// Reads a 128-bit little-endian value from guest memory at `addr`.
+    pub fn read128(self: *const GuestMemory, addr: u32) u128 {
+        return @as(u128, self.read64(addr)) | (@as(u128, self.read64(addr +% 8)) << 64);
+    }
+
+    /// Writes a 128-bit little-endian value to guest memory at `addr`.
+    pub fn write128(self: *GuestMemory, addr: u32, val: u128) void {
+        self.write64(addr, @truncate(val));
+        self.write64(addr +% 8, @truncate(val >> 64));
     }
 
     /// Get a read-only slice of guest memory.
@@ -117,6 +154,25 @@ pub const GuestMemory = struct {
         if (a >= self.base.len) return null;
         const end = @min(a + len, self.base.len);
         return self.base[a..end];
+    }
+
+    /// Register a writable address range (PE section with IMAGE_SCN_MEM_WRITE).
+    pub fn addWritableSection(self: *GuestMemory, start: u32, end: u32) void {
+        if (self.writable_section_count < self.writable_sections.len) {
+            self.writable_sections[self.writable_section_count] = .{ start, end };
+            self.writable_section_count += 1;
+        }
+    }
+
+    /// Check if a guest address is write-protected. Addresses outside the PE
+    /// image (stack, heap, thunks) are always writable.
+    inline fn isWriteProtected(self: *const GuestMemory, addr: u32) bool {
+        if (self.pe_image_end == 0) return false;
+        if (addr < self.base_addr or addr >= self.pe_image_end) return false;
+        for (self.writable_sections[0..self.writable_section_count]) |r| {
+            if (addr >= r[0] and addr < r[1]) return false;
+        }
+        return true;
     }
 };
 

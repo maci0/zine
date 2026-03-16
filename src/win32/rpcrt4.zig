@@ -1,8 +1,12 @@
+//! RPCRT4.dll registration.
+
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
-const w32cc = @import("../calling_convention.zig");
+const w32cc = @import("calling_convention.zig");
 
+/// Registers RPCRT4.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const builtin_module = "RPCRT4.dll";
     try environment.addBuiltinExportComptime(builtin_module, "UuidCreate", stub_UuidCreate);

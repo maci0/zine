@@ -66,6 +66,7 @@ fn levelPrefix(level: Level) struct { plain: []const u8, color: []const u8 } {
 
 var log_buf: [16384]u8 = undefined;
 
+/// Formats and emits a log message at the specified level.
 pub fn emit(level: Level, comptime fmt: []const u8, args: anytype) void {
     const prefix = levelPrefix(level);
     const tag = if (getUseColor()) prefix.color else prefix.plain;

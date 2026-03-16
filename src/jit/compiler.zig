@@ -1,29 +1,50 @@
+//! x86 to WebAssembly JIT compiler.
+//!
+//! This module provides the `JitCompiler` struct, which translates x86 machine
+//! code basic blocks into standalone WebAssembly modules. It leverages
+//! `emitter.zig` for WASM generation and `translate.zig` for x86 instruction
+//! mapping.
+
 const std = @import("std");
 const wasm = @import("wasm.zig");
 const emitter = @import("emitter.zig");
 const decoder = @import("../x86/decoder.zig");
 const t = @import("translate.zig");
+const host = @import("host.zig");
 
 const Body = emitter.Buffer;
 
+/// JIT compiler instance for translating x86 basic blocks to WASM.
 pub const JitCompiler = struct {
     allocator: std.mem.Allocator,
     module: emitter.WasmModule,
     block_cache: std.AutoHashMap(u32, u32),
+    /// WASM linear memory address of the JitCpuState struct.
+    state_addr: u32,
 
-    pub fn init(allocator: std.mem.Allocator) JitCompiler {
+    /// Initializes a new JIT compiler instance.
+    pub fn init(allocator: std.mem.Allocator, state_addr: u32) JitCompiler {
         return .{
             .allocator = allocator,
             .module = emitter.WasmModule.init(allocator),
             .block_cache = std.AutoHashMap(u32, u32).init(allocator),
+            .state_addr = state_addr,
         };
     }
 
+    /// Frees all resources associated with the JIT compiler.
     pub fn deinit(self: *JitCompiler) void {
         self.block_cache.deinit();
         self.module.deinit();
     }
 
+    /// Compiles a basic block of x86 code starting at `guest_eip` into a WASM binary.
+    /// The resulting binary is a standalone WASM module that:
+    ///   - Imports shared memory from "env" "memory"
+    ///   - Exports a "run" function (void -> void)
+    ///   - On entry: loads CPU state from JitCpuState at state_addr
+    ///   - Translates straight-line x86 instructions (stops at control flow)
+    ///   - On exit: stores CPU state back, sets EIP + status
     pub fn compile(self: *JitCompiler, guest_eip: u32, x86_code: []const u8) ![]u8 {
         var offset: usize = 0;
         try self.block_cache.put(guest_eip, @intCast(self.module.func_section.bytes.items.len));
@@ -34,9 +55,26 @@ pub const JitCompiler = struct {
         try self.module.type_section.appendUleb128(0);
         try self.module.type_section.appendUleb128(0);
 
+        // Import section: import memory from "env" "memory"
+        try self.module.import_section.appendUleb128(1); // 1 import
+        try self.module.import_section.appendUleb128(3); // module name length
+        try self.module.import_section.appendSlice("env");
+        try self.module.import_section.appendUleb128(6); // field name length
+        try self.module.import_section.appendSlice("memory");
+        try self.module.import_section.append(0x02); // import kind: memory
+        try self.module.import_section.append(0x00); // limits: no max
+        try self.module.import_section.appendUleb128(1); // initial: 1 page
+
         // Func section: 1 function of type 0
         try self.module.func_section.appendUleb128(1);
         try self.module.func_section.appendUleb128(0);
+
+        // Export section: export function 0 as "run"
+        try self.module.export_section.appendUleb128(1); // 1 export
+        try self.module.export_section.appendUleb128(3); // name length
+        try self.module.export_section.appendSlice("run");
+        try self.module.export_section.append(@intFromEnum(wasm.ExportType.func));
+        try self.module.export_section.appendUleb128(0); // function index 0
 
         // Code section: 1 function body
         var body = Body.init(self.allocator);
@@ -47,12 +85,21 @@ pub const JitCompiler = struct {
         try body.appendUleb128(t.LOCAL_COUNT);
         try body.append(@intFromEnum(wasm.ValType.i32));
 
+        // === PROLOGUE: load CPU state from shared memory ===
+        try emitPrologue(&body, self.state_addr);
+
+        // === BODY: translate non-control-flow instructions ===
         while (offset < x86_code.len) {
             const insn = decoder.decode(x86_code[offset..]);
             if (insn.length == 0) break;
+            if (isControlFlow(&insn)) break;
             try self.translateInstruction(&body, &insn);
             offset += insn.length;
         }
+
+        // === EPILOGUE: store CPU state back to shared memory ===
+        const final_eip = guest_eip +% @as(u32, @intCast(offset));
+        try emitEpilogue(&body, self.state_addr, final_eip);
 
         try body.appendOpcode(.end);
 
@@ -61,6 +108,199 @@ pub const JitCompiler = struct {
         try self.module.code_section.appendSlice(body.bytes.items);
 
         return self.module.finish();
+    }
+
+    /// Returns true if the instruction is control flow (the JIT stops before it,
+    /// letting the interpreter handle branches/calls/returns).
+    fn isControlFlow(insn: *const decoder.Instruction) bool {
+        return switch (insn.opcode) {
+            0xE9, 0xEB => true, // JMP rel32, JMP rel8
+            0x70...0x7F => true, // Jcc short
+            0xE8 => true, // CALL rel32
+            0xC3, 0xC2, 0xCB, 0xCA => true, // RET variants
+            0xE0...0xE3 => true, // LOOP, LOOPE, LOOPNE, JECXZ
+            0xF4, 0xCC, 0xCD => true, // HLT, INT3, INT
+            0x0F80...0x0F8F => true, // Jcc near (two-byte)
+            0xFF => if (insn.modrm) |m| (m.reg == 2 or m.reg == 4) else false, // CALL/JMP indirect
+            else => false,
+        };
+    }
+
+    /// Emit prologue: load all CPU registers and flags from the state struct.
+    fn emitPrologue(body: *Body, state_addr: u32) !void {
+        // Load mem_base first (needed for all subsequent memory accesses)
+        try body.appendOpcode(.i32_const);
+        try body.appendUleb128(state_addr);
+        try body.appendOpcode(.i32_load);
+        try body.appendUleb128(2); // align=4
+        try body.appendUleb128(host.JitCpuState.OFF_MEM_BASE);
+        try body.appendOpcode(.local_set);
+        try body.appendUleb128(t.LOCAL_MEM_BASE);
+
+        // Load 8 general purpose registers (EAX..EDI at offsets 0..28)
+        inline for (0..8) |i| {
+            try body.appendOpcode(.i32_const);
+            try body.appendUleb128(state_addr);
+            try body.appendOpcode(.i32_load);
+            try body.appendUleb128(2);
+            try body.appendUleb128(@as(u32, i) * 4);
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(@as(u32, i));
+        }
+
+        // Load EFLAGS and unpack into individual flag locals
+        try body.appendOpcode(.i32_const);
+        try body.appendUleb128(state_addr);
+        try body.appendOpcode(.i32_load);
+        try body.appendUleb128(2);
+        try body.appendUleb128(host.JitCpuState.OFF_EFLAGS);
+        try body.appendOpcode(.local_set);
+        try body.appendUleb128(t.LOCAL_SCRATCH);
+
+        // CF = (eflags >> 0) & 1
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_SCRATCH);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(1);
+        try body.appendOpcode(.i32_and);
+        try body.appendOpcode(.local_set);
+        try body.appendUleb128(t.LOCAL_CF);
+
+        // PF = (eflags >> 2) & 1
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_SCRATCH);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(2);
+        try body.appendOpcode(.i32_shr_u);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(1);
+        try body.appendOpcode(.i32_and);
+        try body.appendOpcode(.local_set);
+        try body.appendUleb128(t.LOCAL_PF);
+
+        // ZF = (eflags >> 6) & 1
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_SCRATCH);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(6);
+        try body.appendOpcode(.i32_shr_u);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(1);
+        try body.appendOpcode(.i32_and);
+        try body.appendOpcode(.local_set);
+        try body.appendUleb128(t.LOCAL_ZF);
+
+        // SF = (eflags >> 7) & 1
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_SCRATCH);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(7);
+        try body.appendOpcode(.i32_shr_u);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(1);
+        try body.appendOpcode(.i32_and);
+        try body.appendOpcode(.local_set);
+        try body.appendUleb128(t.LOCAL_SF);
+
+        // DF = (eflags >> 10) & 1
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_SCRATCH);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(10);
+        try body.appendOpcode(.i32_shr_u);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(1);
+        try body.appendOpcode(.i32_and);
+        try body.appendOpcode(.local_set);
+        try body.appendUleb128(t.LOCAL_DF);
+
+        // OF = (eflags >> 11) & 1
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_SCRATCH);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(11);
+        try body.appendOpcode(.i32_shr_u);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(1);
+        try body.appendOpcode(.i32_and);
+        try body.appendOpcode(.local_set);
+        try body.appendUleb128(t.LOCAL_OF);
+    }
+
+    /// Emit epilogue: store all CPU registers and flags back to the state struct.
+    fn emitEpilogue(body: *Body, state_addr: u32, final_eip: u32) !void {
+        // Store 8 general purpose registers
+        inline for (0..8) |i| {
+            try body.appendOpcode(.i32_const);
+            try body.appendUleb128(state_addr);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(@as(u32, i));
+            try body.appendOpcode(.i32_store);
+            try body.appendUleb128(2);
+            try body.appendUleb128(@as(u32, i) * 4);
+        }
+
+        // Pack flag locals back into EFLAGS and store
+        try body.appendOpcode(.i32_const);
+        try body.appendUleb128(state_addr);
+
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(0x202); // reserved + IF
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_CF);
+        try body.appendOpcode(.i32_or); // CF at bit 0
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_PF);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(2);
+        try body.appendOpcode(.i32_shl);
+        try body.appendOpcode(.i32_or); // PF at bit 2
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_ZF);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(6);
+        try body.appendOpcode(.i32_shl);
+        try body.appendOpcode(.i32_or); // ZF at bit 6
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_SF);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(7);
+        try body.appendOpcode(.i32_shl);
+        try body.appendOpcode(.i32_or); // SF at bit 7
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_DF);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(10);
+        try body.appendOpcode(.i32_shl);
+        try body.appendOpcode(.i32_or); // DF at bit 10
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_OF);
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(11);
+        try body.appendOpcode(.i32_shl);
+        try body.appendOpcode(.i32_or); // OF at bit 11
+
+        try body.appendOpcode(.i32_store);
+        try body.appendUleb128(2);
+        try body.appendUleb128(host.JitCpuState.OFF_EFLAGS);
+
+        // Store EIP = address of the first unhandled instruction
+        try body.appendOpcode(.i32_const);
+        try body.appendUleb128(state_addr);
+        try body.appendOpcode(.i32_const);
+        try body.appendUleb128(final_eip);
+        try body.appendOpcode(.i32_store);
+        try body.appendUleb128(2);
+        try body.appendUleb128(host.JitCpuState.OFF_EIP);
+
+        // Store status = EXIT_TO_INTERP
+        try body.appendOpcode(.i32_const);
+        try body.appendUleb128(state_addr);
+        try body.appendOpcode(.i32_const);
+        try body.appendUleb128(host.JitCpuState.STATUS_EXIT_TO_INTERP);
+        try body.appendOpcode(.i32_store);
+        try body.appendUleb128(2);
+        try body.appendUleb128(host.JitCpuState.OFF_STATUS);
     }
 
     fn translateInstruction(self: *JitCompiler, body: *Body, insn: *const decoder.Instruction) !void {
@@ -749,7 +989,7 @@ pub const JitCompiler = struct {
                     try body.appendUleb128(r);
                 }
                 try t.emitPop32(body);
-                try body.appendOpcode(.drop); // skip ESP
+                try body.appendOpcode(.drop);
                 inline for ([_]u32{ 3, 2, 1, 0 }) |r| {
                     try t.emitPop32(body);
                     try body.appendOpcode(.local_set);
@@ -1033,7 +1273,7 @@ fn translateGroup5(body: *Body, insn: *const decoder.Instruction) !void {
 // =======================================================================
 
 test "jit compiler basic structure" {
-    var compiler = JitCompiler.init(std.testing.allocator);
+    var compiler = JitCompiler.init(std.testing.allocator, 0);
     defer compiler.deinit();
 
     const x86_test_code = [_]u8{
@@ -1049,7 +1289,7 @@ test "jit compiler basic structure" {
 }
 
 test "jit compiler push/pop" {
-    var compiler = JitCompiler.init(std.testing.allocator);
+    var compiler = JitCompiler.init(std.testing.allocator, 0);
     defer compiler.deinit();
 
     const code = [_]u8{
@@ -1064,7 +1304,7 @@ test "jit compiler push/pop" {
 }
 
 test "jit compiler group1 sub imm" {
-    var compiler = JitCompiler.init(std.testing.allocator);
+    var compiler = JitCompiler.init(std.testing.allocator, 0);
     defer compiler.deinit();
 
     const code = [_]u8{
@@ -1077,28 +1317,26 @@ test "jit compiler group1 sub imm" {
     try std.testing.expect(wasm_bin.len >= 8);
 }
 
-test "jit compiler all jcc conditions" {
-    var compiler = JitCompiler.init(std.testing.allocator);
+test "jit compiler stops at control flow" {
+    var compiler = JitCompiler.init(std.testing.allocator, 0);
     defer compiler.deinit();
 
-    // Test all 16 Jcc short opcodes compile without error
-    var code: [32]u8 = undefined;
-    var i: usize = 0;
-    var cc: u8 = 0x70;
-    while (cc <= 0x7F) : (cc += 1) {
-        code[i] = cc;
-        code[i + 1] = 0x00; // rel8 = 0
-        i += 2;
-    }
+    // Jcc is now control flow — the compiler stops before it.
+    // Block: MOV EAX,1 + JE (control flow) → only MOV is translated.
+    const code = [_]u8{
+        0xB8, 0x01, 0x00, 0x00, 0x00, // MOV EAX, 1
+        0x74, 0x00, // JE +0 (control flow — compiler stops here)
+        0xB9, 0x02, 0x00, 0x00, 0x00, // MOV ECX, 2 (not reached)
+    };
 
-    const wasm_bin = try compiler.compile(0x4000, code[0..i]);
+    const wasm_bin = try compiler.compile(0x4000, &code);
     defer std.testing.allocator.free(wasm_bin);
 
     try std.testing.expect(wasm_bin.len >= 8);
 }
 
 test "jit compiler shifts" {
-    var compiler = JitCompiler.init(std.testing.allocator);
+    var compiler = JitCompiler.init(std.testing.allocator, 0);
     defer compiler.deinit();
 
     const code = [_]u8{
@@ -1114,7 +1352,7 @@ test "jit compiler shifts" {
 }
 
 test "jit compiler movzx/movsx" {
-    var compiler = JitCompiler.init(std.testing.allocator);
+    var compiler = JitCompiler.init(std.testing.allocator, 0);
     defer compiler.deinit();
 
     const code = [_]u8{
@@ -1129,7 +1367,7 @@ test "jit compiler movzx/movsx" {
 }
 
 test "jit compiler lea" {
-    var compiler = JitCompiler.init(std.testing.allocator);
+    var compiler = JitCompiler.init(std.testing.allocator, 0);
     defer compiler.deinit();
 
     const code = [_]u8{

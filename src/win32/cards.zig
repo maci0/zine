@@ -1,6 +1,10 @@
+//! CARDS.dll registration.
+
 const env = @import("../loader/env.zig");
 const kernel32 = @import("kernel32.zig");
 
+/// Registers CARDS.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "CARDS.dll";
     try environment.addBuiltinExportComptime(m, "cdtInit", kernel32.stub_args2);

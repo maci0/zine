@@ -1,3 +1,5 @@
+//! Win32 calling convention aliases.
+
 // Calling convention alias for Win32 API stubs.
 //
 // On native x86/x86_64 targets, this resolves to `std.builtin.CallingConvention.winapi`

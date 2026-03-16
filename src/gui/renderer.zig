@@ -1,54 +1,91 @@
+//! Unified GUI rendering and input abstraction layer.
+//!
+//! This module provides a common interface for different rendering backends
+//! (Web UI via WASM/JS or native FLTK) and manages the shared framebuffer,
+//! input state, and UI component synchronization.
+
 const std = @import("std");
 const web_ui = @import("web_ui.zig");
 const fltk_ui = @import("fltk_ui.zig");
 
+/// Available rendering backends.
 pub const Backend = enum {
+    /// Web-based UI using WASM/JS and HTML5 Canvas.
     web_ui,
+    /// Native UI using the Fast Light Tool Kit (FLTK).
     fltk,
+    /// No GUI backend (headless mode).
     none,
 };
 
+/// The currently active rendering backend.
 pub var active_backend: Backend = .web_ui;
 
 // --- Framebuffer (shared rendering surface) ---
+
+/// Shared RGBA framebuffer surface.
 pub var global_framebuf: []u8 = &[_]u8{};
+/// Current width of the framebuffer in pixels.
 pub var global_width: u32 = 1;
+/// Current height of the framebuffer in pixels.
 pub var global_height: u32 = 1;
+/// Whether the resolution has been explicitly set by the guest.
 pub var resolution_set: bool = false; // True once setResolution is called with real dimensions
 
 // --- Input State (written by backend, read by stubs) ---
+
+/// Current state of the keyboard (256 keys).
 pub var keyboard_state: [256]u8 = [_]u8{0} ** 256;
+/// Last recorded X coordinate of the mouse.
 pub var last_mouse_x: i32 = 0;
+/// Last recorded Y coordinate of the mouse.
 pub var last_mouse_y: i32 = 0;
+/// State of mouse buttons (0=left, 1=right, 2=middle, 3=x1).
 pub var mouse_buttons: [4]u8 = [_]u8{0} ** 4; // 0=left, 1=right, 2=middle, 3=x1
+/// Accumulated mouse X delta (for DirectInput).
 pub var mouse_dx: i32 = 0; // Accumulated X delta for DirectInput
+/// Accumulated mouse Y delta (for DirectInput).
 pub var mouse_dy: i32 = 0; // Accumulated Y delta for DirectInput
+/// Accumulated mouse Z (wheel) delta (for DirectInput).
 pub var mouse_dz: i32 = 0; // Accumulated Z (wheel) delta for DirectInput
 
 // --- Cached state for reconnecting clients (web_ui internal) ---
+
+/// Cached JSON representation of the current dynamic menu.
 pub var dynamic_menu_json: ?[]const u8 = null;
+/// Cached JSON representation of the current icon.
 pub var icon_json: ?[]const u8 = null;
+/// Cached JSON representation of the currently active dialog.
 pub var active_dialog: ?[]const u8 = null;
+/// Cached JSON representation of the last window position.
 pub var last_window_pos_json: ?[]const u8 = null;
+/// Cached JSON representation of the last window title.
 pub var last_title_json: ?[]const u8 = null;
+/// Cached JSON representation of the last set resolution.
 pub var last_resolution_json: ?[]const u8 = null;
+/// Cached JSON representation of the last edit control state.
 pub var last_edit_control_json: ?[]const u8 = null;
+/// Cached JSON representation of the last audio format.
 pub var last_audio_format_json: ?[]const u8 = null;
+/// Cached JSON representation of the last controls state.
 pub var last_controls_json: ?[]const u8 = null;
+/// List of cached control text updates for replay.
 pub var cached_control_text_updates: std.ArrayListUnmanaged([]const u8) = .{};
 
 var g_allocator: std.mem.Allocator = undefined;
 var last_frame_time: ?i64 = null;
 
 // --- Frame Batching ---
-// Drawing operations set this flag instead of pushing frames immediately.
-// Frames are flushed at EndPaint / message loop idle to avoid partial-draw artifacts.
+
+/// Whether the screen contents have changed and need to be flushed to the backend.
 pub var screen_dirty: bool = false;
 
+/// Marks the screen as dirty, indicating a frame update is needed.
 pub fn markScreenDirty() void {
     screen_dirty = true;
 }
 
+/// Flushes the framebuffer to the backend if it has been marked as dirty.
 pub fn flushScreenIfDirty() void {
     if (screen_dirty) {
         screen_dirty = false;
@@ -57,33 +94,49 @@ pub fn flushScreenIfDirty() void {
 }
 
 // --- Input Callbacks (set by Win32 stubs, called by backend) ---
+
+/// Callback for menu or control commands (WM_COMMAND).
 pub var on_command: ?*const fn (u32) void = null;
+/// Callback for window resize events (WM_SIZE).
 pub var on_resize: ?*const fn (i32, i32, usize) void = null;
+/// Callback for keyboard events (WM_KEYDOWN/UP).
 pub var on_key_event: ?*const fn (usize, bool) void = null;
+/// Callback for mouse events (WM_MOUSEMOVE/LBUTTONDOWN/etc).
 pub var on_mouse_event: ?*const fn (u32, i32, i32) void = null; // (msg_id, x, y)
+/// Callback for window close events (WM_CLOSE).
 pub var on_close: ?*const fn () void = null;
+/// Callback for dialog cancellation.
 pub var on_cancel_dialog: ?*const fn () void = null;
+/// Callback for file upload events.
 pub var on_file_uploaded: ?*const fn ([]const u8) void = null;
+/// Callback for text find/replace actions.
 pub var on_find_action: ?*const fn ([]const u8, []const u8, []const u8, bool, bool) void = null;
+/// Callback for context menu selection.
 pub var on_context_menu_select: ?*const fn (u32) void = null;
 
 // --- Edit text cache (synced from frontend textarea) ---
-// Dynamically allocated — grows to fit any file size
+
+/// Shared buffer for edit control text data.
 pub var edit_text_data: []u8 = &[_]u8{};
+/// Capacity of the edit text data buffer.
 pub var edit_text_data_cap: usize = 0;
 
+/// Returns a slice of the current edit text data.
 pub fn editTextSlice() []const u8 {
     return edit_text_data;
 }
 
+/// Returns the length of the current edit text data.
 pub fn editTextLen() usize {
     return edit_text_data.len;
 }
 
+/// Returns a pointer to the current edit text data.
 pub fn editTextPtr() [*]const u8 {
     return edit_text_data.ptr;
 }
 
+/// Sets the edit text data from a slice, growing the buffer if necessary.
 pub fn setEditTextFromSlice(text: []const u8) void {
     const needed = text.len + 1; // +1 for null terminator
     if (needed > edit_text_data_cap) {
@@ -100,21 +153,28 @@ pub fn setEditTextFromSlice(text: []const u8) void {
 }
 
 // --- Clipboard buffer ---
+
+/// Shared buffer for clipboard data.
 pub var clipboard_data: []u8 = &[_]u8{};
+/// Capacity of the clipboard data buffer.
 pub var clipboard_data_cap: usize = 0;
 
+/// Returns a slice of the current clipboard data.
 pub fn clipboardSlice() []const u8 {
     return clipboard_data;
 }
 
+/// Returns the length of the current clipboard data.
 pub fn clipboardLen() usize {
     return clipboard_data.len;
 }
 
+/// Returns a pointer to the current clipboard data.
 pub fn clipboardPtr() [*]const u8 {
     return clipboard_data.ptr;
 }
 
+/// Sets the clipboard data from a slice, growing the buffer if necessary.
 pub fn setClipboardFromSlice(text: []const u8) void {
     const needed = text.len + 1;
     if (needed > clipboard_data_cap) {
@@ -129,16 +189,21 @@ pub fn setClipboardFromSlice(text: []const u8) void {
     clipboard_data.len = text.len;
 }
 
+/// Clears the current clipboard data.
 pub fn clearClipboard() void {
     clipboard_data.len = 0;
 }
 
 // --- Context menu blocking ---
+
+/// Whether a context menu selection has been made.
 pub var context_menu_chosen: bool = false;
+/// The ID of the item chosen from the context menu.
 pub var context_menu_result: u32 = 0;
 
 // --- Lifecycle ---
 
+/// Initializes the renderer and the active backend.
 pub fn init(allocator: std.mem.Allocator) !void {
     g_allocator = allocator;
     global_framebuf = try allocator.alloc(u8, 1024 * 1024 * 4);
@@ -163,6 +228,7 @@ pub fn init(allocator: std.mem.Allocator) !void {
 
 // --- Output: Framebuffer ---
 
+/// Pushes the current framebuffer to the active backend for display.
 pub fn pushFrame() void {
     // Don't push frames before the app has set real window dimensions
     if (!resolution_set) return;
@@ -183,6 +249,7 @@ pub fn pushFrame() void {
     }
 }
 
+/// Sets the window resolution and re-initializes the framebuffer.
 pub fn setResolution(w: u32, h: u32) void {
     global_width = w;
     global_height = h;
@@ -216,6 +283,7 @@ pub fn setResolution(w: u32, h: u32) void {
 
 // --- Output: Window Chrome ---
 
+/// Sets the title of the application window.
 pub fn setTitle(title: []const u8) void {
     switch (active_backend) {
         .web_ui => {
@@ -230,6 +298,7 @@ pub fn setTitle(title: []const u8) void {
     }
 }
 
+/// Sets the window position and size.
 pub fn setWindowPos(cx: i32, cy: i32, clientW: i32, clientH: i32) void {
     switch (active_backend) {
         .web_ui => {
@@ -244,6 +313,7 @@ pub fn setWindowPos(cx: i32, cy: i32, clientW: i32, clientH: i32) void {
     }
 }
 
+/// Shows the native edit control (textbox).
 pub fn showEditControl(multiline: bool) void {
     switch (active_backend) {
         .web_ui => {
@@ -256,6 +326,7 @@ pub fn showEditControl(multiline: bool) void {
     }
 }
 
+/// Resizes the native edit control.
 pub fn resizeEditControl(x: i32, y: i32, width: i32, height: i32) void {
     switch (active_backend) {
         .web_ui => {
@@ -268,6 +339,7 @@ pub fn resizeEditControl(x: i32, y: i32, width: i32, height: i32) void {
     }
 }
 
+/// Sets the application icon from a JSON description.
 pub fn setIcon(json: []const u8) void {
     if (icon_json) |old| g_allocator.free(old);
     icon_json = g_allocator.dupe(u8, json) catch null;
@@ -278,6 +350,7 @@ pub fn setIcon(json: []const u8) void {
     }
 }
 
+/// Sets the application menu from a JSON description.
 pub fn setMenu(json: []const u8) void {
     if (dynamic_menu_json) |old| g_allocator.free(old);
     dynamic_menu_json = g_allocator.dupe(u8, json) catch null;
@@ -288,6 +361,7 @@ pub fn setMenu(json: []const u8) void {
     }
 }
 
+/// Sets the font for the native edit control.
 pub fn setEditFont(hwnd: usize, face: []const u8, pt_size: i32, bold: bool, italic: bool) void {
     switch (active_backend) {
         .web_ui => {
@@ -305,6 +379,7 @@ pub fn setEditFont(hwnd: usize, face: []const u8, pt_size: i32, bold: bool, ital
 
 // --- Edit Control Operations (EM_* message support) ---
 
+/// Sets the text selection in the native edit control.
 pub fn setEditSelection(start: i32, end: i32) void {
     switch (active_backend) {
         .web_ui => {
@@ -320,6 +395,7 @@ pub fn setEditSelection(start: i32, end: i32) void {
     }
 }
 
+/// Replaces the current selection in the native edit control with new text.
 pub fn replaceEditSelection(text: []const u8) void {
     switch (active_backend) {
         .web_ui => {
@@ -364,6 +440,7 @@ pub fn replaceEditSelection(text: []const u8) void {
     }
 }
 
+/// Triggers an undo operation in the native edit control.
 pub fn editUndo() void {
     switch (active_backend) {
         .web_ui => web_ui.pushMessage("{\"type\":\"edit_undo\"}"),
@@ -372,6 +449,7 @@ pub fn editUndo() void {
     }
 }
 
+/// Scrolls the native edit control to the current caret position.
 pub fn editScrollCaret() void {
     switch (active_backend) {
         .web_ui => web_ui.pushMessage("{\"type\":\"edit_scrollcaret\"}"),
@@ -380,6 +458,7 @@ pub fn editScrollCaret() void {
     }
 }
 
+/// Enables or disables a menu item by ID.
 pub fn enableMenuItem(id: u32, enabled: bool) void {
     switch (active_backend) {
         .web_ui => {
@@ -392,6 +471,7 @@ pub fn enableMenuItem(id: u32, enabled: bool) void {
     }
 }
 
+/// Sets the check state of a menu item by ID.
 pub fn checkMenuItem(id: u32, checked: bool) void {
     switch (active_backend) {
         .web_ui => {
@@ -406,6 +486,7 @@ pub fn checkMenuItem(id: u32, checked: bool) void {
 
 // --- Status Bar ---
 
+/// Sets the number of parts in the status bar.
 pub fn setStatusBarParts(count: usize) void {
     switch (active_backend) {
         .web_ui => {
@@ -418,6 +499,7 @@ pub fn setStatusBarParts(count: usize) void {
     }
 }
 
+/// Sets the text for a specific part of the status bar.
 pub fn setStatusBarText(part: usize, text: []const u8) void {
     switch (active_backend) {
         .web_ui => {
@@ -432,6 +514,7 @@ pub fn setStatusBarText(part: usize, text: []const u8) void {
 
 // --- Clipboard ---
 
+/// Sets the system clipboard text.
 pub fn setClipboard(text: []const u8) void {
     switch (active_backend) {
         .web_ui => {
@@ -446,6 +529,7 @@ pub fn setClipboard(text: []const u8) void {
 
 // --- Edit Text Push ---
 
+/// Sets the full text content of the native edit control.
 pub fn setEditText(text: []const u8) void {
     switch (active_backend) {
         .web_ui => {
@@ -462,6 +546,7 @@ pub fn setEditText(text: []const u8) void {
 
 // --- Context Menu ---
 
+/// Displays a context menu at the specified coordinates.
 pub fn showContextMenu(x: i32, y: i32, items_json: []const u8) void {
     switch (active_backend) {
         .web_ui => {
@@ -476,6 +561,7 @@ pub fn showContextMenu(x: i32, y: i32, items_json: []const u8) void {
 
 // --- Output: Dialogs ---
 
+/// Displays a standard message box.
 pub fn showMessageBox(title: []const u8, text: []const u8) void {
     switch (active_backend) {
         .web_ui => {
@@ -515,6 +601,7 @@ pub fn showMessageBox(title: []const u8, text: []const u8) void {
     }
 }
 
+/// Displays a dialog from a JSON description.
 pub fn showDialog(json: []const u8) void {
     active_dialog = g_allocator.dupe(u8, json) catch null;
     switch (active_backend) {
@@ -582,6 +669,7 @@ pub fn updateControlText(nIDDlgItem: i32, text: []const u8) void {
     }
 }
 
+/// Opens a file selection dialog.
 pub fn openFileDialog(filters: ?[]const u8, is_save: bool) void {
     switch (active_backend) {
         .web_ui => {
@@ -706,8 +794,10 @@ fn jsonEscapeAppend(json: *std.ArrayListUnmanaged(u8), s: []const u8) void {
     }
 }
 
+/// Callback for when a font is chosen in the font dialog.
 pub var on_font_chosen: ?*const fn ([]const u8, i32, bool, bool) void = null;
 
+/// Opens a font selection dialog.
 pub fn openFontDialog(face_name: []const u8, point_size: i32, bold: bool, italic: bool) void {
     switch (active_backend) {
         .web_ui => {
@@ -725,6 +815,7 @@ pub fn openFontDialog(face_name: []const u8, point_size: i32, bold: bool, italic
     }
 }
 
+/// Closes the currently active dialog.
 pub fn closeDialog() void {
     active_dialog = null;
     switch (active_backend) {
@@ -735,10 +826,13 @@ pub fn closeDialog() void {
 }
 
 // --- Input: Volume changed from UI ---
+
+/// Callback for when the audio volume is changed via the UI.
 pub var on_volume_change: ?*const fn (f32) void = null;
 
 // --- Output: Audio ---
 
+/// Sets the master audio volume (0.0 to 1.0).
 pub fn setVolume(linear: f32) void {
     const clamped = std.math.clamp(linear, 0.0, 1.0);
     switch (active_backend) {
@@ -753,6 +847,7 @@ pub fn setVolume(linear: f32) void {
     }
 }
 
+/// Sets the output audio format.
 pub fn setAudioFormat(sample_rate: u32, channels: u16, bits_per_sample: u16) void {
     switch (active_backend) {
         .web_ui => {
@@ -767,6 +862,7 @@ pub fn setAudioFormat(sample_rate: u32, channels: u16, bits_per_sample: u16) voi
     }
 }
 
+/// Pushes raw PCM audio data to the active backend for playback.
 pub fn pushAudio(data: []const u8) void {
     switch (active_backend) {
         .web_ui => web_ui.pushAudio(data),
@@ -777,6 +873,7 @@ pub fn pushAudio(data: []const u8) void {
 
 // --- Internal: raw message push (web_ui only, kept for web_ui.zig internal use) ---
 
+/// Pushes a raw JSON message to the web UI backend.
 pub fn pushMessage(json: []const u8) void {
     switch (active_backend) {
         .web_ui => web_ui.pushMessage(json),
@@ -787,8 +884,10 @@ pub fn pushMessage(json: []const u8) void {
 
 // --- Desktop Icons ---
 
+/// Cached JSON representation of desktop icons.
 pub var desktop_icons_json: ?[]const u8 = null;
 
+/// Scans the Desktop directory and sends icon metadata to the web UI.
 pub fn sendDesktopIcons() void {
     if (active_backend != .web_ui) return;
 

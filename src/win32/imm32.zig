@@ -1,8 +1,12 @@
+//! IMM32.dll registration.
+
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
-const w32cc = @import("../calling_convention.zig");
+const w32cc = @import("calling_convention.zig");
 
+/// Registers IMM32.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "imm32.dll";
     try environment.addBuiltinExportComptime(m, "ImmGetContext", stub_ImmGetContext);

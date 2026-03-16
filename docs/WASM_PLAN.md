@@ -112,6 +112,8 @@ preferred_base (from PE OptionalHeader.ImageBase)
      │ Stack (64 KB)        │ ← ESP starts near the top of this region
      ├──────────────────────┤
      │ Thunks (32 KB)       │ ← INT 0xFE stubs (CD FE + 4-byte ID)
+     ├──────────────────────┤
+     │ Heap (32 MB)         │ ← Guest heap for malloc/LocalAlloc
      └──────────────────────┘
 ```
 

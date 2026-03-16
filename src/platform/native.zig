@@ -7,7 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const log = @import("../log.zig");
-const teb = @import("../teb.zig");
+const teb = @import("../win32/teb.zig");
 const trace = @import("../trace.zig");
 const kernel32_error = @import("../win32/kernel32/error.zig");
 
@@ -24,16 +24,19 @@ pub const is_x86_64 = builtin.target.cpu.arch == .x86_64;
 // Threading
 // -------------------------------------------------------------------------
 
+/// Yields execution to the host environment.
 pub fn yield() void {
     std.Thread.yield() catch {};
 }
 
+/// Suspends execution for the specified number of nanoseconds.
 pub fn sleep(ns: u64) void {
     std.Thread.sleep(ns);
 }
 
 pub const Mutex = std.Thread.Mutex;
 
+/// Spawns a new thread. Returns true on success.
 pub fn spawnThread(func: anytype, args: anytype) bool {
     _ = std.Thread.spawn(.{}, func, args) catch return false;
     return true;
@@ -53,6 +56,7 @@ pub fn readExceptionList() u32 {
 // Memory Mapping
 // -------------------------------------------------------------------------
 
+/// Allocates or maps a memory region.
 pub fn mmap(
     hint: ?*anyopaque,
     size: usize,
@@ -107,6 +111,7 @@ pub fn mmap(
     }
 }
 
+/// Unmaps a memory region.
 pub fn munmap(slice: []align(4096) u8) void {
     if (comptime builtin.os.tag == .windows) {
         const os = std.os.windows;
@@ -120,15 +125,18 @@ pub fn munmap(slice: []align(4096) u8) void {
 // Process
 // -------------------------------------------------------------------------
 
+/// Returns the process ID of the current process.
 pub fn getProcessId() u32 {
     // Linux-specific — no cross-platform Zig std equivalent
     return @intCast(std.os.linux.getpid());
 }
 
+/// Terminates the current process with the given exit code.
 pub fn exitProcess(code: u8) noreturn {
     std.process.exit(code);
 }
 
+/// Returns a high-resolution timestamp in nanoseconds.
 pub fn timestamp() i64 {
     return std.time.timestamp();
 }
@@ -142,6 +150,7 @@ pub const StackBounds = struct {
     stack_limit: u32,
 };
 
+/// Returns the bounds of the current thread's stack.
 pub fn getStackBounds(frame_addr: usize) StackBounds {
     // Defaults based on frame address
     var result = StackBounds{
@@ -188,6 +197,7 @@ pub fn getStackBounds(frame_addr: usize) StackBounds {
 // FS Segment Setup (TEB)
 // -------------------------------------------------------------------------
 
+/// Configures the FS segment for the current thread.
 pub fn setupFS(teb_ptr: *anyopaque) !void {
     const arch = builtin.target.cpu.arch;
 
@@ -258,6 +268,7 @@ pub fn setupFS(teb_ptr: *anyopaque) !void {
 // Memory Protection
 // -------------------------------------------------------------------------
 
+/// Changes the protection of a memory region.
 pub fn mprotect(addr: usize, len: usize, readable: bool, writable: bool, executable: bool) void {
     var prot: u32 = 0;
     if (readable) prot |= std.posix.PROT.READ;
@@ -270,10 +281,12 @@ pub fn mprotect(addr: usize, len: usize, readable: bool, writable: bool, executa
 // Pipe / Dup
 // -------------------------------------------------------------------------
 
+/// Creates a unidirectional data channel.
 pub fn pipe() ![2]std.posix.fd_t {
     return std.posix.pipe();
 }
 
+/// Duplicates a file descriptor.
 pub fn dup(fd: std.posix.fd_t) !std.posix.fd_t {
     return std.posix.dup(fd);
 }
@@ -302,6 +315,41 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     const fault_addr = @intFromPtr(info.fields.sigfault.addr);
     const ip: usize = @bitCast(uctx.mcontext.gregs[reg_ip]);
 
+
+    // Handle SIGILL — dispatch through SEH like Wine does.
+    // cpuidsdk's SEH handler catches EXCEPTION_ILLEGAL_INSTRUCTION and sets
+    // EIP/registers appropriately. Only skip directly if no SEH handler exists.
+    if (sig == std.posix.SIG.ILL) {
+        const teb_mod = @import("../win32/teb.zig");
+        var has_seh = false;
+        if (teb_mod.teb_base_addr != 0) {
+            const seh_head = @as(*const u32, @ptrFromInt(teb_mod.teb_base_addr)).*;
+            if (seh_head != 0 and seh_head != 0xFFFFFFFF) has_seh = true;
+        }
+        if (!has_seh) {
+            const seh_fs = readExceptionList();
+            if (seh_fs != 0 and seh_fs != 0xFFFFFFFF) has_seh = true;
+        }
+        if (has_seh) {
+            // Fall through to SEH dispatch below with EXCEPTION_ILLEGAL_INSTRUCTION
+            log.info("AppCompat: SIGILL at 0x{X}, dispatching to SEH", .{ip});
+        } else {
+            // No SEH handler — skip the instruction directly
+            const code = @as([*]const u8, @ptrFromInt(ip));
+            var inst_len: usize = 2;
+            if (code[0] == 0x0F) {
+                if (code[1] == 0x3F) inst_len = 4
+                else if (code[1] == 0x37) inst_len = 2
+                else if (code[1] == 0x01) inst_len = 3;
+            }
+            log.info("AppCompat: SIGILL at 0x{X}, no SEH, skipping {d} bytes", .{ ip, inst_len });
+            uctx.mcontext.gregs[reg_ip] = @bitCast(ip + inst_len);
+            uctx.mcontext.gregs[reg_ax] = 0;
+            uctx.mcontext.gregs[reg_dx] = 0;
+            return;
+        }
+    }
+
     // Handle SIGFPE (divide by zero) in game or native DLL code — skip the instruction
     if (sig == std.posix.SIG.FPE) {
         const code = @as([*]const u8, @ptrFromInt(ip));
@@ -323,13 +371,37 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         return;
     }
 
+    // Handle privileged I/O port instructions (IN/OUT) — skip directly.
+    // These cause #GP on Linux (SIGSEGV). cpuidsdk.dll uses VMware's backdoor
+    // I/O port for detection. Skipping with EAX=0 indicates "not VMware".
+    if (sig == std.posix.SIG.SEGV and ip != 0 and ip < 0xF0000000) {
+        const code = @as([*]const u8, @ptrFromInt(ip));
+        const is_io = switch (code[0]) {
+            0xEC, 0xED, 0xEE, 0xEF => true,
+            0xE4, 0xE5, 0xE6, 0xE7 => true,
+            else => false,
+        };
+        if (is_io) {
+            const ilen: usize = switch (code[0]) {
+                0xE4, 0xE5, 0xE6, 0xE7 => 2,
+                else => 1,
+            };
+            log.info("AppCompat: I/O port at 0x{X}, skipping {d} bytes", .{ ip, ilen });
+            uctx.mcontext.gregs[reg_ip] = @bitCast(ip + ilen);
+            uctx.mcontext.gregs[reg_ax] = 0;
+            return;
+        }
+    }
+    const is_priv_instruction = false;
+
     // Guard: If IP is outside game code range AND outside loaded native DLL ranges,
     // check if it's a near-null jump (bad function pointer call from game code).
     // Native DLLs like MSS32 may legally crash (e.g., null pointer deref) and should
     // fall through to the SEH handler dispatch below.
-    const is_app_code = (ip >= 0x400000 and ip <= 0x700000);
-    const is_native_dll = (ip >= 0x21000000 and ip < 0x30000000) or // MSS32, .asi plugins
-        (ip >= 0x10000000 and ip < 0x20000000); // other DLLs
+    const k32 = @import("../win32/kernel32.zig");
+    const is_app_code = (ip >= k32.app_code_start and ip < k32.app_code_end);
+    const is_native_dll = (ip >= 0x10000000 and ip < 0x30000000) or
+        (ip >= 0xF0000000); // loaded DLLs (may be relocated)
     // Check if IP is within the zine binary's code segment. We use the address
     // of this handler function as a reference point — all Zig-compiled stubs
     // (COM vtable methods, Win32 API stubs) are in the same binary and within
@@ -338,18 +410,18 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     const zine_code_ref = @intFromPtr(&sigsegvHandler);
     const is_zine_code = (ip >= zine_code_ref -| (64 * 1024 * 1024)) and
         (ip < zine_code_ref + (64 * 1024 * 1024));
-    if (ip != 0 and !is_app_code and !is_native_dll and !is_zine_code) {
+    if (ip != 0 and !is_app_code and !is_native_dll and !is_zine_code and sig != std.posix.SIG.ILL) {
         // Bad function pointer call from game code — try to recover
         // This handles both near-null (0x40) and garbage (0xF0EB1210) addresses
         const esp: usize = @bitCast(uctx.mcontext.gregs[reg_sp]);
         if (esp > 0x1000) {
-            const stack = @as([*]const u32, @ptrFromInt(esp));
+            const stack = @as([*]const u32, @ptrFromInt(esp & ~@as(usize, 3)));
             log.warn("AppCompat: Bad IP=0x{X} jump. Stack walk:", .{ip});
             var found_ret: ?u32 = null;
             var found_idx: usize = 0;
             for (0..200) |si| {
                 const val = stack[si];
-                if (val >= 0x401000 and val <= 0x6B0000) {
+                if (val >= k32.app_code_start and val < k32.app_code_end) {
                     if (found_ret == null) {
                         found_ret = val;
                         found_idx = si;
@@ -400,15 +472,15 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         if (esp > 0x1000) {
             // Walk the stack to find the first valid code address
             // App code is in 0x401000-0x6B0000, zine code is in 0x100000-0x300000
-            // App code is in .text section: 0x401000-0x661000
+            // App code is in .text section (bounds from PE loader)
             // (.rdata starts at 0x662000 — must NOT jump there, it's data)
-            const stack = @as([*]const u32, @ptrFromInt(esp));
+            const stack = @as([*]const u32, @ptrFromInt(esp & ~@as(usize, 3)));
             log.warn("AppCompat: EIP=0 fault. Stack walk:", .{});
             var found_ret: ?u32 = null;
             var found_idx: usize = 0;
             for (0..200) |si| {
                 const val = stack[si];
-                if (val >= 0x401000 and val < 0x661000) {
+                if (val >= k32.app_code_start and val < k32.app_code_end) {
                     if (found_ret == null) {
                         found_ret = val;
                         found_idx = si;
@@ -522,157 +594,53 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         }
     }
 
-    // Setup exception record
-    var record: teb.EXCEPTION_RECORD = undefined;
-    record.ExceptionCode = 0xC0000005; // EXCEPTION_ACCESS_VIOLATION
-    record.ExceptionFlags = 0;
-    record.ExceptionRecord = null;
-    record.ExceptionAddress = @truncate(ip);
-    record.NumberParameters = 2;
+    // Instead of calling SEH handlers directly (which corrupts the stack when
+    // they do RtlUnwind/longjmp), redirect execution to RaiseException.
+    // This sets up the exception dispatch in normal context, not signal context.
+    //
+    // Write RaiseException args on the guest stack and set EIP to RaiseException.
+    const exc_code: u32 = if (sig == std.posix.SIG.ILL)
+        0xC000001D // EXCEPTION_ILLEGAL_INSTRUCTION
+    else if (is_priv_instruction)
+        0xC0000096 // EXCEPTION_PRIV_INSTRUCTION
+    else
+        0xC0000005; // EXCEPTION_ACCESS_VIOLATION
 
-    // Get ERR register to determine if read or write
-    const err_reg = uctx.mcontext.gregs[REG.ERR];
-    record.ExceptionInformation[0] = if ((err_reg & 2) != 0) 1 else 0;
-    record.ExceptionInformation[1] = @truncate(fault_addr);
+    // Save hardware context for RaiseException's SEH dispatch
+    const k32_error = @import("../win32/kernel32/error.zig");
+    const raise_addr = @intFromPtr(&k32_error.RaiseException);
 
-    // Setup CONTEXT
-    var context: teb.CONTEXT = undefined;
-    @memset(std.mem.asBytes(&context), 0);
-    context.ContextFlags = 0x10007; // CONTEXT_FULL
-    context.Eax = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_ax])));
-    context.Ecx = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_cx])));
-    context.Edx = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_dx])));
-    context.Ebx = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_bx])));
-    context.Esi = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_si])));
-    context.Edi = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_di])));
-    context.Ebp = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_bp])));
-    context.Esp = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_sp])));
-    context.Eip = @truncate(ip);
-    context.EFlags = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_fl])));
-    if (native_arch == .x86) {
-        context.SegCs = @intCast(uctx.mcontext.gregs[std.os.linux.REG.CS] & 0xFFFF);
-        context.SegDs = @intCast(uctx.mcontext.gregs[std.os.linux.REG.DS] & 0xFFFF);
-        context.SegEs = @intCast(uctx.mcontext.gregs[std.os.linux.REG.ES] & 0xFFFF);
-        context.SegFs = @intCast(uctx.mcontext.gregs[std.os.linux.REG.FS] & 0xFFFF);
-        context.SegGs = @intCast(uctx.mcontext.gregs[std.os.linux.REG.GS] & 0xFFFF);
-        context.SegSs = @intCast(uctx.mcontext.gregs[std.os.linux.REG.SS] & 0xFFFF);
-    }
+    // Fill a static CONTEXT with the faulting register state
+    const hw_ctx = &(struct { var ctx: teb.CONTEXT = undefined; }).ctx;
+    @memset(std.mem.asBytes(hw_ctx), 0);
+    hw_ctx.ContextFlags = 0x10007;
+    hw_ctx.Eax = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_ax])));
+    hw_ctx.Ecx = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_cx])));
+    hw_ctx.Edx = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_dx])));
+    hw_ctx.Ebx = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_bx])));
+    hw_ctx.Esi = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_si])));
+    hw_ctx.Edi = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_di])));
+    hw_ctx.Ebp = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_bp])));
+    hw_ctx.Esp = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_sp])));
+    hw_ctx.Eip = @truncate(ip);
+    hw_ctx.EFlags = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_fl])));
+    k32_error.saved_hw_context = hw_ctx;
 
-    // Detect infinite SEH loops
-    const seh_loop = struct {
-        var last_ip: usize = 0;
-        var repeat_count: u32 = 0;
-    };
-    if (ip == seh_loop.last_ip) {
-        seh_loop.repeat_count += 1;
-        if (seh_loop.repeat_count > 16) {
-            log.fatal("Infinite SEH loop at 0x{X} (fault addr: 0x{X})", .{ ip, fault_addr });
-            std.process.exit(1);
-        }
-    } else {
-        seh_loop.last_ip = ip;
-        seh_loop.repeat_count = 0;
-    }
+    // Push RaiseException args on the guest stack (stdcall: right-to-left)
+    var esp: u32 = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_sp])));
+    esp -= 4; @as(*u32, @ptrFromInt(esp)).* = 0; // lpArguments = NULL
+    esp -= 4; @as(*u32, @ptrFromInt(esp)).* = 0; // nNumberOfArguments = 0
+    esp -= 4; @as(*u32, @ptrFromInt(esp)).* = 0; // dwExceptionFlags = 0
+    esp -= 4; @as(*u32, @ptrFromInt(esp)).* = exc_code; // dwExceptionCode
+    esp -= 4; @as(*u32, @ptrFromInt(esp)).* = @truncate(ip); // fake return address
 
-    // Read SEH chain from FS:0
-    const fs_base: u32 = asm volatile ("movl %%fs:0, %[ret]" : [ret] "=r" (-> u32));
+    // Set signal context to call RaiseException when signal handler returns
+    uctx.mcontext.gregs[reg_sp] = esp;
+    uctx.mcontext.gregs[reg_ip] = @truncate(raise_addr);
 
-    var current_node: u32 = fs_base;
-    while (current_node != 0 and current_node != 0xFFFFFFFF) {
-        const next_ptr = @as(*u32, @ptrFromInt(@as(usize, current_node)));
-        const handler_ptr = @as(*u32, @ptrFromInt(@as(usize, current_node) + 4));
+    if (trace.enable_tracing) trace.print("SEH: Redirecting to RaiseException(code={x}) for exception at 0x{X}\n", .{ exc_code, ip });
+    return;
 
-        const handler_addr = handler_ptr.*;
-        if (handler_addr == 0) {
-            current_node = next_ptr.*;
-            continue;
-        }
-
-        const handler_fn = @as(*const fn (*teb.EXCEPTION_RECORD, u32, *teb.CONTEXT, usize) callconv(.c) u32, @ptrFromInt(@as(usize, handler_addr)));
-
-        if (trace.enable_tracing) trace.print("SEH: Calling handler at 0x{X} for exception at 0x{X}\n", .{handler_addr, ip});
-
-        const disposition = handler_fn(&record, current_node, &context, 0);
-
-        if (disposition == 0) { // ExceptionContinueExecution
-            if (trace.enable_tracing) trace.print("SEH: Handler returned ExceptionContinueExecution. Resuming at 0x{X}\n", .{context.Eip});
-            uctx.mcontext.gregs[reg_ax] = context.Eax;
-            uctx.mcontext.gregs[reg_cx] = context.Ecx;
-            uctx.mcontext.gregs[reg_dx] = context.Edx;
-            uctx.mcontext.gregs[reg_bx] = context.Ebx;
-            uctx.mcontext.gregs[reg_si] = context.Esi;
-            uctx.mcontext.gregs[reg_di] = context.Edi;
-            uctx.mcontext.gregs[reg_bp] = context.Ebp;
-            uctx.mcontext.gregs[reg_sp] = context.Esp;
-            uctx.mcontext.gregs[reg_ip] = context.Eip;
-            uctx.mcontext.gregs[reg_fl] = context.EFlags;
-            return;
-        } else if (disposition == 1) { // ExceptionContinueSearch
-            current_node = next_ptr.*;
-            continue;
-        } else {
-            log.err("Unhandled SEH disposition {d} from handler 0x{X}", .{disposition, handler_ptr.*});
-            std.process.exit(1);
-        }
-    }
-
-    // All SEH handlers returned ExceptionContinueSearch.
-    // Try the top-level exception filter set via SetUnhandledExceptionFilter.
-    if (kernel32_error.unhandled_exception_filter != 0) {
-        // Build EXCEPTION_POINTERS on the stack
-        var exc_ptrs: extern struct {
-            ExceptionRecord: *teb.EXCEPTION_RECORD,
-            ContextRecord: *teb.CONTEXT,
-        } = .{
-            .ExceptionRecord = &record,
-            .ContextRecord = &context,
-        };
-
-        const filter_fn = @as(*const fn (*const anyopaque) callconv(.winapi) i32, @ptrFromInt(kernel32_error.unhandled_exception_filter));
-        if (trace.enable_tracing) trace.print("SEH: Calling top-level exception filter at 0x{X}\n", .{kernel32_error.unhandled_exception_filter});
-        const result = filter_fn(@ptrCast(&exc_ptrs));
-
-        if (result == -1) { // EXCEPTION_CONTINUE_EXECUTION
-            if (trace.enable_tracing) trace.print("SEH: Top-level filter returned CONTINUE_EXECUTION. Resuming at 0x{X}\n", .{context.Eip});
-            uctx.mcontext.gregs[reg_ax] = context.Eax;
-            uctx.mcontext.gregs[reg_cx] = context.Ecx;
-            uctx.mcontext.gregs[reg_dx] = context.Edx;
-            uctx.mcontext.gregs[reg_bx] = context.Ebx;
-            uctx.mcontext.gregs[reg_si] = context.Esi;
-            uctx.mcontext.gregs[reg_di] = context.Edi;
-            uctx.mcontext.gregs[reg_bp] = context.Ebp;
-            uctx.mcontext.gregs[reg_sp] = context.Esp;
-            uctx.mcontext.gregs[reg_ip] = context.Eip;
-            uctx.mcontext.gregs[reg_fl] = context.EFlags;
-            return;
-        }
-        // result == 0 (EXCEPTION_CONTINUE_SEARCH) or 1 (EXCEPTION_EXECUTE_HANDLER)
-        // Fall through to crash report
-    }
-
-    const eax: usize = @bitCast(uctx.mcontext.gregs[reg_ax]);
-    const ecx: usize = @bitCast(uctx.mcontext.gregs[reg_cx]);
-    const edx: usize = @bitCast(uctx.mcontext.gregs[reg_dx]);
-    const ebx: usize = @bitCast(uctx.mcontext.gregs[reg_bx]);
-    const esp: usize = @bitCast(uctx.mcontext.gregs[reg_sp]);
-    const ebp: usize = @bitCast(uctx.mcontext.gregs[reg_bp]);
-    const esi: usize = @bitCast(uctx.mcontext.gregs[reg_si]);
-    const edi: usize = @bitCast(uctx.mcontext.gregs[reg_di]);
-    log.fatal("Unhandled SIGSEGV at 0x{X} (fault addr: 0x{X})", .{ip, fault_addr});
-    log.fatal("  EAX=0x{X} ECX=0x{X} EDX=0x{X} EBX=0x{X}", .{eax, ecx, edx, ebx});
-    log.fatal("  ESP=0x{X} EBP=0x{X} ESI=0x{X} EDI=0x{X}", .{esp, ebp, esi, edi});
-    // Dump stack (return addresses)
-    if (esp > 0x1000) {
-        const stack = @as([*]const u32, @ptrFromInt(esp));
-        var stack_buf: [256]u8 = undefined;
-        var stack_pos: usize = 0;
-        for (0..16) |si| {
-            const written = std.fmt.bufPrint(stack_buf[stack_pos..], "{X} ", .{stack[si]}) catch break;
-            stack_pos += written.len;
-        }
-        log.fatal("  Stack: {s}", .{stack_buf[0..stack_pos]});
-    }
-    std.process.exit(1);
 }
 
 /// Install the SIGSEGV/SIGFPE handler.
@@ -684,6 +652,7 @@ pub fn installSegfaultHandler() void {
     };
     std.posix.sigaction(std.posix.SIG.SEGV, &act, null);
     std.posix.sigaction(std.posix.SIG.FPE, &act, null);
+    std.posix.sigaction(std.posix.SIG.ILL, &act, null);
 }
 
 /// Map the null page for compatibility (may fail due to mmap_min_addr).

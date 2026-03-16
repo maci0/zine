@@ -1,9 +1,11 @@
+//! DirectSound implementation.
 const std = @import("std");
 const env = @import("../../loader/env.zig");
+const ordinals = @import("../ordinals.zig");
 const trace = @import("../../trace.zig");
 const renderer = @import("../../gui/renderer.zig");
-const w32 = @import("../../win32_constants.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32 = @import("../constants.zig");
+const w32cc = @import("../calling_convention.zig");
 
 // --- COM VTables ---
 //
@@ -70,7 +72,7 @@ var audio_playing: bool = false;
 var audio_play_start_ns: i128 = 0;
 var format_sent: bool = false;
 
-// DirectSound volume: hundredths of dB, -10000 (silence) to 0 (full)
+/// DirectSound volume: hundredths of dB, -10000 (silence) to 0 (full).
 pub var dsound_volume: i32 = 0;
 
 var audio_buffer: [262144]u8 = [_]u8{0} ** 262144;
@@ -84,10 +86,9 @@ var global_dsbuffer_primary: IDirectSoundBuffer = undefined;
 var dsound_vtbl: IDirectSoundVtbl = undefined;
 var dsbuffer_vtbl: IDirectSoundBufferVtbl = undefined;
 
-/// Truncate a host pointer to a 32-bit address for COM vtable entries.
-fn ptr32(comptime func: anytype) u32 {
-    return @truncate(@intFromPtr(&func));
-}
+/// Truncate a host pointer to a 32-bit address for COM vtable entries
+/// and register it as a native import with correct param count.
+const comPtr = @import("../../x86/thunks.zig").comPtr;
 
 // --- IDirectSound Implementation ---
 
@@ -218,7 +219,7 @@ fn parseWaveFormat(fmt_addr: u32) void {
     if (fmt.nChannels == 0 or fmt.nChannels > 8 or
         fmt.nSamplesPerSec == 0 or fmt.nSamplesPerSec > 200000 or
         (fmt.wBitsPerSample != 8 and fmt.wBitsPerSample != 16 and
-        fmt.wBitsPerSample != 24 and fmt.wBitsPerSample != 32))
+            fmt.wBitsPerSample != 24 and fmt.wBitsPerSample != 32))
     {
         if (trace.enable_tracing) trace.print("DSOUND:   format INVALID: {d}Hz {d}ch {d}bit — skipping\n", .{ fmt.nSamplesPerSec, fmt.nChannels, fmt.wBitsPerSample });
         return;
@@ -459,49 +460,49 @@ fn dsbuffer_GetVolume(this: usize, plVolume: usize) callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
-// --- Registration ---
-
+/// Registers DSOUND.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
-    const p_dummy: u32 = ptr32(dsound_Dummy);
-    const p_dummy2: u32 = ptr32(dsound_Dummy2);
-    const p_dummy3: u32 = ptr32(dsound_Dummy3);
+    const d1 = comPtr(dsound_Dummy, "IDirectSound::Dummy");
+    const d2 = comPtr(dsound_Dummy2, "IDirectSound::Dummy2");
+    const d3 = comPtr(dsound_Dummy3, "IDirectSound::Dummy3");
 
     dsound_vtbl = .{
-        .QueryInterface = ptr32(dsound_QueryInterface),
-        .AddRef = p_dummy,
-        .Release = p_dummy,
-        .CreateSoundBuffer = ptr32(dsound_CreateSoundBuffer),
-        .GetCaps = ptr32(dsound_GetCaps),
-        .DuplicateSoundBuffer = p_dummy3,
-        .SetCooperativeLevel = ptr32(dsound_SetCooperativeLevel),
-        .Compact = p_dummy,
-        .GetSpeakerConfig = p_dummy2,
-        .SetSpeakerConfig = p_dummy2,
-        .Initialize = p_dummy2,
+        .QueryInterface = comPtr(dsound_QueryInterface, "IDirectSound::QueryInterface"),
+        .AddRef = d1,
+        .Release = d1,
+        .CreateSoundBuffer = comPtr(dsound_CreateSoundBuffer, "IDirectSound::CreateSoundBuffer"),
+        .GetCaps = comPtr(dsound_GetCaps, "IDirectSound::GetCaps"),
+        .DuplicateSoundBuffer = d3,
+        .SetCooperativeLevel = comPtr(dsound_SetCooperativeLevel, "IDirectSound::SetCooperativeLevel"),
+        .Compact = d1,
+        .GetSpeakerConfig = d2,
+        .SetSpeakerConfig = d2,
+        .Initialize = d2,
     };
 
     dsbuffer_vtbl = .{
-        .QueryInterface = p_dummy3,
-        .AddRef = p_dummy,
-        .Release = p_dummy,
-        .GetCaps = ptr32(dsbuffer_GetCaps),
-        .GetCurrentPosition = ptr32(dsbuffer_GetCurrentPosition),
-        .GetFormat = ptr32(dsbuffer_GetFormat),
-        .GetVolume = ptr32(dsbuffer_GetVolume),
-        .GetPan = p_dummy2,
-        .GetFrequency = p_dummy2,
-        .GetStatus = ptr32(dsbuffer_GetStatus),
-        .Initialize = p_dummy3,
-        .Lock = ptr32(dsbuffer_Lock),
-        .Play = ptr32(dsbuffer_Play),
-        .SetCurrentPosition = ptr32(dsbuffer_SetCurrentPosition),
-        .SetFormat = ptr32(dsbuffer_SetFormat),
-        .SetVolume = ptr32(dsbuffer_SetVolume),
-        .SetPan = p_dummy2,
-        .SetFrequency = p_dummy2,
-        .Stop = ptr32(dsbuffer_Stop),
-        .Unlock = ptr32(dsbuffer_Unlock),
-        .Restore = p_dummy,
+        .QueryInterface = d3,
+        .AddRef = d1,
+        .Release = d1,
+        .GetCaps = comPtr(dsbuffer_GetCaps, "IDirectSoundBuffer::GetCaps"),
+        .GetCurrentPosition = comPtr(dsbuffer_GetCurrentPosition, "IDirectSoundBuffer::GetCurrentPosition"),
+        .GetFormat = comPtr(dsbuffer_GetFormat, "IDirectSoundBuffer::GetFormat"),
+        .GetVolume = comPtr(dsbuffer_GetVolume, "IDirectSoundBuffer::GetVolume"),
+        .GetPan = d2,
+        .GetFrequency = d2,
+        .GetStatus = comPtr(dsbuffer_GetStatus, "IDirectSoundBuffer::GetStatus"),
+        .Initialize = d3,
+        .Lock = comPtr(dsbuffer_Lock, "IDirectSoundBuffer::Lock"),
+        .Play = comPtr(dsbuffer_Play, "IDirectSoundBuffer::Play"),
+        .SetCurrentPosition = comPtr(dsbuffer_SetCurrentPosition, "IDirectSoundBuffer::SetCurrentPosition"),
+        .SetFormat = comPtr(dsbuffer_SetFormat, "IDirectSoundBuffer::SetFormat"),
+        .SetVolume = comPtr(dsbuffer_SetVolume, "IDirectSoundBuffer::SetVolume"),
+        .SetPan = d2,
+        .SetFrequency = d2,
+        .Stop = comPtr(dsbuffer_Stop, "IDirectSoundBuffer::Stop"),
+        .Unlock = comPtr(dsbuffer_Unlock, "IDirectSoundBuffer::Unlock"),
+        .Restore = d1,
     };
 
     global_dsound.lpVtbl = @truncate(@intFromPtr(&dsound_vtbl));
@@ -509,7 +510,7 @@ pub fn register(environment: *env.Environment) !void {
     global_dsbuffer_primary.lpVtbl = @truncate(@intFromPtr(&dsbuffer_vtbl));
 
     const builtin_module = "DSOUND.dll";
-    try environment.addBuiltinExportComptime(builtin_module, "ordinal_1", stub_DirectSoundCreate);
+    try environment.addBuiltinExportComptime(builtin_module, ordinals.DSOUND.DirectSoundCreate, stub_DirectSoundCreate);
     try environment.addBuiltinExportComptime(builtin_module, "DirectSoundCreate", stub_DirectSoundCreate);
     try environment.addBuiltinExportComptime(builtin_module, "DirectSoundEnumerateA", stub_DirectSoundEnumerateA);
 

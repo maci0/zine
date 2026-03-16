@@ -4,6 +4,7 @@ pub const BatEnv = struct {
     allocator: std.mem.Allocator,
     env: std.StringHashMap([]const u8),
 
+    /// Initializes a new batch environment.
     pub fn init(allocator: std.mem.Allocator) !BatEnv {
         var self = BatEnv{
             .allocator = allocator,
@@ -23,6 +24,7 @@ pub const BatEnv = struct {
         return self;
     }
 
+    /// Frees all resources associated with the batch environment.
     pub fn deinit(self: *BatEnv) void {
         self.env.deinit();
     }
@@ -90,6 +92,8 @@ pub const BatEnv = struct {
         return try out.toOwnedSlice(self.allocator);
     }
 
+    /// Parses a Windows batch file and returns the final command to execute.
+    /// This is a simplified interpreter that handles SET and CALL.
     pub fn parseFile(self: *BatEnv, bat_path: []const u8, args: [][]const u8) !?[][]const u8 {
         var open_path = bat_path;
         if (open_path.len >= 2 and open_path[1] == ':' and std.ascii.isAlphabetic(open_path[0])) {
@@ -219,6 +223,7 @@ pub const BatEnv = struct {
         return null;
     }
 
+    /// Builds an environment vector (envp) from the current batch environment.
     pub fn buildEnvp(self: *BatEnv) !?[*]?[*:0]u8 {
         var envp_list: std.ArrayList(?[*:0]u8) = .{};
         var it = self.env.iterator();

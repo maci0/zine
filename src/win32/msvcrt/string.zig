@@ -3,14 +3,17 @@ const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
 const io = @import("io.zig");
 
-
+/// strlen
+/// Implementation status: Partially implemented
 pub fn strlen(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const len = trace.c_span(str_ptr).len;
-    if (trace.enable_tracing) trace.print("MSVCRT: strlen('{s}') -> {d}\n", .{trace.c_span(str_ptr)[0..len], len});
+    if (trace.enable_tracing) trace.print("MSVCRT: strlen('{s}') -> {d}\n", .{ trace.c_span(str_ptr)[0..len], len });
     return len;
 }
 
+/// strcpy
+/// Implementation status: Partially implemented
 pub fn strcpy(dest_ptr: usize, src_ptr: usize) callconv(.c) usize {
     if (dest_ptr == 0 or src_ptr == 0) return dest_ptr;
     const dest = @as([*]u8, @ptrFromInt(trace.addr(dest_ptr)));
@@ -24,12 +27,14 @@ pub fn strcpy(dest_ptr: usize, src_ptr: usize) callconv(.c) usize {
     return dest_ptr;
 }
 
+/// strncpy
+/// Implementation status: Partially implemented
 pub fn strncpy(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
     if (dest_ptr == 0 or src_ptr == 0 or count == 0) return dest_ptr;
     const dest = @as([*]u8, @ptrFromInt(trace.addr(dest_ptr)));
     const src = @as([*]const u8, @ptrFromInt(trace.addr(src_ptr)));
     if (trace.enable_tracing) trace.print("MSVCRT: strncpy(count={d})\n", .{count});
-    
+
     var i: usize = 0;
     while (i < count and src[i] != 0) : (i += 1) {
         dest[i] = src[i];
@@ -40,6 +45,8 @@ pub fn strncpy(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize
     return dest_ptr;
 }
 
+/// strcat
+/// Implementation status: Partially implemented
 pub fn strcat(dest_ptr: usize, src_ptr: usize) callconv(.c) usize {
     if (dest_ptr == 0 or src_ptr == 0) return dest_ptr;
     const dest = @as([*]u8, @ptrFromInt(trace.addr(dest_ptr)));
@@ -56,6 +63,8 @@ pub fn strcat(dest_ptr: usize, src_ptr: usize) callconv(.c) usize {
     return dest_ptr;
 }
 
+/// strcmp
+/// Implementation status: Partially implemented
 pub fn strcmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
     const s1 = @as([*]const u8, @ptrFromInt(trace.addr(s1_ptr)));
@@ -65,6 +74,8 @@ pub fn strcmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
+/// strncmp
+/// Implementation status: Partially implemented
 pub fn strncmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0 or count == 0) return 0;
     const s1 = @as([*]const u8, @ptrFromInt(trace.addr(s1_ptr)));
@@ -75,6 +86,8 @@ pub fn strncmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
+/// stricmp
+/// Implementation status: Partially implemented
 pub fn stricmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
     const s1 = trace.c_span(s1_ptr);
@@ -104,6 +117,8 @@ pub fn stricmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     return ret;
 }
 
+/// mbsicmp
+/// Implementation status: Partially implemented
 pub fn mbsicmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
     const s1 = trace.c_span(s1_ptr);
@@ -120,6 +135,8 @@ pub fn mbsicmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     return ret;
 }
 
+/// strnicmp
+/// Implementation status: Partially implemented
 pub fn strnicmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0 or count == 0) return 0;
     const s1 = trace.c_span(s1_ptr);
@@ -136,6 +153,8 @@ pub fn strnicmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     return 0;
 }
 
+/// strchr
+/// Implementation status: Partially implemented
 pub fn strchr(s_ptr: usize, c: i32) callconv(.c) usize {
     if (s_ptr == 0) return 0;
     const target = @as(u8, @intCast(c & 0xFF));
@@ -145,6 +164,8 @@ pub fn strchr(s_ptr: usize, c: i32) callconv(.c) usize {
     return 0;
 }
 
+/// strrchr
+/// Implementation status: Partially implemented
 pub fn strrchr(str_ptr: usize, c: i32) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const target = @as(u8, @intCast(c & 0xFF));
@@ -154,6 +175,8 @@ pub fn strrchr(str_ptr: usize, c: i32) callconv(.c) usize {
     return 0;
 }
 
+/// strstr
+/// Implementation status: Partially implemented
 pub fn strstr(str_ptr: usize, substr_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0 or substr_ptr == 0) return 0;
     const str = trace.c_span(str_ptr);
@@ -163,6 +186,8 @@ pub fn strstr(str_ptr: usize, substr_ptr: usize) callconv(.c) usize {
     return 0;
 }
 
+/// strpbrk
+/// Implementation status: Partially implemented
 pub fn strpbrk(s1_ptr: usize, s2_ptr: usize) callconv(.c) ?*anyopaque {
     if (s1_ptr == 0 or s2_ptr == 0) return null;
     const s1 = trace.c_span(s1_ptr);
@@ -171,6 +196,8 @@ pub fn strpbrk(s1_ptr: usize, s2_ptr: usize) callconv(.c) ?*anyopaque {
     return null;
 }
 
+/// strcspn
+/// Implementation status: Partially implemented
 pub fn strcspn(s1_ptr: usize, s2_ptr: usize) callconv(.c) usize {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
     const s1 = trace.c_span(s1_ptr);
@@ -178,10 +205,12 @@ pub fn strcspn(s1_ptr: usize, s2_ptr: usize) callconv(.c) usize {
     return std.mem.indexOfAny(u8, s1, s2) orelse s1.len;
 }
 
+/// strdup
+/// Implementation status: Partially implemented
 pub fn strdup(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const s = trace.c_span(str_ptr);
-    const stub_common = @import("../stub_common.zig");
+    const stub_common = @import("../shared.zig");
     const raw = stub_common.raw_alloc(s.len + 1) orelse return 0;
     const ptr = @as([*]u8, @ptrCast(raw));
     @memcpy(ptr[0..s.len], s);
@@ -189,12 +218,14 @@ pub fn strdup(str_ptr: usize) callconv(.c) usize {
     return @intFromPtr(raw);
 }
 
+/// wcsdup
+/// Implementation status: Partially implemented
 pub fn wcsdup(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const str = @as([*]const u16, @ptrFromInt(trace.addr(str_ptr)));
     const len = std.mem.indexOfScalar(u16, str[0..65536], 0) orelse 0;
-    
-    const stub_common = @import("../stub_common.zig");
+
+    const stub_common = @import("../shared.zig");
     const raw = stub_common.raw_alloc((len + 1) * 2) orelse return 0;
     const ptr = @as([*]u16, @ptrCast(@alignCast(raw)));
     @memcpy(ptr[0..len], str[0..len]);
@@ -202,8 +233,10 @@ pub fn wcsdup(str_ptr: usize) callconv(.c) usize {
     return @intFromPtr(raw);
 }
 
+/// itoa
+/// Implementation status: Partially implemented
 pub fn itoa(value: i32, buffer_ptr: usize, radix: i32) callconv(.c) usize {
-    if (trace.enable_tracing) trace.print("MSVCRT: _itoa(value={d}, buf={x}, radix={d})\n", .{value, buffer_ptr, radix});
+    if (trace.enable_tracing) trace.print("MSVCRT: _itoa(value={d}, buf={x}, radix={d})\n", .{ value, buffer_ptr, radix });
     if (buffer_ptr == 0) return 0;
     const buffer = @as([*]u8, @ptrFromInt(trace.addr(buffer_ptr)));
     const slice = buffer[0..33];
@@ -216,6 +249,8 @@ pub fn itoa(value: i32, buffer_ptr: usize, radix: i32) callconv(.c) usize {
     return buffer_ptr;
 }
 
+/// strtoul
+/// Implementation status: Partially implemented
 pub fn strtoul(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) u32 {
     if (str_ptr == 0) return 0;
     const str = @as([*:0]const u8, @ptrFromInt(trace.addr(str_ptr)));
@@ -247,30 +282,34 @@ pub fn strtoul(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) u32 {
     }
     if (end_ptr != 0) @as(*usize, @ptrFromInt(trace.addr(end_ptr))).* = if (parsed) str_ptr + i else str_ptr;
     const final_val = if (sign == -1) ~val +% 1 else val;
-    if (trace.enable_tracing) trace.print("MSVCRT: strtoul('{s}', {d}) -> {d}\n", .{trace.c_span(str_ptr), radix, final_val});
+    if (trace.enable_tracing) trace.print("MSVCRT: strtoul('{s}', {d}) -> {d}\n", .{ trace.c_span(str_ptr), radix, final_val });
     return final_val;
 }
 
+/// strtol
+/// Implementation status: Partially implemented
 pub fn strtol(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) i32 {
     const val = @as(i32, @bitCast(strtoul(str_ptr, end_ptr, radix)));
     if (trace.enable_tracing) {
-        trace.print("MSVCRT: strtol('{s}', {d}) -> {d}\n", .{trace.c_span(str_ptr), radix, val});
+        trace.print("MSVCRT: strtol('{s}', {d}) -> {d}\n", .{ trace.c_span(str_ptr), radix, val });
     }
     return val;
 }
 
+/// atoi
+/// Implementation status: Partially implemented
 pub fn atoi(str_ptr: usize) callconv(.c) i32 {
     const val = @as(i32, @bitCast(strtoul(str_ptr, 0, 10)));
     if (trace.enable_tracing) {
         if (str_ptr != 0) {
-            trace.print("MSVCRT: atoi('{s}') -> {d}\n", .{trace.c_span(str_ptr), val});
+            trace.print("MSVCRT: atoi('{s}') -> {d}\n", .{ trace.c_span(str_ptr), val });
         }
     }
     return val;
 }
 
-// --- Wide String ---
-
+/// --- Wide String ---
+/// Implementation status: Partially implemented
 pub fn wcslen(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const str = @as([*]const u16, @ptrFromInt(trace.addr(str_ptr)));
@@ -278,6 +317,8 @@ pub fn wcslen(str_ptr: usize) callconv(.c) usize {
     return len;
 }
 
+/// wcsupr
+/// Implementation status: Partially implemented
 pub fn wcsupr(str_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const str = @as([*]u16, @ptrFromInt(trace.addr(str_ptr)));
@@ -288,6 +329,8 @@ pub fn wcsupr(str_ptr: usize) callconv(.c) usize {
     return str_ptr;
 }
 
+/// wcscpy
+/// Implementation status: Partially implemented
 pub fn wcscpy(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
     log_wcs("wcscpy src: ", src_ptr);
     if (dst_ptr == 0 or src_ptr == 0) return dst_ptr;
@@ -302,6 +345,8 @@ pub fn wcscpy(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
     return dst_ptr;
 }
 
+/// wcsncpy
+/// Implementation status: Partially implemented
 pub fn wcsncpy(dst_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
     if (dst_ptr == 0 or src_ptr == 0) return dst_ptr;
     const dst = @as([*]u16, @ptrFromInt(trace.addr(dst_ptr)));
@@ -317,6 +362,8 @@ pub fn wcsncpy(dst_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize 
     return dst_ptr;
 }
 
+/// wcscat
+/// Implementation status: Partially implemented
 pub fn wcscat(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
     if (dst_ptr == 0 or src_ptr == 0) return dst_ptr;
     const dst = @as([*]u16, @ptrFromInt(trace.addr(dst_ptr)));
@@ -333,6 +380,8 @@ pub fn wcscat(dst_ptr: usize, src_ptr: usize) callconv(.c) usize {
     return dst_ptr;
 }
 
+/// wcscmp
+/// Implementation status: Partially implemented
 pub fn wcscmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
     const s1 = @as([*]const u16, @ptrFromInt(trace.addr(s1_ptr)));
@@ -342,6 +391,8 @@ pub fn wcscmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
+/// wcsncmp
+/// Implementation status: Partially implemented
 pub fn wcsncmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0 or count == 0) return 0;
     const s1 = @as([*]const u16, @ptrFromInt(trace.addr(s1_ptr)));
@@ -352,6 +403,8 @@ pub fn wcsncmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
+/// wcsicmp
+/// Implementation status: Partially implemented
 pub fn wcsicmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
     const s1 = @as([*]const u16, @ptrFromInt(trace.addr(s1_ptr)));
@@ -365,6 +418,8 @@ pub fn wcsicmp(s1_ptr: usize, s2_ptr: usize) callconv(.c) i32 {
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
+/// wcsnicmp
+/// Implementation status: Partially implemented
 pub fn wcsnicmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     if (s1_ptr == 0 or s2_ptr == 0 or count == 0) return 0;
     const s1 = @as([*]const u16, @ptrFromInt(trace.addr(s1_ptr)));
@@ -379,6 +434,8 @@ pub fn wcsnicmp(s1_ptr: usize, s2_ptr: usize, count: usize) callconv(.c) i32 {
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
+/// wcschr
+/// Implementation status: Partially implemented
 pub fn wcschr(str_ptr: usize, c: i32) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const target = @as(u16, @intCast(c & 0xFFFF));
@@ -388,6 +445,8 @@ pub fn wcschr(str_ptr: usize, c: i32) callconv(.c) usize {
     return 0;
 }
 
+/// wcsrchr
+/// Implementation status: Partially implemented
 pub fn wcsrchr(str_ptr: usize, c: i32) callconv(.c) usize {
     if (str_ptr == 0) return 0;
     const target = @as(u16, @intCast(c & 0xFFFF));
@@ -397,6 +456,8 @@ pub fn wcsrchr(str_ptr: usize, c: i32) callconv(.c) usize {
     return 0;
 }
 
+/// wcsstr
+/// Implementation status: Partially implemented
 pub fn wcsstr(str_ptr: usize, substr_ptr: usize) callconv(.c) usize {
     if (str_ptr == 0 or substr_ptr == 0) return 0;
     const str = trace.c_span_w(str_ptr);
@@ -411,6 +472,8 @@ pub fn wcsstr(str_ptr: usize, substr_ptr: usize) callconv(.c) usize {
     return 0;
 }
 
+/// wcstol
+/// Implementation status: Partially implemented
 pub fn wcstol(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) i32 {
     if (str_ptr == 0) return 0;
     const str = @as([*]const u16, @ptrFromInt(trace.addr(str_ptr)));
@@ -442,6 +505,8 @@ pub fn wcstol(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) i32 {
     return val * sign;
 }
 
+/// wtoi
+/// Implementation status: Partially implemented
 pub fn wtoi(str_ptr: usize) callconv(.c) i32 {
     if (str_ptr == 0) return 0;
     const str = @as([*]const u16, @ptrFromInt(trace.addr(str_ptr)));
@@ -460,53 +525,54 @@ pub fn wtoi(str_ptr: usize) callconv(.c) i32 {
     return val * sign;
 }
 
-
-
-
+/// init_pctype
+/// Implementation status: Partially implemented
 pub fn init_pctype() void {
     const pctype_data = [_]u16{
-        0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0028, 0x0028, 0x0028, 0x0028, 0x0028, 0x0020, 0x0020, 
-        0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 
-        0x0048, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 
-        0x0084, 0x0084, 0x0084, 0x0084, 0x0084, 0x0084, 0x0084, 0x0084, 0x0084, 0x0084, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 
-        0x0010, 0x0081, 0x0081, 0x0081, 0x0081, 0x0081, 0x0081, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 
-        0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 
-        0x0010, 0x0082, 0x0082, 0x0082, 0x0082, 0x0082, 0x0082, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 
-        0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0010, 0x0010, 0x0010, 0x0010, 0x0020, 
-        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 
-        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 
-        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 
-        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 
-        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 
-        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 
-        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 
-        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 
+        0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0028, 0x0028, 0x0028, 0x0028, 0x0028, 0x0020, 0x0020,
+        0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020,
+        0x0048, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010,
+        0x0084, 0x0084, 0x0084, 0x0084, 0x0084, 0x0084, 0x0084, 0x0084, 0x0084, 0x0084, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010,
+        0x0010, 0x0081, 0x0081, 0x0081, 0x0081, 0x0081, 0x0081, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001,
+        0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0010, 0x0010, 0x0010, 0x0010, 0x0010,
+        0x0010, 0x0082, 0x0082, 0x0082, 0x0082, 0x0082, 0x0082, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002,
+        0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0010, 0x0010, 0x0010, 0x0010, 0x0020,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
     };
     msvcrt.msvcrt_pctype[0] = 0; // EOF
     @memcpy(msvcrt.msvcrt_pctype[1..257], pctype_data[0..256]);
 
     const mbctype_data = [_]u8{
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-        0x00, 0x00, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 
-        0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00, 0x00, 0x00, 0x00, 
-        0x00, 0x00, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 
-        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0x00, 0x00, 0x00, 
-        0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x10, 0x00, 0x10, 
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x20, 0x00, 0x20, 
-        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 
-        0x00, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 
-        0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 
-        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 
-        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10,
+        0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x10, 0x00, 0x10,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x20, 0x00, 0x20,
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10,
+        0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
     };
     msvcrt.msvcrt_mbctype[0] = 0; // EOF
     @memcpy(msvcrt.msvcrt_mbctype[1..257], mbctype_data[0..256]);
 }
 
+/// p_pctype
+/// Implementation status: Partially implemented
 pub fn p_pctype() callconv(.c) *?*u16 {
     const static = struct {
         var p: ?*u16 = null;
@@ -515,6 +581,8 @@ pub fn p_pctype() callconv(.c) *?*u16 {
     return @ptrCast(@constCast(&static.p));
 }
 
+/// isalnum
+/// Implementation status: Partially implemented
 pub fn isalnum(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
@@ -523,16 +591,20 @@ pub fn isalnum(c: i32) callconv(.c) i32 {
     return 0;
 }
 
+/// isalpha
+/// Implementation status: Partially implemented
 pub fn isalpha(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         const res = msvcrt.msvcrt_pctype[index] & 0x0103; // _ALPHA | _UPPER | _LOWER
-        if (trace.enable_tracing) trace.print("MSVCRT: isalpha({d}) -> {x}\n", .{c, res});
+        if (trace.enable_tracing) trace.print("MSVCRT: isalpha({d}) -> {x}\n", .{ c, res });
         return res;
     }
     return 0;
 }
 
+/// isdigit
+/// Implementation status: Partially implemented
 pub fn isdigit(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
@@ -541,6 +613,8 @@ pub fn isdigit(c: i32) callconv(.c) i32 {
     return 0;
 }
 
+/// isupper
+/// Implementation status: Partially implemented
 pub fn isupper(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
@@ -549,6 +623,8 @@ pub fn isupper(c: i32) callconv(.c) i32 {
     return 0;
 }
 
+/// islower
+/// Implementation status: Partially implemented
 pub fn islower(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
@@ -557,16 +633,20 @@ pub fn islower(c: i32) callconv(.c) i32 {
     return 0;
 }
 
+/// isspace
+/// Implementation status: Partially implemented
 pub fn isspace(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         const res = msvcrt.msvcrt_pctype[index] & 0x0008; // _SPACE
-        if (trace.enable_tracing) trace.print("MSVCRT: isspace({d}) -> {x}\n", .{c, res});
+        if (trace.enable_tracing) trace.print("MSVCRT: isspace({d}) -> {x}\n", .{ c, res });
         return res;
     }
     return 0;
 }
 
+/// isxdigit
+/// Implementation status: Partially implemented
 pub fn isxdigit(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
@@ -575,6 +655,8 @@ pub fn isxdigit(c: i32) callconv(.c) i32 {
     return 0;
 }
 
+/// isprint
+/// Implementation status: Partially implemented
 pub fn isprint(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
@@ -583,6 +665,8 @@ pub fn isprint(c: i32) callconv(.c) i32 {
     return 0;
 }
 
+/// ispunct
+/// Implementation status: Partially implemented
 pub fn ispunct(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
@@ -591,6 +675,8 @@ pub fn ispunct(c: i32) callconv(.c) i32 {
     return 0;
 }
 
+/// isctype
+/// Implementation status: Partially implemented
 pub fn isctype(c: i32, mask: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
@@ -599,66 +685,86 @@ pub fn isctype(c: i32, mask: i32) callconv(.c) i32 {
     return 0;
 }
 
+/// tolower
+/// Implementation status: Partially implemented
 pub fn tolower(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
     if (v <= 255) return std.ascii.toLower(@intCast(v));
     return v;
 }
 
+/// toupper
+/// Implementation status: Partially implemented
 pub fn toupper(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
     if (v <= 255) return std.ascii.toUpper(@intCast(v));
     return v;
 }
 
+/// iswctype
+/// Implementation status: Partially implemented
 pub fn iswctype(c: i32, desc: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         const res = if ((msvcrt.msvcrt_pctype[index] & @as(u16, @intCast(desc & 0xFFFF))) != 0) @as(i32, 1) else @as(i32, 0);
-        if (trace.enable_tracing) trace.print("MSVCRT: iswctype({d}, {x}) -> {d}\n", .{c, desc, res});
+        if (trace.enable_tracing) trace.print("MSVCRT: iswctype({d}, {x}) -> {d}\n", .{ c, desc, res });
         return res;
     }
-    if (trace.enable_tracing) trace.print("MSVCRT: iswctype({d}, {x}) -> 0 (out of bounds)\n", .{c, desc});
+    if (trace.enable_tracing) trace.print("MSVCRT: iswctype({d}, {x}) -> 0 (out of bounds)\n", .{ c, desc });
     return 0;
 }
 
+/// towupper
+/// Implementation status: Partially implemented
 pub fn towupper(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
     if (v <= 255) return std.ascii.toUpper(@intCast(v));
     return v;
 }
 
+/// towlower
+/// Implementation status: Partially implemented
 pub fn towlower(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
     if (v <= 255) return std.ascii.toLower(@intCast(v));
     return v;
 }
 
+/// ismbcspace
+/// Implementation status: Partially implemented
 pub fn ismbcspace(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
     return if (v == ' ' or v == '\t' or v == '\n' or v == '\r' or v == 0x0B or v == 0x0C) 1 else 0;
 }
 
+/// mbsinc
+/// Implementation status: Partially implemented
 pub fn mbsinc(str_ptr: usize) callconv(.c) usize {
     return if (str_ptr == 0) 0 else str_ptr + 1;
 }
 
+/// mbccpy
+/// Implementation status: Partially implemented
 pub fn mbccpy(dest: usize, src: usize) callconv(.c) void {
     if (dest != 0 and src != 0) @as([*]u8, @ptrFromInt(trace.addr(dest)))[0] = @as([*]const u8, @ptrFromInt(trace.addr(src)))[0];
 }
 
+/// mbclen
+/// Implementation status: Partially implemented
 pub fn mbclen(c_ptr: usize) callconv(.c) usize {
     return if (c_ptr == 0) 0 else 1;
 }
 
+/// mbsdec
+/// Implementation status: Partially implemented
 pub fn mbsdec(start: usize, current: usize) callconv(.c) usize {
     if (start == 0 or current <= start) return 0;
-    if (trace.enable_tracing) trace.print("MSVCRT: _mbsdec(start={x}, current={x}) -> {x}\n", .{start, current, current - 1});
+    if (trace.enable_tracing) trace.print("MSVCRT: _mbsdec(start={x}, current={x}) -> {x}\n", .{ start, current, current - 1 });
     return current - 1;
 }
 
-// --- Setjmp / Longjmp ---
-
+/// --- Setjmp / Longjmp ---
+/// Implementation status: Partially implemented
 pub fn log_wcs(prefix: []const u8, str_ptr: usize) void {
     if (!trace.enable_tracing) return;
     trace.print("{s}(ptr=0x{x}) ", .{ prefix, str_ptr });
@@ -675,12 +781,18 @@ pub fn log_wcs(prefix: []const u8, str_ptr: usize) void {
     trace.print("\n", .{});
 }
 
-// --- Generic Stubs ---
-
+/// --- Generic Stubs ---
+/// Implementation status: Partially implemented
 pub fn iscntrl(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
         const index = @as(usize, @intCast(c + 1));
         return msvcrt.msvcrt_pctype[index] & 0x0020; // _CONTROL
     }
     return 0;
+}
+
+pub fn atof(str_ptr: usize) callconv(.c) f64 {
+    if (str_ptr == 0) return 0.0;
+    const s = @import("../../trace.zig").c_span(str_ptr);
+    return std.fmt.parseFloat(f64, s) catch 0.0;
 }

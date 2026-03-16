@@ -1,6 +1,7 @@
+//! DirectInput implementation for keyboard and mouse.
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 
 // --- DirectInput GUID constants (Data1 field) ---
 const GUID_SysMouse: u32 = 0x6F1D2B60;
@@ -8,10 +9,12 @@ const GUID_SysKeyboard: u32 = 0x6F1D2B61;
 
 // --- COM VTables ---
 
+/// IDirectInput interface.
 pub const IDirectInput = extern struct {
     lpVtbl: *const IDirectInputVtbl,
 };
 
+/// IDirectInput vtable.
 pub const IDirectInputVtbl = extern struct {
     QueryInterface: *const fn (*anyopaque, usize, *?*anyopaque) callconv(w32cc.WINAPI) i32,
     AddRef: *const fn (*IDirectInput) callconv(w32cc.WINAPI) u32,
@@ -23,11 +26,12 @@ pub const IDirectInputVtbl = extern struct {
     Initialize: *const fn (*IDirectInput, usize, u32) callconv(w32cc.WINAPI) i32,
 };
 
+/// IDirectInputDevice interface.
 pub const IDirectInputDevice = extern struct {
     lpVtbl: *const IDirectInputDeviceVtbl,
 };
 
-// IDirectInputDevice8 vtable — matches real DirectX SDK layout exactly
+/// IDirectInputDevice vtable — matches real DirectX SDK layout exactly.
 pub const IDirectInputDeviceVtbl = extern struct {
     // IUnknown
     QueryInterface: *const fn (*anyopaque, usize, *?*anyopaque) callconv(w32cc.WINAPI) i32,
@@ -68,24 +72,28 @@ pub const IDirectInputDeviceVtbl = extern struct {
     GetImageInfo: *const fn (*IDirectInputDevice, usize) callconv(w32cc.WINAPI) i32,
 };
 
-// ============================================================================
-// Event Ring Buffer (matches DIDEVICEOBJECTDATA layout)
-// ============================================================================
-
+/// DirectInput device object data.
 pub const DIDEVICEOBJECTDATA = extern struct {
-    dwOfs: u32, // Scancode offset or axis offset
-    dwData: u32, // Key state (0x80=down, 0x00=up) or axis delta
-    dwTimeStamp: u32, // Timestamp in ms
-    dwSequence: u32, // Global sequence number
+    /// Scancode offset or axis offset.
+    dwOfs: u32,
+    /// Key state (0x80=down, 0x00=up) or axis delta.
+    dwData: u32,
+    /// Timestamp in ms.
+    dwTimeStamp: u32,
+    /// Global sequence number.
+    dwSequence: u32,
 };
 
 const EVENT_BUFFER_SIZE = 128;
 
+/// Ring buffer for input events.
 pub const EventRingBuffer = struct {
     events: [EVENT_BUFFER_SIZE]DIDEVICEOBJECTDATA = undefined,
     head: u32 = 0,
     tail: u32 = 0, // head == tail means empty
 
+    /// Push an event onto the buffer.
+    /// Implementation status: Partially implemented
     pub fn push(self: *EventRingBuffer, evt: DIDEVICEOBJECTDATA) void {
         const next_head = (self.head + 1) % EVENT_BUFFER_SIZE;
         if (next_head == self.tail) {
@@ -96,6 +104,8 @@ pub const EventRingBuffer = struct {
         self.head = next_head;
     }
 
+    /// Return the number of events in the buffer.
+    /// Implementation status: Partially implemented
     pub fn count(self: *const EventRingBuffer) u32 {
         if (self.head >= self.tail) {
             return self.head - self.tail;
@@ -104,6 +114,8 @@ pub const EventRingBuffer = struct {
         }
     }
 
+    /// Drain events from the buffer.
+    /// Implementation status: Partially implemented
     pub fn drain(self: *EventRingBuffer, out: [*]DIDEVICEOBJECTDATA, max_items: u32, peek: bool) u32 {
         var n: u32 = 0;
         var pos = self.tail;
@@ -118,6 +130,8 @@ pub const EventRingBuffer = struct {
         return n;
     }
 
+    /// Flush the buffer.
+    /// Implementation status: Partially implemented
     pub fn flush(self: *EventRingBuffer) void {
         self.tail = self.head;
     }
@@ -126,17 +140,15 @@ pub const EventRingBuffer = struct {
 // Global sequence counter for event ordering
 var global_sequence: u32 = 0;
 
-// Event buffers
+/// Global keyboard event buffer.
 pub var keyboard_events: EventRingBuffer = .{};
+/// Global mouse event buffer.
 pub var mouse_events: EventRingBuffer = .{};
-
-// ============================================================================
-// Public API: Push events from renderer/WebUI
-// ============================================================================
 
 /// Push a keyboard event into the DirectInput buffer.
 /// scancode: DirectInput scancode (DIK_xxx), e.g. DIK_ESCAPE=0x01
 /// pressed: true for key down, false for key up
+/// Implementation status: Partially implemented
 pub fn pushKeyEvent(scancode: u8, pressed: bool) void {
     global_sequence += 1;
     keyboard_events.push(.{
@@ -151,6 +163,7 @@ pub fn pushKeyEvent(scancode: u8, pressed: bool) void {
 /// Push a mouse event into the DirectInput buffer.
 /// dwOfs: DIMOFS_X(0), DIMOFS_Y(4), DIMOFS_Z(8), DIMOFS_BUTTON0(12), etc.
 /// dwData: axis delta or button state (0x80=down, 0x00=up)
+/// Implementation status: Partially implemented
 pub fn pushMouseEvent(dwOfs: u32, dwData: u32) void {
     global_sequence += 1;
     mouse_events.push(.{
@@ -167,19 +180,19 @@ fn getTickCount() u32 {
     return @truncate(@as(u64, @bitCast(@as(i64, ms))));
 }
 
-// ============================================================================
-// Device State
-// ============================================================================
-
+/// Global IDirectInput instance.
 pub var global_dinput: IDirectInput = undefined;
 
-// Separate device instances for keyboard and mouse
+/// Global keyboard IDirectInputDevice instance.
 pub var keyboard_device: IDirectInputDevice = undefined;
+/// Global mouse IDirectInputDevice instance.
 pub var mouse_device: IDirectInputDevice = undefined;
 
-// Track which device type each instance is (set by SetDataFormat or CreateDevice GUID)
+/// DirectInput device types.
 pub const DeviceType = enum { unknown, keyboard, mouse };
+/// Current keyboard device type.
 pub var keyboard_device_type: DeviceType = .unknown;
+/// Current mouse device type.
 pub var mouse_device_type: DeviceType = .unknown;
 
 fn getDeviceType(this: *IDirectInputDevice) DeviceType {
@@ -315,8 +328,8 @@ fn device_Unacquire(this: *IDirectInputDevice) callconv(w32cc.WINAPI) i32 {
 }
 
 /// DIMOUSESTATE layout (16 bytes):
-///   i32 lX, lY, lZ;
-///   u8  rgbButtons[4];
+/// i32 lX, lY, lZ;
+/// u8  rgbButtons[4];
 const DIMOUSESTATE = extern struct {
     lX: i32,
     lY: i32,
@@ -506,9 +519,13 @@ fn device_GetImageInfo(_: *IDirectInputDevice, _: usize) callconv(w32cc.WINAPI) 
 // VTable Initialization
 // ============================================================================
 
+/// IDirectInputDevice vtable instance.
 pub var device_vtbl: IDirectInputDeviceVtbl = undefined;
+/// IDirectInput vtable instance.
 pub var dinput_vtbl: IDirectInputVtbl = undefined;
 
+/// Initialize DirectInput vtables.
+/// Implementation status: Partially implemented
 pub fn initVtables() void {
     device_vtbl = .{
         .QueryInterface = @ptrCast(&device_QueryInterface),
@@ -561,28 +578,25 @@ pub fn initVtables() void {
     mouse_device.lpVtbl = &device_vtbl;
 }
 
-// ============================================================================
-// Exported entry points (DLL stubs)
-// ============================================================================
-
+/// DirectInputCreateA exported entry point.
+/// Implementation status: Stub
 pub fn stub_DirectInputCreateA(_: usize, _: u32, ppDI: *?*IDirectInput, _: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("DINPUT: DirectInputCreateA\n", .{});
     ppDI.* = &global_dinput;
     return 0; // DI_OK
 }
 
+/// DirectInput8Create exported entry point.
+/// Implementation status: Stub
 pub fn stub_DirectInput8Create(_: usize, _: u32, _: usize, ppvOut: *?*IDirectInput, _: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("DINPUT8: DirectInput8Create\n", .{});
     ppvOut.* = &global_dinput;
     return 0; // DI_OK
 }
 
-// ============================================================================
-// VK to DirectInput Scancode mapping
-// ============================================================================
-
 /// Map a Windows Virtual Key code to a DirectInput keyboard scancode (DIK_xxx).
 /// Returns 0 if no mapping exists.
+/// Implementation status: Partially implemented
 pub fn vkToDIK(vk: usize) u8 {
     return switch (vk) {
         0x1B => 0x01, // VK_ESCAPE -> DIK_ESCAPE

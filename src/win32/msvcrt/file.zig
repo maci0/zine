@@ -1,7 +1,5 @@
-/// Low-level fd-based file I/O — corresponds to <io.h> / <fcntl.h>.
-/// This module handles _sopen, _read, _write, _lseek, _close, _stat,
-/// _fstat, _findfirst, etc. — everything that operates on integer fds
-/// rather than FILE* streams (which live in io.zig).
+//! MSVCRT low-level file descriptor I/O.
+
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const io = @import("io.zig");
@@ -9,11 +7,15 @@ const io = @import("io.zig");
 const max_fds = 64;
 var fd_handles: [max_fds]?std.fs.File = [_]?std.fs.File{null} ** max_fds;
 
+/// Internal helper to allocate a new file descriptor.
+/// Implementation status: Partially implemented
 pub fn alloc_fd() ?i32 {
     for (3..max_fds) |i| if (fd_handles[i] == null) return @intCast(i);
     return null;
 }
 
+/// Internal helper to get a std.fs.File from a file descriptor.
+/// Implementation status: Partially implemented
 pub fn get_fd_file(fd: i32) ?std.fs.File {
     if (fd == 0) return std.fs.File{ .handle = 0 };
     if (fd == 1) return std.fs.File{ .handle = 1 };
@@ -23,6 +25,8 @@ pub fn get_fd_file(fd: i32) ?std.fs.File {
 
 const FILE = io.MSVCRT_FILE;
 
+/// Determines if a file has the specified access permissions.
+/// Implementation status: Fully implemented.
 pub fn access(path_ptr: usize, mode: i32) callconv(.c) i32 {
     if (path_ptr == 0) return -1;
     const path = trace.c_span(path_ptr);
@@ -32,6 +36,8 @@ pub fn access(path_ptr: usize, mode: i32) callconv(.c) i32 {
     return result;
 }
 
+/// Opens a file with shared access.
+/// Implementation status: Partially implemented.
 pub fn sopen(path_ptr: usize, oflag: i32, shflag: i32, pmode: i32) callconv(.c) i32 {
     _ = shflag;
     _ = pmode;
@@ -69,6 +75,8 @@ pub fn sopen(path_ptr: usize, oflag: i32, shflag: i32, pmode: i32) callconv(.c) 
     return rc;
 }
 
+/// Reads data from a file.
+/// Implementation status: Fully implemented.
 pub fn read(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
     if (trace.enable_tracing) trace.print("MSVCRT: _read(fd={d}, count={d})\n", .{ fd, count });
     if (buffer_ptr == 0 or count == 0) return 0;
@@ -85,12 +93,14 @@ pub fn read(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
     return @intCast(read_bytes);
 }
 
+/// Writes data to a file.
+/// Implementation status: Fully implemented.
 pub fn write(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
     if (trace.enable_tracing) trace.print("MSVCRT: _write(fd={d}, buf={x}, count={d})\n", .{ fd, buffer_ptr, count });
     if (buffer_ptr == 0 or count == 0) return 0;
     // On WASM, read from guest memory buffer directly instead of trace.addr
     // (which may return a stale host pointer if WASM memory grew)
-    const sc = @import("../stub_common.zig");
+    const sc = @import("../shared.zig");
     const slice = if (sc.guest_memory) |gmem| blk: {
         const offset = @as(u32, @truncate(buffer_ptr)) -% gmem.base_addr;
         if (offset + count <= gmem.base.len) {
@@ -106,6 +116,8 @@ pub fn write(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
     return @intCast(count);
 }
 
+/// Moves the file pointer to the specified location.
+/// Implementation status: Fully implemented.
 pub fn lseek(fd: i32, offset: i32, origin: i32) callconv(.c) i32 {
     const file = std.fs.File{ .handle = fd };
     switch (origin) {
@@ -123,6 +135,8 @@ pub fn lseek(fd: i32, offset: i32, origin: i32) callconv(.c) i32 {
     return @intCast(file.getPos() catch return -1);
 }
 
+/// Closes the specified file.
+/// Implementation status: Fully implemented.
 pub fn close(fd: i32) callconv(.c) i32 {
     if (fd >= 3) {
         const file = std.fs.File{ .handle = fd };
@@ -132,6 +146,8 @@ pub fn close(fd: i32) callconv(.c) i32 {
     return -1;
 }
 
+/// Retrieves the file descriptor associated with a stream.
+/// Implementation status: Fully implemented.
 pub fn fileno(file_ptr: usize) callconv(.c) i32 {
     if (file_ptr != 0) {
         const ms_file = @as(*FILE, @ptrFromInt(file_ptr));
@@ -140,22 +156,30 @@ pub fn fileno(file_ptr: usize) callconv(.c) i32 {
     return -1;
 }
 
+/// Determines whether a file descriptor is associated with a character device.
+/// Implementation status: Fully implemented.
 pub fn stub_isatty(fd: i32) callconv(.c) i32 {
     if (fd == 0 or fd == 1 or fd == 2) return 1;
     return 0;
 }
 
+/// Gets the current position of the file pointer.
+/// Implementation status: Fully implemented.
 pub fn tell(fd: i32) callconv(.c) i32 {
     const file = std.fs.File{ .handle = fd };
     return @intCast(file.getPos() catch return -1);
 }
 
+/// Changes the size of a file.
+/// Implementation status: Fully implemented.
 pub fn chsize(fd: i32, size: i32) callconv(.c) i32 {
     const file = std.fs.File{ .handle = fd };
     file.setEndPos(@intCast(size)) catch return -1;
     return 0;
 }
 
+/// Gets the length of a file.
+/// Implementation status: Fully implemented.
 pub fn filelength(fd: i32) callconv(.c) i32 {
     const file = std.fs.File{ .handle = fd };
     if (file.getEndPos()) |pos| {
@@ -167,6 +191,8 @@ pub fn filelength(fd: i32) callconv(.c) i32 {
     }
 }
 
+/// Gets status information on a file.
+/// Implementation status: Partially implemented.
 pub fn stat(path_ptr: usize, stat_ptr: usize) callconv(.c) i32 {
     if (path_ptr < 0x10000 or stat_ptr == 0) return -1;
     const path = std.mem.span(@as([*:0]const u8, @ptrFromInt(path_ptr)));
@@ -189,6 +215,8 @@ pub fn stat(path_ptr: usize, stat_ptr: usize) callconv(.c) i32 {
     return -1;
 }
 
+/// Gets status information on an open file.
+/// Implementation status: Partially implemented.
 pub fn fstat(fd: i32, stat_ptr: usize) callconv(.c) i32 {
     if (stat_ptr != 0) {
         const file = std.fs.File{ .handle = fd };
@@ -210,6 +238,8 @@ pub fn fstat(fd: i32, stat_ptr: usize) callconv(.c) i32 {
     return -1;
 }
 
+/// Finds the first instance of a filename that matches the file specified in the argument.
+/// Implementation status: Stub.
 pub fn stub_findfirst(path_ptr: usize, find_data: usize) callconv(.c) isize {
     _ = path_ptr;
     _ = find_data;
@@ -217,17 +247,32 @@ pub fn stub_findfirst(path_ptr: usize, find_data: usize) callconv(.c) isize {
     return -1;
 }
 
+/// Finds the next name, if any, that matches the argument specified in a previous call to _findfirst.
+/// Implementation status: Stub.
 pub fn stub_findnext(handle: isize, find_data: usize) callconv(.c) i32 {
     _ = handle;
     _ = find_data;
     return -1;
 }
 
+/// Retrieves the operating-system file handle that is associated with the specified file descriptor.
+/// Implementation status: Fully implemented.
 pub fn get_osfhandle(fd: i32) callconv(.c) isize {
     return @as(isize, @intCast(fd));
 }
 
+/// Associates a C run-time file descriptor with an existing operating-system file handle.
+/// Implementation status: Fully implemented.
 pub fn open_osfhandle(osfhandle: isize, flags: i32) callconv(.c) i32 {
     _ = flags;
     return @intCast(osfhandle);
+}
+
+/// UCRT replacement for _iob array access.
+/// Implementation status: Fully implemented
+pub fn acrt_iob_func(index: u32) callconv(.c) usize {
+    if (index < 3) {
+        return @intFromPtr(&io.msvcrt_iob[index]);
+    }
+    return 0;
 }

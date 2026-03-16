@@ -1,38 +1,72 @@
+//! Winsock 2.2 (WS2_32.dll) implementation.
 const env = @import("../loader/env.zig");
+const ordinals = @import("ordinals.zig");
 const stubs = @import("ws2_32/winsock.zig");
 
 // Re-export symbols used by wsock32.zig
+/// WSAStartup function.
 pub const WSAStartup = stubs.WSAStartup;
+/// WSACleanup function.
 pub const WSACleanup = stubs.WSACleanup;
+/// WSAGetLastError function stub.
 pub const stub_WSAGetLastError = stubs.stub_WSAGetLastError;
+/// WSASetLastError function stub.
 pub const stub_WSASetLastError = stubs.stub_WSASetLastError;
+/// accept function.
 pub const accept = stubs.accept;
+/// bind function.
 pub const bind = stubs.bind;
+/// closesocket function.
 pub const closesocket = stubs.closesocket;
+/// connect function.
 pub const connect = stubs.connect;
+/// getpeername function.
 pub const getpeername = stubs.getpeername;
+/// getsockname function.
 pub const getsockname = stubs.getsockname;
+/// getsockopt function.
 pub const getsockopt = stubs.getsockopt;
+/// htonl function.
 pub const htonl = stubs.htonl;
+/// htons function.
 pub const htons = stubs.htons;
+/// ioctlsocket function.
 pub const ioctlsocket = stubs.ioctlsocket;
+/// inet_addr function.
 pub const inet_addr = stubs.inet_addr;
+/// inet_ntoa function.
 pub const inet_ntoa = stubs.inet_ntoa;
+/// listen function.
 pub const listen = stubs.listen;
+/// ntohl function.
 pub const ntohl = stubs.ntohl;
+/// ntohs function.
 pub const ntohs = stubs.ntohs;
+/// recv function.
 pub const recv = stubs.recv;
+/// recvfrom function.
 pub const recvfrom = stubs.recvfrom;
+/// select function.
 pub const select = stubs.select;
+/// send function.
 pub const send = stubs.send;
+/// sendto function.
 pub const sendto = stubs.sendto;
+/// setsockopt function.
 pub const setsockopt = stubs.setsockopt;
+/// shutdown function stub.
 pub const stub_shutdown = stubs.stub_shutdown;
+/// socket function.
 pub const socket = stubs.socket;
+/// gethostbyaddr function.
 pub const gethostbyaddr = stubs.gethostbyaddr;
+/// gethostbyname function.
 pub const gethostbyname = stubs.gethostbyname;
+/// gethostname function.
 pub const gethostname = stubs.gethostname;
 
+/// Registers WS2_32.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "WS2_32.dll";
     try environment.addBuiltinExportComptime(m, "WSAStartup", stubs.WSAStartup);
@@ -86,33 +120,38 @@ pub fn register(environment: *env.Environment) !void {
     // --- Ordinal-based exports (WS2_32 exports by ordinal) ---
     // Games often import WS2_32 functions by ordinal number.
     // Standard ordinal map from Windows SDK:
-    try environment.addBuiltinExportComptime(m, "ordinal_1", stubs.accept);         // accept
-    try environment.addBuiltinExportComptime(m, "ordinal_2", stubs.bind);           // bind
-    try environment.addBuiltinExportComptime(m, "ordinal_3", stubs.closesocket);    // closesocket
-    try environment.addBuiltinExportComptime(m, "ordinal_4", stubs.connect);        // connect
-    try environment.addBuiltinExportComptime(m, "ordinal_5", stubs.getpeername);    // getpeername
-    try environment.addBuiltinExportComptime(m, "ordinal_6", stubs.getsockname);    // getsockname
-    try environment.addBuiltinExportComptime(m, "ordinal_7", stubs.getsockopt);     // getsockopt
-    try environment.addBuiltinExportComptime(m, "ordinal_8", stubs.htonl);          // htonl
-    try environment.addBuiltinExportComptime(m, "ordinal_9", stubs.htons);          // htons
-    try environment.addBuiltinExportComptime(m, "ordinal_10", stubs.ioctlsocket);   // ioctlsocket
-    try environment.addBuiltinExportComptime(m, "ordinal_11", stubs.inet_addr);     // inet_addr
-    try environment.addBuiltinExportComptime(m, "ordinal_12", stubs.inet_ntoa);     // inet_ntoa
-    try environment.addBuiltinExportComptime(m, "ordinal_13", stubs.listen);        // listen
-    try environment.addBuiltinExportComptime(m, "ordinal_14", stubs.ntohl);         // ntohl
-    try environment.addBuiltinExportComptime(m, "ordinal_15", stubs.ntohs);         // ntohs
-    try environment.addBuiltinExportComptime(m, "ordinal_16", stubs.recv);          // recv
-    try environment.addBuiltinExportComptime(m, "ordinal_17", stubs.recvfrom);      // recvfrom
-    try environment.addBuiltinExportComptime(m, "ordinal_18", stubs.select);        // select
-    try environment.addBuiltinExportComptime(m, "ordinal_19", stubs.send);          // send
-    try environment.addBuiltinExportComptime(m, "ordinal_20", stubs.sendto);        // sendto
-    try environment.addBuiltinExportComptime(m, "ordinal_21", stubs.setsockopt);    // setsockopt
-    try environment.addBuiltinExportComptime(m, "ordinal_22", stubs.stub_shutdown);      // shutdown
-    try environment.addBuiltinExportComptime(m, "ordinal_23", stubs.socket);        // socket
-    try environment.addBuiltinExportComptime(m, "ordinal_51", stubs.gethostbyaddr); // gethostbyaddr
-    try environment.addBuiltinExportComptime(m, "ordinal_52", stubs.gethostbyname); // gethostbyname
-    try environment.addBuiltinExportComptime(m, "ordinal_57", stubs.gethostname);   // gethostname
-    try environment.addBuiltinExportComptime(m, "ordinal_111", kernel32.stub_args3);     // WSAEnumNetworkEvents
-    try environment.addBuiltinExportComptime(m, "ordinal_115", stubs.WSAStartup);   // WSAStartup
-    try environment.addBuiltinExportComptime(m, "ordinal_116", stubs.WSACleanup);   // WSACleanup
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.accept, stubs.accept); // accept
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.bind, stubs.bind); // bind
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.closesocket, stubs.closesocket); // closesocket
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.connect, stubs.connect); // connect
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.getpeername, stubs.getpeername); // getpeername
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.getsockname, stubs.getsockname); // getsockname
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.getsockopt, stubs.getsockopt); // getsockopt
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.htonl, stubs.htonl); // htonl
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.htons, stubs.htons); // htons
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.ioctlsocket, stubs.ioctlsocket); // ioctlsocket
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.inet_addr, stubs.inet_addr); // inet_addr
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.inet_ntoa, stubs.inet_ntoa); // inet_ntoa
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.listen, stubs.listen); // listen
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.ntohl, stubs.ntohl); // ntohl
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.ntohs, stubs.ntohs); // ntohs
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.recv, stubs.recv); // recv
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.recvfrom, stubs.recvfrom); // recvfrom
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.select, stubs.select); // select
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.send, stubs.send); // send
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.sendto, stubs.sendto); // sendto
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.setsockopt, stubs.setsockopt); // setsockopt
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.shutdown, stubs.stub_shutdown); // shutdown
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.socket, stubs.socket); // socket
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.gethostbyaddr, stubs.gethostbyaddr); // gethostbyaddr
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.gethostbyname, stubs.gethostbyname); // gethostbyname
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.gethostname, stubs.gethostname); // gethostname
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.WSAEnumNetworkEvents, kernel32.stub_args3); // WSAEnumNetworkEvents
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.WSAStartup, stubs.WSAStartup); // WSAStartup
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.WSACleanup, stubs.WSACleanup); // WSACleanup
+
+    // Geekbench ordinal imports
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.__WSAFDIsSet, kernel32.stub_args3); // __WSAFDIsSet
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.WSAGetOverlappedResult, kernel32.stub_args4); // WSAGetOverlappedResult
+    try environment.addBuiltinExportComptime(m, ordinals.WS2_32.WSASocketW, kernel32.stub_args6); // WSASocketW
 }

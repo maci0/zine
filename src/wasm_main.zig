@@ -1,17 +1,16 @@
-// WASM entry point for zine — WASI CLI mode.
-//
-// This module provides a standard `main()` entry point that wasmtime (or
-// any WASI runtime) can call.  It reads a PE file from the filesystem,
-// sets up the Win32 stub environment, resolves imports, and runs the x86
-// interpreter.
-//
-// Usage with wasmtime:
-//   wasmtime --dir=. zig-out/bin/zine.wasm -- path/to/program.exe
+//! WebAssembly entry point for Zine (WASI CLI mode).
+//!
+//! This module provides a standard `main()` entry point for the WASM
+//! build, allowing Zine to run on WASI runtimes like wasmtime. It
+//! initializes the guest environment and starts the interpreter.
+//!
+//! In WASM mode, Zine only supports software interpretation of x86 code,
+//! as it cannot execute native x86 instructions directly.
 
 const std = @import("std");
 const platform = @import("platform.zig");
 const pe = @import("pe.zig");
-const teb = @import("teb.zig");
+const teb = @import("win32/teb.zig");
 const path_utils = @import("path_utils.zig");
 const Module = @import("loader/module.zig").Module;
 const Environment = @import("loader/env.zig").Environment;
@@ -60,6 +59,7 @@ comptime {
     _ = platform;
 }
 
+/// Fallback for unimplemented Win32 APIs in WASM mode.
 fn not_implemented() callconv(.c) void {
     const ra = @returnAddress();
     const name = x86_thunks.lookupUnresolvedName(ra);
@@ -72,12 +72,14 @@ fn not_implemented() callconv(.c) void {
     @trap();
 }
 
+/// The entry point for the WASM build of Zine.
+/// It sets up guest memory, loads the PE, and starts the x86 interpreter.
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
 
     var args = try std.process.argsWithAllocator(allocator);
-    _ = args.next(); // Skip executable name (zine.wasm)
+    _ = args.next();
 
     var target_exe_opt: ?[]const u8 = null;
     var app_args: std.ArrayListUnmanaged(?[*:0]u8) = .{};
@@ -153,10 +155,17 @@ pub fn main() !void {
             }
         } else {
             // Convert absolute POSIX paths to Win32 for guest PE arguments.
-            // Distinguish paths from options: /nologo is an option (short, no
-            // deeper path separators), /tmp/hello.c is a path.
-            const is_posix_path = arg.len > 2 and arg[0] == '/' and
-                (std.mem.indexOfScalar(u8, arg[1..], '/') != null);
+            // Distinguish paths from MSVC-style options: /Fo/tmp/x.obj is an
+            // option (first component "Fo" is <=2 chars), /tmp/hello.c is a
+            // real path (first component "tmp" is >=3 chars).
+            const is_posix_path = blk: {
+                if (arg.len <= 2 or arg[0] != '/') break :blk false;
+                const rest = arg[1..];
+                const next_slash = std.mem.indexOfScalar(u8, rest, '/') orelse break :blk false;
+                // First path component must be >= 3 chars to distinguish from
+                // MSVC options like /Fo, /Fe, /I, /O1, /Ob, /Od, /Zi, etc.
+                break :blk next_slash >= 3;
+            };
             if (is_posix_path) {
                 var win_buf: [1024]u8 = undefined;
                 const win_len = path_utils.posixToWin32(arg, &win_buf);
@@ -235,22 +244,9 @@ pub fn main() !void {
         main_module.mapped_memory.len,
     });
 
-    // For the interpreter's GuestMemory, we use the PE's *preferred* image
-    // base (from OptionalHeader.ImageBase) as the virtual base address —
-    // NOT the actual mmap address. This is critical because EXEs often have
-    // no relocation table, so all absolute addresses in x86 code (CALL [IAT],
-    // data references, etc.) use the preferred base. The GuestMemory.translate()
-    // function subtracts base_addr from virtual addresses to get buffer indices.
     const preferred_base: u32 = main_module.parser.getNtHeaders().OptionalHeader.ImageBase;
     const image_size: u32 = @truncate(main_module.mapped_memory.len);
 
-    // --- Set up thunk memory region for WASM ---
-    // IMPORTANT: We must NOT place thunks inside the PE's mapped memory!
-    // The PE's SizeOfImage covers all sections including imports and data.
-    //
-    // Combined buffer layout:
-    //   [PE image (SizeOfImage)] [stack (STACK_SIZE)] [thunks (THUNK_RESERVE)] [heap (HEAP_RESERVE)]
-    //
     const STACK_SIZE: u32 = 64 * 1024;
     const THUNK_RESERVE: u32 = 32 * 1024;
     const HEAP_RESERVE: u32 = 32 * 1024 * 1024; // 32 MB guest heap
@@ -349,9 +345,97 @@ pub fn main() !void {
     // Copy the PE image (now with patched IAT) into the combined buffer
     @memcpy(combined_buf[0..image_size], main_module.mapped_memory[0..image_size]);
 
+    // On WASM, the PE was mapped at a host address that differs from the
+    // preferred ImageBase. Module.load applied relocations for that host
+    // address. But combined_buf uses preferred_base for the GuestMemory
+    // base_addr. We must undo those relocations so absolute addresses in
+    // the code match the preferred base (= GuestMemory virtual addresses).
+    // Skip IAT slots since resolveImports already wrote correct thunk addresses.
+    {
+        const actual_base: u32 = @truncate(main_module.image_base);
+        if (actual_base != preferred_base) {
+            const reverse_delta = preferred_base -% actual_base;
+            const opt_header = &main_module.parser.getNtHeaders().OptionalHeader;
+
+            // Collect IAT ranges to skip during relocation
+            const import_dir_entry = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_IMPORT];
+            var iat_ranges: [32][2]u32 = undefined;
+            var iat_range_count: usize = 0;
+
+            if (import_dir_entry.Size > 0) {
+                var imp_off = import_dir_entry.VirtualAddress;
+                while (imp_off + 20 <= image_size) {
+                    const imp_name = @as(*align(1) const u32, @ptrCast(combined_buf[imp_off + 12 ..].ptr)).*;
+                    if (imp_name == 0) break;
+                    const first_thunk_rva = @as(*align(1) const u32, @ptrCast(combined_buf[imp_off + 16 ..].ptr)).*;
+                    const orig_thunk_rva_raw = @as(*align(1) const u32, @ptrCast(combined_buf[imp_off ..].ptr)).*;
+                    const ilt_rva = if (orig_thunk_rva_raw == 0) first_thunk_rva else orig_thunk_rva_raw;
+                    // Count entries in this import
+                    var count: u32 = 0;
+                    while (ilt_rva + (count + 1) * 4 <= image_size) {
+                        const e = @as(*align(1) const u32, @ptrCast(combined_buf[ilt_rva + count * 4 ..].ptr)).*;
+                        if (e == 0) break;
+                        count += 1;
+                    }
+                    if (iat_range_count < iat_ranges.len) {
+                        iat_ranges[iat_range_count] = .{ first_thunk_rva, first_thunk_rva + count * 4 };
+                        iat_range_count += 1;
+                    }
+                    imp_off += 20;
+                }
+            }
+
+            const reloc_dir = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC];
+            if (reloc_dir.Size > 0) {
+                var reloc_offset = reloc_dir.VirtualAddress;
+                const reloc_end = reloc_offset + reloc_dir.Size;
+                var reloc_count: u32 = 0;
+                var skip_count: u32 = 0;
+
+                while (reloc_offset < reloc_end) {
+                    const block_va = @as(*align(1) const u32, @ptrCast(combined_buf[reloc_offset..].ptr)).*;
+                    const block_size = @as(*align(1) const u32, @ptrCast(combined_buf[reloc_offset + 4 ..].ptr)).*;
+                    if (block_size == 0) break;
+
+                    const entries_count = (block_size - 8) / 2;
+                    const entries_start = reloc_offset + 8;
+
+                    for (0..entries_count) |e| {
+                        const entry = @as(*align(1) const u16, @ptrCast(combined_buf[entries_start + e * 2 ..].ptr)).*;
+                        const reloc_type = entry >> 12;
+                        const offset = entry & 0x0FFF;
+
+                        if (reloc_type == 3) { // IMAGE_REL_BASED_HIGHLOW
+                            const patch_addr = block_va + offset;
+                            // Skip if this address is inside an IAT range
+                            var in_iat = false;
+                            for (iat_ranges[0..iat_range_count]) |range| {
+                                if (patch_addr >= range[0] and patch_addr < range[1]) {
+                                    in_iat = true;
+                                    break;
+                                }
+                            }
+                            if (in_iat) {
+                                skip_count += 1;
+                                continue;
+                            }
+                            if (patch_addr + 4 <= image_size) {
+                                const ptr = @as(*align(1) u32, @ptrCast(combined_buf[patch_addr..].ptr));
+                                ptr.* = ptr.* +% reverse_delta;
+                                reloc_count += 1;
+                            }
+                        }
+                    }
+                    reloc_offset += block_size;
+                }
+                log.info("wasm: applied {d} reverse relocations, skipped {d} IAT entries (delta=0x{X})", .{ reloc_count, skip_count, reverse_delta });
+            }
+        }
+    }
+
     // --- Initialize MSVCRT globals ---
     // Build proper argv and _acmdln from collected guest arguments
-    try app_args.append(allocator, null); // null-terminate the argv array
+    try app_args.append(allocator, null);
 
     stubs_msvcrt.global_argc = @intCast(app_args.items.len - 1);
     stubs_msvcrt.global_argv = app_args.items.ptr;
@@ -485,8 +569,29 @@ pub fn main() !void {
     };
     cpu.eip = preferred_base +% ep_rva;
 
+    // PE section write protection: protect .rsrc from guest buffer overflows.
+    // Only .rsrc is protected — .rdata/.text must remain writable because
+    // some CRT startup code writes to IAT slots and other "read-only" areas.
+    for (main_module.parser.sections) |sec| {
+        const name = &sec.Name;
+        const is_rsrc = (name[0] == '.' and name[1] == 'r' and name[2] == 's' and name[3] == 'r' and name[4] == 'c');
+        if (is_rsrc) {
+            cpu.memory.pe_image_end = preferred_base +% image_size;
+            const rsrc_start = preferred_base +% sec.VirtualAddress;
+            const rsrc_end = rsrc_start +% sec.Misc.VirtualSize;
+            // Mark everything writable EXCEPT .rsrc
+            if (rsrc_start > preferred_base) {
+                cpu.memory.addWritableSection(preferred_base, rsrc_start);
+            }
+            if (rsrc_end < preferred_base +% image_size) {
+                cpu.memory.addWritableSection(rsrc_end, preferred_base +% image_size);
+            }
+            break;
+        }
+    }
+
     // Wire up guest heap for all stubs (VirtualAlloc, HeapAlloc, malloc, etc.)
-    const stub_common = @import("win32/stub_common.zig");
+    const stub_common = @import("win32/shared.zig");
     stub_common.guest_memory = &cpu.memory;
 
     // Stack occupies the region between the PE image and the thunk area.
@@ -504,31 +609,143 @@ pub fn main() !void {
     });
 
     if (use_jit) {
-        log.info("JIT mode: compiling x86 blocks to WASM alongside interpreter", .{});
-        runWithJit(&cpu, allocator);
+        if (comptime build_options.enable_jit_host) {
+            log.info("JIT mode: compiling and executing x86 blocks via host runtime", .{});
+            runWithJitHost(&cpu, allocator);
+        } else {
+            log.info("JIT mode: compiling x86 blocks to WASM (compile-only, no host)", .{});
+            runWithJit(&cpu, allocator);
+        }
     } else {
         x86_execute.run(&cpu);
     }
 
     log.info("wasm: interpreter halted, EAX=0x{X}", .{cpu.eax});
 
-    // Propagate the guest process exit code to the WASM host
-    std.process.exit(@truncate(cpu.eax));
+    // Propagate the guest process exit code to the WASM host.
+    // WASI only allows 0-125; clamp to avoid wasmtime errors.
+    const code: u8 = @truncate(cpu.eax);
+    std.process.exit(if (code > 125) 125 else code);
 }
 
 // ---------------------------------------------------------------------------
 // JIT-integrated execution loop
 // ---------------------------------------------------------------------------
-// Runs the interpreter but also compiles each new basic block via the JIT
-// compiler. The compiled WASM binary is cached per starting EIP. This
-// validates the JIT on real PE code even though we can't instantiate
-// generated WASM from within a WASM environment.
 
 const jit_compiler = @import("jit/compiler.zig");
+const jit_host_mod = @import("jit/host.zig");
 const x86_decoder = @import("x86/decoder.zig");
 
+const build_options = @import("build_options");
+
+/// JIT-integrated execution loop with host execution support.
+/// When enable_jit_host is true (build option), compiled WASM blocks are
+/// sent to the host runtime (browser/zine-host) for actual execution.
+/// CPU state is transferred via JitCpuState in shared linear memory.
+fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
+    const host_wasm = @import("jit/host_wasm.zig");
+    const jit_host = host_wasm.wasmJitHost();
+
+    // Allocate the JitCpuState in the arena — its WASM linear memory
+    // address is used by the generated code for state transfer.
+    var jit_state = jit_host_mod.JitCpuState{};
+    const state_addr: u32 = @intFromPtr(&jit_state);
+
+    // mem_base = wasm_linear_addr_of_buffer - guest_va_base
+    // This allows JIT'd code to translate guest VAs to WASM linear memory offsets.
+    jit_state.mem_base = @as(i32, @bitCast(@as(u32, @intFromPtr(cpu.memory.base.ptr)) -% cpu.memory.base_addr));
+
+    var jit = jit_compiler.JitCompiler.init(allocator, state_addr);
+    defer jit.deinit();
+
+    // Cache: guest_eip → host block id
+    var block_ids = std.AutoHashMap(u32, jit_host_mod.BlockId).init(allocator);
+    defer block_ids.deinit();
+
+    var blocks_compiled: u32 = 0;
+    var blocks_executed: u32 = 0;
+    var expected_next_eip: u32 = 0;
+
+    while (!cpu.halted) {
+        const eip = cpu.eip;
+
+        // Only attempt JIT at basic block entries (discontinuous EIP changes)
+        if (eip != expected_next_eip) {
+            // Try to execute a cached JIT block
+            if (block_ids.get(eip)) |block_id| {
+                // Transfer CPU state to the shared struct
+                jit_state.eax = cpu.eax;
+                jit_state.ecx = cpu.ecx;
+                jit_state.edx = cpu.edx;
+                jit_state.ebx = cpu.ebx;
+                jit_state.esp = cpu.esp;
+                jit_state.ebp = cpu.ebp;
+                jit_state.esi = cpu.esi;
+                jit_state.edi = cpu.edi;
+                jit_state.eip = eip;
+                jit_state.eflags = cpu.flags.toEflags();
+                jit_state.status = jit_host_mod.JitCpuState.STATUS_CONTINUE;
+
+                // Execute the compiled block via the host
+                jit_host.call(block_id);
+
+                // Read state back
+                cpu.eax = jit_state.eax;
+                cpu.ecx = jit_state.ecx;
+                cpu.edx = jit_state.edx;
+                cpu.ebx = jit_state.ebx;
+                cpu.esp = jit_state.esp;
+                cpu.ebp = jit_state.ebp;
+                cpu.esi = jit_state.esi;
+                cpu.edi = jit_state.edi;
+                cpu.eip = jit_state.eip;
+                cpu.flags.fromEflags(jit_state.eflags);
+
+                blocks_executed += 1;
+                expected_next_eip = cpu.eip;
+                continue;
+            }
+
+            // Compile a new block if we haven't seen this EIP
+            if (!jit.block_cache.contains(eip)) {
+                if (cpu.memory.readSlice(eip, 256)) |code| {
+                    const block_len = scanBlock(code);
+                    if (block_len > 0) {
+                        jit.module.deinit();
+                        jit.module = @import("jit/emitter.zig").WasmModule.init(allocator);
+
+                        if (jit.compile(eip, code[0..block_len])) |wasm_bin| {
+                            // Send to host for compilation
+                            if (jit_host.compile(wasm_bin)) |block_id| {
+                                block_ids.put(eip, block_id) catch {};
+                                blocks_compiled += 1;
+                                if (blocks_compiled <= 10) {
+                                    log.info("JIT: compiled+loaded block at EIP=0x{X} ({d} x86 bytes -> {d} WASM bytes)", .{
+                                        eip, block_len, wasm_bin.len,
+                                    });
+                                } else if (blocks_compiled == 11) {
+                                    log.info("JIT: (suppressing further compilation logs)", .{});
+                                }
+                            }
+                            allocator.free(wasm_bin);
+                        } else |_| {}
+                    }
+                }
+            }
+        }
+
+        // Fall back to interpreter for one instruction
+        x86_execute.step(cpu);
+        expected_next_eip = cpu.eip;
+    }
+
+    log.info("JIT: compiled {d} blocks, executed {d} block calls", .{ blocks_compiled, blocks_executed });
+}
+
+/// Compile-only JIT loop (no host execution).
+/// Validates the JIT compiler on real PE code; compiled WASM is discarded.
 fn runWithJit(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
-    var jit = jit_compiler.JitCompiler.init(allocator);
+    var jit = jit_compiler.JitCompiler.init(allocator, 0);
     defer jit.deinit();
 
     var blocks_compiled: u32 = 0;
@@ -537,16 +754,10 @@ fn runWithJit(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
     while (!cpu.halted) {
         const eip = cpu.eip;
 
-        // Only compile at actual basic block entries — when EIP changes
-        // discontinuously (jump, call, ret). Sequential instruction advances
-        // (eip == expected_next_eip) are NOT new blocks.
         if (eip != expected_next_eip and !jit.block_cache.contains(eip)) {
-            // Read up to 256 bytes of x86 code at this EIP for compilation
             if (cpu.memory.readSlice(eip, 256)) |code| {
-                // Find the block length by scanning for a terminating instruction
                 const block_len = scanBlock(code);
                 if (block_len > 0) {
-                    // Re-init the module for each block (compile produces a standalone module)
                     jit.module.deinit();
                     jit.module = @import("jit/emitter.zig").WasmModule.init(allocator);
 
@@ -560,14 +771,11 @@ fn runWithJit(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
                             log.info("JIT: (suppressing further compilation logs)", .{});
                         }
                         allocator.free(wasm_bin);
-                    } else |_| {
-                        // Compilation failed — not fatal, interpreter handles it
-                    }
+                    } else |_| {}
                 }
             }
         }
 
-        // Execute one instruction and track the expected next EIP
         x86_execute.step(cpu);
         expected_next_eip = cpu.eip;
     }
@@ -592,8 +800,6 @@ fn scanBlock(code: []const u8) usize {
             0xF4, // HLT
             0xCC, // INT3
             => break,
-            // Conditional jumps don't terminate — they're branch targets
-            // within the block (the fall-through continues)
             else => {},
         }
     }

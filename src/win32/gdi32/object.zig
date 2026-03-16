@@ -1,9 +1,12 @@
+//! GDI object management (brushes, pens, fonts, bitmaps).
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const gdi32 = @import("../gdi32.zig");
-const w32 = @import("../../win32_constants.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32 = @import("../constants.zig");
+const w32cc = @import("../calling_convention.zig");
 
+/// Retrieve a handle to one of the stock GDI objects.
+/// Implementation status: Partially implemented
 pub fn GetStockObject(fnObject: i32) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("GDI32: GetStockObject({d})\n", .{fnObject});
     const handle = 0x0B0B0000 | @as(usize, @intCast(@as(u32, @bitCast(fnObject)) & 0xFF));
@@ -27,6 +30,8 @@ pub fn GetStockObject(fnObject: i32) callconv(w32cc.WINAPI) usize {
     return handle;
 }
 
+/// Select an object into the specified device context (DC).
+/// Implementation status: Partially implemented
 pub fn SelectObject(hdc: usize, h: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("GDI32: SelectObject(dc=0x{x}, obj=0x{x})\n", .{ hdc, h });
     var old_obj: usize = 0;
@@ -63,23 +68,31 @@ pub fn SelectObject(hdc: usize, h: usize) callconv(w32cc.WINAPI) usize {
     return if (old_obj != 0) old_obj else h; // Return previous object, or requested if failed
 }
 
+/// Delete a logical pen, brush, font, bitmap, region, or palette.
+/// Implementation status: Stub
 pub fn stub_DeleteObject(h: usize) callconv(w32cc.WINAPI) i32 {
     _ = h;
     return 1;
 }
 
+/// Create a logical brush that has the specified solid color.
+/// Implementation status: Partially implemented
 pub fn CreateSolidBrush(crColor: u32) callconv(w32cc.WINAPI) usize {
     const handle = gdi32.nextHandle();
     gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = crColor, .style = 0 } } });
     return handle;
 }
 
+/// Create a logical pen with the specified style, width, and color.
+/// Implementation status: Partially implemented
 pub fn CreatePen(iStyle: i32, cWidth: i32, crColor: u32) callconv(w32cc.WINAPI) usize {
     const handle = gdi32.nextHandle();
     gdi32.registerObject(.{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = crColor, .width = cWidth, .style = iStyle } } });
     return handle;
 }
 
+/// Create a logical font from a LOGFONT structure.
+/// Implementation status: Stub
 pub fn CreateFontIndirectA(lplf: usize) callconv(w32cc.WINAPI) usize {
     _ = lplf;
     if (trace.enable_tracing) trace.print("GDI32: CreateFontIndirectA\n", .{});
@@ -88,6 +101,8 @@ pub fn CreateFontIndirectA(lplf: usize) callconv(w32cc.WINAPI) usize {
     return handle;
 }
 
+/// Create a bitmap compatible with the device that is associated with the specified DC.
+/// Implementation status: Partially implemented
 pub fn CreateCompatibleBitmap(hdc: usize, cx: i32, cy: i32) callconv(w32cc.WINAPI) usize {
     _ = hdc;
     const w: u32 = if (cx > 0) @intCast(cx) else 1;
@@ -104,6 +119,8 @@ pub fn CreateCompatibleBitmap(hdc: usize, cx: i32, cy: i32) callconv(w32cc.WINAP
     return handle;
 }
 
+/// Create a bitmap with the specified width, height, and color format.
+/// Implementation status: Stub
 pub fn stub_CreateBitmap(nWidth: i32, nHeight: i32, nPlanes: u32, nBitCount: u32, lpBits: usize) callconv(w32cc.WINAPI) usize {
     _ = nWidth;
     _ = nHeight;
@@ -113,6 +130,8 @@ pub fn stub_CreateBitmap(nWidth: i32, nHeight: i32, nPlanes: u32, nBitCount: u32
     return gdi32.nextHandle();
 }
 
+/// Create a DIB that applications can write to directly.
+/// Implementation status: Partially implemented
 pub fn CreateDIBSection(hdc: usize, pbmi: usize, usage: u32, ppvBits: usize, hSection: usize, offset: u32) callconv(w32cc.WINAPI) usize {
     _ = hdc;
     _ = usage;
@@ -155,6 +174,8 @@ pub fn CreateDIBSection(hdc: usize, pbmi: usize, usage: u32, ppvBits: usize, hSe
     return handle;
 }
 
+/// Retrieve information for the specified graphics object.
+/// Implementation status: Partially implemented
 pub fn GetObjectA(h: usize, c: i32, pv: usize) callconv(w32cc.WINAPI) i32 {
     if (c <= 0) return 0;
 
@@ -196,6 +217,8 @@ pub fn GetObjectA(h: usize, c: i32, pv: usize) callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
+/// Retrieve a handle to an object of the specified type that is currently selected into the specified DC.
+/// Implementation status: Partially implemented
 pub fn GetCurrentObject(hdc: usize, tp: u32) callconv(w32cc.WINAPI) usize {
     if (gdi32.getDc(hdc)) |dc| {
         return switch (tp) {
@@ -209,6 +232,8 @@ pub fn GetCurrentObject(hdc: usize, tp: u32) callconv(w32cc.WINAPI) usize {
     return 0;
 }
 
+/// Load an icon, cursor, animated cursor, or bitmap.
+/// Implementation status: Stub
 pub fn stub_LoadImageA(hInst: usize, name: usize, tp: u32, cx: i32, cy: i32, fuLoad: u32) callconv(w32cc.WINAPI) usize {
     _ = hInst;
     _ = name;
@@ -219,12 +244,16 @@ pub fn stub_LoadImageA(hInst: usize, name: usize, tp: u32, cx: i32, cy: i32, fuL
     return gdi32.nextHandle();
 }
 
+/// Create a logical palette.
+/// Implementation status: Stub
 pub fn stub_CreatePalette(lplgpl: usize) callconv(w32cc.WINAPI) usize {
     _ = lplgpl;
     if (trace.enable_tracing) trace.print("GDI32: CreatePalette\n", .{});
     return gdi32.nextHandle();
 }
 
+/// Select the specified logical palette into the specified device context.
+/// Implementation status: Stub
 pub fn stub_SelectPalette(hdc: usize, hPal: usize, bForceBackground: i32) callconv(w32cc.WINAPI) usize {
     _ = hdc;
     _ = bForceBackground;
@@ -232,12 +261,16 @@ pub fn stub_SelectPalette(hdc: usize, hPal: usize, bForceBackground: i32) callco
     return hPal;
 }
 
+/// Map palette entries from the current logical palette to the system palette.
+/// Implementation status: Stub
 pub fn stub_RealizePalette(hdc: usize) callconv(w32cc.WINAPI) u32 {
     _ = hdc;
     if (trace.enable_tracing) trace.print("GDI32: RealizePalette\n", .{});
     return 0;
 }
 
+/// Create a rectangular region.
+/// Implementation status: Stub
 pub fn stub_CreateRectRgn(x1: i32, y1: i32, x2: i32, y2: i32) callconv(w32cc.WINAPI) usize {
     _ = x1;
     _ = y1;
@@ -246,6 +279,8 @@ pub fn stub_CreateRectRgn(x1: i32, y1: i32, x2: i32, y2: i32) callconv(w32cc.WIN
     return gdi32.nextHandle();
 }
 
+/// Create a logical brush that has the style, color, and pattern specified in a LOGBRUSH structure.
+/// Implementation status: Partially implemented
 pub fn CreateBrushIndirect(lplb: usize) callconv(w32cc.WINAPI) usize {
     const handle = gdi32.nextHandle();
     var color: u32 = 0;
@@ -261,6 +296,8 @@ pub fn CreateBrushIndirect(lplb: usize) callconv(w32cc.WINAPI) usize {
     return handle;
 }
 
+/// Create a logical pen that has the style, width, and color specified in a structure.
+/// Implementation status: Partially implemented
 pub fn CreatePenIndirect(lplgpn: usize) callconv(w32cc.WINAPI) usize {
     const handle = gdi32.nextHandle();
     var color: u32 = 0;
@@ -279,6 +316,8 @@ pub fn CreatePenIndirect(lplgpn: usize) callconv(w32cc.WINAPI) usize {
     return handle;
 }
 
+/// Create a logical font with the specified characteristics.
+/// Implementation status: Stub
 pub fn CreateFontA(nHeight: i32, nWidth: i32, nEscapement: i32, nOrientation: i32, fnWeight: i32, fdwItalic: u32, fdwUnderline: u32, fdwStrikeOut: u32, fdwCharSet: u32, fdwOutputPrecision: u32, fdwClipPrecision: u32, fdwQuality: u32, fdwPitchAndFamily: u32, lpszFace: usize) callconv(w32cc.WINAPI) usize {
     _ = nHeight; _ = nWidth; _ = nEscapement; _ = nOrientation; _ = fnWeight;
     _ = fdwItalic; _ = fdwUnderline; _ = fdwStrikeOut; _ = fdwCharSet;
@@ -289,6 +328,8 @@ pub fn CreateFontA(nHeight: i32, nWidth: i32, nEscapement: i32, nOrientation: i3
     return handle;
 }
 
+/// Set RGB (red, green, blue) color values and flags in a range of entries in a logical palette.
+/// Implementation status: Stub
 pub fn stub_SetPaletteEntries(hpal: usize, iStart: u32, cEntries: u32, pPalEntries: usize) callconv(w32cc.WINAPI) u32 {
     _ = hpal;
     _ = iStart;
@@ -297,12 +338,15 @@ pub fn stub_SetPaletteEntries(hpal: usize, iStart: u32, cEntries: u32, pPalEntri
     return 0;
 }
 
+/// Reset the origin of the specified brush or reset the specified palette.
+/// Implementation status: Stub
 pub fn stub_UnrealizeObject(h: usize) callconv(w32cc.WINAPI) i32 {
     _ = h;
     return 1;
 }
 
-// CreateHalftonePalette: creates a halftone palette for a DC
+/// Create a halftone palette for the specified device context.
+/// Implementation status: Partially implemented
 pub fn CreateHalftonePalette(hdc: usize) callconv(w32cc.WINAPI) usize {
     _ = hdc;
     const handle = gdi32.nextHandle();
@@ -311,7 +355,8 @@ pub fn CreateHalftonePalette(hdc: usize) callconv(w32cc.WINAPI) usize {
     return handle;
 }
 
-// CreatePatternBrush: creates a brush based on a bitmap pattern
+/// Create a logical brush with the specified bitmap pattern.
+/// Implementation status: Partially implemented
 pub fn CreatePatternBrush(hBitmap: usize) callconv(w32cc.WINAPI) usize {
     _ = hBitmap;
     const handle = gdi32.nextHandle();

@@ -1,10 +1,10 @@
-/// MSVCRT path utilities: _splitpath, _makepath, _fullpath,
-/// _searchenv, _getcwd, _tempnam, _mktemp.
 const std = @import("std");
 const trace = @import("../../trace.zig");
 
-// --- Path utilities ---
-
+/// MSVCRT path utilities: _splitpath, _makepath, _fullpath,
+/// _searchenv, _getcwd, _tempnam, _mktemp.
+/// --- Path utilities ---
+/// Implementation status: Partially implemented
 pub fn mktemp(template: ?*anyopaque) callconv(.c) ?*anyopaque {
     if (template) |t| {
         const slice = @as([*]u8, @ptrCast(t));
@@ -26,6 +26,8 @@ pub fn mktemp(template: ?*anyopaque) callconv(.c) ?*anyopaque {
     return null;
 }
 
+/// splitpath
+/// Implementation status: Partially implemented
 pub fn splitpath(path_ptr: usize, drive: usize, dir: usize, fname: usize, ext: usize) callconv(.c) void {
     if (path_ptr < 0x10000) return;
     const path = trace.c_span(path_ptr);
@@ -72,6 +74,8 @@ pub fn splitpath(path_ptr: usize, drive: usize, dir: usize, fname: usize, ext: u
     }
 }
 
+/// makepath
+/// Implementation status: Partially implemented
 pub fn makepath(path_ptr: usize, drive: usize, dir: usize, fname: usize, ext: usize) callconv(.c) void {
     if (path_ptr == 0) return;
     const path = @as([*]u8, @ptrFromInt(path_ptr));
@@ -118,13 +122,15 @@ pub fn makepath(path_ptr: usize, drive: usize, dir: usize, fname: usize, ext: us
     if (trace.enable_tracing) trace.print("MSVCRT: _makepath -> {s}\n", .{path[0..len]});
 }
 
+/// fullpath
+/// Implementation status: Partially implemented
 pub fn fullpath(abs_buf: usize, rel: usize, max: usize) callconv(.c) usize {
     if (rel == 0) return 0;
     const s = trace.c_span(rel);
     var dp = abs_buf;
     if (dp == 0) {
         const alloc_size = if (max > 0) max else 4096;
-        const stub_common = @import("../stub_common.zig");
+        const stub_common = @import("../shared.zig");
         const p = stub_common.raw_alloc(alloc_size) orelse return 0;
         dp = @intFromPtr(p);
     }
@@ -136,8 +142,8 @@ pub fn fullpath(abs_buf: usize, rel: usize, max: usize) callconv(.c) usize {
     return dp;
 }
 
-// --- _searchenv / _getcwd ---
-
+/// --- _searchenv / _getcwd ---
+/// Implementation status: Partially implemented
 pub fn searchenv(filename_ptr: usize, varname_ptr: usize, result_ptr: usize) callconv(.c) void {
     const filename = if (filename_ptr != 0) trace.c_span(filename_ptr) else "";
     const varname = if (varname_ptr != 0) trace.c_span(varname_ptr) else "";
@@ -179,6 +185,8 @@ pub fn searchenv(filename_ptr: usize, varname_ptr: usize, result_ptr: usize) cal
     if (trace.enable_tracing) trace.print("MSVCRT: _searchenv -> NOT FOUND\n", .{});
 }
 
+/// getcwd
+/// Implementation status: Partially implemented
 pub fn getcwd(buffer_ptr: usize, maxlen: i32) callconv(.c) ?*anyopaque {
     const path = std.process.getCwdAlloc(std.heap.page_allocator) catch return null;
     defer std.heap.page_allocator.free(path);
@@ -191,7 +199,7 @@ pub fn getcwd(buffer_ptr: usize, maxlen: i32) callconv(.c) ?*anyopaque {
         buf[path.len] = 0;
         return @ptrFromInt(buffer_ptr);
     } else {
-        const stub_common = @import("../stub_common.zig");
+        const stub_common = @import("../shared.zig");
         const raw = stub_common.raw_alloc(path.len + 1) orelse return null;
         const ptr = @as([*]u8, @ptrCast(raw));
         @memcpy(ptr[0..path.len], path);
@@ -201,10 +209,10 @@ pub fn getcwd(buffer_ptr: usize, maxlen: i32) callconv(.c) ?*anyopaque {
     }
 }
 
-// --- tempnam ---
-
 var tempnam_counter: u32 = 0;
 
+/// --- tempnam ---
+/// Implementation status: Partially implemented
 pub fn tempnam(dir_ptr: usize, prefix_ptr: usize) callconv(.c) usize {
     const prefix = if (prefix_ptr != 0) trace.c_span(prefix_ptr) else "tmp";
     _ = dir_ptr;

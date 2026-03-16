@@ -1,16 +1,18 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 const platform = @import("../../platform.zig");
 
-// --- Interlocked operations ---
-
+/// --- Interlocked operations ---
+/// Implementation status: Partially implemented
 pub fn InterlockedIncrement(lpAddend: usize) callconv(w32cc.WINAPI) i32 {
     if (lpAddend == 0) return 0;
     const ptr = @as(*i32, @ptrFromInt(lpAddend));
     return @atomicRmw(i32, ptr, .Add, 1, .seq_cst) + 1;
 }
 
+/// InterlockedDecrement
+/// Implementation status: Partially implemented
 pub fn InterlockedDecrement(lpAddend: usize) callconv(w32cc.WINAPI) i32 {
     if (lpAddend == 0) return 0;
     const ptr = @as(*i32, @ptrFromInt(lpAddend));
@@ -18,61 +20,89 @@ pub fn InterlockedDecrement(lpAddend: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 // --- Critical sections ---
-// Backed by real mutexes since CreateThread spawns real OS threads.
+// Win32 CRITICAL_SECTIONs are RECURSIVE — the same thread can enter
+// multiple times without deadlocking. We track owner thread + recursion count.
 
 const MAX_CRITICAL_SECTIONS = 256;
-var cs_mutexes: [MAX_CRITICAL_SECTIONS]std.Thread.Mutex = init_cs: {
-    var arr: [MAX_CRITICAL_SECTIONS]std.Thread.Mutex = undefined;
-    for (&arr) |*m| m.* = .{};
+
+const CriticalSection = struct {
+    mutex: std.Thread.Mutex = .{},
+    owner: std.Thread.Id = 0,
+    recursion: u32 = 0,
+    addr: usize = 0,
+};
+
+var cs_table: [MAX_CRITICAL_SECTIONS]CriticalSection = init_cs: {
+    var arr: [MAX_CRITICAL_SECTIONS]CriticalSection = undefined;
+    for (&arr) |*cs| cs.* = .{};
     break :init_cs arr;
 };
-var cs_addrs: [MAX_CRITICAL_SECTIONS]usize = [_]usize{0} ** MAX_CRITICAL_SECTIONS;
 
-fn getOrCreateCS(addr: usize) ?*std.Thread.Mutex {
-    // Find existing
-    for (0..MAX_CRITICAL_SECTIONS) |i| {
-        if (cs_addrs[i] == addr) return &cs_mutexes[i];
+fn getOrCreateCS(addr: usize) ?*CriticalSection {
+    for (&cs_table) |*cs| {
+        if (cs.addr == addr) return cs;
     }
-    // Allocate new
-    for (0..MAX_CRITICAL_SECTIONS) |i| {
-        if (cs_addrs[i] == 0) {
-            cs_addrs[i] = addr;
-            cs_mutexes[i] = .{};
-            return &cs_mutexes[i];
+    for (&cs_table) |*cs| {
+        if (cs.addr == 0) {
+            cs.* = .{ .addr = addr };
+            return cs;
         }
     }
-    return null; // table full — fall through to no-op
+    return null;
 }
 
+/// InitializeCriticalSection
+/// Implementation status: Partially implemented
 pub fn InitializeCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: InitializeCriticalSection({x})\n", .{lpCriticalSection});
     if (lpCriticalSection != 0) _ = getOrCreateCS(lpCriticalSection);
 }
 
+/// EnterCriticalSection
+/// Implementation status: Partially implemented
 pub fn EnterCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
     if (lpCriticalSection == 0) return;
-    if (getOrCreateCS(lpCriticalSection)) |m| m.lock();
+    const cs = getOrCreateCS(lpCriticalSection) orelse return;
+    const tid = std.Thread.getCurrentId();
+    if (cs.owner == tid) {
+        // Recursive entry — same thread, just bump count
+        cs.recursion += 1;
+        return;
+    }
+    cs.mutex.lock();
+    cs.owner = tid;
+    cs.recursion = 1;
 }
 
+/// LeaveCriticalSection
+/// Implementation status: Partially implemented
 pub fn LeaveCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
     if (lpCriticalSection == 0) return;
-    if (getOrCreateCS(lpCriticalSection)) |m| m.unlock();
+    const cs = getOrCreateCS(lpCriticalSection) orelse return;
+    if (cs.recursion > 1) {
+        cs.recursion -= 1;
+        return;
+    }
+    cs.owner = 0;
+    cs.recursion = 0;
+    cs.mutex.unlock();
 }
 
+/// DeleteCriticalSection
+/// Implementation status: Partially implemented
 pub fn DeleteCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: DeleteCriticalSection({x})\n", .{lpCriticalSection});
     if (lpCriticalSection == 0) return;
-    for (0..MAX_CRITICAL_SECTIONS) |i| {
-        if (cs_addrs[i] == lpCriticalSection) {
-            cs_addrs[i] = 0;
-            cs_mutexes[i] = .{};
+    for (&cs_table) |*cs| {
+        if (cs.addr == lpCriticalSection) {
+            cs.* = .{};
             return;
         }
     }
 }
 
-// --- Events ---
-
+/// --- Events ---
+/// Implementation status: Stub
 pub fn stub_CreateEventA(lpEventAttributes: usize, bManualReset: i32, bInitialState: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
     _ = lpEventAttributes;
     _ = bManualReset;
@@ -82,17 +112,22 @@ pub fn stub_CreateEventA(lpEventAttributes: usize, bManualReset: i32, bInitialSt
     return 0xE0000001;
 }
 
+/// stub_ResetEvent
+/// Implementation status: No-op fallback
 pub fn stub_ResetEvent(hEvent: usize) callconv(w32cc.WINAPI) i32 {
     _ = hEvent;
     return 1;
 }
 
+/// stub_SetEvent
+/// Implementation status: No-op fallback
 pub fn stub_SetEvent(hEvent: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: SetEvent({x})\n", .{hEvent});
     return 1; // Success
 }
 
-// WAIT_OBJECT_0 = 0
+/// WAIT_OBJECT_0 = 0
+/// Implementation status: Partially implemented
 pub fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: WaitForSingleObject({x}, {d})\n", .{ hHandle, dwMilliseconds });
 
@@ -125,9 +160,12 @@ pub fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.W
     return 0; // WAIT_OBJECT_0
 }
 
-
+/// stub_WaitForMultipleObjects
+/// Implementation status: Stub
 pub fn stub_WaitForMultipleObjects(nCount: u32, lpHandles: usize, bWaitAll: i32, dwMilliseconds: u32) callconv(w32cc.WINAPI) u32 {
-    _ = nCount; _ = lpHandles; _ = bWaitAll;
+    _ = nCount;
+    _ = lpHandles;
+    _ = bWaitAll;
     if (dwMilliseconds > 0) {
         const sleep_ns: u64 = @min(@as(u64, dwMilliseconds) * 1_000_000, 10_000_000);
         std.Thread.sleep(sleep_ns);
@@ -173,6 +211,8 @@ fn getOrCreateTlsEntry() *TlsThreadEntry {
     return &tls_threads[0];
 }
 
+/// TlsAlloc
+/// Implementation status: Partially implemented
 pub fn TlsAlloc() callconv(w32cc.WINAPI) u32 {
     if (tls_next >= MAX_TLS_SLOTS) return 0xFFFFFFFF; // TLS_OUT_OF_INDEXES
     const idx = tls_next;
@@ -180,12 +220,16 @@ pub fn TlsAlloc() callconv(w32cc.WINAPI) u32 {
     return idx;
 }
 
+/// TlsGetValue
+/// Implementation status: Partially implemented
 pub fn TlsGetValue(dwTlsIndex: u32) callconv(w32cc.WINAPI) usize {
     if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;
     const entry = getOrCreateTlsEntry();
     return entry.slots[dwTlsIndex];
 }
 
+/// TlsSetValue
+/// Implementation status: Partially implemented
 pub fn TlsSetValue(dwTlsIndex: u32, lpTlsValue: usize) callconv(w32cc.WINAPI) i32 {
     if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;
     const entry = getOrCreateTlsEntry();
@@ -193,10 +237,10 @@ pub fn TlsSetValue(dwTlsIndex: u32, lpTlsValue: usize) callconv(w32cc.WINAPI) i3
     return 1;
 }
 
-// --- Mutexes ---
-
 var next_mutex_handle: usize = 0xB0000001;
 
+/// --- Mutexes ---
+/// Implementation status: No-op fallback
 pub fn stub_CreateMutexA(lpMutexAttributes: usize, bInitialOwner: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
     _ = lpMutexAttributes;
     _ = bInitialOwner;
@@ -209,11 +253,15 @@ pub fn stub_CreateMutexA(lpMutexAttributes: usize, bInitialOwner: i32, lpName: u
     return handle;
 }
 
+/// stub_ReleaseMutex
+/// Implementation status: No-op fallback
 pub fn stub_ReleaseMutex(hMutex: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: ReleaseMutex({x})\n", .{hMutex});
     return 1; // TRUE = success
 }
 
+/// stub_ReleaseSemaphore
+/// Implementation status: No-op fallback
 pub fn stub_ReleaseSemaphore(hSemaphore: usize, lReleaseCount: i32, lpPreviousCount: usize) callconv(w32cc.WINAPI) i32 {
     _ = hSemaphore;
     _ = lReleaseCount;
@@ -225,6 +273,8 @@ pub fn stub_ReleaseSemaphore(hSemaphore: usize, lReleaseCount: i32, lpPreviousCo
 
 var next_dup_handle: usize = 0xD0000001;
 
+/// DuplicateHandle
+/// Implementation status: Partially implemented
 pub fn DuplicateHandle(
     hSourceProcessHandle: usize,
     hSourceHandle: usize,
@@ -264,17 +314,19 @@ pub fn DuplicateHandle(
     return 1; // TRUE = success
 }
 
-// --- InterlockedCompareExchange ---
-// LONG InterlockedCompareExchange(LONG volatile *Destination, LONG Exchange, LONG Comperand)
+/// --- InterlockedCompareExchange ---
+/// LONG InterlockedCompareExchange(LONG volatile *Destination, LONG Exchange, LONG Comperand)
+/// Implementation status: Partially implemented
 pub fn InterlockedCompareExchange(dest: usize, exchange: i32, comperand: i32) callconv(w32cc.WINAPI) i32 {
     if (dest == 0) return 0;
     const ptr = @as(*i32, @ptrFromInt(dest));
     return @cmpxchgStrong(i32, ptr, comperand, exchange, .seq_cst, .seq_cst) orelse comperand;
 }
 
-// --- File change notifications (stub: return fake handles, no-op poll) ---
 var next_change_handle: usize = 0xCE000001;
 
+/// --- File change notifications (stub: return fake handles, no-op poll) ---
+/// Implementation status: No-op fallback
 pub fn stub_FindFirstChangeNotificationW(path_ptr: usize, watch_subtree: i32, filter: u32) callconv(w32cc.WINAPI) usize {
     _ = path_ptr;
     _ = watch_subtree;
@@ -285,13 +337,15 @@ pub fn stub_FindFirstChangeNotificationW(path_ptr: usize, watch_subtree: i32, fi
     return h;
 }
 
+/// stub_FindNextChangeNotification
+/// Implementation status: No-op fallback
 pub fn stub_FindNextChangeNotification(hChangeHandle: usize) callconv(w32cc.WINAPI) i32 {
     _ = hChangeHandle;
     return 1; // TRUE
 }
 
-// --- SList (Interlocked Singly Linked Lists) ---
-
+/// --- SList (Interlocked Singly Linked Lists) ---
+/// Implementation status: Partially implemented
 pub fn InitializeSListHead(ListHead: usize) callconv(w32cc.WINAPI) void {
     // SLIST_HEADER is 8 bytes on x86 — zero it out
     if (ListHead != 0) {
@@ -299,6 +353,8 @@ pub fn InitializeSListHead(ListHead: usize) callconv(w32cc.WINAPI) void {
     }
 }
 
+/// InterlockedFlushSList
+/// Implementation status: Partially implemented
 pub fn InterlockedFlushSList(ListHead: usize) callconv(w32cc.WINAPI) usize {
     if (ListHead != 0) {
         // Read the first pointer (first 4 bytes of SLIST_HEADER)
@@ -309,38 +365,42 @@ pub fn InterlockedFlushSList(ListHead: usize) callconv(w32cc.WINAPI) usize {
     return 0; // Empty list
 }
 
-// --- Extended Critical Sections ---
-
+/// --- Extended Critical Sections ---
+/// Implementation status: Partially implemented
 pub fn InitializeCriticalSectionEx(lpCriticalSection: usize, dwSpinCount: u32, flags: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: InitializeCriticalSectionEx(cs={X}, spin={d}, flags={X})\n", .{ lpCriticalSection, dwSpinCount, flags });
     InitializeCriticalSection(lpCriticalSection);
     return 1; // TRUE = success
 }
 
+/// InitializeCriticalSectionAndSpinCount
+/// Implementation status: Partially implemented
 pub fn InitializeCriticalSectionAndSpinCount(lpCriticalSection: usize, dwSpinCount: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: InitializeCriticalSectionAndSpinCount(cs={X}, spin={d})\n", .{ lpCriticalSection, dwSpinCount });
     InitializeCriticalSection(lpCriticalSection);
     return 1; // TRUE = success
 }
 
-// --- Pointer encoding (identity transform in emulation) ---
-
+/// --- Pointer encoding (identity transform in emulation) ---
+/// Implementation status: Partially implemented
 pub fn EncodePointer(ptr: usize) callconv(w32cc.WINAPI) usize {
     return ptr; // No encoding needed
 }
 
+/// DecodePointer
+/// Implementation status: Partially implemented
 pub fn DecodePointer(ptr: usize) callconv(w32cc.WINAPI) usize {
     return ptr; // No decoding needed
 }
-
-// --- Fiber Local Storage (FLS) ---
-// FLS is like TLS but per-fiber. We're single-fiber, so just use simple slots.
 
 var fls_next: u32 = 0;
 const MAX_FLS_SLOTS = 128;
 var fls_values: [MAX_FLS_SLOTS]usize = [_]usize{0} ** MAX_FLS_SLOTS;
 var fls_callbacks: [MAX_FLS_SLOTS]usize = [_]usize{0} ** MAX_FLS_SLOTS;
 
+/// --- Fiber Local Storage (FLS) ---
+/// FLS is like TLS but per-fiber. We're single-fiber, so just use simple slots.
+/// Implementation status: Partially implemented
 pub fn FlsAlloc(lpCallback: usize) callconv(w32cc.WINAPI) u32 {
     if (fls_next >= MAX_FLS_SLOTS) return 0xFFFFFFFF; // FLS_OUT_OF_INDEXES
     const idx = fls_next;
@@ -351,17 +411,23 @@ pub fn FlsAlloc(lpCallback: usize) callconv(w32cc.WINAPI) u32 {
     return idx;
 }
 
+/// FlsGetValue
+/// Implementation status: Partially implemented
 pub fn FlsGetValue(dwFlsIndex: u32) callconv(w32cc.WINAPI) usize {
     if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
     return fls_values[dwFlsIndex];
 }
 
+/// FlsSetValue
+/// Implementation status: Partially implemented
 pub fn FlsSetValue(dwFlsIndex: u32, lpFlsData: usize) callconv(w32cc.WINAPI) i32 {
     if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
     fls_values[dwFlsIndex] = lpFlsData;
     return 1; // TRUE
 }
 
+/// FlsFree
+/// Implementation status: Partially implemented
 pub fn FlsFree(dwFlsIndex: u32) callconv(w32cc.WINAPI) i32 {
     if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
     fls_values[dwFlsIndex] = 0;
@@ -369,14 +435,16 @@ pub fn FlsFree(dwFlsIndex: u32) callconv(w32cc.WINAPI) i32 {
     return 1; // TRUE
 }
 
-// --- Additional sync stubs ---
-
+/// --- Additional sync stubs ---
+/// Implementation status: Partially implemented
 pub fn InterlockedExchange(target: usize, value: i32) callconv(w32cc.WINAPI) i32 {
     if (target == 0) return 0;
     const ptr = @as(*i32, @ptrFromInt(target));
     return @atomicRmw(i32, ptr, .Xchg, value, .seq_cst);
 }
 
+/// TlsFree
+/// Implementation status: Partially implemented
 pub fn TlsFree(dwTlsIndex: u32) callconv(w32cc.WINAPI) i32 {
     if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;
     // Clear the value in all thread entries
@@ -390,6 +458,8 @@ pub fn TlsFree(dwTlsIndex: u32) callconv(w32cc.WINAPI) i32 {
 
 var next_semaphore_handle: usize = 0xA0000001;
 
+/// stub_CreateSemaphoreA
+/// Implementation status: Stub
 pub fn stub_CreateSemaphoreA(lpSemaphoreAttributes: usize, lInitialCount: i32, lMaximumCount: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
     _ = lpSemaphoreAttributes;
     _ = lInitialCount;
@@ -408,6 +478,8 @@ pub fn stub_CreateSemaphoreA(lpSemaphoreAttributes: usize, lInitialCount: i32, l
 
 var next_event_handle: usize = 0xE0000010;
 
+/// stub_OpenEventA
+/// Implementation status: Stub
 pub fn stub_OpenEventA(dwDesiredAccess: u32, bInheritHandle: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
     _ = dwDesiredAccess;
     _ = bInheritHandle;

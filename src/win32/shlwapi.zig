@@ -1,8 +1,12 @@
+//! SHLWAPI.dll registration.
+
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
-const stub_common = @import("stub_common.zig");
+const stub_common = @import("shared.zig");
 
+/// Registers SHLWAPI.dll functions with the environment.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "SHLWAPI.dll";
     const s0 = stub_common.stub_args0;
@@ -75,7 +79,7 @@ fn stub_identity(ptr: usize) callconv(.c) usize {
 
 // --- Proper SHLWAPI path implementations ---
 
-const w32cc = @import("../calling_convention.zig");
+const w32cc = @import("calling_convention.zig");
 
 // Helper: get wide string length
 fn wcslen(ptr: usize) usize {

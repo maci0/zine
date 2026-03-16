@@ -14,7 +14,7 @@ const char = @import("user32/char.zig");
 const display = @import("user32/display.zig");
 const class = @import("user32/class.zig");
 const format = @import("user32/format.zig");
-const w32 = @import("../win32_constants.zig");
+const w32 = @import("constants.zig");
 
 pub fn register(environment: *env.Environment) !void {
     // Wire up renderer input callbacks
@@ -438,7 +438,7 @@ pub fn register(environment: *env.Environment) !void {
 
 // --- Generic stubs (imported from stub_common) ---
 
-const stub_common = @import("stub_common.zig");
+const stub_common = @import("shared.zig");
 const stub_ret0_0 = stub_common.stub_args0;
 const stub_ret0_1 = stub_common.stub_args1;
 const stub_ret0_2 = stub_common.stub_args2;
@@ -784,7 +784,7 @@ const SEH_Frame = extern struct {
     catch_ebp: u32,
 };
 
-export fn user32_seh_handler(record: *anyopaque, frame_ptr: *SEH_Frame, context: *@import("../teb.zig").CONTEXT, dispatch: usize) callconv(.c) u32 {
+export fn user32_seh_handler(record: *anyopaque, frame_ptr: *SEH_Frame, context: *@import("teb.zig").CONTEXT, dispatch: usize) callconv(.c) u32 {
     _ = record; _ = dispatch;
     if (trace.enable_tracing) trace.print("USER32: Swallowing exception in WindowProc, jumping to catch handler.\n", .{});
     context.Eip = frame_ptr.catch_eip;
@@ -795,7 +795,7 @@ export fn user32_seh_handler(record: *anyopaque, frame_ptr: *SEH_Frame, context:
 
 const native_arch = @import("builtin").target.cpu.arch;
 const platform_mod = @import("../platform.zig");
-const w32cc = @import("../calling_convention.zig");
+const w32cc = @import("calling_convention.zig");
 
 comptime {
     if (native_arch == .x86) {

@@ -1,7 +1,9 @@
 const trace = @import("../../trace.zig");
 const kernel32 = @import("../kernel32.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 
+/// Determines the location of a resource with the specified type and name in the specified module.
+/// Implementation status: Partially implemented (supports integer IDs).
 pub fn FindResourceA(hModule: usize, lpName: usize, lpType: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) {
         const name_s = if (lpName > 0xFFFF) trace.c_span(lpName) else "INTRESOURCE";
@@ -11,6 +13,8 @@ pub fn FindResourceA(hModule: usize, lpName: usize, lpType: usize) callconv(w32c
     return findResourceImpl(hModule, lpName, lpType);
 }
 
+/// Determines the location of a resource with the specified type and name in the specified module (Unicode version).
+/// Implementation status: Partially implemented (supports integer IDs).
 pub fn FindResourceW(hModule: usize, lpName: usize, lpType: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) {
         trace.print("KERNEL32: FindResourceW(hMod={x}, name={x}, type={x})\n", .{ hModule, lpName, lpType });
@@ -45,6 +49,8 @@ fn findResourceImpl(hModule: usize, lpName: usize, lpType: usize) usize {
     return 0;
 }
 
+/// Retrieves a handle that can be used to obtain a pointer to the first byte of the specified resource in memory.
+/// Implementation status: Partially implemented (returns the resource info handle directly).
 pub fn LoadResource(hModule: usize, hResInfo: usize) callconv(w32cc.WINAPI) usize {
     _ = hModule;
     // In Win32, LoadResource just returns the HGLOBAL handle.
@@ -52,6 +58,8 @@ pub fn LoadResource(hModule: usize, hResInfo: usize) callconv(w32cc.WINAPI) usiz
     return hResInfo;
 }
 
+/// Retrieves the size, in bytes, of the specified resource.
+/// Implementation status: Stub (currently returns 0).
 pub fn stub_SizeofResource(hModule: usize, hResInfo: usize) callconv(w32cc.WINAPI) u32 {
     _ = hModule;
     // We need to find the size. Since FindResource returned the data pointer,
@@ -61,6 +69,8 @@ pub fn stub_SizeofResource(hModule: usize, hResInfo: usize) callconv(w32cc.WINAP
     return 0;
 }
 
+/// Retrieves a pointer to the specified resource in memory.
+/// Implementation status: Partially implemented (returns the resource data handle directly).
 pub fn LockResource(hResData: usize) callconv(w32cc.WINAPI) usize {
     // In Win32, LockResource just returns the pointer.
     return hResData;

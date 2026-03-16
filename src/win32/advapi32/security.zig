@@ -1,7 +1,9 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const w32cc = @import("../../calling_convention.zig");
+const w32cc = @import("../calling_convention.zig");
 
+/// OpenProcessToken
+/// Implementation status: Partially implemented
 pub fn OpenProcessToken(ProcessHandle: usize, DesiredAccess: u32, TokenHandle: usize) callconv(w32cc.WINAPI) i32 {
     _ = ProcessHandle;
     _ = DesiredAccess;
@@ -12,6 +14,8 @@ pub fn OpenProcessToken(ProcessHandle: usize, DesiredAccess: u32, TokenHandle: u
     return 1;
 }
 
+/// AdjustTokenPrivileges
+/// Implementation status: Partially implemented
 pub fn AdjustTokenPrivileges(TokenHandle: usize, DisableAllPrivileges: i32, NewState: usize, BufferLength: u32, PreviousState: usize, ReturnLength: usize) callconv(w32cc.WINAPI) i32 {
     _ = TokenHandle;
     _ = DisableAllPrivileges;
@@ -23,6 +27,8 @@ pub fn AdjustTokenPrivileges(TokenHandle: usize, DisableAllPrivileges: i32, NewS
     return 1;
 }
 
+/// stub_LookupPrivilegeValueW
+/// Implementation status: Stub
 pub fn stub_LookupPrivilegeValueW(lpSystemName: usize, lpName: usize, lpLuid: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpSystemName;
     _ = lpName;
@@ -31,6 +37,8 @@ pub fn stub_LookupPrivilegeValueW(lpSystemName: usize, lpName: usize, lpLuid: us
     return 0;
 }
 
+/// stub_GetTokenInformation
+/// Implementation status: Stub
 pub fn stub_GetTokenInformation(TokenHandle: usize, TokenInformationClass: u32, TokenInformation: usize, TokenInformationLength: u32, ReturnLength: usize) callconv(w32cc.WINAPI) i32 {
     _ = TokenHandle;
     _ = TokenInformationClass;
@@ -41,6 +49,8 @@ pub fn stub_GetTokenInformation(TokenHandle: usize, TokenInformationClass: u32, 
     return 0;
 }
 
+/// stub_OpenThreadToken
+/// Implementation status: No-op fallback
 pub fn stub_OpenThreadToken(ThreadHandle: usize, DesiredAccess: u32, OpenAsSelf: i32, TokenHandle: usize) callconv(w32cc.WINAPI) i32 {
     _ = ThreadHandle;
     _ = DesiredAccess;
@@ -50,6 +60,8 @@ pub fn stub_OpenThreadToken(ThreadHandle: usize, DesiredAccess: u32, OpenAsSelf:
     return 1;
 }
 
+/// GetFileSecurityW
+/// Implementation status: Partially implemented
 pub fn GetFileSecurityW(lpFileName: usize, RequestedInformation: u32, pSecurityDescriptor: usize, nLength: u32, lpnLengthNeeded: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpFileName;
     _ = RequestedInformation;
@@ -62,6 +74,8 @@ pub fn GetFileSecurityW(lpFileName: usize, RequestedInformation: u32, pSecurityD
     return 0;
 }
 
+/// stub_SetFileSecurityW
+/// Implementation status: Stub
 pub fn stub_SetFileSecurityW(lpFileName: usize, SecurityInformation: u32, pSecurityDescriptor: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpFileName;
     _ = SecurityInformation;
@@ -70,6 +84,8 @@ pub fn stub_SetFileSecurityW(lpFileName: usize, SecurityInformation: u32, pSecur
     return 0;
 }
 
+/// stub_IsTextUnicode
+/// Implementation status: Stub
 pub fn stub_IsTextUnicode(lpv: usize, iSize: i32, lpiResult: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpv;
     _ = iSize;
@@ -77,7 +93,8 @@ pub fn stub_IsTextUnicode(lpv: usize, iSize: i32, lpiResult: usize) callconv(w32
     return 0; // Not Unicode
 }
 
-// --- EqualSid: compares two SIDs byte-by-byte ---
+/// --- EqualSid: compares two SIDs byte-by-byte ---
+/// Implementation status: Partially implemented
 pub fn EqualSid(sid1: usize, sid2: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("ADVAPI32: EqualSid({x}, {x})\n", .{ sid1, sid2 });
     if (sid1 == 0 or sid2 == 0) return 0;
@@ -94,7 +111,8 @@ pub fn EqualSid(sid1: usize, sid2: usize) callconv(w32cc.WINAPI) i32 {
     return if (std.mem.eql(u8, s1[0..size], s2[0..size])) 1 else 0;
 }
 
-// --- GetLengthSid: returns byte length of a SID ---
+/// --- GetLengthSid: returns byte length of a SID ---
+/// Implementation status: Partially implemented
 pub fn GetLengthSid(sid: usize) callconv(w32cc.WINAPI) u32 {
     if (sid == 0) return 0;
     const s = @as([*]const u8, @ptrFromInt(sid));
@@ -104,8 +122,9 @@ pub fn GetLengthSid(sid: usize) callconv(w32cc.WINAPI) u32 {
     return result;
 }
 
-// --- GetSecurityDescriptorOwner ---
-// BOOL GetSecurityDescriptorOwner(PSECURITY_DESCRIPTOR pSD, PSID *pOwner, LPBOOL lpbOwnerDefaulted)
+/// --- GetSecurityDescriptorOwner ---
+/// BOOL GetSecurityDescriptorOwner(PSECURITY_DESCRIPTOR pSD, PSID *pOwner, LPBOOL lpbOwnerDefaulted)
+/// Implementation status: Partially implemented
 pub fn GetSecurityDescriptorOwner(pSD: usize, pOwner: usize, lpbOwnerDefaulted: usize) callconv(w32cc.WINAPI) i32 {
     _ = pSD;
     // Set owner to NULL (no owner set)
@@ -115,14 +134,16 @@ pub fn GetSecurityDescriptorOwner(pSD: usize, pOwner: usize, lpbOwnerDefaulted: 
     return 1; // TRUE
 }
 
-// --- GetSecurityDescriptorLength ---
+/// --- GetSecurityDescriptorLength ---
+/// Implementation status: Partially implemented
 pub fn GetSecurityDescriptorLength(pSD: usize) callconv(w32cc.WINAPI) u32 {
     _ = pSD;
     // Minimum SECURITY_DESCRIPTOR_RELATIVE size = 20 bytes
     return 20;
 }
 
-// --- FreeSid ---
+/// --- FreeSid ---
+/// Implementation status: Partially implemented
 pub fn FreeSid(sid: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("ADVAPI32: FreeSid({x})\n", .{sid});
     return 0; // Returns NULL on success
@@ -154,6 +175,44 @@ test "GetSecurityDescriptorOwner sets NULL owner" {
     try std.testing.expectEqual(@as(i32, 1), result);
     try std.testing.expectEqual(@as(usize, 0), owner);
     try std.testing.expectEqual(@as(i32, 0), defaulted);
+}
+
+var sid_storage: [48]u8 align(4) = [_]u8{0} ** 48;
+
+/// SID structure: revision(1) + subAuthorityCount(1) + identifierAuthority(6) + subAuthority[8](32)
+/// Implementation status: Stub
+pub fn stub_AllocateAndInitializeSid(
+    pIdentifierAuthority: usize,
+    nSubAuthorityCount: u8,
+    sa0: u32,
+    sa1: u32,
+    sa2: u32,
+    sa3: u32,
+    sa4: u32,
+    sa5: u32,
+    sa6: u32,
+    sa7: u32,
+    pSid: usize,
+) callconv(w32cc.WINAPI) i32 {
+    // Build a real SID in static storage
+    const count = @min(nSubAuthorityCount, 8);
+    sid_storage[0] = 1; // Revision
+    sid_storage[1] = count;
+    // Copy identifier authority (6 bytes)
+    if (pIdentifierAuthority != 0) {
+        const auth = @as([*]const u8, @ptrFromInt(pIdentifierAuthority));
+        @memcpy(sid_storage[2..8], auth[0..6]);
+    }
+    // Copy sub-authorities
+    const subs = [_]u32{ sa0, sa1, sa2, sa3, sa4, sa5, sa6, sa7 };
+    for (0..count) |i| {
+        const off = 8 + i * 4;
+        @as(*align(1) u32, @ptrCast(sid_storage[off..].ptr)).* = subs[i];
+    }
+    if (pSid != 0) {
+        @as(*usize, @ptrFromInt(pSid)).* = @intFromPtr(&sid_storage);
+    }
+    return 1; // TRUE
 }
 
 test "FreeSid returns NULL" {
