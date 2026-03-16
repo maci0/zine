@@ -33,7 +33,6 @@ fn fsStat(path: []const u8) ?std.fs.File.Stat {
 
 fn fsAccess(path: []const u8) bool {
     // Use openFile+close instead of access/accessAbsolute — faccessat panics on WASI.
-    // Try multiple approaches: WASI needs preopened dir handles for absolute paths.
     if (std.fs.cwd().openFile(path, .{})) |file| {
         file.close();
         return true;

@@ -529,13 +529,19 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     const CHILD_THUNK: u32 = 32 * 1024;
     const CHILD_HEAP: u32 = 16 * 1024 * 1024;
     const child_combined_size = child_image_size + CHILD_STACK + CHILD_THUNK + CHILD_HEAP;
-    const child_buf = child_alloc.alloc(u8, child_combined_size) catch return -1;
 
-    // For PEs with relocation data, use the buffer's host address as base_addr
-    // so each child gets a unique address range. For fixed-base PEs (no relocs),
-    // we MUST use the preferred ImageBase since the code has hardcoded addresses.
     const pe_preferred: u32 = child_module.parser.getNtHeaders().OptionalHeader.ImageBase;
     const has_relocs = child_module.parser.getNtHeaders().OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC].Size > 0;
+
+    // For fixed-base PEs (no relocation table), we need the buffer at the PE's
+    // preferred base so hardcoded addresses match host memory. But we can only
+    // do this if the parent's combined_buf doesn't overlap. If both PEs have the
+    // same preferred base, fall back to a separate buffer (child won't get correct
+    // pointer dereferences in stubs, but at least won't crash the parent).
+    const child_buf = child_alloc.alloc(u8, child_combined_size) catch return -1;
+    // For relocatable PEs, use buffer host address as base.
+    // For fixed-base PEs, use preferred ImageBase (interpreter translates correctly,
+    // but raw @ptrFromInt in stubs may not work for file paths — trace.addr() handles this).
     const child_preferred: u32 = if (has_relocs)
         @intCast(@intFromPtr(child_buf.ptr))
     else

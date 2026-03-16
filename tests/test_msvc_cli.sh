@@ -183,7 +183,8 @@ if $IS_WASM; then
         COMMON_TOOLS="$MSVC_ROOT/Common/Tools"
     else
         # wasmtime: --dir to preopen filesystem, --env to pass-through host env vars
-        WINLOADER_CMD=(wasmtime run --dir=/ --env INCLUDE --env LIB --env PATH --env TMP --env TEMP "$WASM_BIN" --)
+        # --dir=/ for absolute paths, --dir=. for CWD-relative paths
+        WINLOADER_CMD=(wasmtime run --dir=/ --dir=. --env INCLUDE --env LIB --env PATH --env TMP --env TEMP "$WASM_BIN" --)
     fi
 else
     WINLOADER_CMD=("$WINLOADER")
