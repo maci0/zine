@@ -14,6 +14,20 @@ const trace = @import("../trace.zig");
 const w32cc = @import("calling_convention.zig");
 const x86_memory = @import("../x86/memory.zig");
 
+/// Spawn handler for WASM mode. Set by wasm_main.zig.
+/// Called by _spawnvp to load and execute a child PE in-process.
+/// Args: (exe_path, argv_ptr) → exit code, or null if not supported.
+pub var spawn_handler: ?*const fn ([]const u8, usize) i32 = null;
+
+/// When non-null, ExitProcess stores the code here instead of calling
+/// std.process.exit. Used by the WASM spawn handler so a child PE's
+/// ExitProcess doesn't kill the entire WASM process.
+pub var child_exit_code: ?*i32 = null;
+
+/// When true, the interpreter should halt at the next step.
+/// Set by ExitProcess in child-process mode.
+pub var halt_requested: bool = false;
+
 /// Shared guest memory reference. Set by wasm_main.zig at startup.
 /// When non-null, stubs use guest-heap allocation so addresses stay
 /// within the GuestMemory range.  All DLL stubs access this through

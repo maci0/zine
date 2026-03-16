@@ -594,6 +594,9 @@ pub fn main() !void {
     const stub_common = @import("win32/shared.zig");
     stub_common.guest_memory = &cpu.memory;
 
+    // Register spawn handler so _spawnvp can load child PEs in-process
+    stub_common.spawn_handler = &wasmSpawnHandler;
+
     // Stack occupies the region between the PE image and the thunk area.
     // ESP starts near the top of the stack region (just below thunks).
     cpu.esp = thunk_base_addr -% 16;
@@ -625,6 +628,229 @@ pub fn main() !void {
     // Propagate the guest process exit code to the WASM host.
     // Note: wasmtime clamps exit codes ≥126 to 1; wasmer passes them through.
     std.process.exit(@truncate(cpu.eax));
+}
+
+// ---------------------------------------------------------------------------
+// WASM in-process spawn handler
+// ---------------------------------------------------------------------------
+// Implements _spawnvp for WASM by loading and executing a child PE in the
+// same interpreter. Used by DUMPBIN/LIB/EDITBIN which are thin wrappers
+// that exec LINK.EXE.
+
+fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
+    // Resolve the PE path: convert Win32 path to POSIX
+    var posix_buf: [1024]u8 = undefined;
+    const posix_len = path_utils.win32ToPosix(cmdname, &posix_buf);
+    const exe_path = if (posix_len > 0) posix_buf[0..posix_len] else cmdname;
+
+    log.info("wasm: spawn handler loading child PE '{s}'", .{exe_path});
+
+    // Build argv for the child process
+    var child_args: std.ArrayListUnmanaged(?[*:0]u8) = .{};
+    if (argv_ptr != 0) {
+        const argv = @as([*]const usize, @ptrFromInt(argv_ptr));
+        var i: usize = 0;
+        while (argv[i] != 0) : (i += 1) {
+            child_args.append(std.heap.page_allocator, @ptrFromInt(argv[i])) catch break;
+        }
+    }
+    child_args.append(std.heap.page_allocator, null) catch {};
+
+    // Save parent state
+    const shared = @import("win32/shared.zig");
+    const saved_guest_memory = shared.guest_memory;
+    const saved_argc = stubs_msvcrt.global_argc;
+    const saved_argv = stubs_msvcrt.global_argv;
+
+    defer {
+        // Restore parent state
+        shared.guest_memory = saved_guest_memory;
+        stubs_msvcrt.global_argc = saved_argc;
+        stubs_msvcrt.global_argv = saved_argv;
+    }
+
+    // Load the child PE
+    const child_alloc = std.heap.page_allocator;
+    var child_env = Environment.init(child_alloc);
+
+    // Register all stub DLLs (same as main)
+    stubs_msvcrt.register(&child_env) catch return -1;
+    stubs_kernel32.register(&child_env) catch return -1;
+    stubs_advapi32.register(&child_env) catch return -1;
+    stubs_user32.register(&child_env) catch return -1;
+    stubs_ntdll.register(&child_env) catch return -1;
+    stubs_shell32.register(&child_env) catch return -1;
+    stubs_gdi32.register(&child_env) catch return -1;
+    stubs_ole32.register(&child_env) catch return -1;
+    stubs_comctl32.register(&child_env) catch return -1;
+    stubs_version.register(&child_env) catch return -1;
+    stubs_winmm.register(&child_env) catch return -1;
+    stubs_imm32.register(&child_env) catch return -1;
+
+    child_env.addBuiltinExport("builtin", "not_implemented", @intFromPtr(&not_implemented)) catch return -1;
+
+    // Add search paths
+    child_env.registry.addSearchPath(".") catch {};
+    {
+        const fixed = child_alloc.dupe(u8, exe_path) catch return -1;
+        std.mem.replaceScalar(u8, fixed, '\\', '/');
+        if (std.fs.path.dirname(fixed)) |dir| {
+            child_env.registry.addSearchPath(dir) catch {};
+        }
+    }
+    // Add host PATH directories
+    if (std.process.getEnvVarOwned(child_alloc, "PATH")) |host_path| {
+        var it = std.mem.tokenizeScalar(u8, host_path, ':');
+        while (it.next()) |p| {
+            if (p.len > 0) child_env.registry.addSearchPath(child_alloc.dupe(u8, p) catch continue) catch {};
+        }
+    } else |_| {}
+
+    const exe_name = std.fs.path.basename(exe_path);
+    const child_module = child_env.registry.loadModule(exe_name) catch |err| {
+        log.err("wasm: spawn handler failed to load '{s}': {}", .{ exe_name, err });
+        return -1;
+    };
+
+    const child_preferred: u32 = child_module.parser.getNtHeaders().OptionalHeader.ImageBase;
+    const child_image_size: u32 = @truncate(child_module.mapped_memory.len);
+    const CHILD_STACK: u32 = 64 * 1024;
+    const CHILD_THUNK: u32 = 32 * 1024;
+    const CHILD_HEAP: u32 = 16 * 1024 * 1024;
+    const child_combined_size = child_image_size + CHILD_STACK + CHILD_THUNK + CHILD_HEAP;
+    const child_buf = child_alloc.alloc(u8, child_combined_size) catch return -1;
+
+    @memset(child_buf[child_image_size .. child_image_size + CHILD_STACK], 0);
+    @memset(child_buf[child_image_size + CHILD_STACK ..], 0xCC);
+
+    const child_thunk_base = child_preferred +% child_image_size +% CHILD_STACK;
+    var child_guest_mem = x86_memory.GuestMemory{
+        .base = child_buf,
+        .base_addr = child_preferred,
+    };
+    loader.setThunkMemory(&child_guest_mem, child_thunk_base);
+
+    child_guest_mem.heap_start = child_image_size + CHILD_STACK + CHILD_THUNK;
+    child_guest_mem.heap_cursor = child_guest_mem.heap_start;
+    child_env.relocateDataExports(&child_guest_mem, child_buf, child_preferred);
+
+    // Resolve imports
+    var resolved_count: usize = 0;
+    while (true) {
+        var to_resolve: std.ArrayListUnmanaged(*Module) = .{};
+        defer to_resolve.deinit(child_alloc);
+        var it = child_env.registry.modules.iterator();
+        while (it.next()) |entry| {
+            to_resolve.append(child_alloc, entry.value_ptr.*) catch break;
+        }
+        if (to_resolve.items.len == resolved_count) break;
+        for (to_resolve.items) |mod| {
+            loader.resolveImports(&child_env, mod) catch {};
+        }
+        resolved_count = to_resolve.items.len;
+    }
+
+    @memcpy(child_buf[0..child_image_size], child_module.mapped_memory[0..child_image_size]);
+
+    // Reverse relocations (same as main PE loading)
+    {
+        const actual_base: u32 = @truncate(child_module.image_base);
+        if (actual_base != child_preferred) {
+            const reverse_delta = child_preferred -% actual_base;
+            const opt_header = &child_module.parser.getNtHeaders().OptionalHeader;
+            const reloc_dir = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC];
+            if (reloc_dir.Size > 0) {
+                var reloc_offset = reloc_dir.VirtualAddress;
+                const reloc_end = reloc_offset + reloc_dir.Size;
+                while (reloc_offset < reloc_end) {
+                    const block_va = @as(*align(1) const u32, @ptrCast(child_buf[reloc_offset..].ptr)).*;
+                    const block_size = @as(*align(1) const u32, @ptrCast(child_buf[reloc_offset + 4 ..].ptr)).*;
+                    if (block_size == 0) break;
+                    const entries_count = (block_size - 8) / 2;
+                    for (0..entries_count) |e| {
+                        const entry = @as(*align(1) const u16, @ptrCast(child_buf[reloc_offset + 8 + e * 2 ..].ptr)).*;
+                        if (entry >> 12 == 3) {
+                            const patch_addr = block_va + (entry & 0x0FFF);
+                            if (patch_addr + 4 <= child_image_size) {
+                                const ptr = @as(*align(1) u32, @ptrCast(child_buf[patch_addr..].ptr));
+                                ptr.* = ptr.* +% reverse_delta;
+                            }
+                        }
+                    }
+                    reloc_offset += block_size;
+                }
+            }
+        }
+    }
+
+    // Zero-fill BSS sections
+    for (child_module.parser.sections) |sec| {
+        const vsize = sec.Misc.VirtualSize;
+        if (vsize > sec.SizeOfRawData) {
+            const bss_start = sec.VirtualAddress + sec.SizeOfRawData;
+            const bss_end = sec.VirtualAddress + vsize;
+            if (bss_end <= child_buf.len) {
+                @memset(child_buf[bss_start..bss_end], 0);
+            }
+        }
+    }
+
+    // Set up child MSVCRT globals and reset cached command line
+    stubs_msvcrt.global_argc = @intCast(child_args.items.len - 1);
+    stubs_msvcrt.global_argv = child_args.items.ptr;
+    @import("win32/kernel32/process.zig").resetCommandLine();
+
+    // Set up child CPU
+    const ep_rva = child_module.parser.getNtHeaders().OptionalHeader.AddressOfEntryPoint;
+    if (ep_rva == 0) return -1;
+
+    var child_cpu = x86_cpu.Cpu{};
+    child_cpu.memory = x86_memory.GuestMemory{
+        .base = child_buf,
+        .base_addr = child_preferred,
+        .heap_start = child_image_size + CHILD_STACK + CHILD_THUNK,
+        .heap_cursor = child_guest_mem.heap_cursor,
+    };
+    child_cpu.eip = child_preferred +% ep_rva;
+    child_cpu.esp = child_thunk_base -% 16;
+    child_cpu.ebp = child_cpu.esp;
+
+    // Reuse parent's TEB
+    child_cpu.fs_base = @truncate(teb.teb_base_addr);
+
+    shared.guest_memory = &child_cpu.memory;
+
+    // .rsrc write protection for child
+    for (child_module.parser.sections) |sec| {
+        const name = &sec.Name;
+        if (name[0] == '.' and name[1] == 'r' and name[2] == 's' and name[3] == 'r' and name[4] == 'c') {
+            child_cpu.memory.pe_image_end = child_preferred +% child_image_size;
+            const rsrc_start = child_preferred +% sec.VirtualAddress;
+            const rsrc_end = rsrc_start +% sec.Misc.VirtualSize;
+            if (rsrc_start > child_preferred)
+                child_cpu.memory.addWritableSection(child_preferred, rsrc_start);
+            if (rsrc_end < child_preferred +% child_image_size)
+                child_cpu.memory.addWritableSection(rsrc_end, child_preferred +% child_image_size);
+            break;
+        }
+    }
+
+    log.info("wasm: child PE '{s}' at EIP=0x{X}, ESP=0x{X}", .{ exe_name, child_cpu.eip, child_cpu.esp });
+
+    // Set up child exit code capture
+    var exit_code: i32 = 0;
+    shared.child_exit_code = &exit_code;
+    shared.halt_requested = false;
+    defer {
+        shared.child_exit_code = null;
+        shared.halt_requested = false;
+    }
+
+    // Run child interpreter
+    x86_execute.run(&child_cpu);
+
+    log.info("wasm: child PE '{s}' exited with code {d}", .{ exe_name, exit_code });
+    return exit_code;
 }
 
 // ---------------------------------------------------------------------------

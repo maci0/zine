@@ -70,6 +70,17 @@ pub fn UnhandledExceptionFilter(ExceptionInfo: usize) callconv(w32cc.WINAPI) u32
 /// Implementation status: Fully implemented (exits the WASM/native host).
 pub fn ExitProcess(exitCode: u32) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: ExitProcess({d})\n", .{exitCode});
+    // In WASM child-process mode, store the exit code and signal the
+    // interpreter to halt, rather than killing the whole WASM process.
+    const shared = @import("../shared.zig");
+    if (shared.child_exit_code) |ptr| {
+        ptr.* = @bitCast(exitCode);
+        // Signal halt — the interpreter checks halted flag each step.
+        // We need to set the CPU's halted flag. Access it through guest_memory's
+        // parent pointer is not available, so we use a global halt request.
+        shared.halt_requested = true;
+        return; // Return to interpreter loop, which will see halt_requested
+    }
     platform.exitProcess(@intCast(exitCode & 0xFF));
 }
 
@@ -341,6 +352,13 @@ pub fn GetModuleHandleW(lpModuleName_ptr: usize) callconv(w32cc.WINAPI) usize {
 var cmdline_buf: [4096]u8 = undefined;
 var cmdline_initialized: bool = false;
 var cmdline_result_addr: usize = 0; // Final address to return (host or guest)
+
+/// Reset command line state so the next GetCommandLineA rebuilds from current argv.
+/// Called by the WASM spawn handler before executing a child PE.
+pub fn resetCommandLine() void {
+    cmdline_initialized = false;
+    cmdline_result_addr = 0;
+}
 
 /// Retrieves the command-line string for the current process.
 /// Implementation status: Partially implemented (constructs command line from guest arguments).

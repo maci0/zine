@@ -261,6 +261,14 @@ pub fn beginthreadex(
 /// Implementation status: Partially implemented
 pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 {
     if (comptime !platform.is_native) {
+        // WASM mode: use the spawn handler to load and run the child PE in-process
+        const shared = @import("../shared.zig");
+        if (shared.spawn_handler) |handler| {
+            if (cmdname_ptr == 0) return -1;
+            const cmdname = trace.c_span(cmdname_ptr);
+            if (trace.enable_tracing) trace.print("MSVCRT: _spawnvp(mode={d}, cmd='{s}') [WASM in-process]\n", .{ mode, cmdname });
+            return handler(cmdname, argv_ptr);
+        }
         _ = .{ mode, cmdname_ptr, argv_ptr };
         if (trace.enable_tracing) trace.print("MSVCRT: _spawnvp not supported on this platform\n", .{});
         return -1;
