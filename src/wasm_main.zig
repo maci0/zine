@@ -645,28 +645,38 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
 
     log.info("wasm: spawn handler loading child PE '{s}'", .{exe_path});
 
-    // Build argv for the child process
-    var child_args: std.ArrayListUnmanaged(?[*:0]u8) = .{};
+    // Collect argv strings from parent's guest memory (translate guest VAs).
+    // argv_ptr is a guest VA pointing to a null-terminated array of guest VA
+    // string pointers. Each must be translated through the parent's GuestMemory.
+    var arg_strings: std.ArrayListUnmanaged([]const u8) = .{};
     if (argv_ptr != 0) {
-        const argv = @as([*]const usize, @ptrFromInt(argv_ptr));
-        var i: usize = 0;
-        while (argv[i] != 0) : (i += 1) {
-            child_args.append(std.heap.page_allocator, @ptrFromInt(argv[i])) catch break;
+        const host_argv_addr = trace.addr(argv_ptr);
+        if (host_argv_addr >= 0x10000) {
+            const argv = @as([*]const u32, @ptrFromInt(host_argv_addr));
+            var i: usize = 0;
+            while (argv[i] != 0) : (i += 1) {
+                const s = trace.c_span(argv[i]);
+                arg_strings.append(std.heap.page_allocator, std.heap.page_allocator.dupe(u8, s) catch "") catch break;
+            }
         }
     }
-    child_args.append(std.heap.page_allocator, null) catch {};
 
     // Save parent state
     const shared = @import("win32/shared.zig");
+    const msvcrt_process = @import("win32/msvcrt/process.zig");
     const saved_guest_memory = shared.guest_memory;
     const saved_argc = stubs_msvcrt.global_argc;
     const saved_argv = stubs_msvcrt.global_argv;
+    const saved_thunk = loader.saveThunkState();
 
     defer {
         // Restore parent state
         shared.guest_memory = saved_guest_memory;
         stubs_msvcrt.global_argc = saved_argc;
         stubs_msvcrt.global_argv = saved_argv;
+        loader.restoreThunkState(saved_thunk);
+        @import("win32/kernel32/process.zig").resetCommandLine();
+        msvcrt_process.resetGuestArgs();
     }
 
     // Load the child PE
@@ -712,13 +722,16 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
         return -1;
     };
 
-    const child_preferred: u32 = child_module.parser.getNtHeaders().OptionalHeader.ImageBase;
     const child_image_size: u32 = @truncate(child_module.mapped_memory.len);
     const CHILD_STACK: u32 = 64 * 1024;
     const CHILD_THUNK: u32 = 32 * 1024;
     const CHILD_HEAP: u32 = 16 * 1024 * 1024;
     const child_combined_size = child_image_size + CHILD_STACK + CHILD_THUNK + CHILD_HEAP;
     const child_buf = child_alloc.alloc(u8, child_combined_size) catch return -1;
+
+    // Use the buffer's host address as base_addr so each child gets a unique
+    // address range in WASM linear memory (avoids collisions with parent).
+    const child_preferred: u32 = @intCast(@intFromPtr(child_buf.ptr));
 
     @memset(child_buf[child_image_size .. child_image_size + CHILD_STACK], 0);
     @memset(child_buf[child_image_size + CHILD_STACK ..], 0xCC);
@@ -795,10 +808,28 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
         }
     }
 
-    // Set up child MSVCRT globals and reset cached command line
-    stubs_msvcrt.global_argc = @intCast(child_args.items.len - 1);
-    stubs_msvcrt.global_argv = child_args.items.ptr;
+    // Build argv in child's guest memory so the interpreter's string functions
+    // can access argv strings via GuestMemory translation.
+    var child_argv_ptrs: std.ArrayListUnmanaged(?[*:0]u8) = .{};
+    for (arg_strings.items) |s| {
+        // Allocate string in child guest heap
+        const guest_va = child_guest_mem.guestAlloc(@intCast(s.len + 1));
+        if (guest_va != 0) {
+            const offset = guest_va - child_preferred;
+            @memcpy(child_buf[offset..][0..s.len], s);
+            child_buf[offset + s.len] = 0; // null terminator
+            // The argv pointer must be a guest VA (u32), stored as a [*:0]u8
+            // When the thunk dispatcher reads it, c_span(argv[i]) will call
+            // trace.addr() which translates through guest_memory.
+            child_argv_ptrs.append(std.heap.page_allocator, @ptrFromInt(guest_va)) catch {};
+        }
+    }
+    child_argv_ptrs.append(std.heap.page_allocator, null) catch {};
+
+    stubs_msvcrt.global_argc = @intCast(arg_strings.items.len);
+    stubs_msvcrt.global_argv = child_argv_ptrs.items.ptr;
     @import("win32/kernel32/process.zig").resetCommandLine();
+    @import("win32/msvcrt/process.zig").resetGuestArgs();
 
     // Set up child CPU
     const ep_rva = child_module.parser.getNtHeaders().OptionalHeader.AddressOfEntryPoint;
@@ -837,13 +868,13 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
 
     log.info("wasm: child PE '{s}' at EIP=0x{X}, ESP=0x{X}", .{ exe_name, child_cpu.eip, child_cpu.esp });
 
-    // Set up child exit code capture
+    // Set up child exit code capture + CPU pointer for halt
     var exit_code: i32 = 0;
     shared.child_exit_code = &exit_code;
-    shared.halt_requested = false;
+    shared.child_cpu = &child_cpu;
     defer {
         shared.child_exit_code = null;
-        shared.halt_requested = false;
+        shared.child_cpu = null;
     }
 
     // Run child interpreter

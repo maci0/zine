@@ -31,6 +31,18 @@ pub fn setThunkMemory(mem: *x86_memory.GuestMemory, start_addr: u32) void {
     thunk_write_addr = start_addr;
 }
 
+/// Save and restore thunk state for nested PE execution (WASM spawn handler).
+pub const ThunkState = struct { mem: ?*x86_memory.GuestMemory, addr: u32 };
+
+pub fn saveThunkState() ThunkState {
+    return .{ .mem = thunk_memory, .addr = thunk_write_addr };
+}
+
+pub fn restoreThunkState(state: ThunkState) void {
+    thunk_memory = state.mem;
+    thunk_write_addr = state.addr;
+}
+
 /// Allocates and writes a thunk stub in guest memory at the current write address.
 /// Returns the guest address of the written thunk and advances the write address.
 ///

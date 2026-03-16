@@ -101,6 +101,14 @@ pub fn p_environ() callconv(.c) usize {
 var guest_args_buf: ?[]u8 = null;
 var guest_argv_addr: u32 = 0;
 var guest_envp_addr: u32 = 0;
+
+/// Reset cached guest argv/envp state. Called by the WASM spawn handler
+/// so the child PE's CRT rebuilds argv from the new global_argv.
+pub fn resetGuestArgs() void {
+    guest_args_buf = null;
+    guest_argv_addr = 0;
+    guest_envp_addr = 0;
+}
 const guest_args_base: u32 = 0x50000000;
 
 fn ensureGuestArgs() void {
@@ -201,10 +209,8 @@ pub fn getmainargs(
     _ = dowildcard;
     _ = startinfo;
 
-    // Build guest-accessible argv/envp once (interpreter mode only needs this,
-    // but it's harmless on native x86 too — the addresses are still valid).
+    // Build guest-accessible argv/envp (rebuilds after resetGuestArgs)
     ensureGuestArgs();
-
     // Write argc (4 bytes — same width on both 32/64-bit)
     if (argc_ptr != 0) {
         @as(*i32, @ptrFromInt(trace.addr(argc_ptr))).* = msvcrt.global_argc;
@@ -234,8 +240,19 @@ pub fn getmainargs(
 
 /// exit
 /// Implementation status: Partially implemented
-pub fn exit(status: i32) callconv(.c) noreturn {
+pub fn exit(status: i32) callconv(.c) void {
     if (trace.enable_tracing) trace.print("MSVCRT: exit({d}) called from 0x{X}\n", .{ status, @returnAddress() });
+    // In child-process mode, store exit code and halt the child CPU.
+    // exit() returns to the thunk handler → interpreter step() → run() loop
+    // which checks cpu.halted and breaks.
+    const shared = @import("../shared.zig");
+    if (shared.child_exit_code) |ptr| {
+        ptr.* = status;
+        if (shared.child_cpu) |cpu| {
+            cpu.halted = true;
+        }
+        return;
+    }
     platform.exitProcess(@intCast(@as(u32, @bitCast(status)) & 0xFF));
 }
 

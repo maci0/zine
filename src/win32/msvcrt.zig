@@ -446,7 +446,7 @@ fn CxxThrowException(pExceptionObject: usize, pThrowInfo: usize) callconv(.c) vo
 
 /// ?terminate@@YAXXZ: C++ std::terminate()
 /// Called when exception handling fails or unexpected exception
-fn terminate() callconv(.c) noreturn {
+fn terminate() callconv(.c) void {
     if (trace.enable_tracing) trace.print("MSVCRT: terminate() — aborting\n", .{});
     process.exit(3);
 }

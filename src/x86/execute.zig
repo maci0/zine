@@ -34,14 +34,8 @@ const Segment = cpu_mod.Segment;
 
 /// Continually executes instructions in the provided CPU context until the `halted` flag is set.
 pub fn run(cpu: *Cpu) void {
-    const shared = @import("../win32/shared.zig");
     while (!cpu.halted) {
         step(cpu);
-        // Check for halt requested by ExitProcess in child-process mode
-        if (shared.halt_requested) {
-            cpu.halted = true;
-            shared.halt_requested = false;
-        }
     }
 }
 

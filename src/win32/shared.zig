@@ -24,9 +24,9 @@ pub var spawn_handler: ?*const fn ([]const u8, usize) i32 = null;
 /// ExitProcess doesn't kill the entire WASM process.
 pub var child_exit_code: ?*i32 = null;
 
-/// When true, the interpreter should halt at the next step.
-/// Set by ExitProcess in child-process mode.
-pub var halt_requested: bool = false;
+/// When non-null, points to the CPU that should be halted when
+/// ExitProcess/exit is called in child-process mode.
+pub var child_cpu: ?*@import("../x86/cpu.zig").Cpu = null;
 
 /// Shared guest memory reference. Set by wasm_main.zig at startup.
 /// When non-null, stubs use guest-heap allocation so addresses stay

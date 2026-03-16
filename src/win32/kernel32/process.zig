@@ -70,16 +70,15 @@ pub fn UnhandledExceptionFilter(ExceptionInfo: usize) callconv(w32cc.WINAPI) u32
 /// Implementation status: Fully implemented (exits the WASM/native host).
 pub fn ExitProcess(exitCode: u32) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: ExitProcess({d})\n", .{exitCode});
-    // In WASM child-process mode, store the exit code and signal the
-    // interpreter to halt, rather than killing the whole WASM process.
+    // In WASM child-process mode, store the exit code and halt the child
+    // CPU, rather than killing the whole WASM process.
     const shared = @import("../shared.zig");
     if (shared.child_exit_code) |ptr| {
         ptr.* = @bitCast(exitCode);
-        // Signal halt — the interpreter checks halted flag each step.
-        // We need to set the CPU's halted flag. Access it through guest_memory's
-        // parent pointer is not available, so we use a global halt request.
-        shared.halt_requested = true;
-        return; // Return to interpreter loop, which will see halt_requested
+        if (shared.child_cpu) |cpu| {
+            cpu.halted = true;
+        }
+        return;
     }
     platform.exitProcess(@intCast(exitCode & 0xFF));
 }
