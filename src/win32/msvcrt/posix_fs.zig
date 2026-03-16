@@ -33,10 +33,20 @@ fn fsStat(path: []const u8) ?std.fs.File.Stat {
 
 fn fsAccess(path: []const u8) bool {
     // Use openFile+close instead of access/accessAbsolute — faccessat panics on WASI.
+    // Try all preopened directories on WASI (fd 3, 4, 5...).
+    // wasmtime --dir=/ --dir=. gives fd 3=/, fd 4=.
     if (std.fs.cwd().openFile(path, .{})) |file| {
         file.close();
         return true;
     } else |_| {}
+    // Try the second WASI preopened fd (typically fd 4 = "." from --dir=.)
+    {
+        const dir = std.fs.Dir{ .fd = 4 };
+        if (dir.openFile(path, .{})) |file| {
+            file.close();
+            return true;
+        } else |_| {}
+    }
     if (std.fs.path.isAbsolute(path)) {
         if (std.fs.openFileAbsolute(path, .{})) |file| {
             file.close();
@@ -47,21 +57,22 @@ fn fsAccess(path: []const u8) bool {
 }
 
 fn fsCreateFile(path: []const u8, flags: std.fs.File.CreateFlags) !std.fs.File {
-    // Try cwd first (works on WASI where absolute paths need preopened dirs)
-    return std.fs.cwd().createFile(path, flags) catch |e| {
+    return std.fs.cwd().createFile(path, flags) catch {
+        const cwd_dir = std.fs.Dir{ .fd = 4 }; // WASI preopen for "."
+        if (cwd_dir.createFile(path, flags)) |f| return f else |_| {}
         if (std.fs.path.isAbsolute(path))
-            return std.fs.createFileAbsolute(path, flags)
-        else
-            return e;
+            return std.fs.createFileAbsolute(path, flags);
+        return error.FileNotFound;
     };
 }
 
 fn fsOpenFile(path: []const u8, flags: std.fs.File.OpenFlags) !std.fs.File {
-    return std.fs.cwd().openFile(path, flags) catch |e| {
+    return std.fs.cwd().openFile(path, flags) catch {
+        const cwd_dir = std.fs.Dir{ .fd = 4 };
+        if (cwd_dir.openFile(path, flags)) |f| return f else |_| {}
         if (std.fs.path.isAbsolute(path))
-            return std.fs.openFileAbsolute(path, flags)
-        else
-            return e;
+            return std.fs.openFileAbsolute(path, flags);
+        return error.FileNotFound;
     };
 }
 
