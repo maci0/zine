@@ -315,6 +315,7 @@ pub fn main() !void {
     try stubs_msvcrt.register(&environment);
     try stubs_kernel32.register(&environment);
     try stubs_advapi32.register(&environment);
+    @import("win32/advapi32/registry.zig").initConfig(allocator);
     try stubs_imagehlp.register(&environment);
     try stubs_user32.register(&environment);
     try stubs_rpcrt4.register(&environment);

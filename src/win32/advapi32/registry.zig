@@ -1,10 +1,17 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
+const reg_config = @import("registry_config.zig");
 
 var next_reg_handle: u32 = 0xDE000001;
 
 const CPU_REG_HANDLE: u32 = 0xDE00C000;
+
+/// Initialize the registry from the embedded TOML config.
+/// Call once at startup from main.zig / wasm_main.zig.
+pub fn initConfig(allocator: std.mem.Allocator) void {
+    reg_config.init(allocator);
+}
 
 /// Opens the specified registry key.
 /// Implementation status: Stub (always returns ERROR_FILE_NOT_FOUND).
@@ -14,7 +21,22 @@ pub fn RegOpenKeyExA(hKey: usize, lpSubKey: usize, ulOptions: u32, samDesired: u
     _ = samDesired;
     const key = if (lpSubKey != 0) trace.c_span(lpSubKey) else "";
 
-    // Support CPU info registry key that cpuidsdk.dll reads
+    // Build full registry path from root key handle + subkey
+    const full_path = buildFullPath(hKey, key);
+
+    // Check TOML config first
+    if (reg_config.keyExists(full_path)) {
+        if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExA(0x{X}, '{s}') -> OK (config)\n", .{ hKey, key });
+        if (phkResult != 0) {
+            @as(*u32, @ptrFromInt(phkResult)).* = next_reg_handle;
+            // Store the path for later RegQueryValueEx lookups
+            storeHandlePath(next_reg_handle, full_path);
+            next_reg_handle +%= 1;
+        }
+        return 0; // ERROR_SUCCESS
+    }
+
+    // Legacy: hardcoded CPU registry key
     if (isCpuRegKey(hKey, key)) {
         if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExA(0x{X}, '{s}') -> OK (CPU)\n", .{ hKey, key });
         if (phkResult != 0) @as(*u32, @ptrFromInt(phkResult)).* = CPU_REG_HANDLE;
@@ -24,6 +46,71 @@ pub fn RegOpenKeyExA(hKey: usize, lpSubKey: usize, ulOptions: u32, samDesired: u
     if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExA(0x{X}, '{s}') -> ERROR_FILE_NOT_FOUND\n", .{ hKey, key });
     if (phkResult != 0) @as(*u32, @ptrFromInt(phkResult)).* = 0;
     return 2; // ERROR_FILE_NOT_FOUND
+}
+
+// ---------------------------------------------------------------------------
+// Handle → key path mapping (for TOML config lookups)
+// ---------------------------------------------------------------------------
+
+const MAX_HANDLES = 256;
+const HandleEntry = struct { handle: u32 = 0, path: [512]u8 = undefined, len: u16 = 0 };
+var handle_paths: [MAX_HANDLES]HandleEntry = [_]HandleEntry{.{}} ** MAX_HANDLES;
+var handle_count: usize = 0;
+
+fn storeHandlePath(handle: u32, path: []const u8) void {
+    if (handle_count >= MAX_HANDLES) return;
+    var entry = &handle_paths[handle_count];
+    entry.handle = handle;
+    const copy_len = @min(path.len, entry.path.len);
+    @memcpy(entry.path[0..copy_len], path[0..copy_len]);
+    entry.len = @intCast(copy_len);
+    handle_count += 1;
+}
+
+fn lookupHandlePath(handle: u32) ?[]const u8 {
+    for (handle_paths[0..handle_count]) |*entry| {
+        if (entry.handle == handle) return entry.path[0..entry.len];
+    }
+    return null;
+}
+
+/// Build full registry path from a root key handle + subkey.
+/// E.g., (0x80000002, "Software\\Microsoft") → "HKLM\\Software\\Microsoft"
+fn buildFullPath(hKey: usize, subkey: []const u8) []const u8 {
+    // If hKey is a previously opened handle, prepend its path
+    if (lookupHandlePath(@truncate(hKey))) |parent_path| {
+        const buf = struct {
+            var b: [1024]u8 = undefined;
+        };
+        if (subkey.len == 0) return parent_path;
+        const total = parent_path.len + 1 + subkey.len;
+        if (total > buf.b.len) return subkey;
+        @memcpy(buf.b[0..parent_path.len], parent_path);
+        buf.b[parent_path.len] = '\\';
+        @memcpy(buf.b[parent_path.len + 1 ..][0..subkey.len], subkey);
+        return buf.b[0..total];
+    }
+
+    // Root key handles
+    const prefix: []const u8 = switch (hKey) {
+        0x80000000 => "HKCR",
+        0x80000001 => "HKCU",
+        0x80000002 => "HKLM",
+        0x80000003 => "HKU",
+        0x80000005 => "HKCC",
+        else => return subkey,
+    };
+
+    const buf = struct {
+        var b: [1024]u8 = undefined;
+    };
+    if (subkey.len == 0) return prefix;
+    const total = prefix.len + 1 + subkey.len;
+    if (total > buf.b.len) return subkey;
+    @memcpy(buf.b[0..prefix.len], prefix);
+    buf.b[prefix.len] = '\\';
+    @memcpy(buf.b[prefix.len + 1 ..][0..subkey.len], subkey);
+    return buf.b[0..total];
 }
 
 fn isCpuRegKey(hKey: usize, key: []const u8) bool {
@@ -40,11 +127,22 @@ fn isCpuRegKey(hKey: usize, key: []const u8) bool {
 pub fn RegQueryValueExA(hKey: usize, lpValueName: usize, lpReserved: usize, lpType: usize, lpData: usize, lpcbData: usize) callconv(w32cc.WINAPI) u32 {
     _ = lpReserved;
     const name = if (lpValueName != 0) trace.c_span(lpValueName) else "";
+    const REG_SZ: u32 = 1;
+    const REG_DWORD: u32 = 4;
 
-    // CPU registry values
+    // Look up by handle → path mapping, then query TOML config
+    if (lookupHandlePath(@truncate(hKey))) |key_path| {
+        if (reg_config.lookup(key_path, name)) |val| {
+            if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExA('{s}\\{s}') -> config\n", .{ key_path, name });
+            return switch (val) {
+                .string => |s| writeRegString(lpType, lpData, lpcbData, REG_SZ, s),
+                .dword => |d| writeRegDword(lpType, lpData, lpcbData, REG_DWORD, d),
+            };
+        }
+    }
+
+    // Legacy: hardcoded CPU registry values
     if (hKey == CPU_REG_HANDLE) {
-        const REG_SZ: u32 = 1;
-        const REG_DWORD: u32 = 4;
         if (std.ascii.eqlIgnoreCase(name, "ProcessorNameString")) {
             return writeRegString(lpType, lpData, lpcbData, REG_SZ, "Intel Pentium III");
         } else if (std.ascii.eqlIgnoreCase(name, "Identifier")) {
@@ -60,7 +158,7 @@ pub fn RegQueryValueExA(hKey: usize, lpValueName: usize, lpReserved: usize, lpTy
         return 2;
     }
 
-    if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExA('{s}') -> ERROR_FILE_NOT_FOUND\n", .{name});
+    if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExA(0x{X}, '{s}') -> ERROR_FILE_NOT_FOUND\n", .{ hKey, name });
     return 2; // ERROR_FILE_NOT_FOUND
 }
 

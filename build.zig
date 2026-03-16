@@ -38,6 +38,11 @@ pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{});
 
+    const toml_dep = b.dependency("toml", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const mod = b.addModule("zine", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -54,6 +59,7 @@ pub fn build(b: *std.Build) void {
                 .single_threaded = true,
                 .imports = &.{
                     .{ .name = "zine", .module = mod },
+                    .{ .name = "toml", .module = toml_dep.module("toml") },
                 },
             }),
         });
@@ -87,6 +93,7 @@ pub fn build(b: *std.Build) void {
                 .single_threaded = false,
                 .imports = &.{
                     .{ .name = "zine", .module = mod },
+                    .{ .name = "toml", .module = toml_dep.module("toml") },
                 },
             }),
         });
