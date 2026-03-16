@@ -119,10 +119,10 @@ pub const Module = struct {
 
         const sections = parser.getSectionHeaders();
         for (sections) |section| {
+            const vsize = section.Misc.VirtualSize;
             if (section.SizeOfRawData > 0) {
                 const dest = mapped_slice[section.VirtualAddress .. section.VirtualAddress + section.SizeOfRawData];
 
-                // Be careful of sections that have a VirtualSize larger than RawData (BSS)
                 const copy_size = @min(section.SizeOfRawData, file_data.len - section.PointerToRawData);
                 const src = file_data[section.PointerToRawData .. section.PointerToRawData + copy_size];
 
@@ -130,6 +130,17 @@ pub const Module = struct {
 
                 if (copy_size < dest.len) {
                     @memset(dest[copy_size..], 0);
+                }
+            }
+            // Zero-fill BSS tail: when VirtualSize > SizeOfRawData, the region
+            // beyond the raw data is uninitialized data that must be zeroed.
+            // On native Linux, mmap returns zero-filled pages so this happens
+            // implicitly. On WASM, the allocator fills with 0xAA in debug mode.
+            if (vsize > section.SizeOfRawData) {
+                const bss_start = section.VirtualAddress + section.SizeOfRawData;
+                const bss_end = section.VirtualAddress + vsize;
+                if (bss_end <= mapped_slice.len) {
+                    @memset(mapped_slice[bss_start..bss_end], 0);
                 }
             }
         }

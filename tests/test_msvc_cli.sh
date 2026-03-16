@@ -205,12 +205,17 @@ check_startup() {
     fi
     local rc
     rc=$(run out.txt "${WINLOADER_CMD[@]}" "${ZINE_FLAGS[@]+${ZINE_FLAGS[@]}}" "$exe")
-    if [ "$rc" -ge 128 ] && [ "$rc" -le 159 ] && [ "$rc" != "$expected_rc" ]; then
+    # WASM mode: wasmtime clamps exit codes to 0-125
+    local eff_expected="$expected_rc"
+    if $IS_WASM && [ "$expected_rc" -gt 125 ] 2>/dev/null; then
+        eff_expected=125
+    fi
+    if [ "$rc" -ge 128 ] && [ "$rc" -le 159 ] && [ "$rc" != "$eff_expected" ]; then
         fail "$name" "CRASHED (signal $((rc - 128)))"
         return
     fi
-    if [ "$rc" != "$expected_rc" ]; then
-        fail "$name" "exit $rc, expected $expected_rc"
+    if [ "$rc" != "$eff_expected" ]; then
+        fail "$name" "exit $rc, expected $eff_expected"
         return
     fi
     if [ -n "$grep_pattern" ]; then
