@@ -33,28 +33,34 @@ fn fsStat(path: []const u8) ?std.fs.File.Stat {
 
 fn fsAccess(path: []const u8) bool {
     // Use openFile+close instead of access/accessAbsolute — faccessat panics on WASI.
-    const file = if (std.fs.path.isAbsolute(path))
-        std.fs.openFileAbsolute(path, .{}) catch return false
-    else
-        std.fs.cwd().openFile(path, .{}) catch return false;
+    // On WASI, always use cwd().openFile even for absolute paths, because WASI
+    // sandboxes filesystem access through preopened directory handles.
+    const file = std.fs.cwd().openFile(path, .{}) catch
+        (if (std.fs.path.isAbsolute(path))
+            std.fs.openFileAbsolute(path, .{}) catch return false
+        else
+            return false);
     file.close();
     return true;
 }
 
 fn fsCreateFile(path: []const u8, flags: std.fs.File.CreateFlags) !std.fs.File {
-    if (std.fs.path.isAbsolute(path)) {
-        return std.fs.createFileAbsolute(path, flags);
-    } else {
-        return std.fs.cwd().createFile(path, flags);
-    }
+    // Try cwd first (works on WASI where absolute paths need preopened dirs)
+    return std.fs.cwd().createFile(path, flags) catch |e| {
+        if (std.fs.path.isAbsolute(path))
+            return std.fs.createFileAbsolute(path, flags)
+        else
+            return e;
+    };
 }
 
 fn fsOpenFile(path: []const u8, flags: std.fs.File.OpenFlags) !std.fs.File {
-    if (std.fs.path.isAbsolute(path)) {
-        return std.fs.openFileAbsolute(path, flags);
-    } else {
-        return std.fs.cwd().openFile(path, flags);
-    }
+    return std.fs.cwd().openFile(path, flags) catch |e| {
+        if (std.fs.path.isAbsolute(path))
+            return std.fs.openFileAbsolute(path, flags)
+        else
+            return e;
+    };
 }
 
 fn tryLower(path: []const u8, buf: []u8) ?[]const u8 {
