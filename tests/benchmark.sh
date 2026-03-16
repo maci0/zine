@@ -22,7 +22,6 @@ BENCH_LINUX32="/tmp/cpubench_linux32"
 ZINE="./zig-out/bin/zine"
 ZINE_WASM="./zig-out/bin/zine.wasm"
 ZINE_HOST="./zig-out/bin/zine-host"
-ZINE_WASM_JIT="./zig-out-jit/bin/zine.wasm"
 TIMEOUT=30        # seconds per mode
 TIMEOUT_INTERP=30 # interpreter
 TIMEOUT_WASM=30   # WASM interpreted
@@ -68,9 +67,6 @@ if command -v zig &>/dev/null; then
     zig build -Doptimize=ReleaseFast 2>/dev/null || zig build 2>/dev/null
     echo "Building zine.wasm (ReleaseFast)..."
     zig build -Darch=wasm32 -Doptimize=ReleaseFast 2>/dev/null || true
-    echo "Building zine.wasm with JIT host (ReleaseFast)..."
-    zig build -Darch=wasm32 -Djit_host=true -Doptimize=ReleaseFast \
-        --prefix zig-out-jit 2>/dev/null || true
     echo "Building zine-host..."
     zig build -Dhost -Doptimize=ReleaseFast 2>/dev/null || true
 fi
@@ -142,11 +138,11 @@ fi
 
 # --- 8. Zine WASM via zine-host (JIT enabled) ---
 header "8. Zine WASM + JIT (zine-host)"
-if [ -x "$ZINE_HOST" ] && [ -f "$ZINE_WASM_JIT" ] && [ -f "$BENCH_WIN32" ]; then
-    timeout $TIMEOUT_WASM "$ZINE_HOST" "$ZINE_WASM_JIT" -- --jit "$BENCH_WIN32" 2>/dev/null \
+if [ -x "$ZINE_HOST" ] && [ -f "$ZINE_WASM" ] && [ -f "$BENCH_WIN32" ]; then
+    timeout $TIMEOUT_WASM "$ZINE_HOST" "$ZINE_WASM" -- --jit "$BENCH_WIN32" 2>/dev/null \
         || fail "crashed or timed out"
 else
-    skip "zine-host or JIT WASM binary missing (build with -Dhost -Djit_host=true)"
+    skip "zine-host or WASM binary missing (build with -Dhost)"
 fi
 
 echo ""

@@ -65,9 +65,13 @@ pub fn build(b: *std.Build) void {
         wasm_lib.export_memory = true;
 
         // Pass build options to WASM build (FLTK is never used on WASM)
-        const enable_jit_host = b.option(bool, "jit_host", "Enable JIT host imports for WASM (requires zine-host or browser JS glue)") orelse false;
         const wasm_options = b.addOptions();
         wasm_options.addOption(bool, "use_fltk", false);
+        // JIT host imports (extern "jit" functions) are gated behind this flag.
+        // When false (default), --jit runs in compile-only mode (validates JIT
+        // output but doesn't execute it). When true, the WASM binary requires
+        // a host that provides jit_compile/jit_call (zine-host or browser JS).
+        const enable_jit_host = b.option(bool, "jit_host", "Enable JIT host imports (requires zine-host or browser)") orelse false;
         wasm_options.addOption(bool, "enable_jit_host", enable_jit_host);
         wasm_lib.root_module.addOptions("build_options", wasm_options);
 
