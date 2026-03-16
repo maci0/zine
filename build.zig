@@ -144,8 +144,9 @@ pub fn build(b: *std.Build) void {
 
     // -----------------------------------------------------------------------
     // zine-host: native wrapper for running zine.wasm with JIT support
+    // Uses the wasmer C API for WASI + custom JIT imports.
     // -----------------------------------------------------------------------
-    const build_host = b.option(bool, "host", "Build zine-host (wasmtime wrapper with JIT support)") orelse false;
+    const build_host = b.option(bool, "host", "Build zine-host (wasmer wrapper with JIT support)") orelse false;
     if (build_host) {
         const host_exe = b.addExecutable(.{
             .name = "zine-host",
@@ -155,6 +156,11 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
             }),
         });
+        host_exe.root_module.link_libc = true;
+        // wasmer's pkg-config may have stale paths; add system paths explicitly
+        host_exe.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
+        host_exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
+        host_exe.root_module.linkSystemLibrary("wasmer", .{});
         b.installArtifact(host_exe);
     }
 
