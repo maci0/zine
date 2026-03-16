@@ -67,7 +67,7 @@ pub fn GetFileInformationByHandle(hFile: usize, lpFileInformation_ptr: usize) ca
     if (lpFileInformation_ptr != 0) {
         const file = std.fs.File{ .handle = fd };
         if (file.stat() catch null) |stat| {
-            const file_info = @as(*w32.BY_HANDLE_FILE_INFORMATION, @ptrFromInt(lpFileInformation_ptr));
+            const file_info = @as(*w32.BY_HANDLE_FILE_INFORMATION, @ptrFromInt(trace.addr(lpFileInformation_ptr)));
             file_info.* = .{};
             file_info.dwFileAttributes = w32.FILE_ATTRIBUTE_NORMAL;
             file_info.nFileSizeHigh = @intCast(stat.size >> 32);
@@ -556,7 +556,7 @@ pub fn SearchPathA(lpPath_ptr: usize, lpFileName_ptr: usize, lpExtension_ptr: us
     if (found_path) |found| {
         const len = found.len;
         if (lpBuffer_ptr != 0 and nBufferLength > len) {
-            const out_buf = @as([*]u8, @ptrFromInt(lpBuffer_ptr));
+            const out_buf = @as([*]u8, @ptrFromInt(trace.addr(lpBuffer_ptr)));
             @memcpy(out_buf[0..len], found);
             // Replace forward slashes back to backslashes for Win32 callers
             std.mem.replaceScalar(u8, out_buf[0..len], '/', '\\');
@@ -567,7 +567,7 @@ pub fn SearchPathA(lpPath_ptr: usize, lpFileName_ptr: usize, lpExtension_ptr: us
                 for (0..len) |i| {
                     if (out_buf[i] == '\\') last_slash = i + 1;
                 }
-                @as(*usize, @ptrFromInt(lpFilePart_ptr)).* = lpBuffer_ptr + last_slash;
+                @as(*usize, @ptrFromInt(trace.addr(lpFilePart_ptr))).* = lpBuffer_ptr + last_slash;
             }
             return @intCast(len);
         }
@@ -714,7 +714,7 @@ pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: usize) callconv
     // No wildcard — literal file lookup
     const posix_fs = @import("../msvcrt/posix_fs.zig");
     if (posix_fs.stat(@as([*:0]const u8, @ptrCast(&fixed_buf)))) |st| {
-        const find_data = @as(*align(1) w32.WIN32_FIND_DATAA, @ptrFromInt(lpFindFileData_ptr));
+        const find_data = @as(*align(1) w32.WIN32_FIND_DATAA, @ptrFromInt(trace.addr(lpFindFileData_ptr)));
         find_data.* = .{};
 
         find_data.dwFileAttributes = if (st.kind == .directory) w32.FILE_ATTRIBUTE_DIRECTORY else w32.FILE_ATTRIBUTE_NORMAL;
@@ -744,7 +744,7 @@ pub fn FindNextFileA(hFindFile: usize, lpFindFileData_ptr: usize) callconv(w32cc
     if (state.iter) |*iter| {
         while (iter.next() catch null) |entry| {
             if (matchWildcard(entry.name, state.pattern[0..state.pattern_len])) {
-                const find_data = @as(*align(1) w32.WIN32_FIND_DATAA, @ptrFromInt(lpFindFileData_ptr));
+                const find_data = @as(*align(1) w32.WIN32_FIND_DATAA, @ptrFromInt(trace.addr(lpFindFileData_ptr)));
                 find_data.* = .{};
                 find_data.dwFileAttributes = if (entry.kind == .directory) w32.FILE_ATTRIBUTE_DIRECTORY else w32.FILE_ATTRIBUTE_NORMAL;
                 const copy_len = @min(entry.name.len, 259);
@@ -798,7 +798,7 @@ pub fn WriteFile(hFile: usize, lpBuffer_ptr: usize, nNumberOfBytesToWrite: u32, 
     const written = file.write(buf) catch return 0;
 
     if (lpNumberOfBytesWritten_ptr != 0) {
-        @as(*u32, @ptrFromInt(lpNumberOfBytesWritten_ptr)).* = @intCast(written);
+        @as(*u32, @ptrFromInt(trace.addr(lpNumberOfBytesWritten_ptr))).* = @intCast(written);
     }
     return 1;
 }

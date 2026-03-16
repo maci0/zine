@@ -78,7 +78,7 @@ pub fn splitpath(path_ptr: usize, drive: usize, dir: usize, fname: usize, ext: u
 /// Implementation status: Partially implemented
 pub fn makepath(path_ptr: usize, drive: usize, dir: usize, fname: usize, ext: usize) callconv(.c) void {
     if (path_ptr == 0) return;
-    const path = @as([*]u8, @ptrFromInt(path_ptr));
+    const path = @as([*]u8, @ptrFromInt(trace.addr(path_ptr)));
     var len: usize = 0;
     if (drive != 0) {
         const s = trace.c_span(drive);
@@ -151,7 +151,7 @@ pub fn searchenv(filename_ptr: usize, varname_ptr: usize, result_ptr: usize) cal
     if (trace.enable_tracing) trace.print("MSVCRT: _searchenv('{s}', '{s}')\n", .{ filename, varname });
 
     if (result_ptr == 0) return;
-    const result_buf = @as([*]u8, @ptrFromInt(result_ptr));
+    const result_buf = @as([*]u8, @ptrFromInt(trace.addr(result_ptr)));
     result_buf[0] = 0; // default to empty
 
     const env_val_ptr = @import("process.zig").getenv(varname_ptr);
@@ -193,11 +193,12 @@ pub fn getcwd(buffer_ptr: usize, maxlen: i32) callconv(.c) ?*anyopaque {
 
     if (buffer_ptr != 0) {
         if (path.len >= maxlen) return null;
-        const buf = @as([*]u8, @ptrFromInt(buffer_ptr));
+        const host_ptr = trace.addr(buffer_ptr);
+        const buf = @as([*]u8, @ptrFromInt(host_ptr));
         @memcpy(buf[0..path.len], path);
         std.mem.replaceScalar(u8, buf[0..path.len], '/', '\\');
         buf[path.len] = 0;
-        return @ptrFromInt(buffer_ptr);
+        return @ptrFromInt(host_ptr);
     } else {
         const stub_common = @import("../shared.zig");
         const raw = stub_common.raw_alloc(path.len + 1) orelse return null;
