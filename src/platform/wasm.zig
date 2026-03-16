@@ -86,9 +86,9 @@ pub fn getProcessId() u32 {
 }
 
 /// Terminates the current process with the given exit code.
-/// WASI runtimes (wasmtime) reject exit codes > 125, so clamp them.
+/// Note: wasmtime clamps exit codes ≥126 to 1; wasmer passes them through.
 pub fn exitProcess(code: u8) noreturn {
-    std.process.exit(@min(code, 125));
+    std.process.exit(code);
 }
 
 /// Returns a high-resolution timestamp in nanoseconds.

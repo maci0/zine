@@ -448,6 +448,45 @@ zig build
 
 ---
 
+## WASI Runtime Compatibility
+
+Zine's WASM build runs on any WASI-compliant runtime. Tested runtimes:
+
+| Runtime | Version | Exit Codes | Filesystem | Status |
+|---------|---------|-----------|------------|--------|
+| **wasmtime** | 29+ | 0-125 only; ≥126 mapped to 1 | `--dir=/` preopens host FS | Primary test target |
+| **wasmer** | 7+ | 0-255 faithfully | `--volume HOST:GUEST` mounts | Fully working |
+
+### Exit Code Behavior
+
+Win32 applications can call `ExitProcess()` with any 32-bit value. The PE stub
+truncates this to a `u8` (0-255) via `exitCode & 0xFF` before passing to WASI's
+`proc_exit`. However, WASI runtimes handle codes ≥126 differently:
+
+```
+ExitProcess(1000)  →  1000 & 0xFF = 232
+  wasmtime:  proc_exit(232) → ERROR "exit with invalid exit status" → host sees rc=1
+  wasmer:    proc_exit(232) → host sees rc=232
+```
+
+This affects tools like MIDL.EXE (exits 1000 → 232) and REBASE.EXE (exits 99 → OK on both).
+The test suite (`test_msvc_cli.sh`) auto-adjusts expected exit codes per runtime.
+
+### Running
+
+```bash
+# wasmtime
+wasmtime --dir=. zig-out/bin/zine.wasm -- path/to/program.exe
+
+# wasmer
+wasmer run --volume "$(pwd):$(pwd)" --volume . zig-out/bin/zine.wasm -- "$(pwd)/path/to/program.exe"
+```
+
+Note: wasmer requires absolute paths for PE files and explicit volume mounts for
+each directory the guest needs to access.
+
+---
+
 ## Open Questions
 
 1. **FPU priority**: Which applications are blocked on FPU support? If only

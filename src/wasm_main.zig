@@ -623,9 +623,8 @@ pub fn main() !void {
     log.info("wasm: interpreter halted, EAX=0x{X}", .{cpu.eax});
 
     // Propagate the guest process exit code to the WASM host.
-    // WASI runtimes (wasmtime) reject exit codes > 125, so clamp.
-    const exit_code: u8 = @truncate(cpu.eax);
-    std.process.exit(@min(exit_code, 125));
+    // Note: wasmtime clamps exit codes ≥126 to 1; wasmer passes them through.
+    std.process.exit(@truncate(cpu.eax));
 }
 
 // ---------------------------------------------------------------------------

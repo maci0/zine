@@ -6,12 +6,19 @@
 #   ./test_msvc_cli.sh              # run in native mode (default)
 #   ./test_msvc_cli.sh --interpret  # run in interpreter mode
 #   ./test_msvc_cli.sh --jit        # run in JIT mode
-#   ./test_msvc_cli.sh --wasm       # run in WASM mode (via wasmtime)
+#   ./test_msvc_cli.sh --wasmtime   # run in WASM mode via wasmtime
+#   ./test_msvc_cli.sh --wasmer     # run in WASM mode via wasmer
+#   ./test_msvc_cli.sh --wasm       # alias for --wasmtime
 #   ./test_msvc_cli.sh --both       # run native + interpreted
-#   ./test_msvc_cli.sh --all        # run native + interpreted + jit + wasm
+#   ./test_msvc_cli.sh --all        # run native + interpreted + jit + wasmtime + wasmer
 #   ./test_msvc_cli.sh --interpret --filter "CL.EXE"   # run only matching tests
 #   ./test_msvc_cli.sh --interpret --filter "startup"   # run only startup tests
 #   ./test_msvc_cli.sh --native --filter "DUMPBIN"      # run DUMPBIN tests only
+#
+# WASI exit code note:
+#   wasmtime only supports exit codes 0-125; codes ≥126 are mapped to 1.
+#   wasmer passes all exit codes 0-255 faithfully.
+#   The test adapts expected exit codes per runtime.
 #
 # Key constraints:
 # - CL.EXE treats paths starting with / as options, so use relative paths
@@ -54,32 +61,22 @@ if [ "$MODE" = "--both" ] || [ "$MODE" = "both" ]; then
     exit 0
 fi
 
-# --all: re-invoke native + interpreted + jit + wasm
+# --all: re-invoke native + interpreted + jit + wasmtime + wasmer
 if [ "$MODE" = "--all" ] || [ "$MODE" = "all" ]; then
-    echo "===== Running in NATIVE mode ====="
-    "$0" --native ${FILTER:+--filter "$FILTER"}
-    native_rc=$?
-    echo ""
-    echo "===== Running in INTERPRET mode ====="
-    "$0" --interpret ${FILTER:+--filter "$FILTER"}
-    interp_rc=$?
-    echo ""
-    echo "===== Running in JIT mode ====="
-    "$0" --jit ${FILTER:+--filter "$FILTER"}
-    jit_rc=$?
-    echo ""
-    echo "===== Running in WASM mode ====="
-    "$0" --wasm ${FILTER:+--filter "$FILTER"}
-    wasm_rc=$?
-    if [ $native_rc -ne 0 ] || [ $interp_rc -ne 0 ] || [ $jit_rc -ne 0 ] || [ $wasm_rc -ne 0 ]; then
-        exit 1
-    fi
-    exit 0
+    all_rc=0
+    for m in --native --interpret --jit --wasmtime --wasmer; do
+        echo "===== Running in ${m#--} mode ====="
+        "$0" "$m" ${FILTER:+--filter "$FILTER"} || all_rc=1
+        echo ""
+    done
+    exit $all_rc
 fi
 
 # Parse mode flag
 ZINE_FLAGS=()
 IS_WASM=false
+WASM_RUNTIME=""     # "wasmtime" or "wasmer"
+WASM_EXIT_MAX=255   # max exit code the runtime supports faithfully
 TIMEOUT_SECS=30
 case "$MODE" in
     --interpret|interpret)
@@ -92,16 +89,24 @@ case "$MODE" in
         MODE_LABEL="JIT"
         TIMEOUT_SECS=60  # JIT may include compilation overhead
         ;;
-    --wasm|wasm)
+    --wasm|wasm|--wasmtime|wasmtime)
         IS_WASM=true
-        MODE_LABEL="WASM"
+        WASM_RUNTIME="wasmtime"
+        WASM_EXIT_MAX=125  # wasmtime maps exit codes ≥126 to 1
+        MODE_LABEL="WASM/wasmtime"
+        ;;
+    --wasmer|wasmer)
+        IS_WASM=true
+        WASM_RUNTIME="wasmer"
+        WASM_EXIT_MAX=255  # wasmer passes all exit codes 0-255
+        MODE_LABEL="WASM/wasmer"
         ;;
     --native|native|"")
         ZINE_FLAGS=()
         MODE_LABEL="NATIVE"
         ;;
     *)
-        echo "Usage: $0 [--native|--interpret|--jit|--wasm|--both|--all] [--filter PATTERN]"
+        echo "Usage: $0 [--native|--interpret|--jit|--wasmtime|--wasmer|--both|--all] [--filter PATTERN]"
         exit 1
         ;;
 esac
@@ -139,8 +144,8 @@ if $IS_WASM; then
         echo "FATAL: zine.wasm not found at $WASM_BIN"
         exit 1
     fi
-    if ! command -v wasmtime &>/dev/null; then
-        echo "FATAL: wasmtime not found in PATH"
+    if ! command -v "$WASM_RUNTIME" &>/dev/null; then
+        echo "FATAL: $WASM_RUNTIME not found in PATH"
         exit 1
     fi
 else
@@ -163,9 +168,23 @@ cd "$WORKDIR"
 
 # Set up WINLOADER_CMD after WORKDIR is created so WASM --dir knows all paths
 if $IS_WASM; then
-    # wasmtime needs --dir to access host filesystem directories.
-    # We preopen / for full access during testing (WASI sandboxes by default).
-    WINLOADER_CMD=(wasmtime run --dir=/ --env INCLUDE --env LIB --env PATH --env TMP --env TEMP "$WASM_BIN" --)
+    if [ "$WASM_RUNTIME" = "wasmer" ]; then
+        # wasmer needs --volume for filesystem access and absolute paths for PEs.
+        # Map both the project root and workdir so DLLs and temp files are accessible.
+        PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+        WINLOADER_CMD=(wasmer run
+            --volume "$PROJECT_DIR:$PROJECT_DIR"
+            --volume "$WORKDIR:$WORKDIR"
+            --env "INCLUDE=$INCLUDE" --env "LIB=$LIB" --env "PATH=$PATH"
+            "$WASM_BIN" --)
+        # wasmer requires absolute paths for PE files
+        VC_BIN="$MSVC_ROOT/VC98/Bin"
+        COMMON_BIN="$MSVC_ROOT/Common/MSDev98/Bin"
+        COMMON_TOOLS="$MSVC_ROOT/Common/Tools"
+    else
+        # wasmtime: --dir to preopen filesystem, --env to pass-through host env vars
+        WINLOADER_CMD=(wasmtime run --dir=/ --env INCLUDE --env LIB --env PATH --env TMP --env TEMP "$WASM_BIN" --)
+    fi
 else
     WINLOADER_CMD=("$WINLOADER")
 fi
@@ -205,10 +224,11 @@ check_startup() {
     fi
     local rc
     rc=$(run out.txt "${WINLOADER_CMD[@]}" "${ZINE_FLAGS[@]+${ZINE_FLAGS[@]}}" "$exe")
-    # WASM mode: wasmtime clamps exit codes to 0-125
+    # WASM mode: adjust expected exit code for runtime limitations.
+    # wasmtime maps codes ≥126 to 1; wasmer passes all codes faithfully.
     local eff_expected="$expected_rc"
-    if $IS_WASM && [ "$expected_rc" -gt 125 ] 2>/dev/null; then
-        eff_expected=125
+    if $IS_WASM && [ "$expected_rc" -gt "$WASM_EXIT_MAX" ] 2>/dev/null; then
+        eff_expected=1  # runtime maps unsupported codes to 1
     fi
     if [ "$rc" -ge 128 ] && [ "$rc" -le 159 ] && [ "$rc" != "$eff_expected" ]; then
         fail "$name" "CRASHED (signal $((rc - 128)))"
