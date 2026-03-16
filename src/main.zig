@@ -18,39 +18,7 @@ const Module = @import("loader/module.zig").Module;
 const Environment = @import("loader/env.zig").Environment;
 const loader = @import("loader/loader.zig");
 const stubs_msvcrt = @import("win32/msvcrt.zig");
-const stubs_advapi32 = @import("win32/advapi32.zig");
-const stubs_imagehlp = @import("win32/imagehlp.zig");
 const stubs_kernel32 = @import("win32/kernel32.zig");
-const stubs_user32 = @import("win32/user32.zig");
-const stubs_rpcrt4 = @import("win32/rpcrt4.zig");
-const stubs_comdlg32 = @import("win32/comdlg32.zig");
-const stubs_ntdll = @import("win32/ntdll.zig");
-const stubs_mfc42 = @import("win32/mfc42.zig");
-const stubs_winmm = @import("win32/winmm.zig");
-const stubs_ddraw = @import("win32/ddraw.zig");
-const stubs_gdi32 = @import("win32/gdi32.zig");
-const stubs_dinput = @import("win32/dinput.zig");
-const stubs_dinput8 = @import("win32/dinput8.zig");
-const stubs_dsound = @import("win32/dsound.zig");
-const stubs_d3d8 = @import("win32/d3d8.zig");
-const stubs_mss32 = @import("win32/mss32.zig");
-const stubs_shell32 = @import("win32/shell32.zig");
-const stubs_comctl32 = @import("win32/comctl32.zig");
-const stubs_ole32 = @import("win32/ole32.zig");
-const stubs_oleaut32 = @import("win32/oleaut32.zig");
-const stubs_imm32 = @import("win32/imm32.zig");
-const stubs_version = @import("win32/version.zig");
-const stubs_wsock32 = @import("win32/wsock32.zig");
-const stubs_ws2_32 = @import("win32/ws2_32.zig");
-const stubs_winspool = @import("win32/winspool.zig");
-const stubs_nddeapi = @import("win32/nddeapi.zig");
-const stubs_cards = @import("win32/cards.zig");
-const stubs_icmp = @import("win32/icmp.zig");
-const stubs_vdmdbg = @import("win32/vdmdbg.zig");
-const stubs_mag_hook = @import("win32/mag_hook.zig");
-const stubs_setupapi = @import("win32/setupapi.zig");
-const stubs_shlwapi = @import("win32/shlwapi.zig");
-const stubs_msvcp60 = @import("win32/msvcp60.zig");
 const BatEnv = @import("bat.zig").BatEnv;
 const renderer = @import("gui/renderer.zig");
 const platform = @import("platform.zig");
@@ -306,92 +274,38 @@ pub fn main() !void {
         }
     }
 
+    const runner = @import("runner.zig");
+
     var environment = Environment.init(allocator);
     defer environment.deinit();
 
-    // Setup base fallback export for unresolved symbols
-    try environment.addBuiltinExport("builtin", "not_implemented", @intFromPtr(&not_implemented));
+    try runner.registerAllStubs(&environment, @intFromPtr(&not_implemented));
 
-    try stubs_msvcrt.register(&environment);
-    try stubs_kernel32.register(&environment);
-    try stubs_advapi32.register(&environment);
-    @import("win32/advapi32/registry.zig").initConfig(allocator);
-    try stubs_imagehlp.register(&environment);
-    try stubs_user32.register(&environment);
-    try stubs_rpcrt4.register(&environment);
-    try stubs_comdlg32.register(&environment);
-    try stubs_ntdll.register(&environment);
-    try stubs_mfc42.register(&environment);
-    try stubs_winmm.register(&environment);
-    try stubs_ddraw.register(&environment);
-    try stubs_gdi32.register(&environment);
-    try stubs_dinput.register(&environment);
-    try stubs_dinput8.register(&environment);
-    try stubs_dsound.register(&environment);
-    try stubs_d3d8.register(&environment);
-    try stubs_mss32.register(&environment);
-    try stubs_shell32.register(&environment);
-    try stubs_comctl32.register(&environment);
-    try stubs_ole32.register(&environment);
-    try stubs_oleaut32.register(&environment);
-    try stubs_imm32.register(&environment);
-    try stubs_version.register(&environment);
-    try stubs_wsock32.register(&environment);
-    try stubs_ws2_32.register(&environment);
-    try stubs_winspool.register(&environment);
-    try stubs_nddeapi.register(&environment);
-    try stubs_cards.register(&environment);
-    try stubs_icmp.register(&environment);
-    try stubs_vdmdbg.register(&environment);
-    try stubs_mag_hook.register(&environment);
-    try stubs_shlwapi.register(&environment);
-    try stubs_msvcp60.register(&environment);
-    try stubs_setupapi.register(&environment);
-
-    // Allow loader to search current dir and the target exe's directory
-    try environment.registry.addSearchPath(".");
-    // Convert backslashes to forward slashes for dirname extraction on Linux
-    const fixed_target = try allocator.dupe(u8, target_exe);
-    defer allocator.free(fixed_target);
-    std.mem.replaceScalar(u8, fixed_target, '\\', '/');
-    if (std.fs.path.dirname(fixed_target)) |dir| {
-        try environment.registry.addSearchPath(dir);
-    }
-
-    // Add paths from the system PATH environment variable
+    // Search paths: CWD + exe dir + BAT PATH or host PATH
+    var extra_paths: std.ArrayListUnmanaged([]const u8) = .{};
+    defer extra_paths.deinit(allocator);
     if (bat_env_opt) |*be| {
         var bat_path_opt = be.env.get("PATH");
         if (bat_path_opt == null) bat_path_opt = be.env.get("Path");
-        
         if (bat_path_opt) |bat_path| {
             trace.print("ZINE BAT PATH: {s}\n", .{bat_path});
             var it = std.mem.tokenizeAny(u8, bat_path, ";:");
             while (it.next()) |p| {
-                // Strip quotes
                 var clean_p = p;
                 if (clean_p.len >= 2 and clean_p[0] == '"' and clean_p[clean_p.len - 1] == '"') {
                     clean_p = clean_p[1 .. clean_p.len - 1];
                 }
                 const unix_p = try allocator.dupe(u8, clean_p);
                 std.mem.replaceScalar(u8, unix_p, '\\', '/');
-                try environment.registry.addSearchPath(unix_p);
+                try extra_paths.append(allocator, unix_p);
             }
         }
+    } else {
+        var host_dirs = try runner.getHostPathDirs(allocator);
+        defer host_dirs.deinit(allocator);
+        for (host_dirs.items) |d| try extra_paths.append(allocator, d);
     }
-
-    // When no BAT environment was loaded, fall back to the host PATH.
-    // This is needed when the test harness exports PATH=.../VC98/Bin:...
-    // so that LoadLibraryA can find DLLs like MSDIS110.DLL at runtime.
-    if (bat_env_opt == null) {
-        if (std.process.getEnvVarOwned(allocator, "PATH")) |host_path| {
-            defer allocator.free(host_path);
-            var it = std.mem.tokenizeScalar(u8, host_path, ':');
-            while (it.next()) |p| {
-                if (p.len == 0) continue;
-                try environment.registry.addSearchPath(try allocator.dupe(u8, p));
-            }
-        } else |_| {}
-    }
+    try runner.setupSearchPaths(&environment, allocator, target_exe, extra_paths.items);
 
     const exe_name = std.fs.path.basename(target_exe);
     const main_module = try environment.registry.loadModule(exe_name);
@@ -481,24 +395,7 @@ pub fn main() !void {
         }
     }
 
-    // Resolve imports iteratively until all modules are processed
-    var resolved_count: usize = 0;
-    while (true) {
-        var to_resolve: std.ArrayListUnmanaged(*Module) = .{};
-        defer to_resolve.deinit(allocator);
-
-        var it = environment.registry.modules.iterator();
-        while (it.next()) |entry| {
-            try to_resolve.append(allocator, entry.value_ptr.*);
-        }
-
-        if (to_resolve.items.len == resolved_count) break;
-
-        for (to_resolve.items) |mod| {
-            try loader.resolveImports(&environment, mod);
-        }
-        resolved_count = to_resolve.items.len;
-    }
+    try runner.resolveAllImports(&environment, allocator);
 
     try app_args.append(allocator, null);
 
@@ -660,7 +557,7 @@ pub fn main() !void {
 
         if (use_jit) {
             log.warn("JIT on native x86: blocks will be compiled to WASM for validation but NOT executed", .{});
-            runWithJit(&cpu, allocator);
+            runner.runWithJit(&cpu, allocator);
         } else {
             x86_execute.run(&cpu);
         }
@@ -737,69 +634,4 @@ fn scanAndPatch(mem: []align(4096) u8, pattern: []const u8, patch_offset: usize,
 // JIT-integrated execution loop
 // ---------------------------------------------------------------------------
 
-const jit_compiler = @import("jit/compiler.zig");
-const jit_emitter = @import("jit/emitter.zig");
-const x86_decoder = @import("x86/decoder.zig");
-
-/// JIT-integrated execution loop.
-/// Runs the interpreter and compiles basic blocks as they are encountered.
-fn runWithJit(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
-    var jit = jit_compiler.JitCompiler.init(allocator, 0);
-    defer jit.deinit();
-
-    var blocks_compiled: u32 = 0;
-    var expected_next_eip: u32 = 0;
-
-    while (!cpu.halted) {
-        const eip = cpu.eip;
-
-        // Only compile at actual basic block entries — when EIP changes
-        // discontinuously (jump, call, ret). Sequential instruction advances
-        // (eip == expected_next_eip) are NOT new blocks.
-        if (eip != expected_next_eip and !jit.block_cache.contains(eip)) {
-            if (cpu.memory.readSlice(eip, 256)) |code| {
-                const block_len = scanBlock(code);
-                if (block_len > 0) {
-                    jit.module.deinit();
-                    jit.module = jit_emitter.WasmModule.init(allocator);
-
-                    if (jit.compile(eip, code[0..block_len])) |wasm_bin| {
-                        blocks_compiled += 1;
-                        if (blocks_compiled <= 10) {
-                            log.info("JIT: compiled block at EIP=0x{X} ({d} x86 bytes -> {d} WASM bytes)", .{
-                                eip, block_len, wasm_bin.len,
-                            });
-                        } else if (blocks_compiled == 11) {
-                            log.info("JIT: (suppressing further compilation logs)", .{});
-                        }
-                        allocator.free(wasm_bin);
-                    } else |_| {}
-                }
-            }
-        }
-
-        // Execute one instruction and track the expected next EIP
-        x86_execute.step(cpu);
-        // After step, cpu.eip is the next instruction. If execution was
-        // sequential, this will match eip on the next iteration.
-        expected_next_eip = cpu.eip;
-    }
-
-    log.info("JIT: compiled {d} unique basic blocks", .{blocks_compiled});
-}
-
-/// Scans x86 code to find the end of a basic block.
-/// Basic blocks are terminated by control flow instructions like JMP or RET.
-fn scanBlock(code: []const u8) usize {
-    var offset: usize = 0;
-    while (offset < code.len) {
-        const insn = x86_decoder.decode(code[offset..]);
-        if (insn.length == 0) break;
-        offset += insn.length;
-        switch (insn.opcode) {
-            0xC3, 0xC2, 0xCB, 0xCA, 0xE9, 0xEB, 0xF4, 0xCC => break,
-            else => {},
-        }
-    }
-    return offset;
-}
+// JIT and scanBlock are in runner.zig

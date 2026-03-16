@@ -108,6 +108,7 @@ pub fn resetGuestArgs() void {
     guest_args_buf = null;
     guest_argv_addr = 0;
     guest_envp_addr = 0;
+    guest_globals_addr = 0;
 }
 const guest_args_base: u32 = 0x50000000;
 

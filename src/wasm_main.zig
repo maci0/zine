@@ -22,37 +22,9 @@ const x86_thunks = @import("x86/thunks.zig");
 const trace = @import("trace.zig");
 const log = @import("log.zig");
 
-// Stub DLL modules
+const runner = @import("runner.zig");
 const stubs_msvcrt = @import("win32/msvcrt.zig");
 const stubs_kernel32 = @import("win32/kernel32.zig");
-const stubs_advapi32 = @import("win32/advapi32.zig");
-const stubs_imagehlp = @import("win32/imagehlp.zig");
-const stubs_user32 = @import("win32/user32.zig");
-const stubs_rpcrt4 = @import("win32/rpcrt4.zig");
-const stubs_comdlg32 = @import("win32/comdlg32.zig");
-const stubs_ntdll = @import("win32/ntdll.zig");
-const stubs_mfc42 = @import("win32/mfc42.zig");
-const stubs_winmm = @import("win32/winmm.zig");
-const stubs_ddraw = @import("win32/ddraw.zig");
-const stubs_gdi32 = @import("win32/gdi32.zig");
-const stubs_dinput = @import("win32/dinput.zig");
-const stubs_dinput8 = @import("win32/dinput8.zig");
-const stubs_dsound = @import("win32/dsound.zig");
-const stubs_d3d8 = @import("win32/d3d8.zig");
-const stubs_mss32 = @import("win32/mss32.zig");
-const stubs_shell32 = @import("win32/shell32.zig");
-const stubs_comctl32 = @import("win32/comctl32.zig");
-const stubs_ole32 = @import("win32/ole32.zig");
-const stubs_imm32 = @import("win32/imm32.zig");
-const stubs_version = @import("win32/version.zig");
-const stubs_wsock32 = @import("win32/wsock32.zig");
-const stubs_ws2_32 = @import("win32/ws2_32.zig");
-const stubs_winspool = @import("win32/winspool.zig");
-const stubs_nddeapi = @import("win32/nddeapi.zig");
-const stubs_cards = @import("win32/cards.zig");
-const stubs_icmp = @import("win32/icmp.zig");
-const stubs_vdmdbg = @import("win32/vdmdbg.zig");
-const stubs_mag_hook = @import("win32/mag_hook.zig");
 
 // Re-export platform to ensure WASM imports are declared
 comptime {
@@ -191,46 +163,12 @@ pub fn main() !void {
     // --- Set up Environment and register all stub DLLs ---
     var environment = Environment.init(allocator);
 
-    try environment.addBuiltinExport("builtin", "not_implemented", @intFromPtr(&not_implemented));
+    try runner.registerAllStubs(&environment, @intFromPtr(&not_implemented));
 
-    try stubs_msvcrt.register(&environment);
-    try stubs_kernel32.register(&environment);
-    try stubs_advapi32.register(&environment);
-    @import("win32/advapi32/registry.zig").initConfig(allocator);
-    try stubs_imagehlp.register(&environment);
-    try stubs_user32.register(&environment);
-    try stubs_rpcrt4.register(&environment);
-    try stubs_comdlg32.register(&environment);
-    try stubs_ntdll.register(&environment);
-    try stubs_mfc42.register(&environment);
-    try stubs_winmm.register(&environment);
-    try stubs_ddraw.register(&environment);
-    try stubs_gdi32.register(&environment);
-    try stubs_dinput.register(&environment);
-    try stubs_dsound.register(&environment);
-    try stubs_d3d8.register(&environment);
-    try stubs_mss32.register(&environment);
-    try stubs_shell32.register(&environment);
-    try stubs_comctl32.register(&environment);
-    try stubs_ole32.register(&environment);
-    try stubs_imm32.register(&environment);
-    try stubs_version.register(&environment);
-    try stubs_wsock32.register(&environment);
-    try stubs_ws2_32.register(&environment);
-    try stubs_winspool.register(&environment);
-    try stubs_nddeapi.register(&environment);
-    try stubs_cards.register(&environment);
-    try stubs_icmp.register(&environment);
-    try stubs_vdmdbg.register(&environment);
-    try stubs_mag_hook.register(&environment);
-
-    // Add search paths (current dir + exe directory)
-    try environment.registry.addSearchPath(".");
-    const fixed_target = try allocator.dupe(u8, target_exe);
-    std.mem.replaceScalar(u8, fixed_target, '\\', '/');
-    if (std.fs.path.dirname(fixed_target)) |dir| {
-        try environment.registry.addSearchPath(dir);
-    }
+    // Search paths: CWD + exe dir + host PATH
+    var host_dirs = try runner.getHostPathDirs(allocator);
+    defer host_dirs.deinit(allocator);
+    try runner.setupSearchPaths(&environment, allocator, target_exe, host_dirs.items);
 
     // --- Load the main executable via the registry ---
     const exe_name = std.fs.path.basename(target_exe);
@@ -321,118 +259,23 @@ pub fn main() !void {
         }
     }
 
-    // --- Resolve imports iteratively ---
-    // IMPORTANT: This must happen BEFORE copying the PE image into combined_buf,
-    // because resolveImports patches mod.mapped_memory (IAT slots). If we copy
-    // first, the patched IAT entries would be lost.
-    var resolved_count: usize = 0;
-    while (true) {
-        var to_resolve: std.ArrayListUnmanaged(*Module) = .{};
-        defer to_resolve.deinit(allocator);
-
-        var it = environment.registry.modules.iterator();
-        while (it.next()) |entry| {
-            try to_resolve.append(allocator, entry.value_ptr.*);
-        }
-
-        if (to_resolve.items.len == resolved_count) break;
-
-        for (to_resolve.items) |mod| {
-            try loader.resolveImports(&environment, mod);
-        }
-        resolved_count = to_resolve.items.len;
-    }
+    // Resolve imports BEFORE copying the PE into combined_buf (patches IAT in mapped_memory)
+    try runner.resolveAllImports(&environment, allocator);
 
     // Copy the PE image (now with patched IAT) into the combined buffer
     @memcpy(combined_buf[0..image_size], main_module.mapped_memory[0..image_size]);
 
     // On WASM, the PE was mapped at a host address that differs from the
     // preferred ImageBase. Module.load applied relocations for that host
-    // address. But combined_buf uses preferred_base for the GuestMemory
-    // base_addr. We must undo those relocations so absolute addresses in
-    // the code match the preferred base (= GuestMemory virtual addresses).
-    // Skip IAT slots since resolveImports already wrote correct thunk addresses.
-    {
-        const actual_base: u32 = @truncate(main_module.image_base);
-        if (actual_base != preferred_base) {
-            const reverse_delta = preferred_base -% actual_base;
-            const opt_header = &main_module.parser.getNtHeaders().OptionalHeader;
-
-            // Collect IAT ranges to skip during relocation
-            const import_dir_entry = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_IMPORT];
-            var iat_ranges: [32][2]u32 = undefined;
-            var iat_range_count: usize = 0;
-
-            if (import_dir_entry.Size > 0) {
-                var imp_off = import_dir_entry.VirtualAddress;
-                while (imp_off + 20 <= image_size) {
-                    const imp_name = @as(*align(1) const u32, @ptrCast(combined_buf[imp_off + 12 ..].ptr)).*;
-                    if (imp_name == 0) break;
-                    const first_thunk_rva = @as(*align(1) const u32, @ptrCast(combined_buf[imp_off + 16 ..].ptr)).*;
-                    const orig_thunk_rva_raw = @as(*align(1) const u32, @ptrCast(combined_buf[imp_off ..].ptr)).*;
-                    const ilt_rva = if (orig_thunk_rva_raw == 0) first_thunk_rva else orig_thunk_rva_raw;
-                    // Count entries in this import
-                    var count: u32 = 0;
-                    while (ilt_rva + (count + 1) * 4 <= image_size) {
-                        const e = @as(*align(1) const u32, @ptrCast(combined_buf[ilt_rva + count * 4 ..].ptr)).*;
-                        if (e == 0) break;
-                        count += 1;
-                    }
-                    if (iat_range_count < iat_ranges.len) {
-                        iat_ranges[iat_range_count] = .{ first_thunk_rva, first_thunk_rva + count * 4 };
-                        iat_range_count += 1;
-                    }
-                    imp_off += 20;
-                }
-            }
-
-            const reloc_dir = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC];
-            if (reloc_dir.Size > 0) {
-                var reloc_offset = reloc_dir.VirtualAddress;
-                const reloc_end = reloc_offset + reloc_dir.Size;
-                var reloc_count: u32 = 0;
-                var skip_count: u32 = 0;
-
-                while (reloc_offset < reloc_end) {
-                    const block_va = @as(*align(1) const u32, @ptrCast(combined_buf[reloc_offset..].ptr)).*;
-                    const block_size = @as(*align(1) const u32, @ptrCast(combined_buf[reloc_offset + 4 ..].ptr)).*;
-                    if (block_size == 0) break;
-
-                    const entries_count = (block_size - 8) / 2;
-                    const entries_start = reloc_offset + 8;
-
-                    for (0..entries_count) |e| {
-                        const entry = @as(*align(1) const u16, @ptrCast(combined_buf[entries_start + e * 2 ..].ptr)).*;
-                        const reloc_type = entry >> 12;
-                        const offset = entry & 0x0FFF;
-
-                        if (reloc_type == 3) { // IMAGE_REL_BASED_HIGHLOW
-                            const patch_addr = block_va + offset;
-                            // Skip if this address is inside an IAT range
-                            var in_iat = false;
-                            for (iat_ranges[0..iat_range_count]) |range| {
-                                if (patch_addr >= range[0] and patch_addr < range[1]) {
-                                    in_iat = true;
-                                    break;
-                                }
-                            }
-                            if (in_iat) {
-                                skip_count += 1;
-                                continue;
-                            }
-                            if (patch_addr + 4 <= image_size) {
-                                const ptr = @as(*align(1) u32, @ptrCast(combined_buf[patch_addr..].ptr));
-                                ptr.* = ptr.* +% reverse_delta;
-                                reloc_count += 1;
-                            }
-                        }
-                    }
-                    reloc_offset += block_size;
-                }
-                log.info("wasm: applied {d} reverse relocations, skipped {d} IAT entries (delta=0x{X})", .{ reloc_count, skip_count, reverse_delta });
-            }
-        }
-    }
+    // Reverse relocations: undo Module.load's adjustments so absolute
+    // addresses match preferred_base (= GuestMemory virtual addresses).
+    runner.applyReverseRelocations(
+        combined_buf,
+        &main_module.parser,
+        image_size,
+        @truncate(main_module.image_base),
+        preferred_base,
+    );
 
     // --- Initialize MSVCRT globals ---
     // Build proper argv and _acmdln from collected guest arguments
@@ -570,26 +413,7 @@ pub fn main() !void {
     };
     cpu.eip = preferred_base +% ep_rva;
 
-    // PE section write protection: protect .rsrc from guest buffer overflows.
-    // Only .rsrc is protected — .rdata/.text must remain writable because
-    // some CRT startup code writes to IAT slots and other "read-only" areas.
-    for (main_module.parser.sections) |sec| {
-        const name = &sec.Name;
-        const is_rsrc = (name[0] == '.' and name[1] == 'r' and name[2] == 's' and name[3] == 'r' and name[4] == 'c');
-        if (is_rsrc) {
-            cpu.memory.pe_image_end = preferred_base +% image_size;
-            const rsrc_start = preferred_base +% sec.VirtualAddress;
-            const rsrc_end = rsrc_start +% sec.Misc.VirtualSize;
-            // Mark everything writable EXCEPT .rsrc
-            if (rsrc_start > preferred_base) {
-                cpu.memory.addWritableSection(preferred_base, rsrc_start);
-            }
-            if (rsrc_end < preferred_base +% image_size) {
-                cpu.memory.addWritableSection(rsrc_end, preferred_base +% image_size);
-            }
-            break;
-        }
-    }
+    runner.protectRsrc(main_module.parser.sections, &cpu.memory, preferred_base, image_size);
 
     // Wire up guest heap for all stubs (VirtualAlloc, HeapAlloc, malloc, etc.)
     const stub_common = @import("win32/shared.zig");
@@ -618,7 +442,7 @@ pub fn main() !void {
             runWithJitHost(&cpu, allocator);
         } else {
             log.info("JIT mode: compiling x86 blocks to WASM (compile-only, no host)", .{});
-            runWithJit(&cpu, allocator);
+            runner.runWithJit(&cpu, allocator);
         }
     } else {
         x86_execute.run(&cpu);
@@ -685,37 +509,10 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     var child_env = Environment.init(child_alloc);
 
     // Register all stub DLLs (same as main)
-    stubs_msvcrt.register(&child_env) catch return -1;
-    stubs_kernel32.register(&child_env) catch return -1;
-    stubs_advapi32.register(&child_env) catch return -1;
-    stubs_user32.register(&child_env) catch return -1;
-    stubs_ntdll.register(&child_env) catch return -1;
-    stubs_shell32.register(&child_env) catch return -1;
-    stubs_gdi32.register(&child_env) catch return -1;
-    stubs_ole32.register(&child_env) catch return -1;
-    stubs_comctl32.register(&child_env) catch return -1;
-    stubs_version.register(&child_env) catch return -1;
-    stubs_winmm.register(&child_env) catch return -1;
-    stubs_imm32.register(&child_env) catch return -1;
-
-    child_env.addBuiltinExport("builtin", "not_implemented", @intFromPtr(&not_implemented)) catch return -1;
-
-    // Add search paths
-    child_env.registry.addSearchPath(".") catch {};
-    {
-        const fixed = child_alloc.dupe(u8, exe_path) catch return -1;
-        std.mem.replaceScalar(u8, fixed, '\\', '/');
-        if (std.fs.path.dirname(fixed)) |dir| {
-            child_env.registry.addSearchPath(dir) catch {};
-        }
-    }
-    // Add host PATH directories
-    if (std.process.getEnvVarOwned(child_alloc, "PATH")) |host_path| {
-        var it = std.mem.tokenizeScalar(u8, host_path, ':');
-        while (it.next()) |p| {
-            if (p.len > 0) child_env.registry.addSearchPath(child_alloc.dupe(u8, p) catch continue) catch {};
-        }
-    } else |_| {}
+    runner.registerAllStubs(&child_env, @intFromPtr(&not_implemented)) catch return -1;
+    var child_host_dirs = runner.getHostPathDirs(child_alloc) catch return -1;
+    defer child_host_dirs.deinit(child_alloc);
+    runner.setupSearchPaths(&child_env, child_alloc, exe_path, child_host_dirs.items) catch return -1;
 
     const exe_name = std.fs.path.basename(exe_path);
     const child_module = child_env.registry.loadModule(exe_name) catch |err| {
@@ -730,9 +527,15 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     const child_combined_size = child_image_size + CHILD_STACK + CHILD_THUNK + CHILD_HEAP;
     const child_buf = child_alloc.alloc(u8, child_combined_size) catch return -1;
 
-    // Use the buffer's host address as base_addr so each child gets a unique
-    // address range in WASM linear memory (avoids collisions with parent).
-    const child_preferred: u32 = @intCast(@intFromPtr(child_buf.ptr));
+    // For PEs with relocation data, use the buffer's host address as base_addr
+    // so each child gets a unique address range. For fixed-base PEs (no relocs),
+    // we MUST use the preferred ImageBase since the code has hardcoded addresses.
+    const pe_preferred: u32 = child_module.parser.getNtHeaders().OptionalHeader.ImageBase;
+    const has_relocs = child_module.parser.getNtHeaders().OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC].Size > 0;
+    const child_preferred: u32 = if (has_relocs)
+        @intCast(@intFromPtr(child_buf.ptr))
+    else
+        pe_preferred;
 
     @memset(child_buf[child_image_size .. child_image_size + CHILD_STACK], 0);
     @memset(child_buf[child_image_size + CHILD_STACK ..], 0xCC);
@@ -748,66 +551,12 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     child_guest_mem.heap_cursor = child_guest_mem.heap_start;
     child_env.relocateDataExports(&child_guest_mem, child_buf, child_preferred);
 
-    // Resolve imports
-    var resolved_count: usize = 0;
-    while (true) {
-        var to_resolve: std.ArrayListUnmanaged(*Module) = .{};
-        defer to_resolve.deinit(child_alloc);
-        var it = child_env.registry.modules.iterator();
-        while (it.next()) |entry| {
-            to_resolve.append(child_alloc, entry.value_ptr.*) catch break;
-        }
-        if (to_resolve.items.len == resolved_count) break;
-        for (to_resolve.items) |mod| {
-            loader.resolveImports(&child_env, mod) catch {};
-        }
-        resolved_count = to_resolve.items.len;
-    }
+    runner.resolveAllImports(&child_env, child_alloc) catch return -1;
 
     @memcpy(child_buf[0..child_image_size], child_module.mapped_memory[0..child_image_size]);
 
-    // Reverse relocations (same as main PE loading)
-    {
-        const actual_base: u32 = @truncate(child_module.image_base);
-        if (actual_base != child_preferred) {
-            const reverse_delta = child_preferred -% actual_base;
-            const opt_header = &child_module.parser.getNtHeaders().OptionalHeader;
-            const reloc_dir = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC];
-            if (reloc_dir.Size > 0) {
-                var reloc_offset = reloc_dir.VirtualAddress;
-                const reloc_end = reloc_offset + reloc_dir.Size;
-                while (reloc_offset < reloc_end) {
-                    const block_va = @as(*align(1) const u32, @ptrCast(child_buf[reloc_offset..].ptr)).*;
-                    const block_size = @as(*align(1) const u32, @ptrCast(child_buf[reloc_offset + 4 ..].ptr)).*;
-                    if (block_size == 0) break;
-                    const entries_count = (block_size - 8) / 2;
-                    for (0..entries_count) |e| {
-                        const entry = @as(*align(1) const u16, @ptrCast(child_buf[reloc_offset + 8 + e * 2 ..].ptr)).*;
-                        if (entry >> 12 == 3) {
-                            const patch_addr = block_va + (entry & 0x0FFF);
-                            if (patch_addr + 4 <= child_image_size) {
-                                const ptr = @as(*align(1) u32, @ptrCast(child_buf[patch_addr..].ptr));
-                                ptr.* = ptr.* +% reverse_delta;
-                            }
-                        }
-                    }
-                    reloc_offset += block_size;
-                }
-            }
-        }
-    }
-
-    // Zero-fill BSS sections
-    for (child_module.parser.sections) |sec| {
-        const vsize = sec.Misc.VirtualSize;
-        if (vsize > sec.SizeOfRawData) {
-            const bss_start = sec.VirtualAddress + sec.SizeOfRawData;
-            const bss_end = sec.VirtualAddress + vsize;
-            if (bss_end <= child_buf.len) {
-                @memset(child_buf[bss_start..bss_end], 0);
-            }
-        }
-    }
+    runner.applyReverseRelocations(child_buf, &child_module.parser, child_image_size, @truncate(child_module.image_base), child_preferred);
+    runner.zeroFillBss(child_buf, child_module.parser.sections);
 
     // Build argv in child's guest memory so the interpreter's string functions
     // can access argv strings via GuestMemory translation.
@@ -847,25 +596,13 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     child_cpu.esp = child_thunk_base -% 16;
     child_cpu.ebp = child_cpu.esp;
 
+
     // Reuse parent's TEB
     child_cpu.fs_base = @truncate(teb.teb_base_addr);
 
     shared.guest_memory = &child_cpu.memory;
 
-    // .rsrc write protection for child
-    for (child_module.parser.sections) |sec| {
-        const name = &sec.Name;
-        if (name[0] == '.' and name[1] == 'r' and name[2] == 's' and name[3] == 'r' and name[4] == 'c') {
-            child_cpu.memory.pe_image_end = child_preferred +% child_image_size;
-            const rsrc_start = child_preferred +% sec.VirtualAddress;
-            const rsrc_end = rsrc_start +% sec.Misc.VirtualSize;
-            if (rsrc_start > child_preferred)
-                child_cpu.memory.addWritableSection(child_preferred, rsrc_start);
-            if (rsrc_end < child_preferred +% child_image_size)
-                child_cpu.memory.addWritableSection(rsrc_end, child_preferred +% child_image_size);
-            break;
-        }
-    }
+    runner.protectRsrc(child_module.parser.sections, &child_cpu.memory, child_preferred, child_image_size);
 
     log.info("wasm: child PE '{s}' at EIP=0x{X}, ESP=0x{X}", .{ exe_name, child_cpu.eip, child_cpu.esp });
 
@@ -891,7 +628,6 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
 
 const jit_compiler = @import("jit/compiler.zig");
 const jit_host_mod = @import("jit/host.zig");
-const x86_decoder = @import("x86/decoder.zig");
 
 const build_options = @import("build_options");
 
@@ -966,7 +702,7 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
             // Compile a new block if we haven't seen this EIP
             if (!jit.block_cache.contains(eip)) {
                 if (cpu.memory.readSlice(eip, 256)) |code| {
-                    const block_len = scanBlock(code);
+                    const block_len = runner.scanBlock(code);
                     if (block_len > 0) {
                         jit.module.deinit();
                         jit.module = @import("jit/emitter.zig").WasmModule.init(allocator);
@@ -999,66 +735,4 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
     log.info("JIT: compiled {d} blocks, executed {d} block calls", .{ blocks_compiled, blocks_executed });
 }
 
-/// Compile-only JIT loop (no host execution).
-/// Validates the JIT compiler on real PE code; compiled WASM is discarded.
-fn runWithJit(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
-    var jit = jit_compiler.JitCompiler.init(allocator, 0);
-    defer jit.deinit();
-
-    var blocks_compiled: u32 = 0;
-    var expected_next_eip: u32 = 0;
-
-    while (!cpu.halted) {
-        const eip = cpu.eip;
-
-        if (eip != expected_next_eip and !jit.block_cache.contains(eip)) {
-            if (cpu.memory.readSlice(eip, 256)) |code| {
-                const block_len = scanBlock(code);
-                if (block_len > 0) {
-                    jit.module.deinit();
-                    jit.module = @import("jit/emitter.zig").WasmModule.init(allocator);
-
-                    if (jit.compile(eip, code[0..block_len])) |wasm_bin| {
-                        blocks_compiled += 1;
-                        if (blocks_compiled <= 10) {
-                            log.info("JIT: compiled block at EIP=0x{X} ({d} x86 bytes -> {d} WASM bytes)", .{
-                                eip, block_len, wasm_bin.len,
-                            });
-                        } else if (blocks_compiled == 11) {
-                            log.info("JIT: (suppressing further compilation logs)", .{});
-                        }
-                        allocator.free(wasm_bin);
-                    } else |_| {}
-                }
-            }
-        }
-
-        x86_execute.step(cpu);
-        expected_next_eip = cpu.eip;
-    }
-
-    log.info("JIT: compiled {d} unique basic blocks", .{blocks_compiled});
-}
-
-/// Scan x86 code to find the end of a basic block (up to a terminating
-/// instruction like RET, JMP, HLT, or INT3).
-fn scanBlock(code: []const u8) usize {
-    var offset: usize = 0;
-    while (offset < code.len) {
-        const insn = x86_decoder.decode(code[offset..]);
-        if (insn.length == 0) break;
-        offset += insn.length;
-
-        // Block terminators
-        switch (insn.opcode) {
-            0xC3, 0xC2, // RET, RET imm16
-            0xCB, 0xCA, // RETF
-            0xE9, 0xEB, // JMP rel32, JMP rel8
-            0xF4, // HLT
-            0xCC, // INT3
-            => break,
-            else => {},
-        }
-    }
-    return offset;
-}
+// runWithJit and scanBlock are in runner.zig
