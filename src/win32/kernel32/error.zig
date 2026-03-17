@@ -228,7 +228,8 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
         return;
     }
 
-    if (trace.enable_tracing) trace.print("KERNEL32: Unhandled exception! Terminating.\n", .{});
+    // Use direct fd write to avoid TLS-dependent code (FS = TEB on x86_64)
+    _ = std.posix.write(2, "Unhandled exception, terminating.\n") catch {};
     platform.exitProcess(1);
 }
 

@@ -410,7 +410,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         // AppCompat/SEH handlers which handle compat mode guest faults.
         if (cs != 0x23 and ip >= 0x70000000) {
             log.fatal("Segfault in host code at IP=0x{X}, fault_addr=0x{X}", .{ ip, fault_addr });
-            std.process.exit(1);
+            exitProcess(1);
         }
     }
 
@@ -561,7 +561,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
                 log.fatal("    [{d}] = 0x{X}", .{ si, stack[si] });
             }
         }
-        std.process.exit(1);
+        exitProcess(1);
     }
 
     // AppCompat: Handle EIP=0 (null function pointer call or corrupted ret)
@@ -613,7 +613,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
             if (S.null_repeat_count > 5) {
                 // Stuck in a loop — crash cleanly instead of spinning forever
                 log.fatal("AppCompat: NULL read loop at 0x{X} ({d} repeats), aborting", .{ ip, S.null_repeat_count });
-                std.process.exit(1);
+                exitProcess(1);
             }
         } else {
             S.last_null_ip = ip;
@@ -744,7 +744,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     var esp: u32 = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_sp])));
     if (esp < 0x10000 or esp > 0x7FFFF000) {
         log.fatal("SEH dispatch: ESP=0x{X} out of range at IP=0x{X}", .{ esp, ip });
-        std.process.exit(1);
+        exitProcess(1);
     }
     // Align ESP to 4 bytes (compat mode may have misaligned ESP)
     esp &= ~@as(u32, 3);
