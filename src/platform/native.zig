@@ -746,15 +746,23 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         log.fatal("SEH dispatch: ESP=0x{X} out of range at IP=0x{X}", .{ esp, ip });
         std.process.exit(1);
     }
-    esp -= 4; @as(*u32, @ptrFromInt(esp)).* = 0; // lpArguments = NULL
-    esp -= 4; @as(*u32, @ptrFromInt(esp)).* = 0; // nNumberOfArguments = 0
-    esp -= 4; @as(*u32, @ptrFromInt(esp)).* = 0; // dwExceptionFlags = 0
-    esp -= 4; @as(*u32, @ptrFromInt(esp)).* = exc_code; // dwExceptionCode
-    esp -= 4; @as(*u32, @ptrFromInt(esp)).* = @truncate(ip); // fake return address
+    // Align ESP to 4 bytes (compat mode may have misaligned ESP)
+    esp &= ~@as(u32, 3);
+    esp -= 4; @as(*align(1) u32, @ptrFromInt(esp)).* = 0; // lpArguments = NULL
+    esp -= 4; @as(*align(1) u32, @ptrFromInt(esp)).* = 0; // nNumberOfArguments = 0
+    esp -= 4; @as(*align(1) u32, @ptrFromInt(esp)).* = 0; // dwExceptionFlags = 0
+    esp -= 4; @as(*align(1) u32, @ptrFromInt(esp)).* = exc_code; // dwExceptionCode
+    esp -= 4; @as(*align(1) u32, @ptrFromInt(esp)).* = @truncate(ip); // fake return address
 
-    // Set signal context to call RaiseException when signal handler returns
+    // Set signal context to call RaiseException when signal handler returns.
+    // On x86_64, set CS=0x33 since RaiseException is 64-bit Zig code and
+    // the fault may have been in 32-bit compat mode (CS=0x23).
     uctx.mcontext.gregs[reg_sp] = esp;
     uctx.mcontext.gregs[reg_ip] = @truncate(raise_addr);
+    if (comptime is_x86_64) {
+        const csgsfs: usize = @bitCast(uctx.mcontext.gregs[REG.CSGSFS]);
+        uctx.mcontext.gregs[REG.CSGSFS] = @bitCast((csgsfs & ~@as(usize, 0xFFFF)) | 0x33);
+    }
 
     if (trace.enable_tracing) trace.print("SEH: Redirecting to RaiseException(code={x}) for exception at 0x{X}\n", .{ exc_code, ip });
     return;

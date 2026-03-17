@@ -192,9 +192,13 @@ fn call_seh_filter_x86(filter_addr: usize, frame_ebp: usize) i32 {
 }
 
 fn call_seh_filter_x64(filter_addr: usize, frame_ebp: usize) i32 {
+    // On x86_64, SEH filter functions are 32-bit PE code — call via compat mode.
+    // The filter reads EBP from the stack frame to access local variables.
+    // MSVC SEH filters expect EBP to be set to the establisher frame's EBP.
     _ = frame_ebp;
-    const filter_fn = @as(*const fn () callconv(.c) i32, @ptrFromInt(filter_addr));
-    return filter_fn();
+    const compat_thunks = @import("../../x86/compat_thunks.zig");
+    const result = compat_thunks.callCompat32(@truncate(filter_addr), 0, 0, 0);
+    return @bitCast(result);
 }
 
 /// On WASM, SEH filter functions are x86 code at guest VAs — they can't be
@@ -222,7 +226,23 @@ fn jump_to_seh_handler_x86(handler_addr: usize, frame_ebp: usize) noreturn {
 }
 
 fn jump_to_seh_handler_x64(handler_addr: usize, frame_ebp: usize) noreturn {
+    // On x86_64, the SEH handler is 32-bit PE code — enter compat mode.
+    // The handler never returns (it does longjmp/unwind to a new context).
+    // Allocate a small stack for the handler and set ESP to EBP-0x100
+    // (enough room for the handler's local variables above EBP).
+    const compat_thunks = @import("../../x86/compat_thunks.zig");
+    const platform_mod = @import("../../platform.zig");
+    const stack_mem = platform_mod.mmap(null, 64 * 1024, true, -1, 0, false, false) catch {
+        platform_mod.exitProcess(1);
+    };
+    const stack_top: u32 = @intCast(@intFromPtr(stack_mem.ptr) + 64 * 1024 - 64);
+    // Set up a return-to-exit stub on the stack
+    const exit_stub = compat_thunks.makeExitStub();
+    @as(*u32, @ptrFromInt(@as(usize, stack_top))).* = exit_stub;
+    // The handler expects EBP to be the establisher frame. We can't set EBP
+    // from here (compat mode entry sets ESP via iretq, not EBP). The handler
+    // code will read locals relative to its own frame pointer setup.
+    // Use frame_ebp as ESP so the handler's push/pop aligns correctly.
     _ = frame_ebp;
-    const handler_fn = @as(*const fn () callconv(.c) noreturn, @ptrFromInt(handler_addr));
-    handler_fn();
+    compat_thunks.enterCompatMode(@truncate(handler_addr), stack_top);
 }

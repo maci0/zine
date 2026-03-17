@@ -241,10 +241,12 @@ fn returnFromCompat(uctx: *std.posix.ucontext_t) void {
 /// Uses iretq to enter 32-bit mode. The function's RET hits a return thunk
 /// (INT 0xFE) which modifies the ucontext to resume at a landing label here.
 pub noinline fn callCompat32(target: u32, arg0: u32, arg1: u32, arg2: u32) u32 {
+    if (comptime !platform.is_x86_64) return 0;
     return callCompat32_4(target, arg0, arg1, arg2, 0);
 }
 
 pub noinline fn callCompat32_4(target: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32) u32 {
+    if (comptime !platform.is_x86_64) return 0;
     if (pool_base == null) return 0;
     // Allocate return stub (INT 0xFE) if not yet done
     if (return_thunk_id == 0) {
@@ -260,12 +262,29 @@ pub noinline fn callCompat32_4(target: u32, arg0: u32, arg1: u32, arg2: u32, arg
     }
     const ret_stub = allocThunk(return_thunk_id) orelse return 0;
 
-    // Allocate a small guest stack for this call
-    const call_stack_size: usize = 64 * 1024;
-    const call_stack_mem = platform.mmap(null, call_stack_size, true, -1, 0, false, false) catch return 0;
-    defer platform.munmap(@alignCast(call_stack_mem));
-
-    const esp: u32 = @intCast(@intFromPtr(call_stack_mem.ptr) + call_stack_size - 64);
+    // Use a shared 1MB guest stack for all compat calls (avoid C1063 stack
+    // overflow errors from CRT stack checks). The stack is allocated once
+    // and never freed — reused across all callCompat32 invocations.
+    const S = struct {
+        var stack_mem: ?[]align(4096) u8 = null;
+    };
+    if (S.stack_mem == null) {
+        S.stack_mem = platform.mmap(null, 1024 * 1024, true, -1, 0, false, false) catch return 0;
+        // Set TEB stack bounds to this permanent stack
+        const teb_mod = @import("../win32/teb.zig");
+        if (teb_mod.teb_base_addr != 0) {
+            const teb_ptr = @as(*teb_mod.TEB, @ptrFromInt(teb_mod.teb_base_addr));
+            teb_ptr.NtTib.StackBase = @intCast(@intFromPtr(S.stack_mem.?.ptr) + 1024 * 1024);
+            teb_ptr.NtTib.StackLimit = @intCast(@intFromPtr(S.stack_mem.?.ptr));
+        }
+    }
+    const call_stack_mem = S.stack_mem.?;
+    // Each nesting level uses a different region of the 1MB stack to avoid
+    // overwriting the outer call's stack frame. Each level gets 128KB.
+    const level_size: usize = 128 * 1024;
+    const level_offset = saved_depth * level_size;
+    if (level_offset + level_size > call_stack_mem.len) return 0;
+    const esp: u32 = @intCast(@intFromPtr(call_stack_mem.ptr) + level_offset + level_size - 64);
 
     // Build stdcall frame: [ret_stub] [arg0] [arg1] [arg2] [arg3]
     const stack_ptr = @as([*]u32, @ptrFromInt(@as(usize, esp)));
@@ -352,8 +371,7 @@ pub fn enterCompatMode(entry_point: u32, guest_esp: u32) noreturn {
 }
 
 fn enterCompatModeImpl(entry_point: u64, guest_esp: u64) noreturn {
-    // We build the iretq frame manually on the current stack.
-    // Use explicit 64-bit register constraints via named registers.
+    if (comptime !platform.is_x86_64) unreachable;
     asm volatile (
         \\ movq $0x2B, %%rax
         \\ movw %%ax, %%ds

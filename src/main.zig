@@ -490,6 +490,15 @@ pub fn main() !void {
     // Initialize TEB/PEB
     const thread_env = try teb.initTEB(allocator);
     teb.teb_base_addr = @intFromPtr(thread_env);
+
+    // On x86_64, set conservative stack bounds immediately (host stack is above
+    // 4GB and truncates to garbage). These will be overridden later when we
+    // allocate the actual guest stack for compat mode or interpreter.
+    if (comptime platform.is_x86_64) {
+        const early_stack = try platform.mmap(null, 1024 * 1024, true, -1, 0, false, false);
+        thread_env.NtTib.StackBase = @intCast(@intFromPtr(early_stack.ptr) + 1024 * 1024);
+        thread_env.NtTib.StackLimit = @intCast(@intFromPtr(early_stack.ptr));
+    }
     
     // Build PEB Environment block (Must be UTF-16 on NT)
     var env_total_chars: usize = 1; // Final null
@@ -592,6 +601,13 @@ pub fn main() !void {
     // Call DllMain for all loaded DLL dependencies (after CRT globals are initialized)
     loader.attachLoadedDlls(&environment);
 
+    if (trace.enable_tracing) {
+        if (main_module.getExport("_InvokeCompilerPass@12")) |addr| {
+            trace.print("Found _InvokeCompilerPass@12 at 0x{X}\n", .{addr});
+        } else {
+            trace.print("_InvokeCompilerPass@12 not found in {s}\n", .{exe_name});
+        }
+    }
     if (main_module.getExport("_InvokeCompilerPass@12")) |invoke_addr| {
         trace.print("Executing MSVC Compiler Pass...\n", .{});
         if (comptime platform.is_x86_64) {
