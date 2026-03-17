@@ -270,13 +270,6 @@ pub noinline fn callCompat32_4(target: u32, arg0: u32, arg1: u32, arg2: u32, arg
     };
     if (S.stack_mem == null) {
         S.stack_mem = platform.mmap(null, 1024 * 1024, true, -1, 0, false, false) catch return 0;
-        // Set TEB stack bounds to this permanent stack
-        const teb_mod = @import("../win32/teb.zig");
-        if (teb_mod.teb_base_addr != 0) {
-            const teb_ptr = @as(*teb_mod.TEB, @ptrFromInt(teb_mod.teb_base_addr));
-            teb_ptr.NtTib.StackBase = @intCast(@intFromPtr(S.stack_mem.?.ptr) + 1024 * 1024);
-            teb_ptr.NtTib.StackLimit = @intCast(@intFromPtr(S.stack_mem.?.ptr));
-        }
     }
     const call_stack_mem = S.stack_mem.?;
     // Each nesting level uses a different region of the 1MB stack to avoid

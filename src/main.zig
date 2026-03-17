@@ -491,13 +491,13 @@ pub fn main() !void {
     const thread_env = try teb.initTEB(allocator);
     teb.teb_base_addr = @intFromPtr(thread_env);
 
-    // On x86_64, set conservative stack bounds immediately (host stack is above
-    // 4GB and truncates to garbage). These will be overridden later when we
-    // allocate the actual guest stack for compat mode or interpreter.
+    // On x86_64, set very wide stack bounds to cover all MAP_32BIT allocations.
+    // Multiple stacks are used (callCompat32 shared stack, enterCompatMode guest
+    // stack, etc.) and the CRT's _chkstk compares ESP against StackLimit.
+    // Setting wide bounds prevents C1063 false positives.
     if (comptime platform.is_x86_64) {
-        const early_stack = try platform.mmap(null, 1024 * 1024, true, -1, 0, false, false);
-        thread_env.NtTib.StackBase = @intCast(@intFromPtr(early_stack.ptr) + 1024 * 1024);
-        thread_env.NtTib.StackLimit = @intCast(@intFromPtr(early_stack.ptr));
+        thread_env.NtTib.StackBase = 0x7FFF0000; // near top of 32-bit range
+        thread_env.NtTib.StackLimit = 0x00100000; // 1MB above null page
     }
     
     // Build PEB Environment block (Must be UTF-16 on NT)
@@ -569,12 +569,6 @@ pub fn main() !void {
         cpu.ebp = cpu.esp;
         cpu.fs_base = @truncate(teb.teb_base_addr);
 
-        // On x86_64 interpreter, update TEB stack bounds to the interpreter stack
-        // (the host stack is above 4GB and @truncate gives garbage StackBase/StackLimit).
-        if (comptime platform.is_x86_64) {
-            thread_env.NtTib.StackBase = @intCast(@intFromPtr(stack_mem.ptr) + stack_size);
-            thread_env.NtTib.StackLimit = @intCast(@intFromPtr(stack_mem.ptr));
-        }
         trace.print("Interpreter: EIP=0x{X} ESP=0x{X} fs_base=0x{X} (image base=0x{X}, stack base=0x{X})\n", .{ cpu.eip, cpu.esp, cpu.fs_base, base, @intFromPtr(stack_mem.ptr) });
 
         if (use_jit) {
@@ -616,8 +610,6 @@ pub fn main() !void {
             const guest_stack_mem = try platform.mmap(null, guest_stack_size, true, -1, 0, false, false);
             const guest_esp_top: u32 = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size - 64);
             // Update TEB stack bounds to match the guest stack
-            thread_env.NtTib.StackBase = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size);
-            thread_env.NtTib.StackLimit = @intCast(@intFromPtr(guest_stack_mem.ptr));
             // Push arguments for _InvokeCompilerPass@12 (stdcall: 3 params)
             // Stack layout: [exit_stub] [arg1: argc] [arg2: argv] [arg3: envp]
             const stack = @as([*]u32, @ptrFromInt(@as(usize, guest_esp_top)));
@@ -646,8 +638,6 @@ pub fn main() !void {
             const guest_stack_mem = try platform.mmap(null, guest_stack_size, true, -1, 0, false, false);
             const guest_esp: u32 = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size - 64);
             // Update TEB stack bounds to match the guest stack
-            thread_env.NtTib.StackBase = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size);
-            thread_env.NtTib.StackLimit = @intCast(@intFromPtr(guest_stack_mem.ptr));
             // Push exit stub as return address
             const exit_stub = compat_thunks.makeExitStub();
             @as(*u32, @ptrFromInt(@as(usize, guest_esp))).* = exit_stub;

@@ -612,7 +612,8 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
             S.null_repeat_count += 1;
             if (S.null_repeat_count > 5) {
                 // Stuck in a loop — crash cleanly instead of spinning forever
-                log.fatal("AppCompat: NULL read loop at 0x{X} ({d} repeats), aborting", .{ ip, S.null_repeat_count });
+                // Use exitProcess directly — log.fatal may crash if FS=TEB (x86_64)
+                _ = std.posix.write(2, "NULL read loop, aborting.\n") catch {};
                 exitProcess(1);
             }
         } else {
