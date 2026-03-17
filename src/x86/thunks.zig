@@ -31,6 +31,11 @@ pub const ThunkEntry = struct {
     native_param_bytes: u32 = 0,
     /// Whether the native function uses cdecl (true) or stdcall (false).
     native_is_cdecl: bool = false,
+    /// Number of fixed params for variadic functions (0 = not variadic).
+    /// For variadic stubs like printf(fmt, ap), this is the number of
+    /// guest-visible fixed params (e.g., 1 for printf). The dispatch
+    /// passes a pointer to the remaining guest stack args as the last arg.
+    native_va_fixed: u8 = 0,
 };
 
 /// Maximum number of thunks.
@@ -39,6 +44,12 @@ pub const MAX_THUNKS = 4096;
 /// Global thunk table (populated during PE loading).
 var thunk_entries: [MAX_THUNKS]?ThunkEntry = .{null} ** MAX_THUNKS;
 var thunk_count: u32 = 0;
+
+/// Look up a thunk entry by ID (used by compat_thunks signal dispatcher).
+pub fn getEntry(id: u32) ?*const ThunkEntry {
+    if (id >= MAX_THUNKS) return null;
+    return if (thunk_entries[id]) |*entry| entry else null;
+}
 
 /// Register a thunk and return its ID.
 pub fn registerThunk(entry: ThunkEntry) u32 {
@@ -133,13 +144,20 @@ pub fn reset() void {
 
 /// Register a native function as a thunk and return the thunk ID.
 pub fn registerNativeThunk(name: []const u8, native_addr: usize, param_bytes: u32, is_cdecl: bool) u32 {
+    return registerNativeThunkVA(name, native_addr, param_bytes, is_cdecl, 0);
+}
+
+/// Register a variadic native function. va_fixed = number of fixed params
+/// (e.g. 1 for printf, 2 for sprintf). 0 = not variadic.
+pub fn registerNativeThunkVA(name: []const u8, native_addr: usize, param_bytes: u32, is_cdecl: bool, va_fixed: u8) u32 {
     return registerThunk(.{
         .name = name,
-        .param_count = null, // We handle ESP ourselves
+        .param_count = null,
         .handler = &dispatchNativeThunk,
         .native_addr = native_addr,
         .native_param_bytes = param_bytes,
         .native_is_cdecl = is_cdecl,
+        .native_va_fixed = va_fixed,
     });
 }
 
@@ -199,10 +217,18 @@ fn dispatchNativeThunk(cpu: *Cpu) void {
 // -----------------------------------------------------------------------
 
 /// Call a cdecl function at `addr` with 16 u32 args (extras are harmless).
+/// On x86_64, args are zero-extended to usize so native stubs (which take
+/// usize params like malloc(size: usize)) get correct 64-bit values.
 pub fn callNativeCdecl(addr: usize, args: [16]u32) u32 {
-    const GenericFnC = *const fn (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) callconv(.c) u32;
-    const func: GenericFnC = @ptrFromInt(addr);
-    return func(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15]);
+    if (comptime @import("../platform.zig").is_x86_64) {
+        const GenericFnC = *const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) callconv(.c) usize;
+        const func: GenericFnC = @ptrFromInt(addr);
+        return @truncate(func(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15]));
+    } else {
+        const GenericFnC = *const fn (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) callconv(.c) u32;
+        const func: GenericFnC = @ptrFromInt(addr);
+        return func(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15]);
+    }
 }
 
 /// Call a stdcall/WINAPI function at `addr` with the correct arity
@@ -219,28 +245,42 @@ pub fn callNativeByArity(addr: usize, param_bytes: u32, args: [16]u32) u32 {
     return callNativeCdecl(addr, args);
 }
 
-/// Comptime-generated call with exactly N u32 arguments using WINAPI convention.
+/// Comptime-generated call with exactly N arguments using WINAPI convention.
+/// On x86_64, uses usize params to match native stub signatures.
 fn callNativeN(comptime n: usize, addr: usize, args: [16]u32) u32 {
     const FnType = FnTypeForArity(n);
     const func: *const FnType = @ptrFromInt(addr);
     var call_args: std.meta.ArgsTuple(FnType) = undefined;
     inline for (0..n) |i| {
-        call_args[i] = args[i];
+        call_args[i] = args[i]; // u32 -> u32 on x86, u32 -> usize on x86_64 (auto zero-extend)
     }
-    return @call(.auto, func, call_args);
+    if (comptime @import("../platform.zig").is_x86_64) {
+        return @truncate(@call(.auto, func, call_args));
+    } else {
+        return @call(.auto, func, call_args);
+    }
 }
 
-/// Generate a function type: fn(u32, u32, ...) callconv(WINAPI) u32 with N params.
+/// Generate a function type with N params. On x86, uses u32 params with
+/// WINAPI (stdcall). On x86_64, uses usize params with .c (SysV ABI)
+/// because the Zig stubs are compiled for Linux SysV, not Windows x64.
 fn FnTypeForArity(comptime n: usize) type {
+    const is_64 = comptime @import("../platform.zig").is_x86_64;
+    const param_type = if (is_64) usize else u32;
+    const ret_type = if (is_64) usize else u32;
+    // Must match the calling convention used by the actual stubs.
+    // On x86: .winapi = stdcall. On x86_64-linux: .winapi = Win64 (RCX, RDX, R8, R9).
+    // The Zig stubs are declared with callconv(WINAPI), so we must match.
+    const cc = @import("../win32/calling_convention.zig").WINAPI;
     comptime var params: [n]std.builtin.Type.Fn.Param = undefined;
     inline for (0..n) |i| {
-        params[i] = .{ .is_generic = false, .is_noalias = false, .type = u32 };
+        params[i] = .{ .is_generic = false, .is_noalias = false, .type = param_type };
     }
     return @Type(.{ .@"fn" = .{
-        .calling_convention = @import("../win32/calling_convention.zig").WINAPI,
+        .calling_convention = cc,
         .is_generic = false,
         .is_var_args = false,
-        .return_type = u32,
+        .return_type = ret_type,
         .params = &params,
     } });
 }
@@ -256,7 +296,7 @@ fn FnTypeForArity(comptime n: usize) type {
 const MAX_IMPORTS = 2048;
 
 const ImportEntry = struct {
-    addr: u32,
+    addr: usize,
     param_bytes: u32, // stdcall bytes to pop (n_params * 4)
     is_cdecl: bool,   // true if this is a cdecl import (e.g. MSVCRT)
 };
@@ -269,14 +309,15 @@ var imports_sorted: bool = false;
 /// Returns the truncated 32-bit address for use in COM vtable u32 fields.
 /// Deduplicates: shared stubs (Dummy, noop) are only registered once.
 pub fn comPtr(comptime func: anytype, comptime name: []const u8) u32 {
-    const addr: u32 = @truncate(@intFromPtr(&func));
+    const full_addr: usize = @intFromPtr(&func);
+    const addr: u32 = @truncate(full_addr);
     if (comptime @import("../platform.zig").is_native) {
         const param_count: u32 = comptime blk: {
             const info = @typeInfo(@TypeOf(func));
             break :blk if (info == .@"fn") @intCast(info.@"fn".params.len) else 4;
         };
         if (!isNativeImport(addr)) {
-            registerNativeImport(addr, "COM", name, param_count * 4);
+            registerNativeImport(full_addr, "COM", name, param_count * 4);
         }
     }
     return addr;
@@ -284,7 +325,7 @@ pub fn comPtr(comptime func: anytype, comptime name: []const u8) u32 {
 
 /// Register a resolved import address with its stdcall parameter byte count.
 /// Called from loader.zig during import resolution.
-pub fn registerNativeImport(addr: u32, dll_name: []const u8, func_name: []const u8, param_bytes: u32) void {
+pub fn registerNativeImport(addr: usize, dll_name: []const u8, func_name: []const u8, param_bytes: u32) void {
     if (import_count >= MAX_IMPORTS) return;
     const is_msvcrt = std.ascii.eqlIgnoreCase(dll_name, "MSVCRT.dll") or std.ascii.eqlIgnoreCase(dll_name, "MSVCP60.dll");
     
@@ -319,11 +360,11 @@ fn ensureImportsSorted() void {
 }
 
 /// Binary search for an import entry by address.
-fn findImport(addr: u32) ?*const ImportEntry {
+fn findImport(addr: usize) ?*const ImportEntry {
     ensureImportsSorted();
     const slice = import_registry[0..import_count];
     const idx = std.sort.binarySearch(ImportEntry, slice, addr, struct {
-        fn cmp(key: u32, entry: ImportEntry) std.math.Order {
+        fn cmp(key: usize, entry: ImportEntry) std.math.Order {
             return std.math.order(key, entry.addr);
         }
     }.cmp);
@@ -332,17 +373,17 @@ fn findImport(addr: u32) ?*const ImportEntry {
 
 /// Retrieves the number of bytes to pop from the stack for a stdcall function.
 pub fn getParamBytes(addr: u32) u32 {
-    return if (findImport(addr)) |entry| entry.param_bytes else 0;
+    return if (findImport(@as(usize, addr))) |entry| entry.param_bytes else 0;
 }
 
 /// Returns true if the function at the given address uses the cdecl calling convention.
 pub fn isTargetCdecl(addr: u32) bool {
-    return if (findImport(addr)) |entry| entry.is_cdecl else false;
+    return if (findImport(@as(usize, addr))) |entry| entry.is_cdecl else false;
 }
 
 /// Returns true if the address corresponds to a registered native import.
 pub fn isNativeImport(addr: u32) bool {
-    return findImport(addr) != null;
+    return findImport(@as(usize, addr)) != null;
 }
 
 pub const getStdcallCleanup = getParamBytes;

@@ -79,7 +79,12 @@ pub fn mmap(
 
         var flags: std.posix.MAP = if (shared) .{ .TYPE = .SHARED } else .{ .TYPE = .PRIVATE };
         if (comptime is_x86_64 and builtin.os.tag == .linux) {
-            flags.@"32BIT" = true;
+            // MAP_32BIT constrains anonymous allocations to the low 2GB.
+            // Don't set it for fixed-address mappings (the address is already
+            // known) — it can interfere with MAP_FIXED_NOREPLACE.
+            if (!fixed) {
+                flags.@"32BIT" = true;
+            }
         }
         if (file_fd == -1) {
             flags.ANONYMOUS = true;
@@ -99,11 +104,13 @@ pub fn mmap(
             return slice;
         } else |err| {
             if (fixed and (err == error.MappingAlreadyExists or err == error.OutOfMemory)) {
-                // The fixed address is occupied (by the host process). Fall back
-                // to a non-fixed mapping — the PE will need relocations applied.
+                // The fixed address is occupied. Fall back to a non-fixed mapping.
                 log.warn("MAP_FIXED_NOREPLACE failed at 0x{X}, falling back to any address", .{@intFromPtr(hint)});
                 var fallback_flags = flags;
                 fallback_flags.FIXED_NOREPLACE = false;
+                if (comptime is_x86_64 and builtin.os.tag == .linux) {
+                    fallback_flags.@"32BIT" = true; // ensure fallback stays in low 4GB
+                }
                 return std.posix.mmap(null, size, prot, fallback_flags, file_fd, file_offset);
             }
             return err;
@@ -132,7 +139,18 @@ pub fn getProcessId() u32 {
 }
 
 /// Terminates the current process with the given exit code.
+/// On x86_64, use a raw syscall to avoid Zig's TLS-dependent cleanup
+/// (FS segment is set to TEB, not Zig's TLS, so cleanup would crash).
 pub fn exitProcess(code: u8) noreturn {
+    if (comptime is_x86_64) {
+        asm volatile ("syscall"
+            :
+            : [num] "{rax}" (@as(usize, 231)), // __NR_exit_group
+              [arg1] "{rdi}" (@as(usize, code)),
+            : .{ .rcx = true, .r11 = true }
+        );
+        unreachable;
+    }
     std.process.exit(code);
 }
 
@@ -240,9 +258,10 @@ pub fn setupFS(teb_ptr: *anyopaque) !void {
 
         log.info("FS segment initialized with selector 0x{X}, TEB at 0x{X}", .{ selector, @intFromPtr(teb_ptr) });
     } else if (arch == .x86_64) {
-        // x86_64: use arch_prctl(ARCH_SET_FS, base) syscall
-        // No Zig std equivalent — arch_prctl is Linux-specific for setting
-        // the FS segment base on x86_64 (needed for Win32 TEB access).
+        // x86_64: use arch_prctl(ARCH_SET_FS) for 64-bit mode FS base,
+        // AND set_thread_area for 32-bit compat mode FS access.
+        // 32-bit compat mode (CS=0x23) uses GDT-based FS, not the MSR-based
+        // FS base from arch_prctl. Both are needed.
         const SYS_arch_prctl: usize = 158;
         const ARCH_SET_FS: usize = 0x1002;
         var rc: usize = undefined;
@@ -258,6 +277,51 @@ pub fn setupFS(teb_ptr: *anyopaque) !void {
             log.err("arch_prctl(ARCH_SET_FS) failed: {d}", .{rc});
             return error.SetThreadAreaFailed;
         }
+
+        // Also set up a LDT entry for FS so 32-bit compat mode code can use
+        // fs: prefix (e.g. `mov eax, fs:[0]` for SEH chain).
+        // set_thread_area is not available on x86_64, but modify_ldt is.
+        const SYS_modify_ldt: usize = 154;
+        const teb_addr_32: u32 = @truncate(@intFromPtr(teb_ptr));
+        const ldt_entry = extern struct {
+            entry_number: u32,
+            base_addr: u32,
+            limit: u32,
+            flags: u32,
+        }{
+            .entry_number = 0, // LDT entry 0
+            .base_addr = teb_addr_32,
+            .limit = 0xFFFFF, // 4GB (granularity=page)
+            .flags = (1 << 0) | // seg_32bit
+                (0 << 3) | // contents = data
+                (0 << 1) | // read_exec_only = 0 (writable)
+                (1 << 4) | // limit_in_pages = 1 (4K granularity)
+                (0 << 5) | // seg_not_present = 0 (present)
+                (1 << 6), // useable = 1
+        };
+        var rc2: usize = undefined;
+        asm volatile ("syscall"
+            : [ret] "={rax}" (rc2),
+            : [num] "{rax}" (SYS_modify_ldt),
+              [arg1] "{rdi}" (@as(usize, 1)), // write
+              [arg2] "{rsi}" (@intFromPtr(&ldt_entry)),
+              [arg3] "{rdx}" (@as(usize, @sizeOf(@TypeOf(ldt_entry)))),
+            : .{ .rcx = true, .r11 = true, .memory = true }
+        );
+
+        if (rc2 > 0xfffffffffffff000) {
+            log.warn("modify_ldt failed on x86_64: {d} (compat mode FS won't work)", .{rc2});
+        } else {
+            // LDT selector: (entry_number << 3) | 0x4 (LDT bit) | 0x3 (RPL 3)
+            const selector: u16 = (0 << 3) | 0x4 | 0x3; // = 0x07
+            asm volatile ("movw %[sel], %%fs"
+                :
+                : [sel] "r" (selector),
+            );
+            teb.teb_fs_selector = selector;
+            log.info("FS LDT entry set for compat mode: selector=0x{X}, TEB at 0x{X}", .{ selector, teb_addr_32 });
+        }
+
         log.info("FS base set via arch_prctl, TEB at 0x{X}", .{@intFromPtr(teb_ptr)});
     } else {
         return; // Unsupported architecture
@@ -315,6 +379,36 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     const fault_addr = @intFromPtr(info.fields.sigfault.addr);
     const ip: usize = @bitCast(uctx.mcontext.gregs[reg_ip]);
 
+    // x86_64: check CS to determine if the fault is in guest (32-bit) or host (64-bit) code.
+    // Guest faults (CS=0x23) need INT 0xFE dispatch and AppCompat/SEH handling.
+    // Host faults (CS=0x33) should exit — they indicate bugs in Zig stubs.
+    if (comptime is_x86_64) {
+        const cs = @as(usize, @bitCast(uctx.mcontext.gregs[REG.CSGSFS])) & 0xFFFF;
+
+        // INT 0xFE thunk detection — works in both compat and 64-bit mode
+        if (sig == std.posix.SIG.SEGV and ip != 0) {
+            // Only read instruction bytes if IP is in a mapped code range
+            const in_pool = if (@import("../x86/compat_thunks.zig").getPoolRange()) |r|
+                (ip >= r[0] and ip < r[1])
+            else
+                false;
+            if (in_pool or cs == 0x23) {
+                const code = @as([*]const u8, @ptrFromInt(ip));
+                if (code[0] == 0xCD and code[1] == 0xFE) {
+                    const thunk_id = @as(*align(1) const u32, @ptrCast(code + 2)).*;
+                    const compat_thunks = @import("../x86/compat_thunks.zig");
+                    compat_thunks.dispatchFromSignal(uctx, thunk_id);
+                    return;
+                }
+            }
+        }
+
+        // 64-bit host code fault — not guest code, exit cleanly
+        if (cs != 0x23) {
+            log.fatal("Segfault in host code at IP=0x{X}, fault_addr=0x{X}", .{ ip, fault_addr });
+            std.process.exit(1);
+        }
+    }
 
     // Handle SIGILL — dispatch through SEH like Wine does.
     // cpuidsdk's SEH handler catches EXCEPTION_ILLEGAL_INSTRUCTION and sets
@@ -502,7 +596,26 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         }
     }
 
-    // Application Compatibility Shim for NULL pointer dereferences
+    // Application Compatibility Shim for NULL pointer dereferences.
+    // Track repeated faults at the same IP to detect infinite loops
+    // (e.g., code that retries a load from a null pointer in a loop).
+    const S = struct {
+        var last_null_ip: usize = 0;
+        var null_repeat_count: u32 = 0;
+    };
+    if (fault_addr < 0x1000 and ip != 0) {
+        if (ip == S.last_null_ip) {
+            S.null_repeat_count += 1;
+            if (S.null_repeat_count > 5) {
+                // Stuck in a loop — crash cleanly instead of spinning forever
+                log.fatal("AppCompat: NULL read loop at 0x{X} ({d} repeats), aborting", .{ ip, S.null_repeat_count });
+                std.process.exit(1);
+            }
+        } else {
+            S.last_null_ip = ip;
+            S.null_repeat_count = 1;
+        }
+    }
     if (fault_addr < 0x1000 and ip != 0) {
         const ptr = @as([*]u8, @ptrFromInt(ip));
 
@@ -594,11 +707,6 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         }
     }
 
-    // Instead of calling SEH handlers directly (which corrupts the stack when
-    // they do RtlUnwind/longjmp), redirect execution to RaiseException.
-    // This sets up the exception dispatch in normal context, not signal context.
-    //
-    // Write RaiseException args on the guest stack and set EIP to RaiseException.
     const exc_code: u32 = if (sig == std.posix.SIG.ILL)
         0xC000001D // EXCEPTION_ILLEGAL_INSTRUCTION
     else if (is_priv_instruction)
@@ -626,8 +734,14 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     hw_ctx.EFlags = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_fl])));
     k32_error.saved_hw_context = hw_ctx;
 
-    // Push RaiseException args on the guest stack (stdcall: right-to-left)
+    // Push RaiseException args on the guest stack (stdcall: right-to-left).
+    // Verify ESP is in a plausible mapped range before writing to avoid
+    // crashing the signal handler itself.
     var esp: u32 = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_sp])));
+    if (esp < 0x10000 or esp > 0x7FFFF000) {
+        log.fatal("SEH dispatch: ESP=0x{X} out of range at IP=0x{X}", .{ esp, ip });
+        std.process.exit(1);
+    }
     esp -= 4; @as(*u32, @ptrFromInt(esp)).* = 0; // lpArguments = NULL
     esp -= 4; @as(*u32, @ptrFromInt(esp)).* = 0; // nNumberOfArguments = 0
     esp -= 4; @as(*u32, @ptrFromInt(esp)).* = 0; // dwExceptionFlags = 0
@@ -645,10 +759,14 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
 
 /// Install the SIGSEGV/SIGFPE handler.
 pub fn installSegfaultHandler() void {
+    // SA_NODEFER allows the signal to be delivered while its handler is running.
+    // This is required for x86_64 compat mode: callCompat32 enters compat mode
+    // via iretq, and nested INT 0xFE signals must be delivered within the
+    // handler context (e.g., DllMain -> _initterm -> callCompat32 -> init func).
     var act = std.posix.Sigaction{
         .handler = .{ .sigaction = &sigsegvHandler },
         .mask = std.posix.sigemptyset(),
-        .flags = std.posix.SA.SIGINFO,
+        .flags = std.posix.SA.SIGINFO | std.posix.SA.NODEFER,
     };
     std.posix.sigaction(std.posix.SIG.SEGV, &act, null);
     std.posix.sigaction(std.posix.SIG.FPE, &act, null);

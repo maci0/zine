@@ -65,30 +65,57 @@ When the 32-bit application wants to call a Win32 API (e.g., `kernel32.dll!GetVe
 - **Current State**: `sigsegvHandler` assumes all registers are 64-bit on an x86_64 build.
 - **Missing**: When a crash happens in 32-bit compat mode, the `ucontext_t` still contains 64-bit registers, but we must reconstruct the `teb.CONTEXT` structure using 32-bit semantics. The exception handler must correctly identify whether the fault happened in 32-bit mode (checking if `CS == 0x23` from the `ucontext_t`) or 64-bit mode.
 
-## Implementation Plan & Checklist
+## Implementation Status
 
-### Phase 1: Sub-4GB Memory Management
-- [ ] Create `GuestAllocator` in `platform.zig` / `platform/native.zig`.
-- [ ] Implement x86_64 `mmap` wrapper to always include `MAP_32BIT` flag for guest allocations.
-- [ ] Update `loader/module.zig` to use the `GuestAllocator` for allocating the PE image and all its sections.
-- [ ] Ensure `teb.zig` allocates the TEB/PEB using the `GuestAllocator`.
+### Phase 5 — Signal-Based INT 0xFE Dispatch (Implemented)
 
-### Phase 2: Thunking & Stubs
-- [ ] Implement `x86/native_thunks_64.zig` to manage a pool of 32-bit executable memory (`GuestAllocator`) for thunk stubs.
-- [ ] Generate 32-bit trampoline assembly for each Win32 API stub (`push thunk_id`, `lcall $0x33, $ThunkDispatcher_64`).
-- [ ] Implement the `ThunkDispatcher_64` assembly stub that receives the 64-bit call, saves callee-saved registers, aligns the stack, reads arguments via `ESP`, and calls the Zig backend handler.
-- [ ] Modify `loader/loader.zig` to patch the guest 32-bit IAT with addresses pointing to these low-memory trampolines.
+The original plan outlined phases 1–4 with `lcall`/`lret` far-call trampolines. The actual
+implementation uses a simpler signal-based approach that reuses the existing `INT 0xFE + thunk_id`
+mechanism from the WASM/interpreter path. This avoids complex GDT manipulation and far calls.
 
-### Phase 3: Bootstrapping & Mode Transition
-- [ ] Add CLI support or auto-detection logic to identify when a 32-bit PE is being run on a 64-bit host.
-- [ ] Allocate a 32-bit compatible Thread Stack (`MAP_32BIT`) for the main thread.
-- [ ] Write the 64->32 inline assembly trampoline (`iret` based) that pushes `SS`, `ESP`, `EFLAGS`, `CS` (`0x23`), and `EIP`, then executes `iretq`.
-- [ ] Update `main.zig` to jump to the entry point using the trampoline.
+**How it works:**
+1. On x86_64, `INT 0xFE` in 32-bit compatibility mode (CS=0x23) raises SIGSEGV.
+2. The signal handler detects `CD FE` at the faulting IP and reads the 4-byte thunk ID.
+3. `compat_thunks.dispatchFromSignal()` reads 32-bit args from the guest stack (via RSP in ucontext),
+   calls the 64-bit Zig stub, writes the result to RAX, adjusts RSP for stdcall, and sets RIP to the
+   return address. The signal handler returns, resuming the guest in 32-bit compat mode.
+4. Each API call costs one kernel signal entry/exit (~2-5µs), acceptable for I/O-bound CLI tools.
 
-### Phase 4: Signal Handling & Compatibility
-- [ ] Update `platform/native.zig` `sigsegvHandler` to detect whether the fault occurred in `CS == 0x23` (32-bit) or `CS == 0x33` (64-bit).
-- [ ] Implement 32-bit CONTEXT extraction from a 64-bit `ucontext_t` when `CS == 0x23`.
-- [ ] Verify `FS` (TEB) accesses correctly trigger the 32-bit SEH linked list lookup.
+**Key files:**
+| File | Change |
+|------|--------|
+| `src/x86/compat_thunks.zig` | **NEW** — 256KB thunk pool (MAP_32BIT), signal dispatcher, iretq entry trampoline |
+| `src/platform/native.zig` | INT 0xFE detection at top of SIGSEGV handler |
+| `src/loader/loader.zig` | `patchImport` x86_64 branch — allocates INT 0xFE stubs in compat pool |
+| `src/x86/thunks.zig` | `ImportEntry.addr` widened to `usize`, added `getEntry()` |
+| `src/main.zig` | Initializes compat pool, allocates 1MB guest stack, uses `iretq` to enter PE |
+| `src/win32/teb.zig` | TEB allocated via `platform.mmap` (MAP_32BIT) on x86_64 |
+
+### Checklist
+
+#### Sub-4GB Memory Management
+- [x] `platform.mmap` uses `MAP_32BIT` on x86_64 — all guest mmaps land in low 4GB (`native.zig:82`)
+- [x] `teb.zig` allocates TEB via `platform.mmap` on x86_64 (ensures < 4GB)
+- [x] PEB/ProcessParameters allocated via `kernel32/mem.zig:raw_alloc` (uses platform.mmap)
+
+#### Thunking & Stubs
+- [x] `compat_thunks.zig` — 256KB executable pool in low 4GB for `INT 0xFE` stubs
+- [x] `allocThunk(thunk_id)` — writes `CD FE + u32` and returns 32-bit address for IAT
+- [x] `allocData(src, size)` — copies data exports into pool for 32-bit guest access
+- [x] `loader.zig:patchImport` — x86_64 branch registers native thunks and allocates compat stubs
+- [x] `thunks.zig` — `ImportEntry.addr` widened to `usize`, `registerNativeImport` takes `usize`
+
+#### Bootstrapping & Mode Transition
+- [x] 1MB guest stack allocated via `platform.mmap` (MAP_32BIT)
+- [x] Exit stub pushed as return address on guest stack
+- [x] `iretq` trampoline switches CS=0x23, SS=0x2B to enter 32-bit compat mode
+- [x] `main.zig` — entry point and `_InvokeCompilerPass@12` both use compat mode on x86_64
+
+#### Signal Handling
+- [x] `sigsegvHandler` detects `CD FE` at faulting IP and dispatches to `compat_thunks`
+- [x] `dispatchFromSignal` reads 32-bit guest stack, calls 64-bit stub, writes EAX/ESP/EIP in ucontext
+- [ ] CS=0x23 check for non-thunk faults (SEH dispatch in compat mode) — future work
+- [ ] Full 32-bit CONTEXT extraction from 64-bit ucontext — future work
 
 ---
 

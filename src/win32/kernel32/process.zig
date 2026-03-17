@@ -226,12 +226,10 @@ pub fn GetProcAddress(hModule: usize, lpProcName_ptr: usize) callconv(w32cc.WINA
                 const builtin = entry.value_ptr.*;
                 if (builtin.handle == hModule) {
                     if (builtin.exports.get(name)) |exp| {
-                        if (trace.enable_tracing) trace.print("KERNEL32: GetProcAddress('{s}') -> {x} (from builtin)\n", .{ name, exp.addr });
-                        // Register the resolved address as a native import so the
-                        // interpreter can dispatch calls to it (GetProcAddress results
-                        // bypass the normal IAT-based import registration).
-                        x86_thunks.registerNativeImport(@intCast(exp.addr), entry.key_ptr.*, name, exp.param_bytes);
-                        return exp.addr;
+                        const loader_mod = @import("../../loader/loader.zig");
+                        const result = loader_mod.allocThunkForExport(exp, entry.key_ptr.*, name);
+                        if (trace.enable_tracing) trace.print("KERNEL32: GetProcAddress('{s}') -> {x} (from builtin)\n", .{ name, result });
+                        return result;
                     }
                 }
             }
@@ -266,10 +264,8 @@ pub fn GetProcAddress(hModule: usize, lpProcName_ptr: usize) callconv(w32cc.WINA
 
 /// GetStartupInfoA
 /// Implementation status: Partially implemented
-pub fn GetStartupInfoA(lpStartupInfo_ptr: usize) callconv(w32cc.WINAPI) void {
-    if (trace.enable_tracing) trace.print("KERNEL32: GetStartupInfoA({x})\n", .{lpStartupInfo_ptr});
-    if (lpStartupInfo_ptr == 0) return;
-    const si = @as(*w32.STARTUPINFOA, @ptrFromInt(lpStartupInfo_ptr));
+pub fn GetStartupInfoA(si: *w32.STARTUPINFOA) callconv(w32cc.WINAPI) void {
+    if (trace.enable_tracing) trace.print("KERNEL32: GetStartupInfoA\n", .{});
     si.* = .{}; // zero all, cb defaults to 68
 }
 
@@ -753,8 +749,8 @@ pub fn CreateProcessA(
 
     if (lpProcessInformation != 0) {
         const pi = @as(*align(1) w32.PROCESS_INFORMATION, @ptrFromInt(lpProcessInformation));
-        pi.hProcess = proc_handle;
-        pi.hThread = proc_handle + 0x10000; // fake thread handle
+        pi.hProcess = @truncate(proc_handle);
+        pi.hThread = @truncate(proc_handle + 0x10000); // fake thread handle
         pi.dwProcessId = @intCast(child.id);
         pi.dwThreadId = @intCast(child.id);
     }
@@ -971,6 +967,16 @@ pub fn GetCommandLineW() callconv(w32cc.WINAPI) usize {
         }
         wbuf[copy_len] = 0;
         cmdline_w_initialized = true;
+    }
+    // On WASM, allocate in guest memory so x86 code can dereference
+    const shared = @import("../shared.zig");
+    if (shared.guest_memory != null) {
+        const raw = shared.raw_alloc(cmdline_w_buf.len * 2) orelse return @intFromPtr(&cmdline_w_buf);
+        const ptr = @as([*]u16, @ptrCast(@alignCast(raw)));
+        for (0..cmdline_w_buf.len) |i| {
+            ptr[i] = cmdline_w_buf[i];
+        }
+        return @intFromPtr(raw);
     }
     return @intFromPtr(&cmdline_w_buf);
 }

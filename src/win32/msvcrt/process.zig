@@ -20,10 +20,14 @@ const g_commode: u32 = 16; // u16 padded to u32
 const g_initenv: u32 = 20; // u32
 const g_pgmptr: u32 = 24; // u32
 const g_acmdln: u32 = 28; // u32 (pointer to acmdln string)
+// Phase 3 additions: static return values that x86 code dereferences
+pub const g_errno: u32 = 32; // i32
+pub const g_doserrno: u32 = 36; // u32
+pub const g_setlocale: u32 = 40; // 2 bytes ("C\0") padded
 
 var guest_globals_addr: u32 = 0; // guest virtual address of globals block
 
-fn ensureGuestGlobals() u32 {
+pub fn ensureGuestGlobals() u32 {
     if (guest_globals_addr != 0) return guest_globals_addr;
     const stub_common = @import("../shared.zig");
     if (stub_common.guest_memory) |gmem| {
@@ -41,9 +45,75 @@ fn ensureGuestGlobals() u32 {
         gmem.write32(addr + g_initenv, 0); // null
         gmem.write32(addr + g_pgmptr, 0); // null
         gmem.write32(addr + g_acmdln, @truncate(msvcrt.msvcrt_acmdln));
+        // Static return value slots
+        gmem.write32(addr + g_errno, 0); // errno = 0
+        gmem.write32(addr + g_doserrno, 0); // doserrno = 0
+        gmem.base[addr - gmem.base_addr + g_setlocale] = 'C';
+        gmem.base[addr - gmem.base_addr + g_setlocale + 1] = 0;
+        return addr;
+    }
+    // On x86_64 compat mode, __p_xxx stubs return pointers that 32-bit guest
+    // code dereferences. Host globals are above 4GB, so allocate a low-4GB
+    // block via platform.mmap (MAP_32BIT) and mirror the globals there.
+    if (comptime platform.is_x86_64) {
+        // Allocate a large low-4GB block for globals + copied strings
+        const block_size: usize = 64 * 1024; // 64KB for globals + string copies
+        const mem = platform.mmap(null, block_size, false, -1, 0, false, false) catch return 0;
+        const addr: u32 = @intCast(@intFromPtr(mem.ptr));
+        guest_globals_addr = addr;
+        const ptr = mem.ptr;
+        // String copy area starts after the globals header (256 bytes)
+        var str_cursor: u32 = guest_globals_size;
+
+        // Helper to copy a NUL-terminated string into the low-4GB block
+        const copyStr = struct {
+            fn f(base: [*]u8, cursor: *u32, src: usize, limit: u32) u32 {
+                if (src == 0) return 0;
+                const s = @as([*]const u8, @ptrFromInt(src));
+                var len: u32 = 0;
+                while (len < limit - cursor.* - 1 and s[len] != 0) : (len += 1) {}
+                const dest = cursor.*;
+                @memcpy(base[dest .. dest + len], s[0..len]);
+                base[dest + len] = 0;
+                cursor.* += len + 1;
+                return dest;
+            }
+        }.f;
+
+        // Copy _pgmptr string
+        const pgmptr_off = if (msvcrt.msvcrt_pgmptr) |pgm|
+            copyStr(ptr, &str_cursor, @intFromPtr(pgm), @intCast(block_size))
+        else
+            @as(u32, 0);
+
+        // Copy _acmdln string
+        const acmdln_off = if (msvcrt.msvcrt_acmdln != 0)
+            copyStr(ptr, &str_cursor, msvcrt.msvcrt_acmdln, @intCast(block_size))
+        else
+            @as(u32, 0);
+
+        writeU32(ptr, g_argc, @bitCast(msvcrt.global_argc));
+        // argv/envp: these are arrays of pointers. The pointers themselves
+        // may be in low 4GB (from arena+mmap), just truncate for now.
+        writeU32(ptr, g_argv, @truncate(@intFromPtr(msvcrt.global_argv)));
+        writeU32(ptr, g_envp, @truncate(@intFromPtr(msvcrt.global_envp)));
+        writeU32(ptr, g_fmode, msvcrt.msvcrt_fmode);
+        writeU32(ptr, g_commode, msvcrt.msvcrt_commode);
+        writeU32(ptr, g_initenv, 0);
+        // pgmptr: pointer TO the string, stored as addr + pgmptr_off
+        writeU32(ptr, g_pgmptr, if (pgmptr_off != 0) addr + pgmptr_off else 0);
+        writeU32(ptr, g_acmdln, if (acmdln_off != 0) addr + acmdln_off else 0);
+        writeU32(ptr, g_errno, 0);
+        writeU32(ptr, g_doserrno, 0);
+        ptr[g_setlocale] = 'C';
+        ptr[g_setlocale + 1] = 0;
         return addr;
     }
     return 0;
+}
+
+fn writeU32(base: [*]u8, offset: u32, value: u32) void {
+    @as(*align(1) u32, @ptrCast(base + offset)).* = value;
 }
 
 /// Update guest globals after argv/envp are built
@@ -307,9 +377,11 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     }
 
     if (argv_ptr != 0) {
-        const argv = @as([*]const usize, @ptrFromInt(argv_ptr));
+        // On x86_64 compat mode, the guest argv array contains 32-bit pointers.
+        const ArgPtrType = if (comptime platform.is_x86_64) u32 else usize;
+        const argv = @as([*]const ArgPtrType, @ptrFromInt(argv_ptr));
         if (argv[0] != 0) {
-            const arg0 = trace.c_span(argv[0]);
+            const arg0 = trace.c_span(@as(usize, argv[0]));
             var clean_arg0 = std.heap.page_allocator.dupe(u8, arg0) catch return -1;
             std.mem.replaceScalar(u8, clean_arg0, '/', '\\');
             if (std.mem.lastIndexOfScalar(u8, clean_arg0, '\\')) |idx| {
@@ -360,11 +432,12 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     }
 
     if (argv_ptr != 0) {
-        const argv = @as([*]const usize, @ptrFromInt(argv_ptr));
+        const ArgPtrType2 = if (comptime platform.is_x86_64) u32 else usize;
+        const argv2 = @as([*]const ArgPtrType2, @ptrFromInt(argv_ptr));
         var i: usize = 0;
-        while (argv[i] != 0) : (i += 1) {
+        while (argv2[i] != 0) : (i += 1) {
             if (i > 0) {
-                const arg = trace.c_span(argv[i]);
+                const arg = trace.c_span(@as(usize, argv2[i]));
                 var clean_arg: []const u8 = arg;
                 if (clean_arg.len >= 2 and clean_arg[0] == '"' and clean_arg[clean_arg.len - 1] == '"') {
                     clean_arg = clean_arg[1 .. clean_arg.len - 1];
@@ -514,6 +587,11 @@ pub fn p_pgmptr() callconv(.c) usize {
                 const first_arg = gmem.read32(guest_argv_addr);
                 gmem.write32(g + g_pgmptr, first_arg);
             }
+        } else if (guest_argv_addr != 0) {
+            // Native x86_64: guest_argv_addr points to the low-4GB argv array.
+            // Read argv[0] directly from it.
+            const first_arg = @as(*const u32, @ptrFromInt(@as(usize, guest_argv_addr))).*;
+            @as(*align(1) u32, @ptrFromInt(@as(usize, g + g_pgmptr))).* = first_arg;
         }
         return g + g_pgmptr;
     }
@@ -566,6 +644,18 @@ pub fn initterm(pfbegin: [*]const ?*const fn () callconv(.c) void, pfend: [*]con
                     initterm_state.callbacks().*[initterm_state.count().*] = func_ptr;
                     initterm_state.count().* += 1;
                 }
+            }
+        }
+        return;
+    }
+    if (comptime platform.is_x86_64) {
+        const compat_thunks = @import("../../x86/compat_thunks.zig");
+        var current: usize = @intFromPtr(pfbegin);
+        const end: usize = @intFromPtr(pfend);
+        while (current < end) : (current += 4) {
+            const func_addr = @as(*const u32, @ptrFromInt(current)).*;
+            if (func_addr != 0) {
+                _ = compat_thunks.callCompat32(func_addr, 0, 0, 0);
             }
         }
         return;

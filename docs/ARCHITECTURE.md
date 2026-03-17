@@ -40,7 +40,7 @@ The build system (`build.zig`) supports three target architectures:
 | Target | Architecture | Description |
 |--------|-------------|-------------|
 | **x86** (default) | `i386-linux` | Native 32-bit execution. Sets image base to `0x70000000` so the low address space (`0x00400000+`) is free for guest PEs — the same approach Wine uses. Disables SSE/AVX (Streaming SIMD Extensions / Advanced Vector Extensions) to match legacy MSVC6 (Microsoft Visual C++ 6.0) expectations. |
-| **x86_64** | `x86_64-linux` | Native 64-bit execution. PE code runs at its preferred 32-bit base but within a 64-bit host process. |
+| **x86_64** | `x86_64-linux` | Native 64-bit host running 32-bit PEs in CPU compatibility mode (CS=0x23). API calls use `INT 0xFE` → SIGSEGV signal dispatch to call 64-bit Zig stubs. All guest memory is in the low 4GB via `MAP_32BIT`. |
 | **wasm32** | `wasm32-wasi` | WASM (WebAssembly) output, running under a WASI (WebAssembly System Interface) runtime. All x86 code is run through the software interpreter. Initial memory is 256 MB, max 2 GB. |
 
 ---
@@ -135,18 +135,22 @@ The software interpreter is used on WASM (always) and optionally on native (`--i
 | [fpu.zig](../src/x86/fpu.zig) | x87 FPU state (ST(0)–ST(7) floating-point register stack, control/status words). |
 | [memory.zig](../src/x86/memory.zig) | `GuestMemory` struct — translates guest virtual addresses to host buffer offsets. Provides `read8/16/32`, `write8/16/32`, and `readSlice`/`writeSlice`. Supports `native_linear` mode for direct host memory access when using `--interpret` on native targets. |
 | [thunks.zig](../src/x86/thunks.zig) | Thunk dispatch table. Maps thunk IDs to handlers. On `INT 0xFE`, reads the 4-byte thunk ID from the code stream and calls the registered handler with the CPU state. Also manages the native import registry for stdcall (callee-cleans-stack calling convention) parameter cleanup. |
+| [compat_thunks.zig](../src/x86/compat_thunks.zig) | x86_64 compatibility mode thunk pool. Allocates `INT 0xFE` stubs in a 256KB executable pool in the low 4GB (`MAP_32BIT`). When the SIGSEGV handler detects `CD FE`, `dispatchFromSignal()` reads 32-bit args from the guest stack, calls 64-bit Zig stubs, and writes results back via ucontext. Also provides `enterCompatMode()` which uses `iretq` to switch CS to 0x23 and start the PE. |
 
-#### Thunk Mechanism (WASM)
+#### Thunk Mechanism (WASM & x86_64 Compat Mode)
 
-On WASM, Win32 API calls can't be dispatched by jumping to native function pointers. Instead:
+On WASM and x86_64, Win32 API calls can't be dispatched by jumping to native function pointers directly. Instead, both use the same `INT 0xFE + thunk_id` mechanism:
 
 1. During import resolution, each stub gets a thunk slot written into guest memory: `CD FE` (`INT 0xFE`, a software interrupt) followed by a 4-byte thunk ID.
 2. The PE's IAT is patched to point to this thunk code.
 3. When the guest x86 code executes `CALL [IAT_entry]`, it jumps to the thunk.
-4. The interpreter's `INT 0xFE` handler reads the thunk ID and dispatches to the registered Zig function.
+4. **WASM**: The interpreter's `INT 0xFE` handler reads the thunk ID and dispatches to the registered Zig function.
+   **x86_64**: `INT 0xFE` in 32-bit compat mode (CS=0x23) triggers SIGSEGV. The signal handler detects `CD FE` at the faulting IP, reads the thunk ID, and calls `compat_thunks.dispatchFromSignal()` which marshals 32-bit args from the guest stack (via RSP in ucontext), calls the 64-bit Zig stub, writes the return value to RAX, adjusts RSP for stdcall, and sets RIP to the return address.
 5. The handler reads arguments from the guest stack, calls the stub function, writes the return value to EAX (the accumulator register, used for return values), and adjusts ESP (the stack pointer register) for stdcall cleanup.
 
-> **Note:** Thunks are allocated in a dedicated region *beyond* the PE image and stack in WASM's combined buffer (`[PE image] [stack 64KB] [thunks 32KB]`). An earlier design placed thunks inside `SizeOfImage`, which overwrote the IAT and data sections with `0xCC` (INT3), causing crashes.
+> **Note (WASM):** Thunks are allocated in a dedicated region *beyond* the PE image and stack in WASM's combined buffer (`[PE image] [stack 64KB] [thunks 32KB]`). An earlier design placed thunks inside `SizeOfImage`, which overwrote the IAT and data sections with `0xCC` (INT3), causing crashes.
+
+> **Note (x86_64):** Thunks are allocated in a 256KB executable pool mapped with `MAP_32BIT` to ensure addresses fit in 32-bit IAT slots. Each API call costs one kernel signal entry/exit (~2-5µs), acceptable for I/O-bound CLI tools like MSVC.
 
 ---
 
@@ -427,6 +431,7 @@ zine/
 │   │   └── wasm.zig         # WASM-specific implementation
 │   ├── x86/
 │   │   ├── cpu.zig          # CPU state struct
+│   │   ├── compat_thunks.zig # x86_64 compat mode thunk pool & signal dispatcher
 │   │   ├── decoder.zig      # Instruction decoder
 │   │   ├── execute.zig      # Interpreter main loop
 │   │   ├── flags.zig        # Lazy EFLAGS

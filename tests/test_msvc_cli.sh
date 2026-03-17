@@ -3,22 +3,31 @@
 # Runs each tool with realistic arguments and verifies expected behavior.
 #
 # Usage:
-#   ./test_msvc_cli.sh              # run in native mode (default)
+#   ./test_msvc_cli.sh              # run in native mode (default, x86)
+#   ./test_msvc_cli.sh --native64   # run in native mode (x86_64 compat mode)
 #   ./test_msvc_cli.sh --interpret  # run in interpreter mode
 #   ./test_msvc_cli.sh --jit        # run in JIT mode
+#   ./test_msvc_cli.sh --external   # run with external DLL stubs (not embedded)
 #   ./test_msvc_cli.sh --wasmtime   # run in WASM mode via wasmtime
 #   ./test_msvc_cli.sh --wasmer     # run in WASM mode via wasmer
 #   ./test_msvc_cli.sh --wasm       # alias for --wasmtime
 #   ./test_msvc_cli.sh --both       # run native + interpreted
-#   ./test_msvc_cli.sh --all        # run native + interpreted + jit + wasmtime + wasmer
+#   ./test_msvc_cli.sh --all        # run native + interpreted + jit + external + wasmtime + wasmer
 #   ./test_msvc_cli.sh --interpret --filter "CL.EXE"   # run only matching tests
 #   ./test_msvc_cli.sh --interpret --filter "startup"   # run only startup tests
 #   ./test_msvc_cli.sh --native --filter "DUMPBIN"      # run DUMPBIN tests only
+#   ./test_msvc_cli.sh --native64 --filter "startup"    # run startup tests on x86_64
 #
 # WASI exit code note:
 #   wasmtime only supports exit codes 0-125; codes ≥126 are mapped to 1.
 #   wasmer passes all exit codes 0-255 faithfully.
 #   The test adapts expected exit codes per runtime.
+#
+# x86_64 compat mode notes:
+#   --native64 builds with -Darch=x86_64 and runs 32-bit PEs in CPU compat
+#   mode (CS=0x23). API calls use INT 0xFE -> SIGSEGV signal dispatch.
+#   x86_64 --interpret is not yet supported (stubs return 64-bit pointers
+#   that the 32-bit interpreter can't handle).
 #
 # Key constraints:
 # - CL.EXE treats paths starting with / as options, so use relative paths
@@ -61,10 +70,10 @@ if [ "$MODE" = "--both" ] || [ "$MODE" = "both" ]; then
     exit 0
 fi
 
-# --all: re-invoke native + interpreted + jit + wasmtime + wasmer
+# --all: re-invoke native + native64 + interpreted + jit + wasmtime + wasmer
 if [ "$MODE" = "--all" ] || [ "$MODE" = "all" ]; then
     all_rc=0
-    for m in --native --interpret --jit --wasmtime --wasmer; do
+    for m in --native --native64 --interpret --jit --external --wasmtime --wasmer; do
         echo "===== Running in ${m#--} mode ====="
         "$0" "$m" ${FILTER:+--filter "$FILTER"} || all_rc=1
         echo ""
@@ -75,6 +84,8 @@ fi
 # Parse mode flag
 ZINE_FLAGS=()
 IS_WASM=false
+IS_EXTERNAL=false
+IS_NATIVE64=false
 WASM_RUNTIME=""     # "wasmtime" or "wasmer"
 WASM_EXIT_MAX=255   # max exit code the runtime supports faithfully
 TIMEOUT_SECS=30
@@ -88,6 +99,16 @@ case "$MODE" in
         ZINE_FLAGS=(--jit)
         MODE_LABEL="JIT"
         TIMEOUT_SECS=60  # JIT may include compilation overhead
+        ;;
+    --external|external)
+        ZINE_FLAGS=()
+        MODE_LABEL="EXTERNAL"
+        IS_EXTERNAL=true
+        ;;
+    --native64|native64)
+        ZINE_FLAGS=()
+        MODE_LABEL="NATIVE64"
+        IS_NATIVE64=true
         ;;
     --wasm|wasm|--wasmtime|wasmtime)
         IS_WASM=true
@@ -106,7 +127,7 @@ case "$MODE" in
         MODE_LABEL="NATIVE"
         ;;
     *)
-        echo "Usage: $0 [--native|--interpret|--jit|--wasmtime|--wasmer|--both|--all] [--filter PATTERN]"
+        echo "Usage: $0 [--native|--native64|--interpret|--jit|--external|--wasmtime|--wasmer|--both|--all] [--filter PATTERN]"
         exit 1
         ;;
 esac
@@ -128,6 +149,12 @@ if [ "${SKIP_BUILD:-}" != "1" ]; then
     if $IS_WASM; then
         echo "Building zine for wasm32..."
         (cd "$SCRIPT_DIR/.." && zig build -Darch=wasm32) || { echo "FATAL: zig build -Darch=wasm32 failed"; exit 1; }
+    elif $IS_EXTERNAL; then
+        echo "Building DLLs + zine with external stubs..."
+        (cd "$SCRIPT_DIR/.." && zig build -Ddll=true && zig build -Dexternal-stubs=true -Darch=x86) || { echo "FATAL: zig build -Dexternal-stubs failed"; exit 1; }
+    elif $IS_NATIVE64; then
+        echo "Building zine for x86_64 (compat mode)..."
+        (cd "$SCRIPT_DIR/.." && zig build -Darch=x86_64) || { echo "FATAL: zig build -Darch=x86_64 failed"; exit 1; }
     else
         echo "Building zine..."
         (cd "$SCRIPT_DIR/.." && zig build) || { echo "FATAL: zig build failed"; exit 1; }
@@ -139,9 +166,13 @@ else
 fi
 
 if $IS_WASM; then
-    WASM_BIN="$(realpath "$SCRIPT_DIR/../zig-out/bin/zine.wasm")"
+    WASM_BIN="$(realpath "$SCRIPT_DIR/../zig-out/bin/zine.wasm32.wasm")"
+    # Fall back to old name if new name doesn't exist
     if [ ! -f "$WASM_BIN" ]; then
-        echo "FATAL: zine.wasm not found at $WASM_BIN"
+        WASM_BIN="$(realpath "$SCRIPT_DIR/../zig-out/bin/zine.wasm" 2>/dev/null || echo "")"
+    fi
+    if [ ! -f "$WASM_BIN" ]; then
+        echo "FATAL: zine.wasm32.wasm not found"
         exit 1
     fi
     if ! command -v "$WASM_RUNTIME" &>/dev/null; then
@@ -149,9 +180,13 @@ if $IS_WASM; then
         exit 1
     fi
 else
-    WINLOADER="$(realpath "$SCRIPT_DIR/../zig-out/bin/zine")"
+    if $IS_NATIVE64; then
+        WINLOADER="$(realpath "$SCRIPT_DIR/../zig-out/bin/zine.x86_64")"
+    else
+        WINLOADER="$(realpath "$SCRIPT_DIR/../zig-out/bin/zine.x86")"
+    fi
     if [ ! -x "$WINLOADER" ]; then
-        echo "FATAL: zine not found at $WINLOADER"
+        echo "FATAL: $WINLOADER not found"
         exit 1
     fi
 fi

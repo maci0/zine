@@ -57,15 +57,19 @@ pub fn step(cpu: *Cpu) void {
         return;
     }
 
-    // On x86-linux: if EIP is in a loaded DLL (not the main exe, not a thunk),
-    // execute natively via stack switching. DLL code may use SSE/MMX/FPU
-    // instructions that the interpreter cannot handle.
-    if (cpu.memory.native_linear) {
-        const k32 = @import("../win32/kernel32.zig");
-        const is_main_exe = (eip >= k32.app_code_start and eip < k32.app_code_end);
-        if (!is_main_exe and eip >= 0x10000 and eip < 0x70000000) {
-            callDllNative(cpu);
-            return;
+    // On native x86 (32-bit): if EIP is in a loaded DLL (not the main exe,
+    // not a thunk), execute natively via stack switching. DLL code may use
+    // SSE/MMX/FPU instructions that the interpreter cannot handle.
+    // On x86_64, this shortcut is disabled because the callDllNative asm is
+    // x86-only, and compat thunk stubs in low 4GB must be interpreted.
+    if (comptime @import("../platform.zig").is_x86) {
+        if (cpu.memory.native_linear) {
+            const k32 = @import("../win32/kernel32.zig");
+            const is_main_exe = (eip >= k32.app_code_start and eip < k32.app_code_end);
+            if (!is_main_exe and eip >= 0x10000 and eip < 0x70000000) {
+                callDllNative(cpu);
+                return;
+            }
         }
     }
 

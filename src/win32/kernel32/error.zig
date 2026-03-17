@@ -120,7 +120,36 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
         }
     }
 
-    var rec = std.mem.zeroes(EXCEPTION_RECORD);
+    // On x86_64, EXCEPTION_RECORD and CONTEXT must be in low 4GB because
+    // 32-bit SEH handlers receive pointers to them as u32 arguments.
+    // Use static buffers (which on x86_64 are in the .bss of the Zig binary,
+    // potentially above 4GB) — so use the compat thunk pool for allocation.
+    const RecCtx = struct {
+        var rec_buf: EXCEPTION_RECORD = std.mem.zeroes(EXCEPTION_RECORD);
+        var ctx_buf: CONTEXT = std.mem.zeroes(CONTEXT);
+        // Low-4GB copies (allocated via mmap)
+        var low_rec: ?*EXCEPTION_RECORD = null;
+        var low_ctx: ?*CONTEXT = null;
+
+        fn getLow() struct { rec: *EXCEPTION_RECORD, ctx: *CONTEXT } {
+            if (comptime platform.is_x86_64) {
+                if (low_rec == null) {
+                    const size = @sizeOf(EXCEPTION_RECORD) + @sizeOf(CONTEXT) + 64;
+                    const mem = platform.mmap(null, size, false, -1, 0, false, false) catch
+                        return .{ .rec = &rec_buf, .ctx = &ctx_buf };
+                    low_rec = @ptrCast(@alignCast(mem.ptr));
+                    low_ctx = @ptrCast(@alignCast(mem.ptr + @sizeOf(EXCEPTION_RECORD)));
+                }
+                return .{ .rec = low_rec.?, .ctx = low_ctx.? };
+            }
+            return .{ .rec = &rec_buf, .ctx = &ctx_buf };
+        }
+    };
+    const ptrs = RecCtx.getLow();
+    const rec = ptrs.rec;
+    const ctx = ptrs.ctx;
+
+    rec.* = std.mem.zeroes(EXCEPTION_RECORD);
     rec.ExceptionCode = dwExceptionCode;
     rec.ExceptionFlags = dwExceptionFlags;
     rec.NumberParameters = nNumberOfArguments;
@@ -134,7 +163,7 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
 
     // Use saved CONTEXT from signal handler if available (hardware exceptions),
     // otherwise create a zeroed CONTEXT (software exceptions like C++ throw).
-    var ctx: CONTEXT = if (saved_hw_context) |hwctx|
+    ctx.* = if (saved_hw_context) |hwctx|
         @as(*const CONTEXT, @ptrCast(hwctx)).*
     else
         std.mem.zeroes(CONTEXT);
@@ -149,16 +178,25 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
 
         if (handler != 0) {
             if (trace.enable_tracing) trace.print("  Calling SEH Handler: {x}\n", .{handler});
-            const HandlerFn = *const fn (record: *EXCEPTION_RECORD, establisherFrame: u32, contextRecord: *CONTEXT, dispatcherContext: u32) callconv(w32cc.WINAPI) u32;
-
-            const func = @as(HandlerFn, @ptrFromInt(handler));
-            const disp = func(&rec, current_node, &ctx, 0);
+            const disp = if (comptime platform.is_x86_64) blk: {
+                // On x86_64, SEH handlers are 32-bit PE code — call via compat mode
+                const compat_thunks = @import("../../x86/compat_thunks.zig");
+                break :blk compat_thunks.callCompat32_4(
+                    handler,
+                    @truncate(@intFromPtr(rec)),
+                    current_node,
+                    @truncate(@intFromPtr(ctx)),
+                    0, // dispatcherContext
+                );
+            } else blk: {
+                const HandlerFn = *const fn (record: *EXCEPTION_RECORD, establisherFrame: u32, contextRecord: *CONTEXT, dispatcherContext: u32) callconv(w32cc.WINAPI) u32;
+                const func = @as(HandlerFn, @ptrFromInt(handler));
+                break :blk func(rec, current_node, ctx, 0);
+            };
             if (trace.enable_tracing) trace.print("  Handler returned: {d}\n", .{disp});
 
             if (disp == 0) { // ExceptionContinueExecution
                 if (trace.enable_tracing) trace.print("  ExceptionContinueExecution: resuming at EIP={x}\n", .{ctx.Eip});
-                // The handler modified ctx.Eip. We need to resume there.
-                // Use noinline setjmp-like asm to transfer control.
                 if (comptime platform.is_native) {
                     resumeAtEip(ctx.Eip, ctx.Esp, ctx.Ebp, ctx.Eax, ctx.Ebx, ctx.Ecx, ctx.Edx, ctx.Esi, ctx.Edi);
                     unreachable;
@@ -245,9 +283,15 @@ pub fn RtlUnwind(targetFrame: u32, targetIp: u32, pExceptionRecord: usize, retur
         if (targetIp != 0 and comptime platform.is_native) {
             const REG = std.os.linux.REG;
             const frame_ebp = targetFrame +% 8;
-            uctx.mcontext.gregs[REG.EIP] = targetIp;
-            uctx.mcontext.gregs[REG.EBP] = frame_ebp;
-            uctx.mcontext.gregs[REG.EAX] = returnValue;
+            if (comptime platform.is_x86) {
+                uctx.mcontext.gregs[REG.EIP] = targetIp;
+                uctx.mcontext.gregs[REG.EBP] = frame_ebp;
+                uctx.mcontext.gregs[REG.EAX] = returnValue;
+            } else if (comptime platform.is_x86_64) {
+                uctx.mcontext.gregs[REG.RIP] = targetIp;
+                uctx.mcontext.gregs[REG.RBP] = frame_ebp;
+                uctx.mcontext.gregs[REG.RAX] = returnValue;
+            }
             if (trace.enable_tracing) trace.print("  RtlUnwind: modified signal context EIP={x} EBP={x}\n", .{ targetIp, frame_ebp });
         }
     }
@@ -256,16 +300,21 @@ pub fn RtlUnwind(targetFrame: u32, targetIp: u32, pExceptionRecord: usize, retur
 /// Resume execution at a new EIP with specified register state.
 noinline fn resumeAtEip(eip: u32, esp_val: u32, ebp_val: u32, eax: u32, ebx: u32, ecx: u32, edx: u32, esi: u32, edi: u32) void {
     _ = .{ eax, ebx, ecx, edx, esi, edi }; // passed in regs but asm accesses via stack
-    asm volatile (
-        \\movl %[ebp_r], %%ebp
-        \\movl %[esp_r], %%esp
-        \\jmp *%[eip_r]
-        :
-        : [eip_r] "r" (eip),
-          [esp_r] "r" (esp_val),
-          [ebp_r] "r" (ebp_val),
-    );
-    unreachable;
+    if (comptime platform.is_x86) {
+        asm volatile (
+            \\movl %[ebp_r], %%ebp
+            \\movl %[esp_r], %%esp
+            \\jmp *%[eip_r]
+            :
+            : [eip_r] "r" (eip),
+              [esp_r] "r" (esp_val),
+              [ebp_r] "r" (ebp_val),
+        );
+    } else if (comptime platform.is_x86_64) {
+        // On x86_64, resume execution in 32-bit compat mode at the given EIP.
+        const compat_thunks = @import("../../x86/compat_thunks.zig");
+        compat_thunks.enterCompatMode(eip, esp_val);
+    }
 }
 
 /// Last error code for the calling thread.

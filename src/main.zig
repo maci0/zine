@@ -26,6 +26,7 @@ const x86_cpu = @import("x86/cpu.zig");
 const x86_execute = @import("x86/execute.zig");
 const x86_thunks = @import("x86/thunks.zig");
 const x86_memory = @import("x86/memory.zig");
+const compat_thunks = if (platform.is_x86_64) @import("x86/compat_thunks.zig") else struct {};
 
 const trace = @import("trace.zig");
 const log = @import("log.zig");
@@ -280,6 +281,11 @@ pub fn main() !void {
     defer environment.deinit();
 
     try runner.registerAllStubs(&environment, @intFromPtr(&not_implemented));
+
+    // On x86_64, initialize the compat thunk pool for 32-bit PE execution
+    if (comptime platform.is_x86_64) {
+        try compat_thunks.init();
+    }
 
     // Search paths: CWD + exe dir + BAT PATH or host PATH
     var extra_paths: std.ArrayListUnmanaged([]const u8) = .{};
@@ -553,6 +559,13 @@ pub fn main() !void {
         cpu.esp = @intCast(@intFromPtr(stack_mem.ptr) + stack_size - 16);
         cpu.ebp = cpu.esp;
         cpu.fs_base = @truncate(teb.teb_base_addr);
+
+        // On x86_64 interpreter, update TEB stack bounds to the interpreter stack
+        // (the host stack is above 4GB and @truncate gives garbage StackBase/StackLimit).
+        if (comptime platform.is_x86_64) {
+            thread_env.NtTib.StackBase = @intCast(@intFromPtr(stack_mem.ptr) + stack_size);
+            thread_env.NtTib.StackLimit = @intCast(@intFromPtr(stack_mem.ptr));
+        }
         trace.print("Interpreter: EIP=0x{X} ESP=0x{X} fs_base=0x{X} (image base=0x{X}, stack base=0x{X})\n", .{ cpu.eip, cpu.esp, cpu.fs_base, base, @intFromPtr(stack_mem.ptr) });
 
         if (use_jit) {
@@ -581,19 +594,54 @@ pub fn main() !void {
 
     if (main_module.getExport("_InvokeCompilerPass@12")) |invoke_addr| {
         trace.print("Executing MSVC Compiler Pass...\n", .{});
-        const invoke = @as(*const fn (i32, [*]?[*:0]u8, [*]?[*:0]u8) callconv(.winapi) i32, @ptrFromInt(invoke_addr));
-        const rc = invoke(stubs_msvcrt.global_argc, stubs_msvcrt.global_argv, @as([*]?[*:0]u8, @ptrCast(@constCast(stubs_msvcrt.global_envp))));
-        std.process.exit(@intCast(rc & 0xFF));
+        if (comptime platform.is_x86_64) {
+            // On x86_64, _InvokeCompilerPass is in a 32-bit PE — must use compat mode
+            const guest_stack_size = 1024 * 1024;
+            const guest_stack_mem = try platform.mmap(null, guest_stack_size, true, -1, 0, false, false);
+            const guest_esp_top: u32 = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size - 64);
+            // Update TEB stack bounds to match the guest stack
+            thread_env.NtTib.StackBase = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size);
+            thread_env.NtTib.StackLimit = @intCast(@intFromPtr(guest_stack_mem.ptr));
+            // Push arguments for _InvokeCompilerPass@12 (stdcall: 3 params)
+            // Stack layout: [exit_stub] [arg1: argc] [arg2: argv] [arg3: envp]
+            const stack = @as([*]u32, @ptrFromInt(@as(usize, guest_esp_top)));
+            const exit_stub = compat_thunks.makeExitStub();
+            stack[0] = exit_stub; // return address
+            stack[1] = @intCast(stubs_msvcrt.global_argc);
+            stack[2] = @truncate(@intFromPtr(stubs_msvcrt.global_argv));
+            stack[3] = @truncate(@intFromPtr(stubs_msvcrt.global_envp));
+            trace.print("compat: entering _InvokeCompilerPass at 0x{X} ESP=0x{X}\n", .{ invoke_addr, guest_esp_top });
+            compat_thunks.enterCompatMode(@truncate(invoke_addr), guest_esp_top);
+        } else {
+            const invoke = @as(*const fn (i32, [*]?[*:0]u8, [*]?[*:0]u8) callconv(.winapi) i32, @ptrFromInt(invoke_addr));
+            const rc = invoke(stubs_msvcrt.global_argc, stubs_msvcrt.global_argv, @as([*]?[*:0]u8, @ptrCast(@constCast(stubs_msvcrt.global_envp))));
+            std.process.exit(@intCast(rc & 0xFF));
+        }
     } else if (main_module.entry_point) |ep| {
         // AppCompat: patch known executables that need runtime fixes
         applyAppCompatPatches(main_module);
 
-        const EntryPointFn = *const fn () callconv(.c) void;
-        const entry_point = @as(EntryPointFn, @ptrFromInt(ep));
-        entry_point();
-        profiler.dump();
-        trace.print("*** Entry point returned, exiting ***\n", .{});
-        std.process.exit(0);
+        if (comptime platform.is_x86_64) {
+            // On x86_64, PE entry point is 32-bit code — use compat mode
+            const guest_stack_size = 1024 * 1024;
+            const guest_stack_mem = try platform.mmap(null, guest_stack_size, true, -1, 0, false, false);
+            const guest_esp: u32 = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size - 64);
+            // Update TEB stack bounds to match the guest stack
+            thread_env.NtTib.StackBase = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size);
+            thread_env.NtTib.StackLimit = @intCast(@intFromPtr(guest_stack_mem.ptr));
+            // Push exit stub as return address
+            const exit_stub = compat_thunks.makeExitStub();
+            @as(*u32, @ptrFromInt(@as(usize, guest_esp))).* = exit_stub;
+            trace.print("compat: entering PE at 0x{X} ESP=0x{X} exit_stub=0x{X}\n", .{ ep, guest_esp, exit_stub });
+            compat_thunks.enterCompatMode(@truncate(ep), guest_esp);
+        } else {
+            const EntryPointFn = *const fn () callconv(.c) void;
+            const entry_point = @as(EntryPointFn, @ptrFromInt(ep));
+            entry_point();
+            profiler.dump();
+            trace.print("*** Entry point returned, exiting ***\n", .{});
+            std.process.exit(0);
+        }
     } else {
         std.fs.File.stderr().writeAll("Error: no entry point found in executable.\n") catch {};
         std.process.exit(1);

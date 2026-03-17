@@ -32,6 +32,9 @@ pub const BuiltinExport = struct {
     is_data: bool = false,
     /// Size in bytes of the data export (only meaningful when is_data == true).
     data_size: u32 = 0,
+    /// Number of fixed params for variadic functions (0 = not variadic).
+    /// Used on x86_64 compat mode to pass a guest stack pointer as the va_list arg.
+    va_fixed: u8 = 0,
 };
 
 /// Represents a built-in module (DLL) with its registered exports.
@@ -83,8 +86,13 @@ pub const Environment = struct {
             return existing;
         }
 
-        // Allocate a page for the fake PE header
-        const header = try self.allocator.alloc(u8, 4096);
+        // Allocate a page for the fake PE header.
+        // On x86_64, this must be in low 4GB because guest code receives
+        // the address as a module handle (HMODULE) in 32-bit registers.
+        const header = if (comptime platform.is_x86_64)
+            try platform.mmap(null, 4096, false, -1, 0, false, false)
+        else
+            try self.allocator.alloc(u8, 4096);
         @memset(header, 0);
 
         // Minimal MZ/PE header
@@ -175,7 +183,7 @@ pub const Environment = struct {
     }
 
     /// Register a typed Zig function as a built-in export with explicit calling convention.
-    fn addBuiltinExportComptimeCC(self: *Environment, dll: []const u8, name: []const u8, comptime func: anytype, comptime is_cdecl: bool) !void {
+    pub fn addBuiltinExportComptimeCC(self: *Environment, dll: []const u8, name: []const u8, comptime func: anytype, comptime is_cdecl: bool) !void {
         const info = @typeInfo(@TypeOf(func));
         comptime var param_len: usize = 0;
         comptime var is_bare_fn = false;
@@ -199,14 +207,27 @@ pub const Environment = struct {
         // Variadic functions can't have ArgsTuple created, so skip thunk generation for them.
         const handler: ?*const fn (*Cpu) void = if (comptime platform.is_wasm and !is_variadic)
             &(struct {
-                // Convert any return value to u32 for EAX
-                fn toU32(val: anytype) u32 {
+                // Convert any return value to u32 for EAX.
+                // For pointer return types on WASM, reverse-translate
+                // host address back to guest VA so the x86 code gets
+                // a valid guest-space pointer.
+                fn toU32(val: anytype, cpu_ref: *Cpu) u32 {
                     const T = @TypeOf(val);
                     const ti = @typeInfo(T);
                     return switch (ti) {
                         .void, .noreturn => 0,
-                        .pointer => @as(u32, @truncate(@intFromPtr(val))),
-                        .optional => if (val) |v| toU32(v) else 0,
+                        .pointer => blk: {
+                            const host_addr = @intFromPtr(val);
+                            if (host_addr == 0) break :blk 0;
+                            // Reverse translate: host addr → guest VA
+                            const base_ptr = @intFromPtr(cpu_ref.memory.base.ptr);
+                            const base_end = base_ptr + cpu_ref.memory.base.len;
+                            if (host_addr >= base_ptr and host_addr < base_end) {
+                                break :blk cpu_ref.memory.base_addr +% @as(u32, @intCast(host_addr - base_ptr));
+                            }
+                            break :blk @as(u32, @truncate(host_addr));
+                        },
+                        .optional => if (val) |v| toU32(v, cpu_ref) else 0,
                         .int => |int_info| blk: {
                             if (int_info.bits <= 32) {
                                 if (int_info.signedness == .signed) {
@@ -240,7 +261,7 @@ pub const Environment = struct {
                     }
 
                     const result = @call(.auto, fptr, call_args);
-                    return toU32(result);
+                    return toU32(result, cpu);
                 }
 
                 fn translateGuestAddr(val: u32, cpu: *Cpu) usize {
@@ -272,12 +293,11 @@ pub const Environment = struct {
                             break :blk @bitCast(val);
                         },
                         .int => |int_info| blk: {
-                            // On WASM, usize parameters are often guest pointers
-                            // (Win32 stubs use usize for pointer args). Translate
-                            // values that fall within the guest VA range.
-                            if (T == usize and comptime !platform.is_native) {
-                                break :blk translateGuestAddr(val, cpu);
-                            }
+                            // Do NOT auto-translate usize params here: the stub
+                            // functions call trace.addr() themselves (from the
+                            // trace.addr audit). Auto-translating would cause
+                            // double-translation when the host buffer address
+                            // overlaps the guest VA range.
                             if (int_info.signedness == .signed) {
                                 if (int_info.bits <= 32) {
                                     break :blk @truncate(@as(i32, @bitCast(val)));
@@ -506,6 +526,7 @@ pub const Environment = struct {
             .addr = addr,
             .param_bytes = fixed_params * 4,
             .thunk_handler = handler,
+            .va_fixed = @intCast(fixed_params),
         });
     }
 
@@ -594,7 +615,8 @@ pub const Environment = struct {
         if (n == 0) return;
 
         const header = @as([*]u8, @ptrFromInt(builtin.handle));
-        const base: u32 = @intCast(builtin.handle);
+        const base: usize = builtin.handle;
+        const base32: u32 = @intCast(builtin.handle);
 
         // PE layout:
         //   0x00: MZ header
@@ -611,7 +633,7 @@ pub const Environment = struct {
         // Optional: Magic = PE32
         @as(*align(1) u16, @ptrFromInt(base + 0x58)).* = 0x10B;
         // ImageBase = actual base (so game adds 0 displacement)
-        @as(*align(1) u32, @ptrFromInt(base + 0x74)).* = base;
+        @as(*align(1) u32, @ptrFromInt(base + 0x74)).* = base32;
         // SizeOfImage = 0x1000 (one page)
         @as(*align(1) u32, @ptrFromInt(base + 0x80)).* = 0x1000;
         // NumberOfRvaAndSizes = 16
@@ -682,9 +704,12 @@ pub const Environment = struct {
             header[thunk_addr + 0] = 0xFF; // jmp
             header[thunk_addr + 1] = 0x25; // [disp32]
             // The disp32 is the absolute address of the 4 bytes that hold the target
-            @as(*align(1) u32, @ptrFromInt(base + thunk_addr + 2)).* = base + thunk_addr + 6;
+            @as(*align(1) u32, @ptrFromInt(base + thunk_addr + 2)).* = base32 + thunk_addr + 6;
             // The actual target address (stored at thunk+6)
-            @as(*align(1) u32, @ptrFromInt(base + thunk_addr + 6)).* = @intCast(sorted_addrs[si]);
+            // On x86_64, stub addresses are above 4GB (in the Zig binary) and
+            // can't fit in the 32-bit jmp thunk. Truncate — these thunks are
+            // only used by games that manually parse PE exports (very rare).
+            @as(*align(1) u32, @ptrFromInt(base + thunk_addr + 6)).* = @truncate(sorted_addrs[si]);
 
             // Function RVA → thunk offset
             @as(*align(1) u32, @ptrFromInt(base + funcs_off + si * 4)).* = thunk_addr;
@@ -715,7 +740,7 @@ pub const Environment = struct {
         @as(*align(1) u32, @ptrFromInt(base + 0xBC)).* = 40; // Size
 
         // Make the page executable (thunks need to be executable)
-        platform.mprotect(base, 4096, true, true, true);
+        platform.mprotect(@intCast(base), 4096, true, true, true);
     }
 
     /// Resolves an imported function by name from built-in stubs or loaded PE modules.

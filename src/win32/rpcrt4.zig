@@ -3,6 +3,7 @@
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
+const platform = @import("../platform.zig");
 const w32cc = @import("calling_convention.zig");
 
 /// Registers RPCRT4.dll functions with the environment.
@@ -17,7 +18,6 @@ pub fn register(environment: *env.Environment) !void {
 fn stub_UuidCreate(uuid_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("RPCRT4: UuidCreate({x})\n", .{uuid_ptr});
     if (uuid_ptr != 0) {
-        // Just fill with a dummy UUID for now
         const out = @as([*]u8, @ptrFromInt(uuid_ptr));
         @memset(out[0..16], 0x42);
     }
@@ -25,27 +25,44 @@ fn stub_UuidCreate(uuid_ptr: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 fn stub_UuidToStringA(uuid_ptr: usize, string_ptr: usize) callconv(w32cc.WINAPI) i32 {
-    if (trace.enable_tracing) trace.print("RPCRT4: UuidToStringA({x}, {x})\n", .{ uuid_ptr, string_ptr });
-    if (string_ptr != 0) {
-        // Allocate a string. UUID is 36 chars + null.
-        const ptr = std.heap.page_allocator.alloc(u8, 37) catch return 14; // RPC_S_OUT_OF_MEMORY
-        const dummy_uuid = "42424242-4242-4242-4242-424242424242";
-        @memcpy(ptr[0..dummy_uuid.len], dummy_uuid);
-        ptr[dummy_uuid.len] = 0;
+    _ = uuid_ptr;
+    if (trace.enable_tracing) trace.print("RPCRT4: UuidToStringA(string_ptr={x})\n", .{string_ptr});
+    if (string_ptr == 0) return 0;
 
-        const out = @as(*usize, @ptrFromInt(string_ptr));
-        out.* = @intFromPtr(ptr.ptr);
+    const dummy_uuid = "42424242-4242-4242-4242-424242424242";
+    const stub_common = @import("shared.zig");
+
+    // On WASM, allocate from guest heap so the x86 code can read the string.
+    // On native, allocate from page_allocator (host addresses work directly).
+    if (comptime !platform.is_native) {
+        if (stub_common.guest_memory) |gmem| {
+            const guest_va = gmem.guestAlloc(dummy_uuid.len + 1);
+            if (guest_va != 0) {
+                const offset = guest_va - gmem.base_addr;
+                @memcpy(gmem.base[offset..][0..dummy_uuid.len], dummy_uuid);
+                gmem.base[offset + dummy_uuid.len] = 0;
+                // Write 32-bit guest VA to the output pointer
+                @as(*u32, @ptrFromInt(string_ptr)).* = guest_va;
+                return 0;
+            }
+        }
     }
+
+    // Native path: allocate string in low 4GB (needed for x86_64 compat mode)
+    const stub_alloc = @import("shared.zig").raw_alloc;
+    const raw = stub_alloc(37) orelse return 14;
+    const ptr = @as([*]u8, @ptrCast(raw));
+    @memcpy(ptr[0..dummy_uuid.len], dummy_uuid);
+    ptr[dummy_uuid.len] = 0;
+    // Write 32-bit pointer to the output location (guest expects u32)
+    @as(*u32, @ptrFromInt(string_ptr)).* = @truncate(@intFromPtr(ptr));
     return 0; // RPC_S_OK
 }
 
 fn stub_RpcStringFreeA(string_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("RPCRT4: RpcStringFreeA({x})\n", .{string_ptr});
-    // Let it leak or free it if we know the size. Page allocator can't free without size.
-    // For a CLI tool, leaking a few UUID strings is fine.
     if (string_ptr != 0) {
-        const out = @as(*usize, @ptrFromInt(string_ptr));
-        out.* = 0;
+        @as(*u32, @ptrFromInt(string_ptr)).* = 0;
     }
     return 0; // RPC_S_OK
 }

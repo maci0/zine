@@ -1,6 +1,8 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
-const renderer = @import("../../gui/renderer.zig");
+const renderer = if (@import("builtin").os.tag != .windows) @import("../../gui/renderer.zig") else struct {
+    pub fn setVolume(_: anytype) void {}
+};
 const dsound_stubs = @import("../dsound/dsound.zig");
 const platform = @import("../../platform.zig");
 const w32 = @import("../constants.zig");
@@ -143,34 +145,37 @@ fn mmTimerThread(idx: usize) void {
                     const cb = @as(*const fn (u32, u32, usize, usize, usize) callconv(w32cc.WINAPI) void, @ptrFromInt(timer.callback));
                     cb(timer.id, 0, timer.user_data, 0, 0);
                     if (trace.enable_tracing) {
-                        // Read re-entrancy flag via asm to avoid Zig optimizing away the read
-                        var flag_val: u32 = undefined;
-                        asm volatile ("movl 0x6333dc, %[out]"
-                            : [out] "=r" (flag_val),
-                            :
-                            : .{ .memory = true });
-                        // Read gui_gate (0x75e8c0), resource table first entry (0xf8f0a0), DAT_006f22bc
-                        var gui_gate: u32 = undefined;
-                        var res_ptr: u32 = undefined;
-                        var dat_6f22bc: u32 = undefined;
-                        asm volatile ("movl 0x75e8c0, %[out]"
-                            : [out] "=r" (gui_gate),
-                            :
-                            : .{ .memory = true });
-                        asm volatile ("movl 0xf8f0a0, %[out]"
-                            : [out] "=r" (res_ptr),
-                            :
-                            : .{ .memory = true });
-                        asm volatile ("movl 0x6f22bc, %[out]"
-                            : [out] "=r" (dat_6f22bc),
-                            :
-                            : .{ .memory = true });
-                        // If resource pointer is non-null, read byte 0
-                        var res_byte0: u8 = 0;
-                        if (res_ptr != 0) {
-                            res_byte0 = @as(*const u8, @ptrFromInt(res_ptr)).*;
+                        if (comptime builtin.target.cpu.arch == .x86) {
+                            // Read re-entrancy flag via asm to avoid Zig optimizing away the read
+                            // (game-specific absolute addresses, only valid on 32-bit)
+                            var flag_val: u32 = undefined;
+                            asm volatile ("movl 0x6333dc, %[out]"
+                                : [out] "=r" (flag_val),
+                                :
+                                : .{ .memory = true });
+                            var gui_gate: u32 = undefined;
+                            var res_ptr: u32 = undefined;
+                            var dat_6f22bc: u32 = undefined;
+                            asm volatile ("movl 0x75e8c0, %[out]"
+                                : [out] "=r" (gui_gate),
+                                :
+                                : .{ .memory = true });
+                            asm volatile ("movl 0xf8f0a0, %[out]"
+                                : [out] "=r" (res_ptr),
+                                :
+                                : .{ .memory = true });
+                            asm volatile ("movl 0x6f22bc, %[out]"
+                                : [out] "=r" (dat_6f22bc),
+                                :
+                                : .{ .memory = true });
+                            var res_byte0: u8 = 0;
+                            if (res_ptr != 0) {
+                                res_byte0 = @as(*const u8, @ptrFromInt(res_ptr)).*;
+                            }
+                            trace.print("WINMM: TimeProc cb (timer {d}) flag={d} gui_gate={d} res_ptr=0x{x} res_byte0=0x{x} dat_6f22bc=0x{x}\n", .{ timer.id, flag_val, gui_gate, res_ptr, res_byte0, dat_6f22bc });
+                        } else {
+                            trace.print("WINMM: TimeProc cb (timer {d})\n", .{timer.id});
                         }
-                        trace.print("WINMM: TimeProc cb (timer {d}) flag={d} gui_gate={d} res_ptr=0x{x} res_byte0=0x{x} dat_6f22bc=0x{x}\n", .{ timer.id, flag_val, gui_gate, res_ptr, res_byte0, dat_6f22bc });
                     }
 
                     // Restore Zig's FS base

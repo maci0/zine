@@ -1,9 +1,7 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
-    const arch = b.option(std.Target.Cpu.Arch, "arch", "Target architecture (x86, x86_64, or wasm32)") orelse .x86;
-
-    const query = switch (arch) {
+fn queryForArch(arch: std.Target.Cpu.Arch) std.Target.Query {
+    return switch (arch) {
         .x86 => blk: {
             // Disable SIMD to match legacy 32-bit x86 target and avoid stack alignment
             // issues with Win32 binaries expecting 4-byte aligned stacks.
@@ -21,131 +19,272 @@ pub fn build(b: *std.Build) void {
                 .cpu_features_sub = disabled_features,
             };
         },
-        .x86_64 => std.Target.Query{
+        .x86_64 => .{
             .cpu_arch = .x86_64,
             .os_tag = .linux,
         },
-        .wasm32 => std.Target.Query{
+        .wasm32 => .{
             .cpu_arch = .wasm32,
             .os_tag = .wasi,
         },
         else => @panic("Unsupported architecture. Use x86, x86_64, or wasm32."),
     };
+}
 
-    const target = b.resolveTargetQuery(query);
+fn nameForArch(arch: std.Target.Cpu.Arch) []const u8 {
+    return switch (arch) {
+        .x86 => "zine.x86",
+        .x86_64 => "zine.x86_64",
+        .wasm32 => "zine.wasm32",
+        else => "zine",
+    };
+}
+
+fn addNativeExe(
+    b: *std.Build,
+    arch: std.Target.Cpu.Arch,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zine_mod: *std.Build.Module,
+    toml_mod: *std.Build.Module,
+    use_fltk: bool,
+    embed_stubs: bool,
+) *std.Build.Step.Compile {
+    const exe = b.addExecutable(.{
+        .name = nameForArch(arch),
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .single_threaded = false,
+            .imports = &.{
+                .{ .name = "zine", .module = zine_mod },
+                .{ .name = "toml", .module = toml_mod },
+            },
+        }),
+    });
+
+    // Move the host binary to a high address so that the low address
+    // space (0x00400000+) is free for guest Win32 PEs.
+    // On x86: 0x70000000 (same approach Wine uses)
+    // On x86_64: 0x200000000 (above 4GB, completely out of the guest's way)
+    if (arch == .x86) {
+        exe.image_base = 0x70000000;
+    } else if (arch == .x86_64) {
+        // Place above typical PE bases (0x400000, 0x1000000, 0x10300000)
+        // but within the first 4GB so MAP_32BIT allocations don't conflict.
+        exe.image_base = 0x70000000;
+    }
+
+    // FLTK native GUI backend (optional, x86 only)
+    if (use_fltk and arch == .x86) {
+        exe.root_module.addCSourceFile(.{
+            .file = b.path("src/gui/fltk_bridge.cpp"),
+            .flags = &.{ "-std=c++11", "-fno-exceptions", "-I/usr/include/fltk1.3" },
+        });
+        exe.root_module.addIncludePath(b.path("src/gui"));
+        exe.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/fltk1.3" });
+        exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib/fltk1.3" });
+        exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
+        exe.root_module.linkSystemLibrary("fltk", .{});
+        exe.root_module.linkSystemLibrary("fltk_images", .{});
+        exe.root_module.linkSystemLibrary("X11", .{});
+        exe.root_module.linkSystemLibrary("Xext", .{});
+        exe.root_module.linkSystemLibrary("Xft", .{});
+        exe.root_module.linkSystemLibrary("fontconfig", .{});
+        exe.root_module.linkSystemLibrary("Xinerama", .{});
+        exe.root_module.linkSystemLibrary("Xcursor", .{});
+        exe.root_module.linkSystemLibrary("Xrender", .{});
+        exe.root_module.linkSystemLibrary("Xfixes", .{});
+        exe.root_module.linkSystemLibrary("pthread", .{});
+        exe.root_module.link_libc = true;
+        exe.root_module.link_libcpp = true;
+    }
+
+    const options = b.addOptions();
+    options.addOption(bool, "use_fltk", use_fltk and arch == .x86);
+    options.addOption(bool, "embed_stubs", embed_stubs);
+    exe.root_module.addOptions("build_options", options);
+
+    return exe;
+}
+
+fn addWasmExe(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zine_mod: *std.Build.Module,
+    toml_mod: *std.Build.Module,
+    embed_stubs: bool,
+    enable_jit_host: bool,
+) *std.Build.Step.Compile {
+    const wasm_lib = b.addExecutable(.{
+        .name = nameForArch(.wasm32),
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/wasm_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .single_threaded = true,
+            .imports = &.{
+                .{ .name = "zine", .module = zine_mod },
+                .{ .name = "toml", .module = toml_mod },
+            },
+        }),
+    });
+    wasm_lib.rdynamic = true;
+    wasm_lib.initial_memory = 256 * 1024 * 1024;
+    wasm_lib.max_memory = 2 * 1024 * 1024 * 1024;
+    wasm_lib.export_memory = true;
+
+    const wasm_options = b.addOptions();
+    wasm_options.addOption(bool, "use_fltk", false);
+    wasm_options.addOption(bool, "enable_jit_host", enable_jit_host);
+    wasm_options.addOption(bool, "embed_stubs", embed_stubs);
+    wasm_lib.root_module.addOptions("build_options", wasm_options);
+
+    return wasm_lib;
+}
+
+pub fn build(b: *std.Build) void {
+    const arch = b.option(std.Target.Cpu.Arch, "arch", "Target architecture (x86, x86_64, wasm32, or 'all')");
+    const build_all = b.option(bool, "all", "Build all targets (x86 + x86_64 + wasm32)") orelse false;
 
     const use_fltk = b.option(bool, "fltk", "Enable FLTK native GUI backend") orelse false;
+    const embed_stubs = !(b.option(bool, "external-stubs", "Load Win32 stubs from external DLLs instead of embedding them") orelse false);
+    const enable_jit_host = b.option(bool, "jit_host", "Enable JIT host imports (requires zine-host or browser)") orelse false;
 
     const optimize = b.standardOptimizeOption(.{});
 
-    const toml_dep = b.dependency("toml", .{
-        .target = target,
-        .optimize = optimize,
-    });
+    const archs_to_build: []const std.Target.Cpu.Arch = if (build_all)
+        &.{ .x86, .x86_64, .wasm32 }
+    else if (arch) |a|
+        @as([]const std.Target.Cpu.Arch, &.{a})
+    else
+        &.{.x86}; // default
 
-    const mod = b.addModule("zine", .{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-    });
+    for (archs_to_build) |a| {
+        const query = queryForArch(a);
+        const target = b.resolveTargetQuery(query);
 
-    if (arch == .wasm32) {
-        // WASM build: produce a .wasm library with exported functions
-        const wasm_lib = b.addExecutable(.{
-            .name = "zine",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/wasm_main.zig"),
-                .target = target,
-                .optimize = optimize,
-                .single_threaded = true,
-                .imports = &.{
-                    .{ .name = "zine", .module = mod },
-                    .{ .name = "toml", .module = toml_dep.module("toml") },
-                },
-            }),
-        });
-        // entry point comes from pub fn main() in wasm_main.zig
-        wasm_lib.rdynamic = true;
-        // 256MB initial, 2GB max
-        wasm_lib.initial_memory = 256 * 1024 * 1024;
-        wasm_lib.max_memory = 2 * 1024 * 1024 * 1024;
-        wasm_lib.export_memory = true;
-
-        // Pass build options to WASM build (FLTK is never used on WASM)
-        const wasm_options = b.addOptions();
-        wasm_options.addOption(bool, "use_fltk", false);
-        // JIT host imports (extern "jit" functions) are gated behind this flag.
-        // When false (default), --jit runs in compile-only mode (validates JIT
-        // output but doesn't execute it). When true, the WASM binary requires
-        // a host that provides jit_compile/jit_call (zine-host or browser JS).
-        const enable_jit_host = b.option(bool, "jit_host", "Enable JIT host imports (requires zine-host or browser)") orelse false;
-        wasm_options.addOption(bool, "enable_jit_host", enable_jit_host);
-        wasm_lib.root_module.addOptions("build_options", wasm_options);
-
-        b.installArtifact(wasm_lib);
-    } else {
-        // Native build: produce an executable
-        const exe = b.addExecutable(.{
-            .name = "zine",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/main.zig"),
-                .target = target,
-                .optimize = optimize,
-                .single_threaded = false,
-                .imports = &.{
-                    .{ .name = "zine", .module = mod },
-                    .{ .name = "toml", .module = toml_dep.module("toml") },
-                },
-            }),
+        const toml_dep = b.dependency("toml", .{
+            .target = target,
+            .optimize = optimize,
         });
 
-        // On x86 (32-bit), move the host binary to a high address so that
-        // the low address space (0x00400000+) is free for guest Win32 PEs.
-        // Without this, MAP_FIXED at a PE's ImageBase would overwrite the
-        // Zine binary itself.  This is the same approach Wine uses.
-        if (arch == .x86) {
-            exe.image_base = 0x70000000;
+        const zine_mod = b.addModule(if (a == .x86) "zine" else if (a == .x86_64) "zine64" else "zinew", .{
+            .root_source_file = b.path("src/root.zig"),
+            .target = target,
+        });
+
+        if (a == .wasm32) {
+            const wasm_lib = addWasmExe(b, target, optimize, zine_mod, toml_dep.module("toml"), embed_stubs, enable_jit_host);
+            b.installArtifact(wasm_lib);
+        } else {
+            const exe = addNativeExe(b, a, target, optimize, zine_mod, toml_dep.module("toml"), use_fltk, embed_stubs);
+            b.installArtifact(exe);
+
+            // Only add run step for the default (x86) target
+            if (a == .x86 and !build_all) {
+                const run_step = b.step("run", "Run the app");
+                const run_cmd = b.addRunArtifact(exe);
+                run_step.dependOn(&run_cmd.step);
+                run_cmd.step.dependOn(b.getInstallStep());
+                if (b.args) |args| {
+                    run_cmd.addArgs(args);
+                }
+            }
         }
+    }
 
-        // FLTK native GUI backend (optional)
-        if (use_fltk) {
-            exe.root_module.addCSourceFile(.{
-                .file = b.path("src/gui/fltk_bridge.cpp"),
-                .flags = &.{ "-std=c++11", "-fno-exceptions", "-I/usr/include/fltk1.3" },
-            });
-            exe.root_module.addIncludePath(b.path("src/gui"));
-            // System FLTK 1.3 — add system include/library paths
-            exe.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/fltk1.3" });
-            exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib/fltk1.3" });
-            exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
-            exe.root_module.linkSystemLibrary("fltk", .{});
-            exe.root_module.linkSystemLibrary("fltk_images", .{});
-            // X11 dependencies
-            exe.root_module.linkSystemLibrary("X11", .{});
-            exe.root_module.linkSystemLibrary("Xext", .{});
-            exe.root_module.linkSystemLibrary("Xft", .{});
-            exe.root_module.linkSystemLibrary("fontconfig", .{});
-            exe.root_module.linkSystemLibrary("Xinerama", .{});
-            exe.root_module.linkSystemLibrary("Xcursor", .{});
-            exe.root_module.linkSystemLibrary("Xrender", .{});
-            exe.root_module.linkSystemLibrary("Xfixes", .{});
-            exe.root_module.linkSystemLibrary("pthread", .{});
-            exe.root_module.link_libc = true;
-            exe.root_module.link_libcpp = true;
-        }
+    // -----------------------------------------------------------------------
+    // DLL build: compile stubs as standalone Windows DLLs
+    // Usage: zig build -Ddll=true    (builds all DLLs into zig-out/bin/dll/)
+    //        zig build -Ddll=msvcrt  (builds just MSVCRT.dll)
+    // -----------------------------------------------------------------------
+    const dll_arg = b.option([]const u8, "dll", "Build Windows DLLs (true=all, or name like msvcrt)");
+    if (dll_arg) |arg| {
+        const dll_target = b.resolveTargetQuery(.{
+            .cpu_arch = .x86,
+            .os_tag = .windows,
+        });
 
-        // Pass FLTK flag to Zig source
-        const options = b.addOptions();
-        options.addOption(bool, "use_fltk", use_fltk);
-        exe.root_module.addOptions("build_options", options);
+        // Shared win32 module accessible via @import("win32") in DLL sources
+        const win32_mod = b.createModule(.{
+            .root_source_file = b.path("src/win32_dll_api.zig"),
+            .target = dll_target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        const win32_build_options = b.addOptions();
+        win32_build_options.addOption(bool, "use_fltk", false);
+        win32_mod.addOptions("build_options", win32_build_options);
 
-        b.installArtifact(exe);
+        const dll_names = [_]struct { name: []const u8, src: []const u8 }{
+            .{ .name = "msvcrt", .src = "src/dll/msvcrt_dll.zig" },
+            .{ .name = "kernel32", .src = "src/dll/kernel32_dll.zig" },
+            .{ .name = "advapi32", .src = "src/dll/advapi32_dll.zig" },
+            .{ .name = "user32", .src = "src/dll/user32_dll.zig" },
+            .{ .name = "gdi32", .src = "src/dll/gdi32_dll.zig" },
+            .{ .name = "shell32", .src = "src/dll/shell32_dll.zig" },
+            .{ .name = "ole32", .src = "src/dll/ole32_dll.zig" },
+            .{ .name = "oleaut32", .src = "src/dll/oleaut32_dll.zig" },
+            .{ .name = "comctl32", .src = "src/dll/comctl32_dll.zig" },
+            .{ .name = "comdlg32", .src = "src/dll/comdlg32_dll.zig" },
+            .{ .name = "winmm", .src = "src/dll/winmm_dll.zig" },
+            .{ .name = "version", .src = "src/dll/version_dll.zig" },
+            .{ .name = "shlwapi", .src = "src/dll/shlwapi_dll.zig" },
+            .{ .name = "ntdll", .src = "src/dll/ntdll_dll.zig" },
+            .{ .name = "imagehlp", .src = "src/dll/imagehlp_dll.zig" },
+            .{ .name = "imm32", .src = "src/dll/imm32_dll.zig" },
+            .{ .name = "setupapi", .src = "src/dll/setupapi_dll.zig" },
+            .{ .name = "winspool", .src = "src/dll/winspool_dll.zig" },
+            .{ .name = "mss32", .src = "src/dll/mss32_dll.zig" },
+            .{ .name = "rpcrt4", .src = "src/dll/rpcrt4_dll.zig" },
+            .{ .name = "ws2_32", .src = "src/dll/ws2_32_dll.zig" },
+            .{ .name = "wsock32", .src = "src/dll/wsock32_dll.zig" },
+            .{ .name = "d3d8", .src = "src/dll/d3d8_dll.zig" },
+            .{ .name = "ddraw", .src = "src/dll/ddraw_dll.zig" },
+            .{ .name = "dinput", .src = "src/dll/dinput_dll.zig" },
+            .{ .name = "dinput8", .src = "src/dll/dinput8_dll.zig" },
+            .{ .name = "dsound", .src = "src/dll/dsound_dll.zig" },
+            .{ .name = "mspdb60", .src = "src/dll/mspdb60_dll.zig" },
+            .{ .name = "msvcp60", .src = "src/dll/msvcp60_dll.zig" },
+            .{ .name = "rcdll", .src = "src/dll/rcdll_dll.zig" },
+            .{ .name = "mfc42", .src = "src/dll/mfc42_dll.zig" },
+            .{ .name = "cards", .src = "src/dll/cards_dll.zig" },
+            .{ .name = "icmp", .src = "src/dll/icmp_dll.zig" },
+            .{ .name = "nddeapi", .src = "src/dll/nddeapi_dll.zig" },
+            .{ .name = "vdmdbg", .src = "src/dll/vdmdbg_dll.zig" },
+            .{ .name = "mag_hook", .src = "src/dll/mag_hook_dll.zig" },
+        };
 
-        const run_step = b.step("run", "Run the app");
-        const run_cmd = b.addRunArtifact(exe);
-        run_step.dependOn(&run_cmd.step);
-        run_cmd.step.dependOn(b.getInstallStep());
-        if (b.args) |args| {
-            run_cmd.addArgs(args);
+        const build_all_dlls = std.mem.eql(u8, arg, "true") or std.mem.eql(u8, arg, "all");
+
+        for (dll_names) |entry| {
+            if (build_all_dlls or std.mem.eql(u8, arg, entry.name)) {
+                const dll = b.addLibrary(.{
+                    .name = entry.name,
+                    .linkage = .dynamic,
+                    .root_module = b.createModule(.{
+                        .root_source_file = b.path(entry.src),
+                        .target = dll_target,
+                        .optimize = optimize,
+                        .imports = &.{
+                            .{ .name = "win32", .module = win32_mod },
+                        },
+                    }),
+                });
+
+                const dll_options = b.addOptions();
+                dll_options.addOption(bool, "use_fltk", false);
+                dll.root_module.addOptions("build_options", dll_options);
+
+                // Install to bin/dll/ subdirectory
+                const install_dll = b.addInstallArtifact(dll, .{
+                    .dest_dir = .{ .override = .{ .custom = "bin/dll" } },
+                });
+                b.getInstallStep().dependOn(&install_dll.step);
+            }
         }
     }
 

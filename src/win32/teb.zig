@@ -170,8 +170,13 @@ pub const TEB = extern struct {
 /// Implementation status: Partially implemented
 pub fn initTEB(allocator: std.mem.Allocator) !*TEB {
     _ = allocator; // PEB/params now use raw_alloc for 32-bit address range
-    // Use page_allocator directly to ensure page alignment for TEB
-    const slice = try std.heap.page_allocator.alloc(u8, @sizeOf(TEB));
+    // On x86_64, TEB must be in low 4GB because guest code reads it via
+    // FS-relative 32-bit pointers. Use platform.mmap which sets MAP_32BIT.
+    // On x86, page_allocator is fine (everything is 32-bit).
+    const slice = if (comptime platform.is_x86_64)
+        try platform.mmap(null, @sizeOf(TEB), false, -1, 0, false, false)
+    else
+        try std.heap.page_allocator.alloc(u8, @sizeOf(TEB));
     const teb_val = @as(*TEB, @ptrCast(@alignCast(slice.ptr)));
     @memset(slice, 0);
 

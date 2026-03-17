@@ -54,6 +54,94 @@ fn allocThunkCode(mem: *x86_memory.GuestMemory, thunk_id: u32) u32 {
     return addr;
 }
 
+/// Copy a loaded PE DLL into GuestMemory so the x86 interpreter can execute
+/// its code. Updates the module's image_base and mapped_memory to point at the
+/// guest copy. Applies relocations for the new base address.
+/// Called on WASM when resolveImports encounters a real PE dependency.
+fn copyModuleToGuest(mod: *Module) void {
+    const shared = @import("../win32/shared.zig");
+    log.info("copyModuleToGuest: {s}, guest_memory={?}, heap_start={d}", .{
+        mod.name,
+        @as(?usize, if (shared.guest_memory) |g| @intFromPtr(g) else null),
+        if (shared.guest_memory) |g| g.heap_start else 0,
+    });
+    const gmem = shared.guest_memory orelse return;
+
+    // Skip if already in guest memory (image_base falls within guest range)
+    const guest_end = gmem.base_addr +% @as(u32, @intCast(gmem.base.len));
+    if (mod.image_base >= gmem.base_addr and mod.image_base < guest_end) return;
+
+    const image_size: u32 = @intCast(mod.mapped_memory.len);
+    const guest_va = gmem.guestAlloc(image_size);
+    if (guest_va == 0) {
+        log.warn("copyModuleToGuest: OOM for {s} ({d} bytes)", .{ mod.name, image_size });
+        return;
+    }
+    const offset = guest_va - gmem.base_addr;
+
+    // Copy PE image into guest memory
+    @memcpy(gmem.base[offset..][0..image_size], mod.mapped_memory[0..image_size]);
+
+    // Apply relocations: Module.load already relocated the image to
+    // mod.image_base (the host mapped address). We need to re-relocate
+    // from that base to the guest VA.
+    const actual_base: u32 = @truncate(mod.image_base);
+    const runner = @import("../runner.zig");
+    runner.applyReverseRelocations(
+        gmem.base[offset..][0..image_size],
+        &mod.parser,
+        image_size,
+        actual_base,
+        guest_va,
+    );
+    runner.zeroFillBss(gmem.base[offset..][0..image_size], mod.parser.sections);
+
+    // Update image_base so getExport() returns guest VAs.
+    // Keep mapped_memory pointing at original buffer so parser references
+    // remain valid for import resolution of this dependency.
+    mod.image_base = guest_va;
+
+    log.info("copyModuleToGuest: {s} at guest 0x{X}-0x{X} ({d} bytes), heap_cursor now 0x{X}", .{ mod.name, guest_va, guest_va + image_size, image_size, gmem.heap_cursor + gmem.base_addr });
+}
+
+/// Allocate a guest thunk for a builtin export resolved at runtime (e.g. via
+/// GetProcAddress).  Returns the guest VA of the thunk, or 0 on failure.
+/// On native targets this is a no-op and returns the host address unchanged.
+pub fn allocThunkForExport(exp: BuiltinExport, dll_name: []const u8, func_name: []const u8) usize {
+    if (comptime !platform.is_wasm) {
+        // Native: register for dispatch and return host addr directly
+        x86_thunks.registerNativeImport(exp.addr, dll_name, func_name, exp.param_bytes);
+        if (comptime platform.is_x86_64) {
+            // On x86_64 compat mode, allocate an INT 0xFE stub in the low 4GB pool
+            const compat_thunks = @import("../x86/compat_thunks.zig");
+            const is_cdecl_rt = std.ascii.eqlIgnoreCase(dll_name, "MSVCRT.dll") or
+                std.ascii.startsWithIgnoreCase(dll_name, "MSVCP");
+            const thunk_id = x86_thunks.registerNativeThunkVA(func_name, exp.addr, exp.param_bytes, is_cdecl_rt, exp.va_fixed);
+            if (compat_thunks.allocThunk(thunk_id)) |addr32| {
+                return @as(usize, addr32);
+            }
+        }
+        return exp.addr;
+    }
+    if (exp.is_data) return exp.addr;
+    if (exp.thunk_handler) |handler| {
+        const thunk_id = x86_thunks.registerThunk(.{
+            .name = func_name,
+            .param_count = null,
+            .handler = handler,
+        });
+        if (thunk_memory) |mem| {
+            return allocThunkCode(mem, thunk_id);
+        }
+    } else {
+        const thunk_id = x86_thunks.registerNativeThunk(func_name, exp.addr, exp.param_bytes, false);
+        if (thunk_memory) |mem| {
+            return allocThunkCode(mem, thunk_id);
+        }
+    }
+    return exp.addr; // fallback
+}
+
 /// Patches a single Import Address Table (IAT) slot with the address of a resolved export.
 ///
 /// On WASM targets, this is a complex operation:
@@ -116,12 +204,53 @@ fn patchImport(
                 }
             }
         }
+    } else if (comptime platform.is_x86_64) {
+        // On x86_64 compat mode: 64-bit stub addresses don't fit in 32-bit IAT slots.
+        // Use compat_thunks to allocate INT 0xFE stubs in the low 4GB pool.
+        const compat_thunks = @import("../x86/compat_thunks.zig");
+        if (exp.is_data) {
+            // Data export: copy into pool so guest has a <4GB address
+            if (exp.data_size > 0) {
+                if (compat_thunks.allocData(@ptrFromInt(exp.addr), exp.data_size)) |addr32| {
+                    first_thunk.* = addr32;
+                } else {
+                    first_thunk.* = @truncate(exp.addr);
+                }
+            } else {
+                first_thunk.* = @truncate(exp.addr);
+            }
+            if (trace.enable_tracing) {
+                trace.print("loader: {s} -> {s} at {X} (data compat)\n", .{ dll_name, func_name, first_thunk.* });
+            }
+        } else if (exp.is_native) {
+            // Function export: register as a native thunk for signal dispatch.
+            // Detect cdecl vs stdcall from the DLL name (MSVCRT/MSVCP use cdecl).
+            const is_cdecl = std.ascii.eqlIgnoreCase(dll_name, "MSVCRT.dll") or
+                std.ascii.startsWithIgnoreCase(dll_name, "MSVCP");
+            const thunk_id = x86_thunks.registerNativeThunkVA(func_name, exp.addr, exp.param_bytes, is_cdecl, exp.va_fixed);
+            if (compat_thunks.allocThunk(thunk_id)) |addr32| {
+                first_thunk.* = addr32;
+            } else {
+                log.warn("compat: pool full for {s}::{s}", .{ dll_name, func_name });
+                first_thunk.* = 0;
+            }
+            x86_thunks.registerNativeImport(exp.addr, dll_name, func_name, exp.param_bytes);
+            if (trace.enable_tracing) {
+                trace.print("loader: {s} -> {s} via compat thunk at {X} (native 0x{X})\n", .{ dll_name, func_name, first_thunk.*, exp.addr });
+            }
+        } else {
+            // Guest PE export — already in low 4GB via MAP_32BIT
+            first_thunk.* = @truncate(exp.addr);
+            if (trace.enable_tracing) {
+                trace.print("loader: {s} -> {s} at {X} (guest compat)\n", .{ dll_name, func_name, exp.addr });
+            }
+        }
     } else {
-        // On native: write the address directly.
+        // On native x86: write the address directly.
         first_thunk.* = @intCast(exp.addr);
         if (exp.is_native) {
             // Register for dispatchNativeCall
-            x86_thunks.registerNativeImport(@intCast(exp.addr), dll_name, func_name, exp.param_bytes);
+            x86_thunks.registerNativeImport(exp.addr, dll_name, func_name, exp.param_bytes);
             if (trace.enable_tracing) {
                 trace.print("loader: {s} -> {s} at {X} (native IAT=0x{x})\n", .{ dll_name, func_name, exp.addr, @intFromPtr(first_thunk) });
             }
@@ -164,10 +293,17 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
 
         if (env.registry.loadModule(dll_name)) |loaded_mod| {
             log.info("Loaded dependency: {s}", .{loaded_mod.name});
+
             if (!loaded_mod.imports_resolved) {
                 resolveImports(env, loaded_mod) catch |resolve_err| {
                     if (trace.enable_tracing) trace.print("loader: failed to resolve imports for {s}: {}\n", .{ dll_name, resolve_err });
                 };
+            }
+
+            // On WASM, copy DLL into GuestMemory AFTER its imports are resolved.
+            // This way the guest copy has the final IAT values (thunk addresses).
+            if (comptime platform.is_wasm) {
+                copyModuleToGuest(loaded_mod);
             }
         } else |err| {
             if (err != error.FileNotFound and err != error.ModuleNotFound) return err;
@@ -254,8 +390,19 @@ pub fn attachLoadedDlls(env: *Environment) void {
 
         mod.attached = true;
         const entry_addr = @intFromPtr(mod.mapped_memory.ptr) + opt_header.AddressOfEntryPoint;
-        const DllMain = @as(*const fn (usize, u32, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(entry_addr));
         if (trace.enable_tracing) trace.print("loader: calling DllMain for {s} at {x}\n", .{ entry.key_ptr.*, entry_addr });
-        _ = DllMain(@intFromPtr(mod.mapped_memory.ptr), 1, 0);
+
+        if (comptime platform.is_x86_64) {
+            const compat_thunks = @import("../x86/compat_thunks.zig");
+            _ = compat_thunks.callCompat32(
+                @truncate(entry_addr),
+                @truncate(@intFromPtr(mod.mapped_memory.ptr)),
+                1, // DLL_PROCESS_ATTACH
+                0, // lpReserved
+            );
+        } else {
+            const DllMain = @as(*const fn (usize, u32, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(entry_addr));
+            _ = DllMain(@intFromPtr(mod.mapped_memory.ptr), 1, 0);
+        }
     }
 }

@@ -128,10 +128,11 @@ pub fn getFile(ptr: ?*anyopaque) ?std.fs.File {
 
 /// Map _iob index (0=stdin, 1=stdout, 2=stderr) to a std.fs.File.
 fn stdFileFromIobIndex(idx: usize) ?std.fs.File {
+    const hio = @import("../host_io.zig");
     return switch (idx) {
-        0 => std.fs.File{ .handle = 0 },
-        1 => std.fs.File{ .handle = 1 },
-        2 => std.fs.File{ .handle = 2 },
+        0 => hio.fileFromFd(0),
+        1 => hio.fileFromFd(1),
+        2 => hio.fileFromFd(2),
         else => null,
     };
 }
@@ -261,21 +262,21 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
             trace.print("MSVCRT_IO: fopen createFile failed\n", .{});
             return null;
         }
-        file = std.fs.File{ .handle = @intCast(rc) };
+        file = @import("../host_io.zig").fileFromFd(@intCast(rc));
     } else if (a_idx != null) {
         const rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed)), posix_fs.O_CREAT | posix_fs.O_RDWR | posix_fs.O_APPEND, 0o666);
         if (rc < 0) {
             trace.print("MSVCRT_IO: fopen openFile (append) failed\n", .{});
             return null;
         }
-        file = std.fs.File{ .handle = @intCast(rc) };
+        file = @import("../host_io.zig").fileFromFd(@intCast(rc));
     } else {
         const rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed)), 0, 0);
         if (rc < 0) {
             trace.print("MSVCRT_IO: fopen openFile failed\n", .{});
             return null;
         }
-        file = std.fs.File{ .handle = @intCast(rc) };
+        file = @import("../host_io.zig").fileFromFd(@intCast(rc));
     }
 
     if (allocateFileSlot()) |idx| {
@@ -469,7 +470,7 @@ pub fn fputc(c: i32, f: ?*anyopaque) callconv(.c) i32 {
 pub fn putchar(c: i32) callconv(.c) i32 {
     var buf: [1]u8 = undefined;
     buf[0] = @intCast(c & 0xFF);
-    const out_file = std.fs.File{ .handle = 1 }; // stdout
+    const out_file = @import("../host_io.zig").fileFromFd(1);
     out_file.writeAll(&buf) catch return -1;
     return buf[0];
 }
@@ -479,7 +480,7 @@ const platform_mod = @import("../../platform.zig");
 
 /// Prints formatted data to a stream.
 /// Implementation status: Partially implemented
-pub const fprintf = if (platform_mod.is_wasm) stub_fprintf_wasm else stub_fprintf_native;
+pub const fprintf = if (platform_mod.is_wasm or platform_mod.is_x86_64) stub_fprintf_wasm else stub_fprintf_native;
 
 fn stub_fprintf_wasm(f: ?*anyopaque, format_ptr: usize, ap: usize) callconv(.c) i32 {
     return fprintf_impl(f, format_ptr, ap);
