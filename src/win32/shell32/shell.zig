@@ -164,7 +164,7 @@ pub fn ShellAboutW(hWnd: usize, szApp: usize, szOtherStuff: usize, hIcon: usize)
     if (trace.enable_tracing) trace.print("SHELL32: ShellAboutW\n", .{});
 
     const window = @import("../user32/window.zig");
-    const renderer = @import("../../gui/renderer.zig");
+    const renderer = if (@import("builtin").os.tag != .windows) @import("../../gui/renderer.zig") else return 1;
 
     const app_name = if (szApp != 0) window.wideToUtf8(szApp) else "Application";
     const extra = if (szOtherStuff != 0) window.wideToUtf8(szOtherStuff) else "";

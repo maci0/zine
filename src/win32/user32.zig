@@ -798,7 +798,7 @@ const platform_mod = @import("../platform.zig");
 const w32cc = @import("calling_convention.zig");
 
 comptime {
-    if (native_arch == .x86) {
+    if (native_arch == .x86 and @import("builtin").target.os.tag != .windows) {
         asm (
             \\.global callWndProcSafe_extern
             \\.type callWndProcSafe_extern, @function
@@ -845,7 +845,7 @@ comptime {
     }
 }
 
-pub const callWndProcSafe = if (native_arch == .x86) callWndProcSafe_extern else callWndProcSafe_zig;
+pub const callWndProcSafe = if (native_arch == .x86 and @import("builtin").target.os.tag != .windows) callWndProcSafe_extern else callWndProcSafe_zig;
 
 extern fn callWndProcSafe_extern(wndproc: usize, hwnd: usize, msg: u32, wParam: usize, lParam: isize, err_out: *u32) callconv(.c) isize;
 

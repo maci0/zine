@@ -134,12 +134,11 @@ fn loadStringFromPE(hInst: usize, uID: u32, out_buf: [*]u8, max_len: usize) usiz
     return copy_len;
 }
 
-pub fn LoadStringA(hInstance: ?*anyopaque, uID: u32, lpBuffer_ptr: usize, nBufferMax: i32) callconv(w32cc.WINAPI) i32 {
+pub fn LoadStringA(hInstance: ?*anyopaque, uID: u32, lpBuffer: [*]u8, nBufferMax: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) {
-        trace.print("USER32: LoadStringA(hInst={*}, uID={d}, buffer={x}, max={d})\n", .{ hInstance, uID, lpBuffer_ptr, nBufferMax });
+        trace.print("USER32: LoadStringA(hInst={*}, uID={d}, max={d})\n", .{ hInstance, uID, nBufferMax });
     }
-    if (nBufferMax > 0 and lpBuffer_ptr > 0x10000) {
-        const lpBuffer = @as([*]u8, @ptrFromInt(trace.addr(lpBuffer_ptr)));
+    if (nBufferMax > 0) {
         const max_len = @as(usize, @intCast(nBufferMax));
 
         var hInst: usize = if (hInstance != null) @intFromPtr(hInstance.?) else 0;

@@ -2,7 +2,12 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
-const renderer = @import("../../gui/renderer.zig");
+const renderer = if (@import("builtin").os.tag != .windows) @import("../../gui/renderer.zig") else struct {
+    pub fn openFileDialog(_: anytype, _: bool) void {}
+    pub fn closeDialog() void {}
+    pub var on_file_uploaded: ?*const fn ([]const u8) void = null;
+    pub var on_cancel_dialog: ?*const fn () void = null;
+};
 const kernel32 = @import("../kernel32.zig");
 
 var dialog_cancelled: bool = false;

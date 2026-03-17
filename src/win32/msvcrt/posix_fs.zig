@@ -40,7 +40,7 @@ fn fsAccess(path: []const u8) bool {
         return true;
     } else |_| {}
     // Try the second WASI preopened fd (typically fd 4 = "." from --dir=.)
-    {
+    if (comptime @import("builtin").os.tag == .wasi) {
         const dir = std.fs.Dir{ .fd = 4 };
         if (dir.openFile(path, .{})) |file| {
             file.close();
@@ -58,8 +58,10 @@ fn fsAccess(path: []const u8) bool {
 
 fn fsCreateFile(path: []const u8, flags: std.fs.File.CreateFlags) !std.fs.File {
     return std.fs.cwd().createFile(path, flags) catch {
-        const cwd_dir = std.fs.Dir{ .fd = 4 }; // WASI preopen for "."
-        if (cwd_dir.createFile(path, flags)) |f| return f else |_| {}
+        if (comptime @import("builtin").os.tag == .wasi) {
+            const cwd_dir = std.fs.Dir{ .fd = 4 }; // WASI preopen for "."
+            if (cwd_dir.createFile(path, flags)) |f| return f else |_| {}
+        }
         if (std.fs.path.isAbsolute(path))
             return std.fs.createFileAbsolute(path, flags);
         return error.FileNotFound;
@@ -68,8 +70,10 @@ fn fsCreateFile(path: []const u8, flags: std.fs.File.CreateFlags) !std.fs.File {
 
 fn fsOpenFile(path: []const u8, flags: std.fs.File.OpenFlags) !std.fs.File {
     return std.fs.cwd().openFile(path, flags) catch {
-        const cwd_dir = std.fs.Dir{ .fd = 4 };
-        if (cwd_dir.openFile(path, flags)) |f| return f else |_| {}
+        if (comptime @import("builtin").os.tag == .wasi) {
+            const cwd_dir = std.fs.Dir{ .fd = 4 };
+            if (cwd_dir.openFile(path, flags)) |f| return f else |_| {}
+        }
         if (std.fs.path.isAbsolute(path))
             return std.fs.openFileAbsolute(path, flags);
         return error.FileNotFound;

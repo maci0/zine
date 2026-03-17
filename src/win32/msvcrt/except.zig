@@ -107,11 +107,12 @@ pub fn except_handler3(
 ) callconv(.c) u32 {
     _ = dispatcher_context;
 
-    const try_level_ptr = @as(*align(1) i32, @ptrFromInt(establisher_frame + 12));
-    const scope_table_addr = @as(*align(1) usize, @ptrFromInt(establisher_frame + 8)).*;
+    const host_frame = trace.addr(establisher_frame);
+    const try_level_ptr = @as(*align(1) i32, @ptrFromInt(host_frame + 12));
+    const scope_table_addr = @as(*align(1) u32, @ptrFromInt(host_frame + 8)).*;
 
     var try_level = try_level_ptr.*;
-    const frame_ebp = establisher_frame + 16;
+    const frame_ebp = establisher_frame + 16; // keep as guest VA for x86 code
 
     if (trace.enable_tracing) {
         trace.print("SEH _except_handler3: frame=0x{X} try_level={d} scope_table=0x{X} ebp=0x{X}\n", .{ establisher_frame, try_level, scope_table_addr, frame_ebp });
@@ -128,16 +129,17 @@ pub fn except_handler3(
     // Note: later MSVC versions (7+) use an extra indirection through EXCEPTION_POINTERS*.
     // Apps compiled with MSVC6 (our primary target) expect this direct layout.
     if (frame_ebp >= 0x14) {
-        @as(*align(1) usize, @ptrFromInt(frame_ebp -% 0x14)).* = exception_record_ptr;
-        @as(*align(1) usize, @ptrFromInt(frame_ebp -% 0x10)).* = context_record_ptr;
+        const host_ebp = trace.addr(frame_ebp);
+        @as(*align(1) u32, @ptrFromInt(host_ebp -% 0x14)).* = @truncate(exception_record_ptr);
+        @as(*align(1) u32, @ptrFromInt(host_ebp -% 0x10)).* = @truncate(context_record_ptr);
     }
 
     while (try_level >= 0) {
-        const entry_base = scope_table_addr + @as(usize, @intCast(try_level)) * 12;
+        const entry_base = trace.addr(scope_table_addr + @as(u32, @intCast(try_level)) * 12);
 
         const enclosing_level = @as(*align(1) i32, @ptrFromInt(entry_base)).*;
-        const filter_func_addr = @as(*align(1) usize, @ptrFromInt(entry_base + 4)).*;
-        const handler_func_addr = @as(*align(1) usize, @ptrFromInt(entry_base + 8)).*;
+        const filter_func_addr = @as(*align(1) u32, @ptrFromInt(entry_base + 4)).*;
+        const handler_func_addr = @as(*align(1) u32, @ptrFromInt(entry_base + 8)).*;
 
         if (trace.enable_tracing) {
             trace.print("SEH _except_handler3: level={d} enclosing={d} filter=0x{X} handler=0x{X}\n", .{ try_level, enclosing_level, filter_func_addr, handler_func_addr });
@@ -165,7 +167,7 @@ pub fn except_handler3(
     return 1; // ExceptionContinueSearch
 }
 
-const call_seh_filter = if (platform.is_x86) call_seh_filter_x86 else call_seh_filter_x64;
+const call_seh_filter = if (platform.is_x86) call_seh_filter_x86 else if (platform.is_wasm) call_seh_filter_wasm else call_seh_filter_x64;
 
 fn call_seh_filter_x86(filter_addr: usize, frame_ebp: usize) i32 {
     return asm volatile (
@@ -193,6 +195,15 @@ fn call_seh_filter_x64(filter_addr: usize, frame_ebp: usize) i32 {
     _ = frame_ebp;
     const filter_fn = @as(*const fn () callconv(.c) i32, @ptrFromInt(filter_addr));
     return filter_fn();
+}
+
+/// On WASM, SEH filter functions are x86 code at guest VAs — they can't be
+/// called directly as host functions. Return -1 (EXCEPTION_CONTINUE_EXECUTION)
+/// to skip the filter and let the app continue.
+fn call_seh_filter_wasm(filter_addr: usize, frame_ebp: usize) i32 {
+    _ = .{ filter_addr, frame_ebp };
+    if (trace.enable_tracing) trace.print("SEH: skipping filter call on WASM (guest addr 0x{X})\n", .{filter_addr});
+    return -1; // EXCEPTION_CONTINUE_EXECUTION
 }
 
 /// Jumps to a SEH handler function with the specified frame EBP.

@@ -12,9 +12,14 @@ pub var current_directory_len: usize = 0;
 pub fn GetCurrentDirectoryA(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCurrentDirectoryA(len={d})\n", .{nBufferLength});
     if (current_directory_len == 0) {
-        const cwd = "C:\\";
-        @memcpy(current_directory[0..cwd.len], cwd);
-        current_directory_len = cwd.len;
+        // Initialize from actual host CWD in Win32 format
+        const host_io = @import("../host_io.zig");
+        const len = host_io.getCwd(&current_directory);
+        current_directory_len = if (len > 0) len else blk: {
+            const cwd = "C:\\";
+            @memcpy(current_directory[0..cwd.len], cwd);
+            break :blk cwd.len;
+        };
     }
 
     if (lpBuffer != 0 and nBufferLength > current_directory_len) {
@@ -98,20 +103,28 @@ pub fn GetFullPathNameA(lpFileName: usize, nBufferLength: u32, lpBuffer: usize, 
     if (lpFileName == 0) return 0;
     const name = trace.c_span(lpFileName);
     if (trace.enable_tracing) trace.print("KERNEL32: GetFullPathNameA('{s}')\n", .{name});
-    if (lpBuffer != 0 and nBufferLength > name.len) {
-        const buf = @as([*]u8, @ptrFromInt(lpBuffer));
+    if (lpBuffer == 0 or nBufferLength == 0) return @intCast(name.len + 1);
+
+    const buf = @as([*]u8, @ptrFromInt(lpBuffer));
+    const host_io = @import("../host_io.zig");
+    const resolved_len = host_io.getFullPath(name, buf[0..nBufferLength]);
+
+    const result_len = if (resolved_len > 0) resolved_len else blk: {
+        // Fallback: copy as-is
+        if (nBufferLength <= name.len) break :blk @as(usize, 0);
         @memcpy(buf[0..name.len], name);
         buf[name.len] = 0;
-        if (lpFilePart != 0) {
-            var last_sep: usize = 0;
-            for (0..name.len) |i| {
-                if (name[i] == '\\' or name[i] == '/') last_sep = i + 1;
-            }
-            @as(*usize, @ptrFromInt(lpFilePart)).* = lpBuffer + last_sep;
+        break :blk name.len;
+    };
+
+    if (result_len > 0 and lpFilePart != 0) {
+        var last_sep: usize = 0;
+        for (0..result_len) |i| {
+            if (buf[i] == '\\' or buf[i] == '/') last_sep = i + 1;
         }
-        return @intCast(name.len);
+        @as(*u32, @ptrFromInt(lpFilePart)).* = @truncate(lpBuffer + last_sep);
     }
-    return @intCast(name.len + 1);
+    return @intCast(result_len);
 }
 
 /// Retrieves the full path and file name of the specified file (Unicode version).

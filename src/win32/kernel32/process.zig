@@ -146,10 +146,20 @@ pub fn LoadLibraryA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
                 const opt_header = &mod.parser.getNtHeaders().OptionalHeader;
                 if (opt_header.AddressOfEntryPoint != 0) {
                     const entry_point_addr = @intFromPtr(mod.mapped_memory.ptr) + opt_header.AddressOfEntryPoint;
-                    const DllMain = @as(*const fn (usize, u32, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(entry_point_addr));
                     if (trace.enable_tracing) trace.print("KERNEL32: Executing DllMain for {s} at {x}\n", .{ load_name, entry_point_addr });
-                    const ret = DllMain(@intFromPtr(mod.mapped_memory.ptr), 1, 0);
-                    if (trace.enable_tracing) trace.print("KERNEL32: DllMain returned {d}\n", .{ret});
+                    if (comptime platform.is_x86_64) {
+                        const compat_thunks_mod = @import("../../x86/compat_thunks.zig");
+                        _ = compat_thunks_mod.callCompat32(
+                            @truncate(entry_point_addr),
+                            @truncate(@intFromPtr(mod.mapped_memory.ptr)),
+                            1, // DLL_PROCESS_ATTACH
+                            0, // lpReserved
+                        );
+                    } else {
+                        const DllMain = @as(*const fn (usize, u32, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(entry_point_addr));
+                        const ret = DllMain(@intFromPtr(mod.mapped_memory.ptr), 1, 0);
+                        if (trace.enable_tracing) trace.print("KERNEL32: DllMain returned {d}\n", .{ret});
+                    }
                 }
             }
 
@@ -1085,7 +1095,7 @@ pub fn GetModuleHandleExW(dwFlags: u32, lpModuleName: usize, phModule: usize) ca
     }
 
     if (phModule != 0) {
-        @as(*usize, @ptrFromInt(phModule)).* = handle;
+        @as(*u32, @ptrFromInt(phModule)).* = @truncate(handle);
     }
     return if (handle != 0) 1 else 0;
 }

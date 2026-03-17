@@ -65,13 +65,19 @@ pub fn mmap(
 ) ![]align(4096) u8 {
     _ = addr_hint;
     _ = executable;
-    _ = fd;
-    _ = off;
     _ = fixed;
     _ = commit;
-    
-    // On WASM we just use the page allocator
+
     const slice = try std.heap.page_allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(4096), len);
+
+    // When a file descriptor is provided, read file content into the mapping
+    // (e.g. CreateFileMappingA + MapViewOfFileEx used by LINK.EXE).
+    if (fd >= 0) {
+        const file = std.fs.File{ .handle = fd };
+        file.seekTo(off) catch {};
+        const bytes_read = file.readAll(slice) catch 0;
+        if (bytes_read < slice.len) @memset(slice[bytes_read..], 0);
+    }
     return slice;
 }
 

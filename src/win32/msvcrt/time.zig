@@ -39,21 +39,16 @@ fn fillTm(tm: *Tm, ts: u64) void {
 
 /// Get current system time.
 /// Implementation status: Partially implemented
-pub fn time(time_ptr: usize) callconv(.c) i32 {
+pub fn time(time_out: ?*i32) callconv(.c) i32 {
     const t = @as(i32, @intCast(std.time.timestamp()));
-    if (time_ptr != 0) {
-        @as(*i32, @ptrFromInt(time_ptr)).* = t;
-    }
+    if (time_out) |p| p.* = t;
     return t;
 }
 
 /// Convert time_t to struct tm as local time.
-/// Implementation status: Partially implemented
-pub fn localtime(time_ptr: usize) callconv(.c) *Tm {
-    if (time_ptr != 0) {
-        const ts: u64 = @intCast(@as(*const i32, @ptrFromInt(time_ptr)).*);
-        fillTm(&localtime_result, ts);
-    }
+pub fn localtime(time_in: *const i32) callconv(.c) *Tm {
+    const ts: u64 = @intCast(time_in.*);
+    fillTm(&localtime_result, ts);
     return &localtime_result;
 }
 
@@ -63,10 +58,10 @@ const mon_names = [_][]const u8{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"
 
 /// Convert time_t to a string. Returns a static buffer: "Day Mon DD HH:MM:SS YYYY\n\0"
 /// Implementation status: Partially implemented
-pub fn ctime(time_ptr: usize) callconv(.c) [*]const u8 {
+pub fn ctime(time_in: ?*const i32) callconv(.c) [*]const u8 {
     var tm: Tm = .{};
-    if (time_ptr != 0) {
-        const raw = @as(*const i32, @ptrFromInt(time_ptr)).*;
+    if (time_in) |p| {
+        const raw = p.*;
         const ts: u64 = if (raw >= 0) @intCast(raw) else 0;
         fillTm(&tm, ts);
     }
@@ -100,16 +95,14 @@ pub fn tzset() callconv(.c) void {
 
 /// Get current time into a _timeb structure.
 /// Implementation status: Partially implemented
-pub fn ftime(timeb_ptr: usize) callconv(.c) void {
-    if (timeb_ptr == 0) return;
+pub fn ftime(timeb_buf: [*]u8) callconv(.c) void {
     const ms = std.time.milliTimestamp();
     const secs: i32 = @intCast(@divTrunc(ms, 1000));
     const millitm: u16 = @intCast(@mod(@as(u64, @intCast(ms)), 1000));
-    const buf = @as([*]u8, @ptrFromInt(timeb_ptr));
-    @as(*align(1) i32, @ptrCast(buf[0..4])).* = secs; // time
-    @as(*align(1) u16, @ptrCast(buf[4..6])).* = millitm; // millitm
-    @as(*align(1) i16, @ptrCast(buf[6..8])).* = 0; // timezone
-    @as(*align(1) i16, @ptrCast(buf[8..10])).* = 0; // dstflag
+    @as(*align(1) i32, @ptrCast(timeb_buf[0..4])).* = secs; // time
+    @as(*align(1) u16, @ptrCast(timeb_buf[4..6])).* = millitm; // millitm
+    @as(*align(1) i16, @ptrCast(timeb_buf[6..8])).* = 0; // timezone
+    @as(*align(1) i16, @ptrCast(timeb_buf[8..10])).* = 0; // dstflag
     if (trace.enable_tracing) trace.print("MSVCRT: _ftime(time={d}, ms={d})\n", .{ secs, millitm });
 }
 
@@ -134,9 +127,7 @@ pub fn stub_futime(fd: i32, times_ptr: usize) callconv(.c) i32 {
 
 /// Convert struct tm to time_t.
 /// Implementation status: Partially implemented
-pub fn mktime(tm_ptr: usize) callconv(.c) i32 {
-    if (tm_ptr == 0) return -1;
-    const tm = @as(*const Tm, @ptrFromInt(tm_ptr));
+pub fn mktime(tm: *const Tm) callconv(.c) i32 {
 
     // Convert struct tm to Unix timestamp
     const year: i64 = @as(i64, tm.tm_year) + 1900;
@@ -189,20 +180,28 @@ var asctime_buf: [32]u8 = undefined;
 
 /// Convert struct tm to string. Returns a static buffer.
 /// Implementation status: Stub
-pub fn asctime(tm_ptr: usize) callconv(.c) usize {
-    // Return a fixed date string
+pub fn asctime(tm_ptr: usize) callconv(.c) [*]const u8 {
     _ = tm_ptr;
     const s = "Sat Jan  1 00:00:00 2000\n";
     @memcpy(asctime_buf[0..s.len], s);
     asctime_buf[s.len] = 0;
-    return @intFromPtr(&asctime_buf);
+    // On WASM, allocate in guest memory so x86 code can read it
+    const stub_common = @import("../shared.zig");
+    if (stub_common.guest_memory != null) {
+        const raw = stub_common.raw_alloc(s.len + 1) orelse return &asctime_buf;
+        const ptr = @as([*]u8, @ptrCast(raw));
+        @memcpy(ptr[0..s.len], s);
+        ptr[s.len] = 0;
+        return ptr;
+    }
+    return &asctime_buf;
 }
 
 /// 64-bit version of time().
 /// Implementation status: Partially implemented
-pub fn time64(t: usize) callconv(.c) i64 {
+pub fn time64(t: ?*align(1) i64) callconv(.c) i64 {
     const ts: i64 = @intCast(std.time.timestamp());
-    if (t != 0) @as(*align(1) i64, @ptrFromInt(t)).* = ts;
+    if (t) |p| p.* = ts;
     return ts;
 }
 
@@ -210,8 +209,15 @@ var tm_buf: [64]u8 = [_]u8{0} ** 64;
 
 /// 64-bit version of localtime(). Returns a static buffer.
 /// Implementation status: Stub
-pub fn localtime64(t: usize) callconv(.c) usize {
-    _ = t; // unused
-    // Return a zeroed tm struct (time functions are stubs)
-    return @intFromPtr(&tm_buf);
+pub fn localtime64(t: usize) callconv(.c) *[64]u8 {
+    _ = t;
+    // On WASM, allocate in guest memory so x86 can dereference
+    const stub_common = @import("../shared.zig");
+    if (stub_common.guest_memory != null) {
+        const raw = stub_common.raw_alloc(64) orelse return &tm_buf;
+        const ptr = @as(*[64]u8, @ptrCast(raw));
+        @memset(ptr, 0);
+        return ptr;
+    }
+    return &tm_buf;
 }

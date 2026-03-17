@@ -29,19 +29,19 @@ pub fn AdjustWindowRect(lpRect: *user32.RECT, dwStyle: u32, bMenu: i32) callconv
     return AdjustWindowRectEx(lpRect, dwStyle, bMenu, 0);
 }
 
-pub fn SystemParametersInfoA(uiAction: u32, uiParam: u32, pvParam: usize, fWinIni: u32) callconv(w32cc.WINAPI) i32 {
+pub fn SystemParametersInfoA(uiAction: u32, uiParam: u32, pvParam: ?*anyopaque, fWinIni: u32) callconv(w32cc.WINAPI) i32 {
     _ = uiParam;
     _ = fWinIni;
     if (trace.enable_tracing) trace.print("USER32: SystemParametersInfoA(action={x})\n", .{uiAction});
-    if (uiAction == w32.SPI_GETWORKAREA and pvParam != 0) {
-        const rect = @as(*user32.RECT, @ptrFromInt(pvParam));
+    if (uiAction == w32.SPI_GETWORKAREA) {
+        const rect = @as(*user32.RECT, @ptrCast(@alignCast(pvParam orelse return 0)));
         rect.left = 0;
         rect.top = 0;
         rect.right = 1024;  // matches SM_CXSCREEN
         rect.bottom = 738;  // screen height minus taskbar (768 - 30)
     }
-    if (uiAction == w32.SPI_GETNONCLIENTMETRICS and pvParam != 0) {
-        const ncm = @as(*w32.NONCLIENTMETRICSA, @ptrFromInt(pvParam));
+    if (uiAction == w32.SPI_GETNONCLIENTMETRICS) {
+        const ncm = @as(*w32.NONCLIENTMETRICSA, @ptrCast(@alignCast(pvParam orelse return 0)));
         ncm.* = .{}; // zero all fields, cbSize defaults to 340
         ncm.iBorderWidth = 1;
         ncm.iScrollWidth = 16;
@@ -116,9 +116,8 @@ pub fn GetSystemMetrics(nIndex: i32) callconv(w32cc.WINAPI) i32 {
     };
 }
 
-pub fn RegisterClassA(lpWndClass: usize) callconv(w32cc.WINAPI) u16 {
-    if (lpWndClass != 0) {
-        const wc = @as(*const w32.WNDCLASSA, @ptrFromInt(lpWndClass));
+pub fn RegisterClassA(wc_ptr: ?*const w32.WNDCLASSA) callconv(w32cc.WINAPI) u16 {
+    if (wc_ptr) |wc| {
         if (wc.lpfnWndProc != 0) {
             user32.global_wndproc = @as(*const fn (usize, u32, usize, isize) callconv(w32cc.WINAPI) isize, @ptrFromInt(wc.lpfnWndProc));
         }
@@ -1171,13 +1170,13 @@ pub fn stub_GetClassInfoExW(hInstance: usize, lpszClass: usize, lpwcx: usize) ca
     return 0;
 }
 
-pub fn stub_SystemParametersInfoW(uiAction: u32, uiParam: u32, pvParam: usize, fWinIni: u32) callconv(w32cc.WINAPI) i32 {
+pub fn stub_SystemParametersInfoW(uiAction: u32, uiParam: u32, pvParam: ?*anyopaque, fWinIni: u32) callconv(w32cc.WINAPI) i32 {
     _ = uiParam;
     _ = fWinIni;
     if (trace.enable_tracing) trace.print("USER32: SystemParametersInfoW(action=0x{x})\n", .{uiAction});
     // SPI_GETWORKAREA
-    if (uiAction == w32.SPI_GETWORKAREA and pvParam != 0) {
-        const rect = @as(*user32.RECT, @ptrFromInt(pvParam));
+    if (uiAction == w32.SPI_GETWORKAREA) {
+        const rect = @as(*user32.RECT, @ptrCast(@alignCast(pvParam orelse return 0)));
         rect.left = 0;
         rect.top = 0;
         rect.right = @intCast(user32.current_client_width);
@@ -1185,10 +1184,11 @@ pub fn stub_SystemParametersInfoW(uiAction: u32, uiParam: u32, pvParam: usize, f
         return 1;
     }
     // SPI_GETNONCLIENTMETRICS
-    if (uiAction == w32.SPI_GETNONCLIENTMETRICS and pvParam != 0) {
-        const size_ptr = @as(*u32, @ptrFromInt(pvParam));
+    if (uiAction == w32.SPI_GETNONCLIENTMETRICS) {
+        const p = pvParam orelse return 0;
+        const size_ptr = @as(*u32, @ptrCast(@alignCast(p)));
         const total = size_ptr.*;
-        const bytes = @as([*]u8, @ptrFromInt(pvParam));
+        const bytes = @as([*]u8, @ptrCast(p));
         @memset(bytes[0..total], 0);
         size_ptr.* = total;
         return 1;

@@ -152,9 +152,12 @@ pub fn dispatchFromSignal(uctx: *std.posix.ucontext_t, thunk_id: u32) void {
         return;
     }
 
-    // Read up to 16 dword arguments from the guest stack
-    var args: [16]u32 = undefined;
-    for (0..16) |i| {
+    // Read arguments from the guest stack. Only read as many as needed
+    // (param_bytes/4) plus a few extra for safety, to avoid reading past
+    // the end of a stack mapping.
+    var args: [16]u32 = [_]u32{0} ** 16;
+    const n_args = @min(@as(usize, entry.native_param_bytes / 4) + 4, 16);
+    for (0..n_args) |i| {
         args[i] = @as(*const u32, @ptrFromInt(@as(usize, guest_esp) + i * 4)).*;
     }
 

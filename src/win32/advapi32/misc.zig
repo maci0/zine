@@ -5,22 +5,20 @@ const w32cc = @import("../calling_convention.zig");
 
 /// Retrieves the name of the user associated with the current thread.
 /// Implementation status: Partially implemented (returns hardcoded "User").
-pub fn GetUserNameA(lpBuffer: usize, pcbBuffer: usize) callconv(w32cc.WINAPI) i32 {
+pub fn GetUserNameA(lpBuffer: ?[*]u8, pcbBuffer: ?*u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("ADVAPI32: GetUserNameA\n", .{});
     const name = "User";
-    if (lpBuffer != 0 and pcbBuffer != 0) {
-        const buf_size = @as(*u32, @ptrFromInt(pcbBuffer)).*;
-        if (buf_size >= name.len + 1) {
-            const buf = @as([*]u8, @ptrFromInt(lpBuffer));
-            @memcpy(buf[0..name.len], name);
-            buf[name.len] = 0;
-            @as(*u32, @ptrFromInt(pcbBuffer)).* = @intCast(name.len + 1);
-            return 1;
+    if (lpBuffer) |buf| {
+        if (pcbBuffer) |cb| {
+            if (cb.* >= name.len + 1) {
+                @memcpy(buf[0..name.len], name);
+                buf[name.len] = 0;
+                cb.* = @intCast(name.len + 1);
+                return 1;
+            }
         }
     }
-    if (pcbBuffer != 0) {
-        @as(*u32, @ptrFromInt(pcbBuffer)).* = @intCast(name.len + 1);
-    }
+    if (pcbBuffer) |cb| cb.* = @intCast(name.len + 1);
     return 0;
 }
 
@@ -104,11 +102,11 @@ pub fn StartServiceA(hService: usize, dwNumServiceArgs: u32, lpServiceArgVectors
 
 /// Determines whether a security descriptor grants a specified set of access rights to the client identified by an access token.
 /// Implementation status: Partially implemented (always grants access).
-pub fn AccessCheck(pSecurityDescriptor: usize, ClientToken: usize, DesiredAccess: u32, GenericMapping: usize, PrivilegeSet: usize, PrivilegeSetLength: usize, GrantedAccess: usize, AccessStatus: usize) callconv(w32cc.WINAPI) i32 {
+pub fn AccessCheck(pSecurityDescriptor: usize, ClientToken: usize, DesiredAccess: u32, GenericMapping: usize, PrivilegeSet: usize, PrivilegeSetLength: usize, GrantedAccess: ?*u32, AccessStatus: ?*i32) callconv(w32cc.WINAPI) i32 {
     _ = .{ pSecurityDescriptor, ClientToken, DesiredAccess, GenericMapping, PrivilegeSet, PrivilegeSetLength };
     if (trace.enable_tracing) trace.print("ADVAPI32: AccessCheck -> TRUE (access granted)\n", .{});
-    if (GrantedAccess != 0) @as(*u32, @ptrFromInt(GrantedAccess)).* = DesiredAccess;
-    if (AccessStatus != 0) @as(*i32, @ptrFromInt(AccessStatus)).* = 1; // TRUE = access granted
+    if (GrantedAccess) |p| p.* = DesiredAccess;
+    if (AccessStatus) |p| p.* = 1; // TRUE = access granted
     return 1; // TRUE
 }
 

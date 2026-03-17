@@ -53,29 +53,26 @@ pub fn realloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
 }
 
 /// --- ANSI String & Memory ---
-/// Implementation status: Partially implemented
-pub fn memset(dest_ptr: usize, c: i32, count: usize) callconv(.c) usize {
-    if (dest_ptr != 0 and count > 0) @memset(@as([*]u8, @ptrFromInt(trace.addr(dest_ptr)))[0..count], @as(u8, @intCast(c & 0xFF)));
-    return dest_ptr;
+pub fn memset(dest: [*]u8, c: i32, count: usize) callconv(.c) [*]u8 {
+    if (count > 0) @memset(dest[0..count], @as(u8, @intCast(c & 0xFF)));
+    return dest;
 }
 
 /// memcpy
-/// Implementation status: Partially implemented
-pub fn memcpy(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
-    if (dest_ptr != 0 and src_ptr != 0 and count > 0) @memcpy(@as([*]u8, @ptrFromInt(trace.addr(dest_ptr)))[0..count], @as([*]const u8, @ptrFromInt(trace.addr(src_ptr)))[0..count]);
-    return dest_ptr;
+pub fn memcpy(dest: [*]u8, src: [*]const u8, count: usize) callconv(.c) [*]u8 {
+    if (count > 0) @memcpy(dest[0..count], src[0..count]);
+    return dest;
 }
 
 /// memmove
-/// Implementation status: Partially implemented
-pub fn memmove(dest_ptr: usize, src_ptr: usize, count: usize) callconv(.c) usize {
-    if (dest_ptr == 0 or src_ptr == 0 or count == 0) return dest_ptr;
-    const dest = @as([*]u8, @ptrFromInt(trace.addr(dest_ptr)))[0..count];
-    const src = @as([*]const u8, @ptrFromInt(trace.addr(src_ptr)))[0..count];
-    if (dest_ptr < src_ptr) {
-        std.mem.copyForwards(u8, dest, src);
-    } else if (dest_ptr > src_ptr) {
-        std.mem.copyBackwards(u8, dest, src);
+pub fn memmove(dest: [*]u8, src: [*]const u8, count: usize) callconv(.c) [*]u8 {
+    if (count == 0) return dest;
+    const d = dest[0..count];
+    const s = src[0..count];
+    if (@intFromPtr(dest) < @intFromPtr(src)) {
+        std.mem.copyForwards(u8, d, s);
+    } else if (@intFromPtr(dest) > @intFromPtr(src)) {
+        std.mem.copyBackwards(u8, d, s);
     }
-    return dest_ptr;
+    return dest;
 }

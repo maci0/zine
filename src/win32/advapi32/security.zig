@@ -4,12 +4,10 @@ const w32cc = @import("../calling_convention.zig");
 
 /// OpenProcessToken
 /// Implementation status: Partially implemented
-pub fn OpenProcessToken(ProcessHandle: usize, DesiredAccess: u32, TokenHandle: usize) callconv(w32cc.WINAPI) i32 {
+pub fn OpenProcessToken(ProcessHandle: usize, DesiredAccess: u32, TokenHandle: ?*u32) callconv(w32cc.WINAPI) i32 {
     _ = ProcessHandle;
     _ = DesiredAccess;
-    if (TokenHandle != 0) {
-        @as(*u32, @ptrFromInt(TokenHandle)).* = 0xFE000001; // fake token handle
-    }
+    if (TokenHandle) |p| p.* = 0xFE000001;
     if (trace.enable_tracing) trace.print("ADVAPI32: OpenProcessToken\n", .{});
     return 1;
 }
@@ -95,12 +93,8 @@ pub fn stub_IsTextUnicode(lpv: usize, iSize: i32, lpiResult: usize) callconv(w32
 
 /// --- EqualSid: compares two SIDs byte-by-byte ---
 /// Implementation status: Partially implemented
-pub fn EqualSid(sid1: usize, sid2: usize) callconv(w32cc.WINAPI) i32 {
-    if (trace.enable_tracing) trace.print("ADVAPI32: EqualSid({x}, {x})\n", .{ sid1, sid2 });
-    if (sid1 == 0 or sid2 == 0) return 0;
-
-    const s1 = @as([*]const u8, @ptrFromInt(sid1));
-    const s2 = @as([*]const u8, @ptrFromInt(sid2));
+pub fn EqualSid(s1: [*]const u8, s2: [*]const u8) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("ADVAPI32: EqualSid\n", .{});
 
     // SID: Revision(1) + SubAuthorityCount(1) + IdentifierAuthority(6) + SubAuthority[count](4*count)
     const count1 = s1[1];
@@ -113,12 +107,10 @@ pub fn EqualSid(sid1: usize, sid2: usize) callconv(w32cc.WINAPI) i32 {
 
 /// --- GetLengthSid: returns byte length of a SID ---
 /// Implementation status: Partially implemented
-pub fn GetLengthSid(sid: usize) callconv(w32cc.WINAPI) u32 {
-    if (sid == 0) return 0;
-    const s = @as([*]const u8, @ptrFromInt(sid));
+pub fn GetLengthSid(s: [*]const u8) callconv(w32cc.WINAPI) u32 {
     const count = s[1];
     const result = 8 + @as(u32, count) * 4;
-    if (trace.enable_tracing) trace.print("ADVAPI32: GetLengthSid({x}) -> {d}\n", .{ sid, result });
+    if (trace.enable_tracing) trace.print("ADVAPI32: GetLengthSid -> {d}\n", .{result});
     return result;
 }
 

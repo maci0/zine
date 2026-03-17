@@ -124,9 +124,9 @@ fn isCpuRegKey(hKey: usize, key: []const u8) bool {
 
 /// Retrieves the type and data for a specified value name associated with an open registry key.
 /// Implementation status: Stub (always returns ERROR_FILE_NOT_FOUND).
-pub fn RegQueryValueExA(hKey: usize, lpValueName: usize, lpReserved: usize, lpType: usize, lpData: usize, lpcbData: usize) callconv(w32cc.WINAPI) u32 {
+pub fn RegQueryValueExA(hKey: usize, lpValueName: ?[*:0]const u8, lpReserved: usize, lpType: ?*u32, lpData: ?[*]u8, lpcbData: ?*u32) callconv(w32cc.WINAPI) u32 {
     _ = lpReserved;
-    const name = if (lpValueName != 0) trace.c_span(lpValueName) else "";
+    const name = if (lpValueName) |n| std.mem.span(n) else "";
     const REG_SZ: u32 = 1;
     const REG_DWORD: u32 = 4;
 
@@ -136,7 +136,7 @@ pub fn RegQueryValueExA(hKey: usize, lpValueName: usize, lpReserved: usize, lpTy
             if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExA('{s}\\{s}') -> config\n", .{ key_path, name });
             return switch (val) {
                 .string => |s| writeRegString(lpType, lpData, lpcbData, REG_SZ, s),
-                .dword => |d| writeRegDword(lpType, lpData, lpcbData, REG_DWORD, d),
+                .dword => |d| writeRegDword(lpType, if (lpData) |p| @ptrCast(@alignCast(p)) else null, lpcbData, REG_DWORD, d),
             };
         }
     }
@@ -150,9 +150,9 @@ pub fn RegQueryValueExA(hKey: usize, lpValueName: usize, lpReserved: usize, lpTy
         } else if (std.ascii.eqlIgnoreCase(name, "VendorIdentifier")) {
             return writeRegString(lpType, lpData, lpcbData, REG_SZ, "GenuineIntel");
         } else if (std.ascii.eqlIgnoreCase(name, "~MHz")) {
-            return writeRegDword(lpType, lpData, lpcbData, REG_DWORD, 1000);
+            return writeRegDword(lpType, if (lpData) |p| @ptrCast(@alignCast(p)) else null, lpcbData, REG_DWORD, 1000);
         } else if (std.ascii.eqlIgnoreCase(name, "FeatureSet")) {
-            return writeRegDword(lpType, lpData, lpcbData, REG_DWORD, 0x2FFF);
+            return writeRegDword(lpType, if (lpData) |p| @ptrCast(@alignCast(p)) else null, lpcbData, REG_DWORD, 0x2FFF);
         }
         if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExA(CPU, '{s}') -> NOT_FOUND\n", .{name});
         return 2;
@@ -162,29 +162,30 @@ pub fn RegQueryValueExA(hKey: usize, lpValueName: usize, lpReserved: usize, lpTy
     return 2; // ERROR_FILE_NOT_FOUND
 }
 
-fn writeRegString(lpType: usize, lpData: usize, lpcbData: usize, regType: u32, value: []const u8) u32 {
+fn writeRegString(lpType: ?*u32, lpData: ?[*]u8, lpcbData: ?*u32, regType: u32, value: []const u8) u32 {
     const needed: u32 = @intCast(value.len + 1);
-    if (lpType != 0) @as(*u32, @ptrFromInt(lpType)).* = regType;
-    if (lpcbData != 0) {
-        const buf_size = @as(*u32, @ptrFromInt(lpcbData)).*;
-        @as(*u32, @ptrFromInt(lpcbData)).* = needed;
-        if (lpData != 0 and buf_size >= needed) {
-            const dst = @as([*]u8, @ptrFromInt(lpData));
-            @memcpy(dst[0..value.len], value);
-            dst[value.len] = 0;
-            return 0; // ERROR_SUCCESS
+    if (lpType) |p| p.* = regType;
+    if (lpcbData) |cb| {
+        const buf_size = cb.*;
+        cb.* = needed;
+        if (lpData) |dst| {
+            if (buf_size >= needed) {
+                @memcpy(dst[0..value.len], value);
+                dst[value.len] = 0;
+                return 0;
+            }
+            return 234; // ERROR_MORE_DATA
         }
-        if (lpData == 0) return 0; // just querying size
-        return 234; // ERROR_MORE_DATA
+        return 0; // just querying size
     }
     return 0;
 }
 
-fn writeRegDword(lpType: usize, lpData: usize, lpcbData: usize, regType: u32, value: u32) u32 {
-    if (lpType != 0) @as(*u32, @ptrFromInt(lpType)).* = regType;
-    if (lpcbData != 0) @as(*u32, @ptrFromInt(lpcbData)).* = 4;
-    if (lpData != 0) @as(*align(1) u32, @ptrFromInt(lpData)).* = value;
-    return 0; // ERROR_SUCCESS
+fn writeRegDword(lpType: ?*u32, lpData: ?*align(1) u32, lpcbData: ?*u32, regType: u32, value: u32) u32 {
+    if (lpType) |p| p.* = regType;
+    if (lpcbData) |p| p.* = 4;
+    if (lpData) |p| p.* = value;
+    return 0;
 }
 
 /// Creates the specified registry key.
@@ -339,9 +340,19 @@ pub fn RegQueryValueExW(hKey: usize, lpValueName: usize, lpReserved: usize, lpTy
         } else if (std.ascii.eqlIgnoreCase(name, "VendorIdentifier")) {
             return writeRegStringW(lpType, lpData, lpcbData, REG_SZ, "GenuineIntel");
         } else if (std.ascii.eqlIgnoreCase(name, "~MHz")) {
-            return writeRegDword(lpType, lpData, lpcbData, REG_DWORD, 1000);
+            return writeRegDword(
+                if (lpType != 0) @as(?*u32, @ptrFromInt(lpType)) else null,
+                if (lpData != 0) @as(?*align(1) u32, @ptrFromInt(lpData)) else null,
+                if (lpcbData != 0) @as(?*u32, @ptrFromInt(lpcbData)) else null,
+                REG_DWORD, 1000,
+            );
         } else if (std.ascii.eqlIgnoreCase(name, "FeatureSet")) {
-            return writeRegDword(lpType, lpData, lpcbData, REG_DWORD, 0x2FFF);
+            return writeRegDword(
+                if (lpType != 0) @as(?*u32, @ptrFromInt(lpType)) else null,
+                if (lpData != 0) @as(?*align(1) u32, @ptrFromInt(lpData)) else null,
+                if (lpcbData != 0) @as(?*u32, @ptrFromInt(lpcbData)) else null,
+                REG_DWORD, 0x2FFF,
+            );
         }
         if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExW(CPU, '{s}') -> NOT_FOUND\n", .{name});
         return 2;

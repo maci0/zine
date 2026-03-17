@@ -91,37 +91,57 @@ pub fn bsearch(key: usize, base: usize, num: usize, width: usize, compare_ptr: u
 }
 
 /// --- errno ---
-/// Implementation status: Partially implemented
+/// Returns a pointer to the errno value. On WASM, returns a guest VA
+/// so the x86 interpreter can dereference it.
 pub fn errno() callconv(.c) *i32 {
+    // On WASM, use guest globals slot so x86 code can dereference
+    const process = @import("process.zig");
+    const g = process.ensureGuestGlobals();
+    if (g != 0) {
+        const shared = @import("../shared.zig");
+        if (shared.guest_memory) |gmem| {
+            // Sync host errno into guest slot
+            const off = g + process.g_errno - gmem.base_addr;
+            @as(*align(1) i32, @ptrCast(gmem.base[off..][0..4].ptr)).* = msvcrt.msvcrt_errno_val;
+            return @ptrCast(@alignCast(gmem.base[off..][0..4].ptr));
+        }
+    }
     return &msvcrt.msvcrt_errno_val;
 }
 
 var setlocale_buf: [2]u8 = .{ 'C', 0 };
 
 /// --- Locale ---
-/// Implementation status: Partially implemented
-pub fn setlocale(category: i32, locale_ptr: usize) callconv(.c) usize {
+/// Returns a pointer to the locale string. On WASM, returns a guest VA.
+pub fn setlocale(category: i32, locale: ?[*:0]const u8) callconv(.c) ?[*:0]const u8 {
     if (trace.enable_tracing) {
-        if (locale_ptr >= 0x10000) {
-            const loc = trace.c_span(locale_ptr);
-            trace.print("MSVCRT: setlocale({d}, '{s}')\n", .{ category, loc });
+        if (locale) |loc| {
+            trace.print("MSVCRT: setlocale({d}, '{s}')\n", .{ category, std.mem.span(loc) });
         } else {
             trace.print("MSVCRT: setlocale({d}, NULL)\n", .{category});
         }
     }
-    return @intFromPtr(&setlocale_buf);
+    // On WASM, return from guest globals slot
+    const process = @import("process.zig");
+    const g = process.ensureGuestGlobals();
+    if (g != 0) {
+        const shared = @import("../shared.zig");
+        if (shared.guest_memory) |gmem| {
+            const off = g + process.g_setlocale - gmem.base_addr;
+            return @ptrCast(gmem.base[off..].ptr);
+        }
+    }
+    return @ptrCast(&setlocale_buf);
 }
 
 /// strupr
 /// Implementation status: Partially implemented
-pub fn strupr(str_ptr: usize) callconv(.c) usize {
-    if (str_ptr < 0x10000) return 0;
-    const s = @as([*]u8, @ptrFromInt(trace.addr(str_ptr)));
+pub fn strupr(s: [*]u8) callconv(.c) [*]u8 {
     var i: usize = 0;
     while (s[i] != 0 and i < 0x100000) : (i += 1) {
         if (s[i] >= 'a' and s[i] <= 'z') s[i] -= 32;
     }
-    return str_ptr;
+    return s;
 }
 
 /// --- Simple stubs ---

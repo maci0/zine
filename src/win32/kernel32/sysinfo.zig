@@ -4,34 +4,29 @@ const w32cc = @import("../calling_convention.zig");
 
 /// Retrieves the process affinity mask for the specified process and the system affinity mask for the system.
 /// Implementation status: Partially implemented (reports 1 CPU).
-pub fn GetProcessAffinityMask(hProcess: usize, lpProcessAffinityMask: usize, lpSystemAffinityMask: usize) callconv(w32cc.WINAPI) i32 {
+pub fn GetProcessAffinityMask(hProcess: usize, lpProcessAffinityMask: ?*u32, lpSystemAffinityMask: ?*u32) callconv(w32cc.WINAPI) i32 {
     _ = hProcess;
-    if (lpProcessAffinityMask != 0) @as(*u32, @ptrFromInt(lpProcessAffinityMask)).* = 1;
-    if (lpSystemAffinityMask != 0) @as(*u32, @ptrFromInt(lpSystemAffinityMask)).* = 1;
+    if (lpProcessAffinityMask) |p| p.* = 1;
+    if (lpSystemAffinityMask) |p| p.* = 1;
     return 1;
 }
 
 /// Retrieves information about the current system.
-/// Implementation status: Partially implemented (returns hardcoded values).
-pub fn GetSystemInfo(lpSystemInfo_ptr: usize) callconv(w32cc.WINAPI) void {
-    if (lpSystemInfo_ptr != 0) {
-        const lpSystemInfo = @as(*[9]u32, @ptrFromInt(lpSystemInfo_ptr));
-        lpSystemInfo[0] = 0; // PROCESSOR_ARCHITECTURE_INTEL
-        lpSystemInfo[1] = 4096;
-        lpSystemInfo[2] = 0x10000;
-        lpSystemInfo[3] = 0x7FFEFFFF;
-        lpSystemInfo[4] = 1;
-        lpSystemInfo[5] = 1;
-        lpSystemInfo[6] = 0;
-        lpSystemInfo[7] = 65536;
-        lpSystemInfo[8] = 0;
-    }
+pub fn GetSystemInfo(si: *[9]u32) callconv(w32cc.WINAPI) void {
+    si[0] = 0; // PROCESSOR_ARCHITECTURE_INTEL
+    si[1] = 4096;
+    si[2] = 0x10000;
+    si[3] = 0x7FFEFFFF;
+    si[4] = 1;
+    si[5] = 1;
+    si[6] = 0;
+    si[7] = 65536;
+    si[8] = 0;
 }
 
 /// Retrieves information about the current system to an application running under WOW64.
-/// Implementation status: Partially implemented (wraps GetSystemInfo).
-pub fn GetNativeSystemInfo(lpSystemInfo_ptr: usize) callconv(w32cc.WINAPI) void {
-    GetSystemInfo(lpSystemInfo_ptr);
+pub fn GetNativeSystemInfo(si: *[9]u32) callconv(w32cc.WINAPI) void {
+    GetSystemInfo(si);
 }
 
 /// Determines whether the specified processor feature is supported by the current computer.
@@ -128,18 +123,16 @@ pub fn stub_SetFileApisToOEM() callconv(w32cc.WINAPI) void {
 
 /// Retrieves information about the system's current usage of both physical and virtual memory.
 /// Implementation status: Partially implemented (returns hardcoded values).
-pub fn GlobalMemoryStatusEx(lpBuffer: usize) callconv(w32cc.WINAPI) i32 {
-    if (lpBuffer == 0) return 0;
-    const buf = @as([*]u8, @ptrFromInt(lpBuffer));
+pub fn GlobalMemoryStatusEx(buf: [*]u8) callconv(w32cc.WINAPI) i32 {
     @memset(buf[0..64], 0);
-    @as(*align(1) u32, @ptrFromInt(lpBuffer)).* = 64;
-    @as(*align(1) u32, @ptrFromInt(lpBuffer + 4)).* = 50;
-    @as(*align(1) u64, @ptrFromInt(lpBuffer + 8)).* = 2 * 1024 * 1024 * 1024;
-    @as(*align(1) u64, @ptrFromInt(lpBuffer + 16)).* = 1 * 1024 * 1024 * 1024;
-    @as(*align(1) u64, @ptrFromInt(lpBuffer + 24)).* = 4 * 1024 * 1024 * 1024;
-    @as(*align(1) u64, @ptrFromInt(lpBuffer + 32)).* = 3 * 1024 * 1024 * 1024;
-    @as(*align(1) u64, @ptrFromInt(lpBuffer + 40)).* = 2 * 1024 * 1024 * 1024;
-    @as(*align(1) u64, @ptrFromInt(lpBuffer + 48)).* = 1536 * 1024 * 1024;
+    @as(*align(1) u32, @ptrCast(buf)).* = 64;
+    @as(*align(1) u32, @ptrCast(buf + 4)).* = 50;
+    @as(*align(1) u64, @ptrCast(buf + 8)).* = 2 * 1024 * 1024 * 1024;
+    @as(*align(1) u64, @ptrCast(buf + 16)).* = 1 * 1024 * 1024 * 1024;
+    @as(*align(1) u64, @ptrCast(buf + 24)).* = 4 * 1024 * 1024 * 1024;
+    @as(*align(1) u64, @ptrCast(buf + 32)).* = 3 * 1024 * 1024 * 1024;
+    @as(*align(1) u64, @ptrCast(buf + 40)).* = 2 * 1024 * 1024 * 1024;
+    @as(*align(1) u64, @ptrCast(buf + 48)).* = 1536 * 1024 * 1024;
     return 1;
 }
 

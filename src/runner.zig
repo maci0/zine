@@ -15,51 +15,71 @@ const log = @import("log.zig");
 const trace = @import("trace.zig");
 const Environment = @import("loader/env.zig").Environment;
 const Module = @import("loader/module.zig").Module;
+const build_options = @import("build_options");
 
-// DLL stub modules
-const stubs_msvcrt = @import("win32/msvcrt.zig");
-const stubs_kernel32 = @import("win32/kernel32.zig");
-const stubs_advapi32 = @import("win32/advapi32.zig");
-const stubs_imagehlp = @import("win32/imagehlp.zig");
-const stubs_user32 = @import("win32/user32.zig");
-const stubs_rpcrt4 = @import("win32/rpcrt4.zig");
-const stubs_comdlg32 = @import("win32/comdlg32.zig");
-const stubs_ntdll = @import("win32/ntdll.zig");
-const stubs_mfc42 = @import("win32/mfc42.zig");
-const stubs_winmm = @import("win32/winmm.zig");
-const stubs_ddraw = @import("win32/ddraw.zig");
-const stubs_gdi32 = @import("win32/gdi32.zig");
-const stubs_dinput = @import("win32/dinput.zig");
-const stubs_dinput8 = @import("win32/dinput8.zig");
-const stubs_dsound = @import("win32/dsound.zig");
-const stubs_d3d8 = @import("win32/d3d8.zig");
-const stubs_mss32 = @import("win32/mss32.zig");
-const stubs_shell32 = @import("win32/shell32.zig");
-const stubs_comctl32 = @import("win32/comctl32.zig");
-const stubs_ole32 = @import("win32/ole32.zig");
-const stubs_oleaut32 = @import("win32/oleaut32.zig");
-const stubs_imm32 = @import("win32/imm32.zig");
-const stubs_version = @import("win32/version.zig");
-const stubs_wsock32 = @import("win32/wsock32.zig");
-const stubs_ws2_32 = @import("win32/ws2_32.zig");
-const stubs_winspool = @import("win32/winspool.zig");
-const stubs_nddeapi = @import("win32/nddeapi.zig");
-const stubs_cards = @import("win32/cards.zig");
-const stubs_icmp = @import("win32/icmp.zig");
-const stubs_vdmdbg = @import("win32/vdmdbg.zig");
-const stubs_mag_hook = @import("win32/mag_hook.zig");
-const stubs_shlwapi = @import("win32/shlwapi.zig");
-const stubs_msvcp60 = @import("win32/msvcp60.zig");
-const stubs_setupapi = @import("win32/setupapi.zig");
+/// Whether Win32 stubs are compiled into the binary (true) or loaded
+/// from external DLLs at runtime (false).  Controlled by -Dexternal-stubs.
+pub const embed_stubs = build_options.embed_stubs;
+
+// DLL stub modules — only pulled in when stubs are embedded.
+const stubs_msvcrt = if (embed_stubs) @import("win32/msvcrt.zig") else void;
+const stubs_kernel32 = if (embed_stubs) @import("win32/kernel32.zig") else void;
+const stubs_advapi32 = if (embed_stubs) @import("win32/advapi32.zig") else void;
+const stubs_imagehlp = if (embed_stubs) @import("win32/imagehlp.zig") else void;
+const stubs_user32 = if (embed_stubs) @import("win32/user32.zig") else void;
+const stubs_rpcrt4 = if (embed_stubs) @import("win32/rpcrt4.zig") else void;
+const stubs_comdlg32 = if (embed_stubs) @import("win32/comdlg32.zig") else void;
+const stubs_ntdll = if (embed_stubs) @import("win32/ntdll.zig") else void;
+const stubs_mfc42 = if (embed_stubs) @import("win32/mfc42.zig") else void;
+const stubs_winmm = if (embed_stubs) @import("win32/winmm.zig") else void;
+const stubs_ddraw = if (embed_stubs) @import("win32/ddraw.zig") else void;
+const stubs_gdi32 = if (embed_stubs) @import("win32/gdi32.zig") else void;
+const stubs_dinput = if (embed_stubs) @import("win32/dinput.zig") else void;
+const stubs_dinput8 = if (embed_stubs) @import("win32/dinput8.zig") else void;
+const stubs_dsound = if (embed_stubs) @import("win32/dsound.zig") else void;
+const stubs_d3d8 = if (embed_stubs) @import("win32/d3d8.zig") else void;
+const stubs_mss32 = if (embed_stubs) @import("win32/mss32.zig") else void;
+const stubs_shell32 = if (embed_stubs) @import("win32/shell32.zig") else void;
+const stubs_comctl32 = if (embed_stubs) @import("win32/comctl32.zig") else void;
+const stubs_ole32 = if (embed_stubs) @import("win32/ole32.zig") else void;
+const stubs_oleaut32 = if (embed_stubs) @import("win32/oleaut32.zig") else void;
+const stubs_imm32 = if (embed_stubs) @import("win32/imm32.zig") else void;
+const stubs_version = if (embed_stubs) @import("win32/version.zig") else void;
+const stubs_wsock32 = if (embed_stubs) @import("win32/wsock32.zig") else void;
+const stubs_ws2_32 = if (embed_stubs) @import("win32/ws2_32.zig") else void;
+const stubs_winspool = if (embed_stubs) @import("win32/winspool.zig") else void;
+const stubs_nddeapi = if (embed_stubs) @import("win32/nddeapi.zig") else void;
+const stubs_cards = if (embed_stubs) @import("win32/cards.zig") else void;
+const stubs_icmp = if (embed_stubs) @import("win32/icmp.zig") else void;
+const stubs_vdmdbg = if (embed_stubs) @import("win32/vdmdbg.zig") else void;
+const stubs_mag_hook = if (embed_stubs) @import("win32/mag_hook.zig") else void;
+const stubs_shlwapi = if (embed_stubs) @import("win32/shlwapi.zig") else void;
+const stubs_msvcp60 = if (embed_stubs) @import("win32/msvcp60.zig") else void;
+const stubs_setupapi = if (embed_stubs) @import("win32/setupapi.zig") else void;
+const stubs_mspdb60 = if (embed_stubs) @import("win32/mspdb60.zig") else void;
+const stubs_rcdll = if (embed_stubs) @import("win32/rcdll.zig") else void;
 
 // -----------------------------------------------------------------------
 // DLL Stub Registration
 // -----------------------------------------------------------------------
 
 /// Register all Win32 DLL stubs with the given environment.
-/// Also adds the not_implemented fallback and initializes the registry config.
+/// In embedded mode (default): registers all stub functions directly.
+/// In external mode (-Dexternal-stubs): skips registration so the loader
+/// picks up the DLLs from disk via the registry search paths.
 pub fn registerAllStubs(environment: *Environment, not_implemented_addr: usize) !void {
     try environment.addBuiltinExport("builtin", "not_implemented", not_implemented_addr);
+
+    if (comptime !embed_stubs) {
+        // External mode: stubs will be loaded as PE DLLs from the search path.
+        // Add the default DLL directory next to the zine binary.
+        if (std.fs.selfExeDirPath(&dll_path_buf)) |self_dir| {
+            var buf: [std.fs.max_path_bytes]u8 = undefined;
+            const dll_dir = std.fmt.bufPrint(&buf, "{s}/dll", .{self_dir}) catch self_dir;
+            environment.registry.addSearchPath(dll_dir) catch {};
+        } else |_| {}
+        return;
+    }
 
     try stubs_msvcrt.register(environment);
     try stubs_kernel32.register(environment);
@@ -96,7 +116,17 @@ pub fn registerAllStubs(environment: *Environment, not_implemented_addr: usize) 
     try stubs_shlwapi.register(environment);
     try stubs_msvcp60.register(environment);
     try stubs_setupapi.register(environment);
+
+    // MSPDB60 and RCDLL stubs are only needed on WASM where the real DLL code
+    // cannot execute in the interpreter. On native/interpret the real DLLs work.
+    const platform = @import("platform.zig");
+    if (comptime platform.is_wasm) {
+        try stubs_mspdb60.register(environment);
+        try stubs_rcdll.register(environment);
+    }
 }
+
+var dll_path_buf: [std.fs.max_path_bytes]u8 = undefined;
 
 // -----------------------------------------------------------------------
 // Search Path Setup
@@ -199,7 +229,10 @@ pub fn applyReverseRelocations(
                 count += 1;
             }
             if (iat_range_count < iat_ranges.len) {
-                iat_ranges[iat_range_count] = .{ first_thunk_rva, first_thunk_rva + count * 4 };
+                // IAT RVAs in buf are in actual_base terms (from Module.load relocation),
+                // but .reloc entries use preferred_base terms. Adjust to match.
+                const adj_start = first_thunk_rva +% reverse_delta;
+                iat_ranges[iat_range_count] = .{ adj_start, adj_start + count * 4 };
                 iat_range_count += 1;
             }
             imp_off += 20;

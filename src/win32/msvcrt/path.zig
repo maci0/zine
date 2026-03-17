@@ -28,98 +28,75 @@ pub fn mktemp(template: ?*anyopaque) callconv(.c) ?*anyopaque {
 
 /// splitpath
 /// Implementation status: Partially implemented
-pub fn splitpath(path_ptr: usize, drive: usize, dir: usize, fname: usize, ext: usize) callconv(.c) void {
-    if (path_ptr < 0x10000) return;
-    const path = trace.c_span(path_ptr);
-
+pub fn splitpath(path: [*:0]const u8, drv_out: ?[*]u8, dir_out: ?[*]u8, fname_out: ?[*]u8, ext_out: ?[*]u8) callconv(.c) void {
+    const s = std.mem.span(path);
     var drive_len: usize = 0;
-    if (path.len >= 2 and path[1] == ':') {
-        drive_len = 2;
-    }
+    if (s.len >= 2 and s[1] == ':') drive_len = 2;
 
     var de: usize = drive_len;
-    var es: usize = path.len;
-    for (drive_len..path.len) |i| {
-        if (path[i] == '/' or path[i] == '\\') de = i + 1;
-        if (path[i] == '.') es = i;
+    var es: usize = s.len;
+    for (drive_len..s.len) |i| {
+        if (s[i] == '/' or s[i] == '\\') de = i + 1;
+        if (s[i] == '.') es = i;
     }
-    if (es < de) es = path.len;
+    if (es < de) es = s.len;
 
-    if (drive != 0) {
-        if (drive_len > 0) {
-            @memcpy(@as([*]u8, @ptrFromInt(drive))[0..drive_len], path[0..drive_len]);
-        }
-        @as([*]u8, @ptrFromInt(drive))[drive_len] = 0;
+    if (drv_out) |d| {
+        if (drive_len > 0) @memcpy(d[0..drive_len], s[0..drive_len]);
+        d[drive_len] = 0;
     }
-    if (dir != 0) {
+    if (dir_out) |d| {
         const dir_len = de - drive_len;
-        if (dir_len > 0) {
-            @memcpy(@as([*]u8, @ptrFromInt(dir))[0..dir_len], path[drive_len..de]);
-        }
-        @as([*]u8, @ptrFromInt(dir))[dir_len] = 0;
+        if (dir_len > 0) @memcpy(d[0..dir_len], s[drive_len..de]);
+        d[dir_len] = 0;
     }
-    if (fname != 0) {
+    if (fname_out) |d| {
         const fname_len = es - de;
-        if (fname_len > 0) {
-            @memcpy(@as([*]u8, @ptrFromInt(fname))[0..fname_len], path[de..es]);
-        }
-        @as([*]u8, @ptrFromInt(fname))[fname_len] = 0;
+        if (fname_len > 0) @memcpy(d[0..fname_len], s[de..es]);
+        d[fname_len] = 0;
     }
-    if (ext != 0) {
-        const ext_len = path.len - es;
-        if (ext_len > 0) {
-            @memcpy(@as([*]u8, @ptrFromInt(ext))[0..ext_len], path[es..path.len]);
-        }
-        @as([*]u8, @ptrFromInt(ext))[ext_len] = 0;
+    if (ext_out) |d| {
+        const ext_len = s.len - es;
+        if (ext_len > 0) @memcpy(d[0..ext_len], s[es..s.len]);
+        d[ext_len] = 0;
     }
 }
 
 /// makepath
 /// Implementation status: Partially implemented
-pub fn makepath(path_ptr: usize, drive: usize, dir: usize, fname: usize, ext: usize) callconv(.c) void {
-    if (path_ptr == 0) return;
-    const path = @as([*]u8, @ptrFromInt(trace.addr(path_ptr)));
+pub fn makepath(out: [*]u8, drv: ?[*:0]const u8, dir: ?[*:0]const u8, fname: ?[*:0]const u8, ext: ?[*:0]const u8) callconv(.c) void {
     var len: usize = 0;
-    if (drive != 0) {
-        const s = trace.c_span(drive);
+    if (drv) |d| {
+        const s = std.mem.span(d);
         if (s.len > 0) {
-            @memcpy(path[len .. len + s.len], s);
+            @memcpy(out[len..][0..s.len], s);
             len += s.len;
-            if (s[s.len - 1] != ':') {
-                path[len] = ':';
-                len += 1;
-            }
+            if (s[s.len - 1] != ':') { out[len] = ':'; len += 1; }
         }
     }
-    if (dir != 0) {
-        const s = trace.c_span(dir);
+    if (dir) |d| {
+        const s = std.mem.span(d);
         if (s.len > 0) {
-            @memcpy(path[len .. len + s.len], s);
+            @memcpy(out[len..][0..s.len], s);
             len += s.len;
-            if (s[s.len - 1] != '/' and s[s.len - 1] != '\\') {
-                path[len] = '\\';
-                len += 1;
-            }
+            if (s[s.len - 1] != '/' and s[s.len - 1] != '\\') { out[len] = '\\'; len += 1; }
         }
     }
-    if (fname != 0) {
-        const s = trace.c_span(fname);
-        @memcpy(path[len .. len + s.len], s);
+    if (fname) |d| {
+        const s = std.mem.span(d);
+        @memcpy(out[len..][0..s.len], s);
         len += s.len;
     }
-    if (ext != 0) {
-        const s = trace.c_span(ext);
+    if (ext) |d| {
+        const s = std.mem.span(d);
         if (s.len > 0) {
-            if (s[0] != '.') {
-                path[len] = '.';
-                len += 1;
-            }
-            @memcpy(path[len .. len + s.len], s);
+            if (s[0] != '.') { out[len] = '.'; len += 1; }
+            @memcpy(out[len..][0..s.len], s);
             len += s.len;
         }
     }
-    path[len] = 0;
-    if (trace.enable_tracing) trace.print("MSVCRT: _makepath -> {s}\n", .{path[0..len]});
+    out[len] = 0;
+    if (trace.enable_tracing) trace.print("MSVCRT: _makepath -> {s}\n", .{out[0..len]});
 }
 
 /// fullpath

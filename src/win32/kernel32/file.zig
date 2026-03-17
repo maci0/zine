@@ -5,6 +5,7 @@ const kernel32_mem = @import("mem.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
 const platform = @import("../../platform.zig");
+const host_io = @import("../host_io.zig");
 
 // KERNEL32.dll file I/O functions.
 /// Retrieves file system attributes for a specified file or directory.
@@ -36,7 +37,7 @@ pub fn GetFileSize(hFile: usize, lpFileSizeHigh: usize) callconv(w32cc.WINAPI) u
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     if (trace.enable_tracing) trace.print("KERNEL32: GetFileSize(hFile={d})\n", .{fd});
 
-    const file = std.fs.File{ .handle = fd };
+    const file = host_io.fileFromFd(fd);
     if (file.stat() catch null) |stat| {
         if (lpFileSizeHigh != 0) {
             const high = @as(*u32, @ptrFromInt(lpFileSizeHigh));
@@ -60,14 +61,13 @@ pub fn GetFileType(hFile: usize) callconv(w32cc.WINAPI) u32 {
 
 /// Retrieves file information for the specified file.
 /// Implementation status: Partially implemented.
-pub fn GetFileInformationByHandle(hFile: usize, lpFileInformation_ptr: usize) callconv(w32cc.WINAPI) i32 {
+pub fn GetFileInformationByHandle(hFile: usize, file_info: *w32.BY_HANDLE_FILE_INFORMATION) callconv(w32cc.WINAPI) i32 {
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     if (trace.enable_tracing) trace.print("KERNEL32: GetFileInformationByHandle(hFile={d})\n", .{fd});
 
-    if (lpFileInformation_ptr != 0) {
-        const file = std.fs.File{ .handle = fd };
+    {
+        const file = host_io.fileFromFd(fd);
         if (file.stat() catch null) |stat| {
-            const file_info = @as(*w32.BY_HANDLE_FILE_INFORMATION, @ptrFromInt(trace.addr(lpFileInformation_ptr)));
             file_info.* = .{};
             file_info.dwFileAttributes = w32.FILE_ATTRIBUTE_NORMAL;
             file_info.nFileSizeHigh = @intCast(stat.size >> 32);
@@ -193,7 +193,7 @@ pub fn CreateFileMappingA(hFile: usize, lpFileMappingAttributes: usize, flProtec
 
     if (hFile != 0xFFFFFFFF) {
         if (dwMaximumSizeLow > 0) {
-            const file = std.fs.File{ .handle = fd };
+            const file = host_io.fileFromFd(fd);
             if (file.stat() catch null) |stat| {
                 if (stat.size < dwMaximumSizeLow) {
                     if (trace.enable_tracing) trace.print("KERNEL32: extending file to {d}\n", .{dwMaximumSizeLow});
@@ -219,7 +219,7 @@ pub fn MapViewOfFileEx(hFileMappingObject: usize, dwDesiredAccess: u32, dwFileOf
             const fd = mapping_fds[idx];
             if (trace.enable_tracing) trace.print("KERNEL32: MapViewOfFileEx(mapping={x}, fd={d}, offsetHigh={d}, offsetLow={d}, bytes={d}, base={x})\n", .{ hFileMappingObject, fd, dwFileOffsetHigh, dwFileOffsetLow, dwNumberOfBytesToMap, lpBaseAddress });
 
-            const file = std.fs.File{ .handle = fd };
+            const file = host_io.fileFromFd(fd);
             const stat = file.stat() catch return 0;
 
             if (stat.size > 0 or dwNumberOfBytesToMap > 0) {
@@ -307,7 +307,7 @@ pub fn CloseHandle(hObject: usize) callconv(w32cc.WINAPI) i32 {
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hObject))));
     if (fd <= 2) return 1;
 
-    const file = std.fs.File{ .handle = fd };
+    const file = host_io.fileFromFd(fd);
     file.close();
     return 1; // TRUE
 }
@@ -318,7 +318,7 @@ pub fn SetFilePointer(hFile: usize, lDistanceToMove: i32, lpDistanceToMoveHigh: 
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     if (trace.enable_tracing) trace.print("KERNEL32: SetFilePointer(hFile={d}, dist={d}, method={d})\n", .{ fd, lDistanceToMove, dwMoveMethod });
 
-    const file = std.fs.File{ .handle = fd };
+    const file = host_io.fileFromFd(fd);
 
     switch (dwMoveMethod) {
         0 => { // FILE_BEGIN
@@ -357,7 +357,7 @@ pub fn ReadFile(hFile: usize, lpBuffer: usize, nNumberOfBytesToRead: u32, lpNumb
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     if (trace.enable_tracing) trace.print("KERNEL32: ReadFile(hFile={d}, len={d})\n", .{ fd, nNumberOfBytesToRead });
 
-    const file = std.fs.File{ .handle = fd };
+    const file = host_io.fileFromFd(fd);
     if (lpBuffer != 0) {
         const buffer = @as([*]u8, @ptrFromInt(lpBuffer));
         const bytes_read = file.read(buffer[0..nNumberOfBytesToRead]) catch return 0; // FALSE
@@ -427,7 +427,7 @@ pub fn GetTempFileNameA(lpPathName: usize, lpPrefixString: usize, uUnique: u32, 
             const fixed_slice = std.fmt.bufPrintZ(&fixed_buf, "./t_{d}.tmp", .{uniq}) catch "./t_999.tmp\x00";
             const rc = posix_fs.open(fixed_slice.ptr, 64 | 2, 0o666);
             if (rc >= 0) {
-                const f = std.fs.File{ .handle = @intCast(rc) };
+                const f = host_io.fileFromFd(@intCast(rc));
                 f.close();
             }
         }
@@ -467,7 +467,7 @@ pub fn DeleteFileA(lpFileName: usize) callconv(w32cc.WINAPI) i32 {
 pub fn SetEndOfFile(hFile: usize) callconv(w32cc.WINAPI) i32 {
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     if (trace.enable_tracing) trace.print("KERNEL32: SetEndOfFile(hFile={d})\n", .{fd});
-    const file = std.fs.File{ .handle = fd };
+    const file = host_io.fileFromFd(fd);
     const pos = file.getPos() catch return 0;
     file.setEndPos(pos) catch return 0;
     return 1; // TRUE
@@ -475,7 +475,7 @@ pub fn SetEndOfFile(hFile: usize) callconv(w32cc.WINAPI) i32 {
 
 /// Searches for a specified file in a specified path.
 /// Implementation status: Partially implemented.
-pub fn SearchPathA(lpPath_ptr: usize, lpFileName_ptr: usize, lpExtension_ptr: usize, nBufferLength: u32, lpBuffer_ptr: usize, lpFilePart_ptr: usize) callconv(w32cc.WINAPI) u32 {
+pub fn SearchPathA(lpPath_ptr: usize, lpFileName_ptr: usize, lpExtension_ptr: usize, nBufferLength: u32, lpBuffer_ptr: ?[*]u8, lpFilePart_ptr: usize) callconv(w32cc.WINAPI) u32 {
     _ = lpPath_ptr;
     if (lpFileName_ptr == 0) return 0;
     const filename = trace.c_span(lpFileName_ptr);
@@ -555,8 +555,8 @@ pub fn SearchPathA(lpPath_ptr: usize, lpFileName_ptr: usize, lpExtension_ptr: us
 
     if (found_path) |found| {
         const len = found.len;
-        if (lpBuffer_ptr != 0 and nBufferLength > len) {
-            const out_buf = @as([*]u8, @ptrFromInt(trace.addr(lpBuffer_ptr)));
+        if (lpBuffer_ptr != null and nBufferLength > len) {
+            const out_buf = lpBuffer_ptr orelse return 0;
             @memcpy(out_buf[0..len], found);
             // Replace forward slashes back to backslashes for Win32 callers
             std.mem.replaceScalar(u8, out_buf[0..len], '/', '\\');
@@ -567,7 +567,7 @@ pub fn SearchPathA(lpPath_ptr: usize, lpFileName_ptr: usize, lpExtension_ptr: us
                 for (0..len) |i| {
                     if (out_buf[i] == '\\') last_slash = i + 1;
                 }
-                @as(*usize, @ptrFromInt(trace.addr(lpFilePart_ptr))).* = lpBuffer_ptr + last_slash;
+                @as(*u32, @ptrFromInt(lpFilePart_ptr)).* = @truncate(@intFromPtr(out_buf) + last_slash);
             }
             return @intCast(len);
         }
@@ -635,8 +635,8 @@ fn matchWildcard(name: []const u8, pattern: []const u8) bool {
 
 /// Searches a directory for a file or subdirectory with a name that matches a specific name.
 /// Implementation status: Partially implemented.
-pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: usize) callconv(w32cc.WINAPI) usize {
-    if (lpFileName_ptr == 0 or lpFindFileData_ptr == 0) return w32.INVALID_HANDLE_VALUE;
+pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: *align(1) w32.WIN32_FIND_DATAA) callconv(w32cc.WINAPI) usize {
+    if (lpFileName_ptr == 0) return w32.INVALID_HANDLE_VALUE;
 
     const filename = trace.c_span(lpFileName_ptr);
     if (trace.enable_tracing) trace.print("KERNEL32: FindFirstFileA('{s}')\n", .{filename});
@@ -714,7 +714,7 @@ pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: usize) callconv
     // No wildcard — literal file lookup
     const posix_fs = @import("../msvcrt/posix_fs.zig");
     if (posix_fs.stat(@as([*:0]const u8, @ptrCast(&fixed_buf)))) |st| {
-        const find_data = @as(*align(1) w32.WIN32_FIND_DATAA, @ptrFromInt(trace.addr(lpFindFileData_ptr)));
+        const find_data = lpFindFileData_ptr;
         find_data.* = .{};
 
         find_data.dwFileAttributes = if (st.kind == .directory) w32.FILE_ATTRIBUTE_DIRECTORY else w32.FILE_ATTRIBUTE_NORMAL;
@@ -736,15 +736,14 @@ pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: usize) callconv
 
 /// Continues a file search from a previous call to the FindFirstFileA function.
 /// Implementation status: Partially implemented.
-pub fn FindNextFileA(hFindFile: usize, lpFindFileData_ptr: usize) callconv(w32cc.WINAPI) i32 {
-    if (lpFindFileData_ptr == 0) return 0;
+pub fn FindNextFileA(hFindFile: usize, lpFindFileData_ptr: *align(1) w32.WIN32_FIND_DATAA) callconv(w32cc.WINAPI) i32 {
 
     const state = getFindHandle(hFindFile) orelse return 0;
 
     if (state.iter) |*iter| {
         while (iter.next() catch null) |entry| {
             if (matchWildcard(entry.name, state.pattern[0..state.pattern_len])) {
-                const find_data = @as(*align(1) w32.WIN32_FIND_DATAA, @ptrFromInt(trace.addr(lpFindFileData_ptr)));
+                const find_data = lpFindFileData_ptr;
                 find_data.* = .{};
                 find_data.dwFileAttributes = if (entry.kind == .directory) w32.FILE_ATTRIBUTE_DIRECTORY else w32.FILE_ATTRIBUTE_NORMAL;
                 const copy_len = @min(entry.name.len, 259);
@@ -786,20 +785,16 @@ pub fn GetSystemDirectoryA(lpBuffer: usize, uSize: u32) callconv(w32cc.WINAPI) u
 
 /// Writes data to the specified file or I/O device.
 /// Implementation status: Fully implemented.
-pub fn WriteFile(hFile: usize, lpBuffer_ptr: usize, nNumberOfBytesToWrite: u32, lpNumberOfBytesWritten_ptr: usize, lpOverlapped: usize) callconv(w32cc.WINAPI) i32 {
+pub fn WriteFile(hFile: usize, lpBuffer: [*]const u8, nNumberOfBytesToWrite: u32, lpNumberOfBytesWritten: ?*u32, lpOverlapped: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpOverlapped;
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     if (trace.enable_tracing) trace.print("KERNEL32: WriteFile(hFile={d}, size={d})\n", .{ fd, nNumberOfBytesToWrite });
 
-    if (lpBuffer_ptr == 0) return 0;
-    const buf = @as([*]const u8, @ptrFromInt(trace.addr(lpBuffer_ptr)))[0..nNumberOfBytesToWrite];
-
-    const file = std.fs.File{ .handle = fd };
+    const buf = lpBuffer[0..nNumberOfBytesToWrite];
+    const file = host_io.fileFromFd(fd);
     const written = file.write(buf) catch return 0;
 
-    if (lpNumberOfBytesWritten_ptr != 0) {
-        @as(*u32, @ptrFromInt(trace.addr(lpNumberOfBytesWritten_ptr))).* = @intCast(written);
-    }
+    if (lpNumberOfBytesWritten) |p| p.* = @intCast(written);
     return 1;
 }
 
@@ -881,7 +876,7 @@ pub fn GetFileSizeEx(hFile: usize, lpFileSize: usize) callconv(w32cc.WINAPI) i32
     if (trace.enable_tracing) trace.print("KERNEL32: GetFileSizeEx(hFile={d})\n", .{fd});
 
     if (lpFileSize == 0) return 0;
-    const file = std.fs.File{ .handle = fd };
+    const file = host_io.fileFromFd(fd);
     if (file.stat() catch null) |stat_result| {
         // LARGE_INTEGER: 64-bit signed int
         @as(*i64, @ptrFromInt(lpFileSize)).* = @intCast(stat_result.size);
@@ -897,7 +892,7 @@ pub fn SetFilePointerEx(hFile: usize, liDistanceToMove_lo: u32, liDistanceToMove
     const distance = @as(i64, @bitCast((@as(u64, liDistanceToMove_hi) << 32) | @as(u64, liDistanceToMove_lo)));
     if (trace.enable_tracing) trace.print("KERNEL32: SetFilePointerEx(hFile={d}, dist={d}, method={d})\n", .{ fd, distance, dwMoveMethod });
 
-    const file = std.fs.File{ .handle = fd };
+    const file = host_io.fileFromFd(fd);
 
     switch (dwMoveMethod) {
         0 => { // FILE_BEGIN
@@ -936,12 +931,11 @@ pub fn FindFirstFileExW(lpFileName: usize, fInfoLevelId: u32, lpFindFileData: us
 
 /// Searches a directory for a file or subdirectory with a name that matches a specific name and additional attributes.
 /// Implementation status: Partially implemented (delegates to FindFirstFileA).
-pub fn FindFirstFileExA(lpFileName: usize, fInfoLevelId: u32, lpFindFileData: usize, fSearchOp: u32, lpSearchFilter: usize, dwAdditionalFlags: u32) callconv(w32cc.WINAPI) usize {
+pub fn FindFirstFileExA(lpFileName: usize, fInfoLevelId: u32, lpFindFileData: *align(1) w32.WIN32_FIND_DATAA, fSearchOp: u32, lpSearchFilter: usize, dwAdditionalFlags: u32) callconv(w32cc.WINAPI) usize {
     _ = fInfoLevelId;
     _ = fSearchOp;
     _ = lpSearchFilter;
     _ = dwAdditionalFlags;
-    // Delegate to FindFirstFileA (ignoring extended parameters)
     return FindFirstFileA(lpFileName, lpFindFileData);
 }
 
@@ -963,7 +957,7 @@ pub fn FlushFileBuffers(hFile: usize) callconv(w32cc.WINAPI) i32 {
     // Actually flush the fd if possible (not available on WASM/WASI)
     if (comptime platform.is_native) {
         const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
-        const file = std.fs.File{ .handle = fd };
+        const file = host_io.fileFromFd(fd);
         file.sync() catch {};
     }
     return 1; // TRUE
@@ -983,7 +977,7 @@ pub fn GetFileTime(hFile: usize, lpCreationTime: usize, lpLastAccessTime: usize,
 
     // Try to get actual file times from stat
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
-    const file = std.fs.File{ .handle = fd };
+    const file = host_io.fileFromFd(fd);
     var actual_low = low;
     var actual_high = high;
     if (file.stat() catch null) |st| {
@@ -1083,9 +1077,8 @@ pub fn FindFirstFileW(lpFileName: usize, lpFindFileData: usize) callconv(w32cc.W
     if (trace.enable_tracing) trace.print("KERNEL32: FindFirstFileW('{s}')\\n", .{narrow_buf[0..copy_len]});
 
     // Use a temporary narrow find data buffer
-    var narrow_find_data: [318]u8 = undefined; // sizeof WIN32_FIND_DATAA = 318
-    @memset(&narrow_find_data, 0);
-    const result = FindFirstFileA(@intFromPtr(&narrow_buf), @intFromPtr(&narrow_find_data));
+    var narrow_find_data: w32.WIN32_FIND_DATAA = .{};
+    const result = FindFirstFileA(@intFromPtr(&narrow_buf), &narrow_find_data);
 
     if (result == 0xFFFFFFFF) {
         if (trace.enable_tracing) trace.print("KERNEL32: FindFirstFileW -> INVALID_HANDLE_VALUE\n", .{});
@@ -1096,17 +1089,18 @@ pub fn FindFirstFileW(lpFileName: usize, lpFindFileData: usize) callconv(w32cc.W
     // WIN32_FIND_DATAW: same layout but cFileName is [260]u16 and cAlternateFileName is [14]u16
     const out = @as([*]u8, @ptrFromInt(lpFindFileData));
     // Copy the fixed fields (dwFileAttributes through dwReserved1 = 44 bytes)
-    @memcpy(out[0..44], narrow_find_data[0..44]);
+    const nfd_bytes = @as([*]const u8, @ptrCast(&narrow_find_data));
+    @memcpy(out[0..44], nfd_bytes[0..44]);
 
     // Widen cFileName (260 bytes narrow -> 260 u16 = 520 bytes wide)
-    const narrow_name = narrow_find_data[44..304]; // 260 bytes
+    const narrow_name = nfd_bytes[44..304]; // 260 bytes
     const wide_name = @as([*]u16, @ptrCast(@alignCast(out + 44)));
     for (0..260) |i| {
         wide_name[i] = narrow_name[i];
     }
 
     // Widen cAlternateFileName (14 bytes narrow -> 14 u16 = 28 bytes wide)
-    const narrow_alt = narrow_find_data[304..318];
+    const narrow_alt = nfd_bytes[304..318];
     const wide_alt = @as([*]u16, @ptrCast(@alignCast(out + 44 + 520)));
     for (0..14) |i| {
         wide_alt[i] = narrow_alt[i];
@@ -1122,24 +1116,21 @@ pub fn FindNextFileW(hFindFile: usize, lpFindFileData: usize) callconv(w32cc.WIN
     if (lpFindFileData == 0) return 0;
 
     // Get the next narrow result, then widen it
-    var narrow_find_data: [318]u8 = undefined;
-    @memset(&narrow_find_data, 0);
-    const result = FindNextFileA(hFindFile, @intFromPtr(&narrow_find_data));
+    var nfd: w32.WIN32_FIND_DATAA = .{};
+    const result = FindNextFileA(hFindFile, &nfd);
     if (result == 0) return 0;
 
-    // Copy fixed fields (44 bytes) then widen the string fields
+    const nfd_b = @as([*]const u8, @ptrCast(&nfd));
     const out = @as([*]u8, @ptrFromInt(lpFindFileData));
-    @memcpy(out[0..44], narrow_find_data[0..44]);
+    @memcpy(out[0..44], nfd_b[0..44]);
 
-    // Widen cFileName (260 bytes narrow -> 260 u16 = 520 bytes wide)
-    const narrow_name = narrow_find_data[44..304];
+    const narrow_name = nfd_b[44..304];
     const wide_name = @as([*]u16, @ptrCast(@alignCast(out + 44)));
     for (0..260) |i| {
         wide_name[i] = narrow_name[i];
     }
 
-    // Widen cAlternateFileName (14 bytes narrow -> 14 u16 = 28 bytes wide)
-    const narrow_alt = narrow_find_data[304..318];
+    const narrow_alt = nfd_b[304..318];
     const wide_alt = @as([*]u16, @ptrCast(@alignCast(out + 44 + 520)));
     for (0..14) |i| {
         wide_alt[i] = narrow_alt[i];

@@ -177,6 +177,28 @@ pub fn main() !void {
     // so the x86 interpreter's address translation works correctly.
     stubs_kernel32.main_module_handle = main_module.parser.getNtHeaders().OptionalHeader.ImageBase;
 
+    // Set main_exe_dir so GetModuleFileNameA can return the correct path.
+    // Convert to Windows-style path with backslashes and drive letter.
+    if (std.fs.path.dirname(target_exe)) |dir| {
+        var win_dir: [512]u8 = undefined;
+        var wlen: usize = 0;
+        // Add synthetic drive letter for Windows path compatibility
+        win_dir[0] = 'Z';
+        win_dir[1] = ':';
+        wlen = 2;
+        for (dir) |c| {
+            if (wlen >= win_dir.len - 2) break;
+            win_dir[wlen] = if (c == '/') '\\' else c;
+            wlen += 1;
+        }
+        if (wlen > 0 and win_dir[wlen - 1] != '\\') {
+            win_dir[wlen] = '\\';
+            wlen += 1;
+        }
+        @memcpy(stubs_kernel32.main_exe_dir[0..wlen], win_dir[0..wlen]);
+        stubs_kernel32.main_exe_dir_len = wlen;
+    }
+
     log.info("wasm: loaded PE '{s}' at 0x{X} (size={d})", .{
         exe_name,
         main_module.image_base,
@@ -258,6 +280,12 @@ pub fn main() !void {
             stubs_msvcrt.msvcrt_acmdln_guest = acmdln_exp.addr;
         }
     }
+
+    // Set guest_memory BEFORE resolveAllImports so that copyModuleToGuest
+    // (which copies PE DLL dependencies into the interpreter's address space)
+    // can allocate from the guest heap.
+    const stub_common = @import("win32/shared.zig");
+    stub_common.guest_memory = &thunk_guest_mem;
 
     // Resolve imports BEFORE copying the PE into combined_buf (patches IAT in mapped_memory)
     try runner.resolveAllImports(&environment, allocator);
@@ -416,7 +444,7 @@ pub fn main() !void {
     runner.protectRsrc(main_module.parser.sections, &cpu.memory, preferred_base, image_size);
 
     // Wire up guest heap for all stubs (VirtualAlloc, HeapAlloc, malloc, etc.)
-    const stub_common = @import("win32/shared.zig");
+    // (stub_common was already imported above for the pre-resolveAllImports setup)
     stub_common.guest_memory = &cpu.memory;
 
     // Register spawn handler so _spawnvp can load child PEs in-process
@@ -466,7 +494,41 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     // Resolve the PE path: convert Win32 path to POSIX
     var posix_buf: [1024]u8 = undefined;
     const posix_len = path_utils.win32ToPosix(cmdname, &posix_buf);
-    const exe_path = if (posix_len > 0) posix_buf[0..posix_len] else cmdname;
+    var exe_path: []const u8 = if (posix_len > 0) posix_buf[0..posix_len] else cmdname;
+
+    // If cmdname is empty, extract the intended command from argv[0].
+    // CL.EXE passes empty cmdname when it can't construct the C1.DLL path,
+    // but argv[0] still contains the bare name (e.g. "c1").
+    var argv_name_buf: [256]u8 = undefined;
+    if (exe_path.len == 0 and argv_ptr != 0) {
+        const host_argv = trace.addr(argv_ptr);
+        if (host_argv >= 0x10000) {
+            const argv0_va = @as(*const u32, @ptrFromInt(host_argv)).*;
+            if (argv0_va != 0) {
+                const argv0 = trace.c_span(argv0_va);
+                if (argv0.len > 0 and argv0.len < argv_name_buf.len) {
+                    @memcpy(argv_name_buf[0..argv0.len], argv0);
+                    exe_path = argv_name_buf[0..argv0.len];
+                }
+            }
+        }
+    }
+
+    // If cmdname is a bare name without path separators, try to
+    // find it in the main PE's directory (e.g. CL.EXE spawning "c1").
+    if (exe_path.len > 0 and std.mem.indexOfScalar(u8, exe_path, '/') == null and
+        std.mem.indexOfScalar(u8, exe_path, '\\') == null)
+    {
+        if (stubs_kernel32.main_exe_dir_len > 0) {
+            const dir = stubs_kernel32.main_exe_dir[0..stubs_kernel32.main_exe_dir_len];
+            var resolved_buf: [1024]u8 = undefined;
+            const dir_posix_len = path_utils.win32ToPosix(dir, &resolved_buf);
+            if (dir_posix_len > 0) {
+                @memcpy(resolved_buf[dir_posix_len..][0..exe_path.len], exe_path);
+                exe_path = resolved_buf[0 .. dir_posix_len + exe_path.len];
+            }
+        }
+    }
 
     log.info("wasm: spawn handler loading child PE '{s}'", .{exe_path});
 

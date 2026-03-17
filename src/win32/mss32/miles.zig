@@ -10,8 +10,8 @@ pub fn stub_startup() callconv(w32cc.WINAPI) i32 {
 
 /// stub_last_error
 /// Implementation status: No-op fallback
-pub fn stub_last_error() callconv(w32cc.WINAPI) usize {
-    return @intFromPtr(&no_error_str);
+pub fn stub_last_error() callconv(w32cc.WINAPI) [*:0]const u8 {
+    return @ptrCast(&no_error_str);
 }
 
 var no_error_str: [1]u8 = .{0};

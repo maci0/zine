@@ -169,8 +169,8 @@ pub fn p_environ() callconv(.c) usize {
 // Allocated once at low address via platform.mmap so x86 guest code
 // can read the 32-bit pointers.  Lazily initialized.
 var guest_args_buf: ?[]u8 = null;
-var guest_argv_addr: u32 = 0;
-var guest_envp_addr: u32 = 0;
+pub var guest_argv_addr: u32 = 0;
+pub var guest_envp_addr: u32 = 0;
 
 /// Reset cached guest argv/envp state. Called by the WASM spawn handler
 /// so the child PE's CRT rebuilds argv from the new global_argv.
@@ -182,7 +182,7 @@ pub fn resetGuestArgs() void {
 }
 const guest_args_base: u32 = 0x50000000;
 
-fn ensureGuestArgs() void {
+pub fn ensureGuestArgs() void {
     if (guest_args_buf != null) return;
 
     const plt = @import("../../platform.zig");

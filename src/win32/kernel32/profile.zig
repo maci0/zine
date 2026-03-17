@@ -12,42 +12,11 @@ fn readIniValue(lpFileName: usize, lpAppName: usize, lpKeyName: usize) ?[]const 
     const section_name = trace.c_span(lpAppName);
     const key_name = trace.c_span(lpKeyName);
 
-    // Convert Windows path to POSIX using canonical mapping
-    const path_utils = @import("../../path_utils.zig");
-    var path_buf: [1024]u8 = undefined;
-    const path_len = path_utils.win32ToPosix(file_path_raw, &path_buf);
-    const path = path_buf[0..path_len];
-
-    const file = blk: {
-        if (std.fs.path.isAbsolute(path)) {
-            break :blk std.fs.openFileAbsolute(path, .{}) catch {
-                // Try lowercase filename
-                var lower_buf: [1024]u8 = undefined;
-                var last_slash: usize = 0;
-                @memcpy(lower_buf[0..path_len], path);
-                for (0..path_len) |i| {
-                    if (lower_buf[i] == '/') last_slash = i + 1;
-                }
-                for (last_slash..path_len) |i| {
-                    lower_buf[i] = std.ascii.toLower(lower_buf[i]);
-                }
-                break :blk std.fs.openFileAbsolute(lower_buf[0..path_len], .{}) catch return null;
-            };
-        } else {
-            break :blk std.fs.cwd().openFile(path, .{}) catch {
-                var lower_buf: [1024]u8 = undefined;
-                var last_slash: usize = 0;
-                @memcpy(lower_buf[0..path_len], path);
-                for (0..path_len) |i| {
-                    if (lower_buf[i] == '/') last_slash = i + 1;
-                }
-                for (last_slash..path_len) |i| {
-                    lower_buf[i] = std.ascii.toLower(lower_buf[i]);
-                }
-                break :blk std.fs.cwd().openFile(lower_buf[0..path_len], .{}) catch return null;
-            };
-        }
-    };
+    // Use host_io for path conversion + case-insensitive resolution
+    const host_io = @import("../host_io.zig");
+    const fd = host_io.open(file_path_raw, 0, 0); // O_RDONLY
+    if (fd < 0) return null;
+    const file = @import("../host_io.zig").fileFromFd(@intCast(fd));
     defer file.close();
 
     var content_buf: [16384]u8 = undefined;

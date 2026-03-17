@@ -5,18 +5,13 @@ const platform = @import("../../platform.zig");
 
 /// --- Interlocked operations ---
 /// Implementation status: Partially implemented
-pub fn InterlockedIncrement(lpAddend: usize) callconv(w32cc.WINAPI) i32 {
-    if (lpAddend == 0) return 0;
-    const ptr = @as(*i32, @ptrFromInt(lpAddend));
-    return @atomicRmw(i32, ptr, .Add, 1, .seq_cst) + 1;
+pub fn InterlockedIncrement(lpAddend: *i32) callconv(w32cc.WINAPI) i32 {
+    return @atomicRmw(i32, lpAddend, .Add, 1, .seq_cst) + 1;
 }
 
 /// InterlockedDecrement
-/// Implementation status: Partially implemented
-pub fn InterlockedDecrement(lpAddend: usize) callconv(w32cc.WINAPI) i32 {
-    if (lpAddend == 0) return 0;
-    const ptr = @as(*i32, @ptrFromInt(lpAddend));
-    return @atomicRmw(i32, ptr, .Sub, 1, .seq_cst) - 1;
+pub fn InterlockedDecrement(lpAddend: *i32) callconv(w32cc.WINAPI) i32 {
+    return @atomicRmw(i32, lpAddend, .Sub, 1, .seq_cst) - 1;
 }
 
 // --- Critical sections ---
@@ -298,18 +293,18 @@ pub fn DuplicateHandle(
             const src_fd = @as(i32, @bitCast(@as(u32, @truncate(hSourceHandle))));
             const new_fd = platform.dup(src_fd) catch {
                 // Fallback to fake handle
-                @as(*usize, @ptrFromInt(lpTargetHandle)).* = next_dup_handle;
+                @as(*u32, @ptrFromInt(lpTargetHandle)).* = @truncate(next_dup_handle);
                 next_dup_handle += 1;
                 return 1;
             };
             if (trace.enable_tracing) trace.print("KERNEL32: DuplicateHandle fd {d} -> {d}\n", .{ src_fd, new_fd });
-            @as(*usize, @ptrFromInt(lpTargetHandle)).* = @intCast(@as(u32, @bitCast(new_fd)));
+            @as(*u32, @ptrFromInt(lpTargetHandle)).* = @as(u32, @bitCast(new_fd));
             return 1;
         }
     }
 
     // Synthetic handle: return a new fake one
-    @as(*usize, @ptrFromInt(lpTargetHandle)).* = next_dup_handle;
+    @as(*u32, @ptrFromInt(lpTargetHandle)).* = @truncate(next_dup_handle);
     next_dup_handle += 1;
     return 1; // TRUE = success
 }
@@ -358,8 +353,8 @@ pub fn InitializeSListHead(ListHead: usize) callconv(w32cc.WINAPI) void {
 pub fn InterlockedFlushSList(ListHead: usize) callconv(w32cc.WINAPI) usize {
     if (ListHead != 0) {
         // Read the first pointer (first 4 bytes of SLIST_HEADER)
-        const first = @as(*usize, @ptrFromInt(ListHead)).*;
-        @as(*usize, @ptrFromInt(ListHead)).* = 0; // Clear the list
+        const first: usize = @as(*u32, @ptrFromInt(ListHead)).*;
+        @as(*u32, @ptrFromInt(ListHead)).* = 0; // Clear the list
         return first;
     }
     return 0; // Empty list

@@ -17,9 +17,9 @@ pub fn alloc_fd() ?i32 {
 /// Internal helper to get a std.fs.File from a file descriptor.
 /// Implementation status: Partially implemented
 pub fn get_fd_file(fd: i32) ?std.fs.File {
-    if (fd == 0) return std.fs.File{ .handle = 0 };
-    if (fd == 1) return std.fs.File{ .handle = 1 };
-    if (fd == 2) return std.fs.File{ .handle = 2 };
+    if (fd == 0) return @import("../host_io.zig").fileFromFd(0);
+    if (fd == 1) return @import("../host_io.zig").fileFromFd(1);
+    if (fd == 2) return @import("../host_io.zig").fileFromFd(2);
     return if (fd >= 3 and fd < max_fds) fd_handles[@intCast(fd)] else null;
 }
 
@@ -30,9 +30,8 @@ const FILE = io.MSVCRT_FILE;
 pub fn access(path_ptr: usize, mode: i32) callconv(.c) i32 {
     if (path_ptr == 0) return -1;
     const path = trace.c_span(path_ptr);
-    const posix_fs = @import("posix_fs.zig");
-    const host_ptr = trace.addr(path_ptr);
-    const result = posix_fs.access(@as([*:0]const u8, @ptrFromInt(host_ptr)), mode);
+    const host_io = @import("../host_io.zig");
+    const result = host_io.access(path, mode);
     if (trace.enable_tracing) trace.print("MSVCRT: _access('{s}', {d}) -> {d}\n", .{ path, mode, result });
     return result;
 }
@@ -55,19 +54,18 @@ pub fn sopen(path_ptr: usize, oflag: i32, shflag: i32, pmode: i32) callconv(.c) 
     const o_creat = 0x0100;
     const o_trunc = 0x0200;
 
-    const pfs = @import("posix_fs.zig");
+    const host_io = @import("../host_io.zig");
     var flags: u32 = 0;
-    if ((oflag & o_creat) != 0) flags |= pfs.O_CREAT;
+    if ((oflag & o_creat) != 0) flags |= host_io.O_CREAT;
     if ((oflag & o_rdwr) != 0) {
-        flags |= pfs.O_RDWR;
+        flags |= host_io.O_RDWR;
     } else if ((oflag & o_wronly) != 0) {
-        flags |= pfs.O_WRONLY;
+        flags |= host_io.O_WRONLY;
     }
-    if ((oflag & o_trunc) != 0) flags |= pfs.O_TRUNC;
-    if ((oflag & o_append) != 0) flags |= pfs.O_APPEND;
+    if ((oflag & o_trunc) != 0) flags |= host_io.O_TRUNC;
+    if ((oflag & o_append) != 0) flags |= host_io.O_APPEND;
 
-    const posix_fs = @import("posix_fs.zig");
-    const rc = posix_fs.open(@as([*:0]const u8, @ptrCast(@constCast(path.ptr))), flags, 0o666);
+    const rc = host_io.open(path, flags, 0o666);
     if (rc < 0) {
         if (trace.enable_tracing) trace.print("  -> failed\n", .{});
         return -1;
@@ -78,11 +76,11 @@ pub fn sopen(path_ptr: usize, oflag: i32, shflag: i32, pmode: i32) callconv(.c) 
 
 /// Reads data from a file.
 /// Implementation status: Fully implemented.
-pub fn read(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
+pub fn read(fd: i32, buffer: [*]u8, count: u32) callconv(.c) i32 {
     if (trace.enable_tracing) trace.print("MSVCRT: _read(fd={d}, count={d})\n", .{ fd, count });
-    if (buffer_ptr == 0 or count == 0) return 0;
-    const file = std.fs.File{ .handle = fd };
-    const buf = @as([*]u8, @ptrFromInt(buffer_ptr));
+    if (count == 0) return 0;
+    const file = @import("../host_io.zig").fileFromFd(fd);
+    const buf = buffer;
     const read_bytes = file.read(buf[0..count]) catch return -1;
     if (trace.enable_tracing) {
         trace.print("  -> read {d} bytes\n", .{read_bytes});
@@ -109,7 +107,7 @@ pub fn write(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
         }
         break :blk @as([*]const u8, @ptrFromInt(trace.addr(buffer_ptr)))[0..count];
     } else @as([*]const u8, @ptrFromInt(trace.addr(buffer_ptr)))[0..count];
-    const out_file = std.fs.File{ .handle = fd };
+    const out_file = @import("../host_io.zig").fileFromFd(fd);
     out_file.writeAll(slice) catch |err| {
         if (trace.enable_tracing) trace.print("  -> _write failed: {}\n", .{err});
         return -1;
@@ -120,7 +118,7 @@ pub fn write(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
 /// Moves the file pointer to the specified location.
 /// Implementation status: Fully implemented.
 pub fn lseek(fd: i32, offset: i32, origin: i32) callconv(.c) i32 {
-    const file = std.fs.File{ .handle = fd };
+    const file = @import("../host_io.zig").fileFromFd(fd);
     switch (origin) {
         0 => file.seekTo(@intCast(offset)) catch return -1,
         1 => {
@@ -140,7 +138,7 @@ pub fn lseek(fd: i32, offset: i32, origin: i32) callconv(.c) i32 {
 /// Implementation status: Fully implemented.
 pub fn close(fd: i32) callconv(.c) i32 {
     if (fd >= 3) {
-        const file = std.fs.File{ .handle = fd };
+        const file = @import("../host_io.zig").fileFromFd(fd);
         file.close();
         return 0;
     }
@@ -149,9 +147,8 @@ pub fn close(fd: i32) callconv(.c) i32 {
 
 /// Retrieves the file descriptor associated with a stream.
 /// Implementation status: Fully implemented.
-pub fn fileno(file_ptr: usize) callconv(.c) i32 {
-    if (file_ptr != 0) {
-        const ms_file = @as(*FILE, @ptrFromInt(file_ptr));
+pub fn fileno(file_ptr: ?*FILE) callconv(.c) i32 {
+    if (file_ptr) |ms_file| {
         return ms_file._file;
     }
     return -1;
@@ -167,14 +164,14 @@ pub fn stub_isatty(fd: i32) callconv(.c) i32 {
 /// Gets the current position of the file pointer.
 /// Implementation status: Fully implemented.
 pub fn tell(fd: i32) callconv(.c) i32 {
-    const file = std.fs.File{ .handle = fd };
+    const file = @import("../host_io.zig").fileFromFd(fd);
     return @intCast(file.getPos() catch return -1);
 }
 
 /// Changes the size of a file.
 /// Implementation status: Fully implemented.
 pub fn chsize(fd: i32, size: i32) callconv(.c) i32 {
-    const file = std.fs.File{ .handle = fd };
+    const file = @import("../host_io.zig").fileFromFd(fd);
     file.setEndPos(@intCast(size)) catch return -1;
     return 0;
 }
@@ -182,7 +179,7 @@ pub fn chsize(fd: i32, size: i32) callconv(.c) i32 {
 /// Gets the length of a file.
 /// Implementation status: Fully implemented.
 pub fn filelength(fd: i32) callconv(.c) i32 {
-    const file = std.fs.File{ .handle = fd };
+    const file = @import("../host_io.zig").fileFromFd(fd);
     if (file.getEndPos()) |pos| {
         if (trace.enable_tracing) trace.print("MSVCRT: _filelength(fd={d}) -> {d}\n", .{ fd, pos });
         return @intCast(pos);
@@ -194,13 +191,12 @@ pub fn filelength(fd: i32) callconv(.c) i32 {
 
 /// Gets status information on a file.
 /// Implementation status: Partially implemented.
-pub fn stat(path_ptr: usize, stat_ptr: usize) callconv(.c) i32 {
-    if (path_ptr < 0x10000 or stat_ptr == 0) return -1;
-    const path = std.mem.span(@as([*:0]const u8, @ptrFromInt(path_ptr)));
+pub fn stat(path_str: [*:0]const u8, stat_out: [*]u8) callconv(.c) i32 {
+    const path = std.mem.span(path_str);
 
-    const posix_fs = @import("posix_fs.zig");
-    if (posix_fs.stat(@as([*:0]const u8, @ptrFromInt(path_ptr)))) |stat_buf| {
-        const out_buf = @as([*]u8, @ptrFromInt(stat_ptr));
+    const host_io = @import("../host_io.zig");
+    if (host_io.stat(path)) |stat_buf| {
+        const out_buf = stat_out;
         @memset(out_buf[0..36], 0);
         out_buf[4] = 0x00;
         out_buf[5] = if (stat_buf.kind == .directory) 0x40 else 0x80; // _S_IFDIR or _S_IFREG
@@ -218,11 +214,11 @@ pub fn stat(path_ptr: usize, stat_ptr: usize) callconv(.c) i32 {
 
 /// Gets status information on an open file.
 /// Implementation status: Partially implemented.
-pub fn fstat(fd: i32, stat_ptr: usize) callconv(.c) i32 {
-    if (stat_ptr != 0) {
-        const file = std.fs.File{ .handle = fd };
+pub fn fstat(fd: i32, stat_out: [*]u8) callconv(.c) i32 {
+    {
+        const file = @import("../host_io.zig").fileFromFd(fd);
         if (file.stat() catch null) |st| {
-            const stat_buf = @as([*]u8, @ptrFromInt(stat_ptr));
+            const stat_buf = stat_out;
             @memset(stat_buf[0..36], 0);
             stat_buf[4] = 0x00;
             stat_buf[5] = 0x80; // _S_IFREG
@@ -273,6 +269,10 @@ pub fn open_osfhandle(osfhandle: isize, flags: i32) callconv(.c) i32 {
 /// Implementation status: Fully implemented
 pub fn acrt_iob_func(index: u32) callconv(.c) usize {
     if (index < 3) {
+        // On WASM, _iob is relocated to guest memory — return guest VA
+        if (io.iob_guest_addr != 0) {
+            return io.iob_guest_addr + index * @sizeOf(io.MSVCRT_FILE);
+        }
         return @intFromPtr(&io.msvcrt_iob[index]);
     }
     return 0;

@@ -61,3 +61,12 @@ pub const raiseStackLimit = interface.raiseStackLimit;
 pub const pipe = interface.pipe;
 /// Duplicates a file descriptor.
 pub const dup = interface.dup;
+
+/// Write a guest pointer-sized value (u32) to a guest memory address.
+/// On x86 native, usize == u32 so this is a normal write.
+/// On x86_64 compat mode, guest pointers are 32-bit — writes u32 to avoid
+/// corrupting adjacent stack/data by writing 8 bytes into a 4-byte slot.
+pub inline fn writeGuestPtr(addr: usize, value: usize) void {
+    if (addr == 0) return;
+    @as(*u32, @ptrFromInt(addr)).* = @truncate(value);
+}

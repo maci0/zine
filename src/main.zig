@@ -606,10 +606,13 @@ pub fn main() !void {
             // Stack layout: [exit_stub] [arg1: argc] [arg2: argv] [arg3: envp]
             const stack = @as([*]u32, @ptrFromInt(@as(usize, guest_esp_top)));
             const exit_stub = compat_thunks.makeExitStub();
+            // Use guest-accessible argv/envp (from ensureGuestArgs, in low 4GB)
+            const msvcrt_proc = @import("win32/msvcrt/process.zig");
+            msvcrt_proc.ensureGuestArgs();
             stack[0] = exit_stub; // return address
             stack[1] = @intCast(stubs_msvcrt.global_argc);
-            stack[2] = @truncate(@intFromPtr(stubs_msvcrt.global_argv));
-            stack[3] = @truncate(@intFromPtr(stubs_msvcrt.global_envp));
+            stack[2] = msvcrt_proc.guest_argv_addr;
+            stack[3] = msvcrt_proc.guest_envp_addr;
             trace.print("compat: entering _InvokeCompilerPass at 0x{X} ESP=0x{X}\n", .{ invoke_addr, guest_esp_top });
             compat_thunks.enterCompatMode(@truncate(invoke_addr), guest_esp_top);
         } else {

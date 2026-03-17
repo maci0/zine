@@ -403,8 +403,12 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
             }
         }
 
-        // 64-bit host code fault — not guest code, exit cleanly
-        if (cs != 0x23) {
+        // 64-bit host code fault — not guest code.
+        // Only exit for faults in the Zig binary itself (above 0x70000000).
+        // Faults in the 0-0x70000000 range with CS=0x33 can happen during
+        // callCompat32 nested signal handling — let them fall through to
+        // AppCompat/SEH handlers which handle compat mode guest faults.
+        if (cs != 0x23 and ip >= 0x70000000) {
             log.fatal("Segfault in host code at IP=0x{X}, fault_addr=0x{X}", .{ ip, fault_addr });
             std.process.exit(1);
         }

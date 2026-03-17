@@ -4,7 +4,7 @@ const user32 = @import("../user32.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
 
-pub fn PeekMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32, wRemoveMsg: u32) callconv(w32cc.WINAPI) i32 {
+pub fn PeekMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32, wRemoveMsg: u32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd; _ = wMsgFilterMin; _ = wMsgFilterMax;
 
     // Scope the mutex to just the message queue checks
@@ -13,8 +13,8 @@ pub fn PeekMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax
         defer user32.pending_command_mutex.unlock();
 
         if (!user32.has_activated) {
-            if (lpMsg != 0) {
-                const msg = @as(*user32.MSG, @ptrFromInt(lpMsg));
+            {
+                const msg = lpMsg;
                 msg.hwnd = user32.global_hwnd;
                 msg.message = w32.WM_ACTIVATE;
                 msg.wParam = w32.WA_ACTIVE;
@@ -35,8 +35,8 @@ pub fn PeekMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax
         // Many fullscreen games (esp. DirectX) skip rendering without this.
         const AA = struct { var sent: bool = false; };
         if (!AA.sent) {
-            if (lpMsg != 0) {
-                const msg = @as(*user32.MSG, @ptrFromInt(lpMsg));
+            {
+                const msg = lpMsg;
                 msg.hwnd = user32.global_hwnd;
                 msg.message = w32.WM_ACTIVATEAPP;
                 msg.wParam = 1; // TRUE = app is being activated
@@ -53,8 +53,8 @@ pub fn PeekMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax
         }
 
         if (user32.pending_command) |cmd_id| {
-            if (lpMsg != 0) {
-                const msg = @as(*user32.MSG, @ptrFromInt(lpMsg));
+            {
+                const msg = lpMsg;
                 msg.hwnd = user32.global_hwnd;
                 msg.message = w32.WM_COMMAND;
                 msg.wParam = cmd_id;
@@ -72,8 +72,8 @@ pub fn PeekMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax
         }
 
         if (user32.pending_messages_tail != user32.pending_messages_head) {
-            if (lpMsg != 0) {
-                const msg = @as(*user32.MSG, @ptrFromInt(lpMsg));
+            {
+                const msg = lpMsg;
                 msg.* = user32.pending_messages[user32.pending_messages_tail];
             }
             if ((wRemoveMsg & w32.PM_REMOVE) != 0) {
@@ -83,8 +83,8 @@ pub fn PeekMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax
         }
 
         if (user32.needs_paint) {
-            if (lpMsg != 0) {
-                const msg = @as(*user32.MSG, @ptrFromInt(lpMsg));
+            {
+                const msg = lpMsg;
                 msg.hwnd = user32.global_hwnd;
                 msg.message = w32.WM_PAINT;
                 msg.wParam = 0;
@@ -108,8 +108,8 @@ pub fn PeekMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax
         if (t.active) {
             const elapsed = now - t.last_fire;
             if (elapsed >= @as(i64, t.elapse_ms)) {
-                if (lpMsg != 0) {
-                    const msg = @as(*user32.MSG, @ptrFromInt(lpMsg));
+                {
+                    const msg = lpMsg;
                     msg.hwnd = t.hwnd;
                     msg.message = w32.WM_TIMER;
                     msg.wParam = t.id;
@@ -135,14 +135,14 @@ pub fn PeekMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax
     return 0; // No messages
 }
 
-pub fn stub_TranslateMessage(lpMsg: usize) callconv(w32cc.WINAPI) i32 {
+pub fn stub_TranslateMessage(lpMsg: ?*user32.MSG) callconv(w32cc.WINAPI) i32 {
     _ = lpMsg;
     return 0;
 }
 
-pub fn DispatchMessageA(lpMsg: usize) callconv(w32cc.WINAPI) isize {
-    if (lpMsg != 0) {
-        const msg = @as(*user32.MSG, @ptrFromInt(lpMsg));
+pub fn DispatchMessageA(lpMsg: *user32.MSG) callconv(w32cc.WINAPI) isize {
+    {
+        const msg = lpMsg;
         if (trace.enable_tracing) trace.print("USER32: DispatchMessageA(Msg={x}, wParam={x})\n", .{msg.message, msg.wParam});
 
         // Look up per-hwnd WndProc first (for dialogs), then fall back to global
@@ -161,14 +161,14 @@ pub fn DispatchMessageA(lpMsg: usize) callconv(w32cc.WINAPI) isize {
     return 0;
 }
 
-pub fn GetMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32) callconv(w32cc.WINAPI) i32 {
+pub fn GetMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: GetMessageA called\n", .{});
     var spin_count: u32 = 0;
     while (true) {
         const result = PeekMessageA(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, w32.PM_REMOVE);
         if (result != 0) {
             if (trace.enable_tracing) {
-                const msg = @as(*user32.MSG, @ptrFromInt(lpMsg));
+                const msg = lpMsg;
                 trace.print("USER32: GetMessageA returning msg={x}\n", .{msg.message});
             }
             return result;
@@ -180,8 +180,8 @@ pub fn GetMessageA(lpMsg: usize, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax:
         // GetMessage to return periodically even when no real messages are pending.
         if (spin_count >= 16) {
             spin_count = 0;
-            if (lpMsg != 0) {
-                const msg = @as(*user32.MSG, @ptrFromInt(lpMsg));
+            {
+                const msg = lpMsg;
                 msg.hwnd = user32.global_hwnd;
                 msg.message = w32.WM_PAINT;
                 msg.wParam = 0;
