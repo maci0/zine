@@ -21,6 +21,66 @@ pub const Backend = enum {
 /// The currently active rendering backend.
 pub var active_backend: Backend = .web_ui;
 
+/// Escapes a string for safe embedding in a JSON string value.
+/// Handles quotes, backslashes, newlines, tabs, and control characters.
+/// Returns the number of bytes written to `out`.
+fn jsonEscape(text: []const u8, out: []u8) usize {
+    var pos: usize = 0;
+    for (text) |c| {
+        if (pos + 6 > out.len) break; // worst case: \u00XX = 6 chars
+        switch (c) {
+            '"' => {
+                out[pos] = '\\';
+                out[pos + 1] = '"';
+                pos += 2;
+            },
+            '\\' => {
+                out[pos] = '\\';
+                out[pos + 1] = '\\';
+                pos += 2;
+            },
+            '\n' => {
+                out[pos] = '\\';
+                out[pos + 1] = 'n';
+                pos += 2;
+            },
+            '\r' => {}, // skip CR (Windows CRLF → LF)
+            '\t' => {
+                out[pos] = '\\';
+                out[pos + 1] = 't';
+                pos += 2;
+            },
+            0x08 => { // backspace
+                out[pos] = '\\';
+                out[pos + 1] = 'b';
+                pos += 2;
+            },
+            0x0C => { // form feed
+                out[pos] = '\\';
+                out[pos + 1] = 'f';
+                pos += 2;
+            },
+            else => |byte| {
+                if (byte < 0x20) {
+                    // Other control characters: emit \u00XX
+                    const hex = "0123456789abcdef";
+                    out[pos] = '\\';
+                    out[pos + 1] = 'u';
+                    out[pos + 2] = '0';
+                    out[pos + 3] = '0';
+                    out[pos + 4] = hex[byte >> 4];
+                    out[pos + 5] = hex[byte & 0x0F];
+                    pos += 6;
+                } else {
+                    out[pos] = byte;
+                    pos += 1;
+                }
+            },
+        }
+    }
+    return pos;
+}
+
 // --- Framebuffer (shared rendering surface) ---
 
 /// Shared RGBA framebuffer surface.
@@ -287,8 +347,10 @@ pub fn setResolution(w: u32, h: u32) void {
 pub fn setTitle(title: []const u8) void {
     switch (active_backend) {
         .web_ui => {
-            var buf: [512]u8 = undefined;
-            const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_title\",\"title\":\"{s}\"}}", .{title}) catch return;
+            var escaped: [512]u8 = undefined;
+            const esc_len = jsonEscape(title, &escaped);
+            var buf: [1024]u8 = undefined;
+            const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_title\",\"title\":\"{s}\"}}", .{escaped[0..esc_len]}) catch return;
             if (last_title_json) |old| g_allocator.free(old);
             last_title_json = g_allocator.dupe(u8, json) catch null;
             web_ui.pushMessage(json);
@@ -399,36 +461,11 @@ pub fn setEditSelection(start: i32, end: i32) void {
 pub fn replaceEditSelection(text: []const u8) void {
     switch (active_backend) {
         .web_ui => {
-            // Escape special chars for JSON
-            var escaped_buf: [2048]u8 = undefined;
-            var esc_len: usize = 0;
-            for (text) |c| {
-                if (esc_len + 2 > escaped_buf.len) break;
-                if (c == '\n') {
-                    escaped_buf[esc_len] = '\\';
-                    esc_len += 1;
-                    escaped_buf[esc_len] = 'n';
-                    esc_len += 1;
-                } else if (c == '\r') {
-                    // skip CR (Windows CRLF → LF)
-                } else if (c == '"') {
-                    escaped_buf[esc_len] = '\\';
-                    esc_len += 1;
-                    escaped_buf[esc_len] = '"';
-                    esc_len += 1;
-                } else if (c == '\\') {
-                    escaped_buf[esc_len] = '\\';
-                    esc_len += 1;
-                    escaped_buf[esc_len] = '\\';
-                    esc_len += 1;
-                } else {
-                    escaped_buf[esc_len] = c;
-                    esc_len += 1;
-                }
-            }
+            var escaped_buf: [4096]u8 = undefined;
+            const esc_len = jsonEscape(text, &escaped_buf);
             const escaped = escaped_buf[0..esc_len];
 
-            var buf: [4096]u8 = undefined;
+            var buf: [8192]u8 = undefined;
             const json = std.fmt.bufPrint(&buf,
                 "{{\"type\":\"edit_replacesel\",\"text\":\"{s}\"}}",
                 .{escaped},
@@ -503,8 +540,10 @@ pub fn setStatusBarParts(count: usize) void {
 pub fn setStatusBarText(part: usize, text: []const u8) void {
     switch (active_backend) {
         .web_ui => {
-            var buf: [512]u8 = undefined;
-            const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_statusbar_text\",\"part\":{d},\"text\":\"{s}\"}}", .{ part, text }) catch return;
+            var escaped: [512]u8 = undefined;
+            const esc_len = jsonEscape(text, &escaped);
+            var buf: [1024]u8 = undefined;
+            const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_statusbar_text\",\"part\":{d},\"text\":\"{s}\"}}", .{ part, escaped[0..esc_len] }) catch return;
             web_ui.pushMessage(json);
         },
         .fltk => fltk_ui.setStatusBarText(part, text),
@@ -518,8 +557,10 @@ pub fn setStatusBarText(part: usize, text: []const u8) void {
 pub fn setClipboard(text: []const u8) void {
     switch (active_backend) {
         .web_ui => {
-            var buf: [4096]u8 = undefined;
-            const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_clipboard\",\"text\":\"{s}\"}}", .{text}) catch return;
+            var escaped: [4096]u8 = undefined;
+            const esc_len = jsonEscape(text, &escaped);
+            var buf: [8192]u8 = undefined;
+            const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_clipboard\",\"text\":\"{s}\"}}", .{escaped[0..esc_len]}) catch return;
             web_ui.pushMessage(json);
         },
         .fltk => fltk_ui.setClipboard(text),
@@ -533,10 +574,12 @@ pub fn setClipboard(text: []const u8) void {
 pub fn setEditText(text: []const u8) void {
     switch (active_backend) {
         .web_ui => {
-            // For large text, we can't fit in a JSON message. Send as a special binary-like message.
-            var buf: [256]u8 = undefined;
-            const len = text.len;
-            const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_edit_text\",\"len\":{d}}}", .{len}) catch return;
+            var escaped_buf: [8192]u8 = undefined;
+            const esc_len = jsonEscape(text, &escaped_buf);
+            const escaped = escaped_buf[0..esc_len];
+
+            var buf: [16384]u8 = undefined;
+            const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_edit_text\",\"len\":{d},\"text\":\"{s}\"}}", .{ text.len, escaped }) catch return;
             web_ui.pushMessage(json);
         },
         .fltk => fltk_ui.setEditText(text),
@@ -565,35 +608,15 @@ pub fn showContextMenu(x: i32, y: i32, items_json: []const u8) void {
 pub fn showMessageBox(title: []const u8, text: []const u8) void {
     switch (active_backend) {
         .web_ui => {
-            // Escape newlines for JSON
-            var escaped_buf: [2048]u8 = undefined;
-            var esc_len: usize = 0;
-            for (text) |c| {
-                if (esc_len + 2 > escaped_buf.len) break;
-                if (c == '\n') {
-                    escaped_buf[esc_len] = '\\';
-                    esc_len += 1;
-                    escaped_buf[esc_len] = 'n';
-                    esc_len += 1;
-                } else if (c == '"') {
-                    escaped_buf[esc_len] = '\\';
-                    esc_len += 1;
-                    escaped_buf[esc_len] = '"';
-                    esc_len += 1;
-                } else if (c == '\\') {
-                    escaped_buf[esc_len] = '\\';
-                    esc_len += 1;
-                    escaped_buf[esc_len] = '\\';
-                    esc_len += 1;
-                } else {
-                    escaped_buf[esc_len] = c;
-                    esc_len += 1;
-                }
-            }
+            var escaped_buf: [4096]u8 = undefined;
+            const esc_len = jsonEscape(text, &escaped_buf);
             const escaped = escaped_buf[0..esc_len];
 
-            var buf: [4096]u8 = undefined;
-            const json = std.fmt.bufPrint(&buf, "{{\"type\":\"message_box\",\"title\":\"{s}\",\"text\":\"{s}\"}}", .{ title, escaped }) catch return;
+            var title_escaped: [512]u8 = undefined;
+            const title_esc_len = jsonEscape(title, &title_escaped);
+
+            var buf: [8192]u8 = undefined;
+            const json = std.fmt.bufPrint(&buf, "{{\"type\":\"message_box\",\"title\":\"{s}\",\"text\":\"{s}\"}}", .{ title_escaped[0..title_esc_len], escaped }) catch return;
             web_ui.pushMessage(json);
         },
         .fltk => fltk_ui.showMessageBox(title, text),
@@ -639,10 +662,12 @@ pub fn showControls(json: []const u8) void {
 pub fn addControl(class: []const u8, hwnd_id: usize, x: i32, y: i32, w: i32, h: i32, style: u32, text: []const u8) void {
     switch (active_backend) {
         .web_ui => {
-            var buf: [1024]u8 = undefined;
+            var escaped: [512]u8 = undefined;
+            const esc_len = jsonEscape(text, &escaped);
+            var buf: [2048]u8 = undefined;
             const json = std.fmt.bufPrint(&buf,
                 "{{\"type\":\"add_control\",\"class\":\"{s}\",\"id\":{d},\"x\":{d},\"y\":{d},\"cx\":{d},\"cy\":{d},\"style\":{d},\"text\":\"{s}\"}}",
-                .{ class, hwnd_id, x, y, w, h, style, text },
+                .{ class, hwnd_id, x, y, w, h, style, escaped[0..esc_len] },
             ) catch return;
             web_ui.pushMessage(json);
         },
@@ -653,8 +678,10 @@ pub fn addControl(class: []const u8, hwnd_id: usize, x: i32, y: i32, w: i32, h: 
 
 /// Update the text of an existing control by its dialog item ID.
 pub fn updateControlText(nIDDlgItem: i32, text: []const u8) void {
-    var buf: [512]u8 = undefined;
-    const json = std.fmt.bufPrint(&buf, "{{\"type\":\"update_control_text\",\"id\":{d},\"text\":\"{s}\"}}", .{ nIDDlgItem, text }) catch return;
+    var escaped: [512]u8 = undefined;
+    const esc_len = jsonEscape(text, &escaped);
+    var buf: [1024]u8 = undefined;
+    const json = std.fmt.bufPrint(&buf, "{{\"type\":\"update_control_text\",\"id\":{d},\"text\":\"{s}\"}}", .{ nIDDlgItem, escaped[0..esc_len] }) catch return;
     // Cache for replay on reconnect
     const cached = g_allocator.dupe(u8, json) catch return;
     cached_control_text_updates.append(g_allocator, cached) catch {

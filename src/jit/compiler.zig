@@ -121,7 +121,7 @@ pub const JitCompiler = struct {
             0xE0...0xE3 => true, // LOOP, LOOPE, LOOPNE, JECXZ
             0xF4, 0xCC, 0xCD => true, // HLT, INT3, INT
             0x0F80...0x0F8F => true, // Jcc near (two-byte)
-            0xFF => if (insn.modrm) |m| (m.reg == 2 or m.reg == 4) else false, // CALL/JMP indirect
+            0xFF => if (insn.has_modrm) (insn.modrm_reg == 2 or insn.modrm_reg == 4) else false, // CALL/JMP indirect
             else => false,
         };
     }
@@ -402,21 +402,21 @@ pub const JitCompiler = struct {
 
             // ===== XCHG r/m, reg (86, 87) =====
             0x86, 0x87 => {
-                if (insn.modrm) |modrm| {
-                    if (modrm.mod == 3) {
+                if (insn.has_modrm) {
+                    if (insn.op0_kind == .reg and insn.op1_kind == .reg) {
                         // reg-reg exchange via scratch
                         try body.appendOpcode(.local_get);
-                        try body.appendUleb128(modrm.rm);
+                        try body.appendUleb128(insn.op0_reg);
                         try body.appendOpcode(.local_set);
                         try body.appendUleb128(t.LOCAL_SCRATCH);
                         try body.appendOpcode(.local_get);
-                        try body.appendUleb128(modrm.reg);
+                        try body.appendUleb128(insn.op1_reg);
                         try body.appendOpcode(.local_set);
-                        try body.appendUleb128(modrm.rm);
+                        try body.appendUleb128(insn.op0_reg);
                         try body.appendOpcode(.local_get);
                         try body.appendUleb128(t.LOCAL_SCRATCH);
                         try body.appendOpcode(.local_set);
-                        try body.appendUleb128(modrm.reg);
+                        try body.appendUleb128(insn.op1_reg);
                     }
                 }
             },
@@ -435,10 +435,10 @@ pub const JitCompiler = struct {
 
             // ===== LEA reg, [mem] (8D) =====
             0x8D => {
-                if (insn.modrm) |modrm| {
+                if (insn.has_modrm) {
                     try t.emitEffectiveAddress(body, insn, 1);
                     try body.appendOpcode(.local_set);
-                    try body.appendUleb128(modrm.reg);
+                    try body.appendUleb128(insn.modrm_reg);
                 }
             },
 
@@ -760,10 +760,10 @@ pub const JitCompiler = struct {
 
             // ===== Group 4: INC/DEC r/m8 (FE) =====
             0xFE => {
-                if (insn.modrm) |modrm| {
+                if (insn.has_modrm) {
                     try t.emitLoadOperand(body, insn, 0);
                     try body.appendOpcode(.i32_const);
-                    try body.appendIleb128(if (modrm.reg == 0) @as(i32, 1) else @as(i32, -1));
+                    try body.appendIleb128(if (insn.modrm_reg == 0) @as(i32, 1) else @as(i32, -1));
                     try body.appendOpcode(.i32_add);
                     try body.appendOpcode(.local_tee);
                     try body.appendUleb128(t.LOCAL_SCRATCH);
@@ -805,29 +805,29 @@ pub const JitCompiler = struct {
 
             // ===== MOVZX r32, r/m8 (0F B6) =====
             0x0FB6 => {
-                if (insn.modrm) |modrm| {
+                if (insn.has_modrm) {
                     try t.emitLoadOperand(body, insn, 1);
                     try body.appendOpcode(.i32_const);
                     try body.appendIleb128(0xFF);
                     try body.appendOpcode(.i32_and);
                     try body.appendOpcode(.local_set);
-                    try body.appendUleb128(modrm.reg);
+                    try body.appendUleb128(insn.modrm_reg);
                 }
             },
             // ===== MOVZX r32, r/m16 (0F B7) =====
             0x0FB7 => {
-                if (insn.modrm) |modrm| {
+                if (insn.has_modrm) {
                     try t.emitLoadOperand(body, insn, 1);
                     try body.appendOpcode(.i32_const);
                     try body.appendIleb128(@as(i32, 0xFFFF));
                     try body.appendOpcode(.i32_and);
                     try body.appendOpcode(.local_set);
-                    try body.appendUleb128(modrm.reg);
+                    try body.appendUleb128(insn.modrm_reg);
                 }
             },
             // ===== MOVSX r32, r/m8 (0F BE) =====
             0x0FBE => {
-                if (insn.modrm) |modrm| {
+                if (insn.has_modrm) {
                     try t.emitLoadOperand(body, insn, 1);
                     try body.appendOpcode(.i32_const);
                     try body.appendIleb128(24);
@@ -836,12 +836,12 @@ pub const JitCompiler = struct {
                     try body.appendIleb128(24);
                     try body.appendOpcode(.i32_shr_s);
                     try body.appendOpcode(.local_set);
-                    try body.appendUleb128(modrm.reg);
+                    try body.appendUleb128(insn.modrm_reg);
                 }
             },
             // ===== MOVSX r32, r/m16 (0F BF) =====
             0x0FBF => {
-                if (insn.modrm) |modrm| {
+                if (insn.has_modrm) {
                     try t.emitLoadOperand(body, insn, 1);
                     try body.appendOpcode(.i32_const);
                     try body.appendIleb128(16);
@@ -850,32 +850,32 @@ pub const JitCompiler = struct {
                     try body.appendIleb128(16);
                     try body.appendOpcode(.i32_shr_s);
                     try body.appendOpcode(.local_set);
-                    try body.appendUleb128(modrm.reg);
+                    try body.appendUleb128(insn.modrm_reg);
                 }
             },
 
             // ===== IMUL r32, r/m32 (0F AF) =====
             0x0FAF => {
-                if (insn.modrm) |modrm| {
+                if (insn.has_modrm) {
                     try body.appendOpcode(.local_get);
-                    try body.appendUleb128(modrm.reg);
+                    try body.appendUleb128(insn.modrm_reg);
                     try t.emitLoadOperand(body, insn, 1);
                     try body.appendOpcode(.i32_mul);
                     try body.appendOpcode(.local_set);
-                    try body.appendUleb128(modrm.reg);
+                    try body.appendUleb128(insn.modrm_reg);
                 }
             },
 
             // ===== CMOVcc (0F 40-4F) =====
             0x0F40...0x0F4F => {
-                if (insn.modrm) |modrm| {
+                if (insn.has_modrm) {
                     const cc: u4 = @truncate(insn.opcode);
                     try t.emitConditionCode(body, cc);
                     try body.appendOpcode(.if_);
                     try body.append(@intFromEnum(wasm.BlockType.void));
                     try t.emitLoadOperand(body, insn, 1);
                     try body.appendOpcode(.local_set);
-                    try body.appendUleb128(modrm.reg);
+                    try body.appendUleb128(insn.modrm_reg);
                     try body.appendOpcode(.end);
                 }
             },
@@ -925,17 +925,17 @@ pub const JitCompiler = struct {
 
             // ===== BSF (0F BC) =====
             0x0FBC => {
-                if (insn.modrm) |modrm| {
+                if (insn.has_modrm) {
                     try t.emitLoadOperand(body, insn, 1);
                     try body.appendOpcode(.i32_ctz);
                     try body.appendOpcode(.local_set);
-                    try body.appendUleb128(modrm.reg);
+                    try body.appendUleb128(insn.modrm_reg);
                 }
             },
 
             // ===== BSR (0F BD) =====
             0x0FBD => {
-                if (insn.modrm) |modrm| {
+                if (insn.has_modrm) {
                     // BSR = 31 - CLZ
                     try body.appendOpcode(.i32_const);
                     try body.appendIleb128(31);
@@ -943,19 +943,19 @@ pub const JitCompiler = struct {
                     try body.appendOpcode(.i32_clz);
                     try body.appendOpcode(.i32_sub);
                     try body.appendOpcode(.local_set);
-                    try body.appendUleb128(modrm.reg);
+                    try body.appendUleb128(insn.modrm_reg);
                 }
             },
 
             // ===== IMUL r, r/m, imm32 (69) / IMUL r, r/m, imm8 (6B) =====
             0x69, 0x6B => {
-                if (insn.modrm) |modrm| {
+                if (insn.has_modrm) {
                     try t.emitLoadOperand(body, insn, 1);
                     try body.appendOpcode(.i32_const);
                     try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
                     try body.appendOpcode(.i32_mul);
                     try body.appendOpcode(.local_set);
-                    try body.appendUleb128(modrm.reg);
+                    try body.appendUleb128(insn.modrm_reg);
                 }
             },
 
@@ -1060,8 +1060,8 @@ fn translateAlu(body: *Body, insn: *const decoder.Instruction) !void {
 }
 
 fn translateGroup1(body: *Body, insn: *const decoder.Instruction) !void {
-    const modrm = insn.modrm orelse return;
-    const sub_op = modrm.reg;
+    if (!insn.has_modrm) return;
+    const sub_op = insn.modrm_reg;
     const wasm_op = t.aluGroupToWasmOp(sub_op) orelse return;
 
     try t.emitLoadOperand(body, insn, 0);
@@ -1086,8 +1086,8 @@ fn translateGroup1(body: *Body, insn: *const decoder.Instruction) !void {
 }
 
 fn translateShift(body: *Body, insn: *const decoder.Instruction) !void {
-    const modrm = insn.modrm orelse return;
-    const sub_op = modrm.reg;
+    if (!insn.has_modrm) return;
+    const sub_op = insn.modrm_reg;
 
     try t.emitLoadOperand(body, insn, 0);
 
@@ -1132,8 +1132,8 @@ fn translateShift(body: *Body, insn: *const decoder.Instruction) !void {
 }
 
 fn translateGroup3(body: *Body, insn: *const decoder.Instruction) !void {
-    const modrm = insn.modrm orelse return;
-    switch (modrm.reg) {
+    if (!insn.has_modrm) return;
+    switch (insn.modrm_reg) {
         0, 1 => { // TEST r/m, imm
             try t.emitLoadOperand(body, insn, 0);
             try body.appendOpcode(.i32_const);
@@ -1222,8 +1222,8 @@ fn translateGroup3(body: *Body, insn: *const decoder.Instruction) !void {
 }
 
 fn translateGroup5(body: *Body, insn: *const decoder.Instruction) !void {
-    const modrm = insn.modrm orelse return;
-    switch (modrm.reg) {
+    if (!insn.has_modrm) return;
+    switch (insn.modrm_reg) {
         0 => { // INC r/m32
             try t.emitLoadOperand(body, insn, 0);
             try body.appendOpcode(.i32_const);
@@ -1285,7 +1285,10 @@ test "jit compiler basic structure" {
     const wasm_bin = try compiler.compile(0x1000, &x86_test_code);
     defer std.testing.allocator.free(wasm_bin);
 
-    try std.testing.expect(wasm_bin.len >= 8);
+    // Valid WASM binary: starts with magic \0asm
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
+    // 3 x86 instructions should produce substantial WASM output
+    try std.testing.expect(wasm_bin.len > 40);
 }
 
 test "jit compiler push/pop" {
@@ -1300,7 +1303,8 @@ test "jit compiler push/pop" {
     const wasm_bin = try compiler.compile(0x2000, &code);
     defer std.testing.allocator.free(wasm_bin);
 
-    try std.testing.expect(wasm_bin.len >= 8);
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
+    try std.testing.expect(wasm_bin.len > 40);
 }
 
 test "jit compiler group1 sub imm" {
@@ -1314,25 +1318,37 @@ test "jit compiler group1 sub imm" {
     const wasm_bin = try compiler.compile(0x3000, &code);
     defer std.testing.allocator.free(wasm_bin);
 
-    try std.testing.expect(wasm_bin.len >= 8);
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
+    try std.testing.expect(wasm_bin.len > 40);
 }
 
 test "jit compiler stops at control flow" {
     var compiler = JitCompiler.init(std.testing.allocator, 0);
     defer compiler.deinit();
 
-    // Jcc is now control flow — the compiler stops before it.
-    // Block: MOV EAX,1 + JE (control flow) → only MOV is translated.
-    const code = [_]u8{
+    // Jcc is control flow — the compiler stops before it.
+    // Block: MOV EAX,1 + JE → only MOV is translated.
+    const code_with_jcc = [_]u8{
         0xB8, 0x01, 0x00, 0x00, 0x00, // MOV EAX, 1
         0x74, 0x00, // JE +0 (control flow — compiler stops here)
         0xB9, 0x02, 0x00, 0x00, 0x00, // MOV ECX, 2 (not reached)
     };
 
-    const wasm_bin = try compiler.compile(0x4000, &code);
-    defer std.testing.allocator.free(wasm_bin);
+    const wasm_jcc = try compiler.compile(0x4000, &code_with_jcc);
+    defer std.testing.allocator.free(wasm_jcc);
 
-    try std.testing.expect(wasm_bin.len >= 8);
+    // Compile same first instruction without control flow
+    compiler.module.deinit();
+    compiler.module = @import("emitter.zig").WasmModule.init(std.testing.allocator);
+    const code_no_jcc = [_]u8{
+        0xB8, 0x01, 0x00, 0x00, 0x00, // MOV EAX, 1
+        0xB9, 0x02, 0x00, 0x00, 0x00, // MOV ECX, 2
+    };
+    const wasm_no_jcc = try compiler.compile(0x5000, &code_no_jcc);
+    defer std.testing.allocator.free(wasm_no_jcc);
+
+    // With JE present, only 1 instruction translated → smaller output than 2 instructions
+    try std.testing.expect(wasm_jcc.len < wasm_no_jcc.len);
 }
 
 test "jit compiler shifts" {
@@ -1348,7 +1364,9 @@ test "jit compiler shifts" {
     const wasm_bin = try compiler.compile(0x5000, &code);
     defer std.testing.allocator.free(wasm_bin);
 
-    try std.testing.expect(wasm_bin.len >= 8);
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
+    // 3 shift instructions should produce more output than 1 instruction
+    try std.testing.expect(wasm_bin.len > 60);
 }
 
 test "jit compiler movzx/movsx" {
@@ -1363,7 +1381,8 @@ test "jit compiler movzx/movsx" {
     const wasm_bin = try compiler.compile(0x6000, &code);
     defer std.testing.allocator.free(wasm_bin);
 
-    try std.testing.expect(wasm_bin.len >= 8);
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
+    try std.testing.expect(wasm_bin.len > 40);
 }
 
 test "jit compiler lea" {
@@ -1377,5 +1396,7 @@ test "jit compiler lea" {
     const wasm_bin = try compiler.compile(0x7000, &code);
     defer std.testing.allocator.free(wasm_bin);
 
-    try std.testing.expect(wasm_bin.len >= 8);
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
+    // LEA with SIB addressing should produce substantial WASM code
+    try std.testing.expect(wasm_bin.len > 40);
 }

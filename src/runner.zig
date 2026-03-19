@@ -246,7 +246,7 @@ pub fn applyReverseRelocations(
         while (reloc_offset < reloc_end) {
             const block_va = @as(*align(1) const u32, @ptrCast(buf[reloc_offset..].ptr)).*;
             const block_size = @as(*align(1) const u32, @ptrCast(buf[reloc_offset + 4 ..].ptr)).*;
-            if (block_size == 0) break;
+            if (block_size < 8) break;
             const entries_count = (block_size - 8) / 2;
             for (0..entries_count) |e| {
                 const entry = @as(*align(1) const u16, @ptrCast(buf[reloc_offset + 8 + e * 2 ..].ptr)).*;

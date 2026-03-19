@@ -2,10 +2,10 @@
 //!
 //! This module provides a standard `main()` entry point for the WASM
 //! build, allowing Zine to run on WASI runtimes like wasmtime. It
-//! initializes the guest environment and starts the interpreter.
+//! initializes the guest environment and starts execution.
 //!
-//! In WASM mode, Zine only supports software interpretation of x86 code,
-//! as it cannot execute native x86 instructions directly.
+//! It supports software interpretation (default) and JIT compilation
+//! (--jit) of x86 code. Native x86 execution is not available on WASM.
 
 const std = @import("std");
 const platform = @import("platform.zig");
@@ -21,6 +21,8 @@ const x86_memory = @import("x86/memory.zig");
 const x86_thunks = @import("x86/thunks.zig");
 const trace = @import("trace.zig");
 const log = @import("log.zig");
+const profiler = @import("profiler.zig");
+const version = @import("version.zig");
 
 const runner = @import("runner.zig");
 const stubs_msvcrt = @import("win32/msvcrt.zig");
@@ -54,9 +56,28 @@ pub fn main() !void {
     _ = args.next();
 
     var target_exe_opt: ?[]const u8 = null;
+    var argv0_opt: ?[]const u8 = null;
     var app_args: std.ArrayListUnmanaged(?[*:0]u8) = .{};
     var use_jit = false;
     var end_of_options = false;
+
+    // Check environment variables (WASI runtimes can pass env vars via --env)
+    {
+        var env_map = std.process.getEnvMap(allocator) catch null;
+        if (env_map) |*em| {
+            if (em.get("ZINE_TRACE") != null) {
+                trace.enable_tracing = true;
+            }
+            if (em.get("ZINE_TRACE_INSN") != null) {
+                trace.enable_instructions = true;
+            }
+            if (em.get("ZINE_PROFILE") != null) {
+                profiler.enabled = true;
+            }
+            em.deinit();
+        }
+    }
+
     while (args.next()) |arg| {
         if (!end_of_options and std.mem.eql(u8, arg, "--")) {
             end_of_options = true;
@@ -79,51 +100,79 @@ pub fn main() !void {
             use_jit = true;
             continue;
         }
+        if (!end_of_options and std.mem.eql(u8, arg, "--profile")) {
+            profiler.enabled = true;
+            continue;
+        }
+        if (!end_of_options and (std.mem.eql(u8, arg, "--argv0") or std.mem.startsWith(u8, arg, "--argv0="))) {
+            if (std.mem.startsWith(u8, arg, "--argv0=")) {
+                const val = arg["--argv0=".len..];
+                if (val.len == 0) {
+                    std.fs.File.stderr().writeAll("Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n") catch {};
+                    std.process.exit(2);
+                }
+                argv0_opt = val;
+            } else if (args.next()) |val| {
+                argv0_opt = val;
+            } else {
+                std.fs.File.stderr().writeAll("Error: --argv0 requires a value.\nTry 'zine --help' for more information.\n") catch {};
+                std.process.exit(2);
+            }
+            continue;
+        }
         if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
-            const stdout = std.fs.File{ .handle = 1 };
-            stdout.writeAll(
+            std.fs.File.stdout().writeAll(
                 \\Usage: zine [options] [--] <target.exe> [args...]
                 \\
                 \\Run a Win32 PE executable in a WebAssembly environment.
                 \\
                 \\Options:
-                \\  -t, --trace         Enable all tracing output (API + instructions)
+                \\      --jit           Use JIT compiler (x86-to-WASM translation)
+                \\      --argv0 <name>  Override argv[0] passed to the target
+                \\
+                \\  -t, --trace         Enable all tracing (API + instructions)
                 \\      --trace-api     Enable API tracing only
                 \\      --trace-insn    Enable x86 instruction tracing only
-                \\      --jit           Use JIT compiler (accepted, uses interpreter on WASM)
+                \\      --profile       Enable profiling (hot code, opcodes, stubs)
+                \\
                 \\  -h, --help          Show this help message
                 \\  -v, --version       Show version information
                 \\  --                  Stop processing options
                 \\
+                \\Environment:
+                \\  ZINE_TRACE          Set to any value to enable API tracing
+                \\  ZINE_TRACE_INSN     Set to any value to enable instruction tracing
+                \\  ZINE_PROFILE        Set to any value to enable profiling
+                \\
                 \\Examples:
                 \\  wasmtime --dir=. zine.wasm -- myapp.exe
                 \\  wasmtime --dir=. zine.wasm -- --trace myapp.exe
+                \\  wasmtime --dir=. zine.wasm -- --argv0 editor notepad.exe
                 \\
             ) catch {};
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
-            const stdout = std.fs.File{ .handle = 1 };
-            stdout.writeAll("zine 0.1.0\n") catch {};
+            std.fs.File.stdout().writeAll("zine " ++ version.string ++ "\n") catch {};
             std.process.exit(0);
         }
         if (!end_of_options and target_exe_opt == null and arg.len > 1 and arg[0] == '-') {
-            const stderr = std.fs.File{ .handle = 2 };
-            var err_buf: [256]u8 = undefined;
+            var err_buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&err_buf, "Error: unknown option '{s}'.\nTry 'zine --help' for more information.\n", .{arg}) catch "Error: unknown option.\n";
-            stderr.writeAll(msg) catch {};
+            std.fs.File.stderr().writeAll(msg) catch {};
             std.process.exit(2);
         }
 
         if (target_exe_opt == null) {
             target_exe_opt = arg;
             // First positional arg is the target exe — convert to Win32 path for argv[0]
+            const first_arg = if (argv0_opt) |a0| a0 else arg;
             var win_buf: [1024]u8 = undefined;
-            const win_len = path_utils.posixToWin32(arg, &win_buf);
+            const win_len = path_utils.posixToWin32(first_arg, &win_buf);
             if (win_len > 0) {
                 try app_args.append(allocator, try allocator.dupeZ(u8, win_buf[0..win_len]));
             } else {
-                try app_args.append(allocator, try allocator.dupeZ(u8, arg));
+                try app_args.append(allocator, try allocator.dupeZ(u8, first_arg));
             }
         } else {
             // Convert absolute POSIX paths to Win32 for guest PE arguments.
@@ -426,7 +475,7 @@ pub fn main() !void {
     // --- Set up CPU and run interpreter ---
     const ep_rva: u32 = main_module.parser.getNtHeaders().OptionalHeader.AddressOfEntryPoint;
     if (ep_rva == 0) {
-        std.fs.File.stderr().writeAll("Error: no entry point found in executable.\n") catch {};
+        log.fatal("No entry point found in '{s}'.", .{exe_name});
         std.process.exit(1);
     }
 
@@ -476,6 +525,7 @@ pub fn main() !void {
         x86_execute.run(&cpu);
     }
 
+    profiler.dump();
     log.info("wasm: interpreter halted, EAX=0x{X}", .{cpu.eax});
 
     // Propagate the guest process exit code to the WASM host.

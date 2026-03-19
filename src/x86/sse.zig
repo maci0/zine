@@ -15,23 +15,22 @@ const log = @import("../log.zig");
 
 const Cpu = cpu_mod.Cpu;
 const Instruction = decoder.Instruction;
-const Operand = decoder.Operand;
-const MemOperand = decoder.MemOperand;
+const OpKind = decoder.OpKind;
 const Segment = cpu_mod.Segment;
 
 // -----------------------------------------------------------------------
-// Address computation (duplicated from execute.zig since it's private)
+// Address computation (uses flat mem_* fields from Instruction)
 // -----------------------------------------------------------------------
 
-fn computeAddr(cpu: *const Cpu, m: *const MemOperand) u32 {
+fn computeAddr(cpu: *const Cpu, insn: *const Instruction) u32 {
     var addr: u32 = 0;
-    if (m.base) |base| addr +%= cpu.getReg(@enumFromInt(base));
-    if (m.index) |index| {
-        const idx_val = cpu.getReg(@enumFromInt(index));
-        addr +%= idx_val << m.scale;
+    if (insn.mem_base != 0xF) addr +%= cpu.getReg(@enumFromInt(@as(u3, @truncate(insn.mem_base))));
+    if (insn.mem_index != 0xF) {
+        const idx_val = cpu.getReg(@enumFromInt(@as(u3, @truncate(insn.mem_index))));
+        addr +%= idx_val << insn.mem_scale;
     }
-    addr +%= @bitCast(m.displacement);
-    return cpu.resolveSegmentAddress(m.segment, addr);
+    addr +%= @bitCast(insn.mem_disp);
+    return cpu.resolveSegmentAddress(insn.mem_seg, addr);
 }
 
 // -----------------------------------------------------------------------
@@ -39,75 +38,76 @@ fn computeAddr(cpu: *const Cpu, m: *const MemOperand) u32 {
 // -----------------------------------------------------------------------
 
 fn readXmm128(cpu: *const Cpu, insn: *const Instruction, op_idx: u1) u128 {
-    const op = insn.operands[op_idx];
-    return switch (op) {
-        .reg => |r| cpu.xmm[r],
-        .mem => |m| cpu.memory.read128(computeAddr(cpu, &m)),
+    const kind = if (op_idx == 0) insn.op0_kind else insn.op1_kind;
+    const reg = if (op_idx == 0) insn.op0_reg else insn.op1_reg;
+    return switch (kind) {
+        .reg => cpu.xmm[reg],
+        .mem => cpu.memory.read128(computeAddr(cpu, insn)),
         else => 0,
     };
 }
 
 fn readXmm64(cpu: *const Cpu, insn: *const Instruction, op_idx: u1) u64 {
-    const op = insn.operands[op_idx];
-    return switch (op) {
-        .reg => |r| @truncate(cpu.xmm[r]),
-        .mem => |m| cpu.memory.read64(computeAddr(cpu, &m)),
+    const kind = if (op_idx == 0) insn.op0_kind else insn.op1_kind;
+    const reg = if (op_idx == 0) insn.op0_reg else insn.op1_reg;
+    return switch (kind) {
+        .reg => @truncate(cpu.xmm[reg]),
+        .mem => cpu.memory.read64(computeAddr(cpu, insn)),
         else => 0,
     };
 }
 
 fn readXmm32(cpu: *const Cpu, insn: *const Instruction, op_idx: u1) u32 {
-    const op = insn.operands[op_idx];
-    return switch (op) {
-        .reg => |r| @truncate(cpu.xmm[r]),
-        .mem => |m| cpu.memory.read32(computeAddr(cpu, &m)),
+    const kind = if (op_idx == 0) insn.op0_kind else insn.op1_kind;
+    const reg = if (op_idx == 0) insn.op0_reg else insn.op1_reg;
+    return switch (kind) {
+        .reg => @truncate(cpu.xmm[reg]),
+        .mem => cpu.memory.read32(computeAddr(cpu, insn)),
         else => 0,
     };
 }
 
 fn writeXmm128(cpu: *Cpu, insn: *const Instruction, op_idx: u1, val: u128) void {
-    const op = insn.operands[op_idx];
-    switch (op) {
-        .reg => |r| cpu.xmm[r] = val,
-        .mem => |m| cpu.memory.write128(computeAddr(cpu, &m), val),
+    const kind = if (op_idx == 0) insn.op0_kind else insn.op1_kind;
+    const reg = if (op_idx == 0) insn.op0_reg else insn.op1_reg;
+    switch (kind) {
+        .reg => cpu.xmm[reg] = val,
+        .mem => cpu.memory.write128(computeAddr(cpu, insn), val),
         else => {},
     }
 }
 
 fn writeXmm64(cpu: *Cpu, insn: *const Instruction, op_idx: u1, val: u64) void {
-    const op = insn.operands[op_idx];
-    switch (op) {
-        .reg => |r| cpu.xmm[r] = val,
-        .mem => |m| cpu.memory.write64(computeAddr(cpu, &m), val),
+    const kind = if (op_idx == 0) insn.op0_kind else insn.op1_kind;
+    const reg = if (op_idx == 0) insn.op0_reg else insn.op1_reg;
+    switch (kind) {
+        .reg => cpu.xmm[reg] = val,
+        .mem => cpu.memory.write64(computeAddr(cpu, insn), val),
         else => {},
     }
 }
 
 fn writeXmm32(cpu: *Cpu, insn: *const Instruction, op_idx: u1, val: u32) void {
-    const op = insn.operands[op_idx];
-    switch (op) {
-        .reg => |r| cpu.xmm[r] = (cpu.xmm[r] & ~@as(u128, 0xFFFFFFFF)) | val,
-        .mem => |m| cpu.memory.write32(computeAddr(cpu, &m), val),
+    const kind = if (op_idx == 0) insn.op0_kind else insn.op1_kind;
+    const reg = if (op_idx == 0) insn.op0_reg else insn.op1_reg;
+    switch (kind) {
+        .reg => cpu.xmm[reg] = (cpu.xmm[reg] & ~@as(u128, 0xFFFFFFFF)) | val,
+        .mem => cpu.memory.write32(computeAddr(cpu, insn), val),
         else => {},
     }
 }
 
 fn getRegIdx(insn: *const Instruction, op_idx: u1) u3 {
-    return switch (insn.operands[op_idx]) {
-        .reg => |r| r,
-        else => 0,
-    };
+    return if (op_idx == 0) insn.op0_reg else insn.op1_reg;
 }
 
 fn getMemAddr(cpu: *const Cpu, insn: *const Instruction, op_idx: u1) u32 {
-    return switch (insn.operands[op_idx]) {
-        .mem => |m| computeAddr(cpu, &m),
-        else => 0,
-    };
+    const kind = if (op_idx == 0) insn.op0_kind else insn.op1_kind;
+    return if (kind == .mem) computeAddr(cpu, insn) else 0;
 }
 
 fn isMem(insn: *const Instruction, op_idx: u1) bool {
-    return insn.operands[op_idx] == .mem;
+    return (if (op_idx == 0) insn.op0_kind else insn.op1_kind) == .mem;
 }
 
 // -----------------------------------------------------------------------
@@ -117,9 +117,9 @@ fn isMem(insn: *const Instruction, op_idx: u1) bool {
 const SsePrefix = enum { none, p66, pF3, pF2 };
 
 fn getPrefix(insn: *const Instruction) SsePrefix {
-    if (insn.prefixes.repne) return .pF2;
-    if (insn.prefixes.rep) return .pF3;
-    if (insn.prefixes.operand_size_override) return .p66;
+    if (insn.repne) return .pF2;
+    if (insn.rep) return .pF3;
+    if (insn.operand_size_override) return .p66;
     return .none;
 }
 
@@ -476,7 +476,7 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         // --- Compare + misc (0F C2-C6) ---
         0x0FC2 => execCmpFloat(cpu, insn, pfx),
         0x0FC3 => { // MOVNTI m32, r32 — normal store
-            if (insn.operands[0] == .mem) {
+            if (insn.op0_kind == .mem) {
                 const addr = getMemAddr(cpu, insn, 0);
                 cpu.memory.write32(addr, cpu.getReg(@enumFromInt(getRegIdx(insn, 1))));
             }
@@ -591,14 +591,14 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // --- Group 15: LDMXCSR/STMXCSR/LFENCE/MFENCE/SFENCE ---
         0x0FAE => {
-            const sub = if (insn.modrm) |m| m.reg else 0;
+            const sub = if (insn.has_modrm) insn.modrm_reg else 0;
             switch (sub) {
                 2 => { // LDMXCSR
-                    if (insn.operands[0] == .mem)
+                    if (insn.op0_kind == .mem)
                         cpu.mxcsr = cpu.memory.read32(getMemAddr(cpu, insn, 0));
                 },
                 3 => { // STMXCSR
-                    if (insn.operands[0] == .mem)
+                    if (insn.op0_kind == .mem)
                         cpu.memory.write32(getMemAddr(cpu, insn, 0), cpu.mxcsr);
                 },
                 5, 6, 7 => {}, // LFENCE/MFENCE/SFENCE — NOP in interpreter
@@ -1076,7 +1076,7 @@ fn execShiftReg(cpu: *Cpu, insn: *const Instruction, pfx: SsePrefix, comptime el
 }
 
 fn execGroupShift(cpu: *Cpu, insn: *const Instruction, pfx: SsePrefix, comptime elem: comptime_int) void {
-    const sub = if (insn.modrm) |m| m.reg else return;
+    const sub = if (insn.has_modrm) insn.modrm_reg else return;
     const kind: ShiftKind = switch (sub) {
         2 => .srl,
         4 => .sra,
@@ -1085,10 +1085,10 @@ fn execGroupShift(cpu: *Cpu, insn: *const Instruction, pfx: SsePrefix, comptime 
     };
     const count: u64 = insn.imm;
     if (pfx == .p66) {
-        const dst = if (insn.operands[0] == .reg) insn.operands[0].reg else return;
+        const dst = if (insn.op0_kind == .reg) insn.op0_reg else return;
         cpu.xmm[dst] = @bitCast(shiftImpl(16, elem, @bitCast(cpu.xmm[dst]), count, kind));
     } else {
-        const dst = if (insn.operands[0] == .reg) insn.operands[0].reg else return;
+        const dst = if (insn.op0_kind == .reg) insn.op0_reg else return;
         cpu.setMmx(dst, @bitCast(shiftImpl(8, elem, @bitCast(cpu.getMmx(dst)), count, kind)));
     }
 }

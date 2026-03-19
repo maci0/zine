@@ -153,7 +153,7 @@ pub const Module = struct {
 
                 while (reloc_offset < reloc_end) {
                     const block = @as(*pe.IMAGE_BASE_RELOCATION, @ptrCast(@alignCast(&mapped_slice[reloc_offset])));
-                    if (block.SizeOfBlock == 0) break;
+                    if (block.SizeOfBlock < @sizeOf(pe.IMAGE_BASE_RELOCATION)) break;
 
                     const entries_count = (block.SizeOfBlock - @sizeOf(pe.IMAGE_BASE_RELOCATION)) / @sizeOf(u16);
                     const entries = @as([*]u16, @ptrCast(@alignCast(&mapped_slice[reloc_offset + @sizeOf(pe.IMAGE_BASE_RELOCATION)])));
@@ -204,7 +204,7 @@ pub const Module = struct {
         const opt_header = &self.parser.getNtHeaders().OptionalHeader;
         const export_dir_rva = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
 
-        if (export_dir_rva == 0) return null;
+        if (export_dir_rva == 0 or export_dir_rva + @sizeOf(pe.IMAGE_EXPORT_DIRECTORY) > self.mapped_memory.len) return null;
 
         const export_dir_size = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
         const export_dir = @as(*pe.IMAGE_EXPORT_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[export_dir_rva])));
@@ -223,6 +223,7 @@ pub const Module = struct {
 
             if (std.mem.eql(u8, func_name, name)) {
                 const ordinal = ords[i];
+                if (ordinal >= export_dir.NumberOfFunctions) return null;
                 const func_rva = funcs[ordinal];
 
                 // Check for forwarded exports: if func_rva points inside the export directory, it's a forwarder
@@ -277,7 +278,8 @@ pub const Module = struct {
         const data_offset = lang_entries[0].OffsetToData & 0x7FFFFFFF;
 
         const data_entry = @as(*pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + data_offset])));
-        
+
+        if (data_entry.OffsetToData + data_entry.Size > self.mapped_memory.len) return null;
         return self.mapped_memory[data_entry.OffsetToData .. data_entry.OffsetToData + data_entry.Size];
     }
 
@@ -325,7 +327,8 @@ pub const Module = struct {
         const data_offset = lang_entries[0].OffsetToData & 0x7FFFFFFF;
 
         const data_entry = @as(*pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + data_offset])));
-        
+
+        if (data_entry.OffsetToData + data_entry.Size > self.mapped_memory.len) return null;
         return self.mapped_memory[data_entry.OffsetToData .. data_entry.OffsetToData + data_entry.Size];
     }
 };

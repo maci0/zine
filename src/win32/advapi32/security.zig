@@ -149,15 +149,15 @@ test "EqualSid compares SIDs correctly" {
     var sid1 = [_]u8{ 1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0 }; // S-1-5-18 (LocalSystem)
     var sid2 = [_]u8{ 1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0 };
 
-    try std.testing.expectEqual(@as(i32, 1), EqualSid(@intFromPtr(&sid1), @intFromPtr(&sid2)));
+    try std.testing.expectEqual(@as(i32, 1), EqualSid(@ptrCast(&sid1), @ptrCast(&sid2)));
 
     sid2[8] = 19; // Change SubAuthority
-    try std.testing.expectEqual(@as(i32, 0), EqualSid(@intFromPtr(&sid1), @intFromPtr(&sid2)));
+    try std.testing.expectEqual(@as(i32, 0), EqualSid(@ptrCast(&sid1), @ptrCast(&sid2)));
 }
 
 test "GetLengthSid returns correct size" {
     var sid = [_]u8{ 1, 2, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0 }; // 2 SubAuthorities
-    try std.testing.expectEqual(@as(u32, 16), GetLengthSid(@intFromPtr(&sid))); // 8 + 2*4 = 16
+    try std.testing.expectEqual(@as(u32, 16), GetLengthSid(@ptrCast(&sid))); // 8 + 2*4 = 16
 }
 
 test "GetSecurityDescriptorOwner sets NULL owner" {

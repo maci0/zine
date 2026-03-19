@@ -46,57 +46,55 @@ pub const REG_EDI: u32 = 7;
 
 /// Emit code to push the effective address of a memory operand onto the Wasm stack.
 pub fn emitEffectiveAddress(body: *Body, insn: *const decoder.Instruction, idx: u1) !void {
-    const op = insn.operands[idx];
-    switch (op) {
-        .mem => |m| {
-            var has_value = false;
-            if (m.base) |base| {
-                try body.appendOpcode(.local_get);
-                try body.appendUleb128(base);
+    const kind = if (idx == 0) insn.op0_kind else insn.op1_kind;
+    if (kind == .mem) {
+        var has_value = false;
+        if (insn.mem_base != 0xF) {
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(@as(u3, @truncate(insn.mem_base)));
+            has_value = true;
+        }
+        if (insn.mem_index != 0xF) {
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(@as(u3, @truncate(insn.mem_index)));
+            if (insn.mem_scale > 0) {
+                try body.appendOpcode(.i32_const);
+                try body.appendUleb128(@as(u32, 1) << insn.mem_scale);
+                try body.appendOpcode(.i32_mul);
+            }
+            if (has_value) {
+                try body.appendOpcode(.i32_add);
+            } else {
                 has_value = true;
             }
-            if (m.index) |index| {
-                try body.appendOpcode(.local_get);
-                try body.appendUleb128(index);
-                if (m.scale > 0) {
-                    try body.appendOpcode(.i32_const);
-                    try body.appendUleb128(@as(u32, 1) << m.scale);
-                    try body.appendOpcode(.i32_mul);
-                }
-                if (has_value) {
-                    try body.appendOpcode(.i32_add);
-                } else {
-                    has_value = true;
-                }
+        }
+        if (insn.mem_disp != 0) {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(insn.mem_disp);
+            if (has_value) {
+                try body.appendOpcode(.i32_add);
+            } else {
+                has_value = true;
             }
-            if (m.displacement != 0) {
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(m.displacement);
-                if (has_value) {
-                    try body.appendOpcode(.i32_add);
-                } else {
-                    has_value = true;
-                }
-            }
-            if (!has_value) {
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(0);
-            }
-        },
-        else => {
+        }
+        if (!has_value) {
             try body.appendOpcode(.i32_const);
             try body.appendIleb128(0);
-        },
+        }
+    } else {
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(0);
     }
 }
 
 /// Load operand value onto Wasm stack.
 pub fn emitLoadOperand(body: *Body, insn: *const decoder.Instruction, idx: u1) !void {
-    const op = insn.operands[idx];
-    switch (op) {
-        .reg => |r| {
+    const kind = if (idx == 0) insn.op0_kind else insn.op1_kind;
+    const reg = if (idx == 0) insn.op0_reg else insn.op1_reg;
+    switch (kind) {
+        .reg => {
             try body.appendOpcode(.local_get);
-            try body.appendUleb128(r);
+            try body.appendUleb128(reg);
         },
         .mem => {
             try emitEffectiveAddress(body, insn, idx);
@@ -122,13 +120,9 @@ pub fn emitLoadOperand(body: *Body, insn: *const decoder.Instruction, idx: u1) !
                 },
             }
         },
-        .imm => |v| {
+        .imm, .rel => {
             try body.appendOpcode(.i32_const);
-            try body.appendIleb128(@as(i32, @bitCast(v)));
-        },
-        .rel => |r| {
-            try body.appendOpcode(.i32_const);
-            try body.appendIleb128(r);
+            try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
         },
         .none => {
             try body.appendOpcode(.i32_const);
@@ -139,11 +133,12 @@ pub fn emitLoadOperand(body: *Body, insn: *const decoder.Instruction, idx: u1) !
 
 /// Store value from Wasm stack to operand destination.
 pub fn emitStoreOperand(body: *Body, insn: *const decoder.Instruction, idx: u1) !void {
-    const op = insn.operands[idx];
-    switch (op) {
-        .reg => |r| {
+    const kind = if (idx == 0) insn.op0_kind else insn.op1_kind;
+    const reg = if (idx == 0) insn.op0_reg else insn.op1_reg;
+    switch (kind) {
+        .reg => {
             try body.appendOpcode(.local_set);
-            try body.appendUleb128(r);
+            try body.appendUleb128(reg);
         },
         .mem => {
             // Value is on stack. We need address below it.

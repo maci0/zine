@@ -1,18 +1,17 @@
-//! Main entry point for the Zine x86 interpreter (Native CLI).
+//! Main entry point for the Zine PE emulator (Native CLI).
 //!
 //! This module provides the standard `main()` function for the native Linux
 //! build. It parses command-line arguments, loads a Win32 PE executable,
-//! initializes the guest environment (memory, stack, TEB), and starts the
-//! x86 interpreter loop.
+//! initializes the guest environment (memory, stack, TEB), and starts
+//! execution.
 //!
-//! It supports both direct native execution (using the host CPU) and
-//! software interpretation.
+//! It supports direct native execution (using the host CPU), software
+//! interpretation, and JIT compilation.
 //!
 //! Usage:
 //!   zine [options] [--] <target.exe> [args...]
 
 const std = @import("std");
-const pe = @import("pe.zig");
 const teb = @import("win32/teb.zig");
 const Module = @import("loader/module.zig").Module;
 const Environment = @import("loader/env.zig").Environment;
@@ -31,6 +30,7 @@ const compat_thunks = if (platform.is_x86_64) @import("x86/compat_thunks.zig") e
 const trace = @import("trace.zig");
 const log = @import("log.zig");
 const profiler = @import("profiler.zig");
+const version = @import("version.zig");
 
 /// Fallback function for unimplemented Win32 APIs.
 /// It attempts to resolve the name of the missing API and logs a fatal error.
@@ -158,15 +158,18 @@ pub fn main() !void {
                 \\Run a Win32 PE executable on Linux.
                 \\
                 \\Options:
-                \\  -t, --trace         Enable all tracing output (API + instructions)
+                \\  -i, --interpret     Use x86 software interpreter instead of native execution
+                \\      --jit           Use JIT compiler (x86-to-WASM translation)
+                \\      --argv0 <name>  Override argv[0] passed to the target
+                \\
+                \\  -t, --trace         Enable all tracing (API + instructions)
                 \\      --trace-api     Enable API tracing only
                 \\      --trace-insn    Enable x86 instruction tracing only
                 \\      --profile       Enable profiling (hot code, opcodes, stubs)
-                \\  -i, --interpret     Use x86 software interpreter instead of native execution
-                \\      --jit           Use JIT compiler (x86-to-WASM translation)
+                \\
                 \\      --fltk          Use native FLTK GUI instead of web UI
                 \\      --no-gui        Disable GUI (no web server), even for GUI apps
-                \\      --argv0 <name>  Override argv[0] passed to the target
+                \\
                 \\  -h, --help          Show this help message
                 \\  -v, --version       Show version information
                 \\  --                  Stop processing options
@@ -186,12 +189,17 @@ pub fn main() !void {
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
-            std.fs.File.stdout().writeAll("zine 0.1.0\n") catch {};
+            std.fs.File.stdout().writeAll("zine " ++ version.string ++ "\n") catch {};
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--argv0") or std.mem.startsWith(u8, arg, "--argv0="))) {
             if (std.mem.startsWith(u8, arg, "--argv0=")) {
-                argv0_opt = arg["--argv0=".len..];
+                const val = arg["--argv0=".len..];
+                if (val.len == 0) {
+                    std.fs.File.stderr().writeAll("Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n") catch {};
+                    std.process.exit(2);
+                }
+                argv0_opt = val;
             } else if (args.next()) |val| {
                 argv0_opt = val;
             } else {
@@ -201,7 +209,7 @@ pub fn main() !void {
             continue;
         }
         if (!end_of_options and target_exe_opt == null and arg.len > 1 and arg[0] == '-') {
-            var err_buf: [256]u8 = undefined;
+            var err_buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&err_buf, "Error: unknown option '{s}'.\nTry 'zine --help' for more information.\n", .{arg}) catch "Error: unknown option.\n";
             std.fs.File.stderr().writeAll(msg) catch {};
             std.process.exit(2);
@@ -242,6 +250,14 @@ pub fn main() !void {
         }
     }
 
+    if (no_gui and renderer.active_backend == .fltk) {
+        std.fs.File.stderr().writeAll("Error: --fltk and --no-gui are mutually exclusive.\nTry 'zine --help' for more information.\n") catch {};
+        std.process.exit(2);
+    }
+    if (use_interpreter and use_jit) {
+        log.warn("--interpret is ignored when --jit is specified", .{});
+    }
+
     if (target_exe_opt == null) {
         std.fs.File.stderr().writeAll("Error: missing required argument <target.exe>.\nTry 'zine --help' for more information.\n") catch {};
         std.process.exit(2);
@@ -270,7 +286,9 @@ pub fn main() !void {
             }
             final_envp = try bat_env.buildEnvp();
         } else {
-            std.fs.File.stderr().writeAll("Error: failed to parse bat file or no final command found.\n") catch {};
+            var err_buf: [512]u8 = undefined;
+            const msg = std.fmt.bufPrint(&err_buf, "Error: failed to parse '{s}' or no final command found.\n", .{target_exe}) catch "Error: failed to parse bat file or no final command found.\n";
+            std.fs.File.stderr().writeAll(msg) catch {};
             std.process.exit(1);
         }
     }
@@ -550,7 +568,7 @@ pub fn main() !void {
         // The PE entry point calls CRT init and DllMain itself, so we skip
         // the native DllMain dispatch and CRT env logging.
         const ep = main_module.entry_point orelse {
-            std.fs.File.stderr().writeAll("Error: no entry point found in executable.\n") catch {};
+            log.fatal("No entry point found in '{s}'.", .{exe_name});
             std.process.exit(1);
         };
         const base: u32 = @truncate(main_module.image_base);
@@ -606,10 +624,9 @@ pub fn main() !void {
         trace.print("Executing MSVC Compiler Pass...\n", .{});
         if (comptime platform.is_x86_64) {
             // On x86_64, _InvokeCompilerPass is in a 32-bit PE — must use compat mode
-            const guest_stack_size = 1024 * 1024;
+            const guest_stack_size = 8 * 1024 * 1024; // 8MB (MSVC needs deep stack)
             const guest_stack_mem = try platform.mmap(null, guest_stack_size, true, -1, 0, false, false);
             const guest_esp_top: u32 = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size - 64);
-            // Update TEB stack bounds to match the guest stack
             // Push arguments for _InvokeCompilerPass@12 (stdcall: 3 params)
             // Stack layout: [exit_stub] [arg1: argc] [arg2: argv] [arg3: envp]
             const stack = @as([*]u32, @ptrFromInt(@as(usize, guest_esp_top)));
@@ -629,12 +646,9 @@ pub fn main() !void {
             std.process.exit(@intCast(rc & 0xFF));
         }
     } else if (main_module.entry_point) |ep| {
-        // AppCompat: patch known executables that need runtime fixes
-        applyAppCompatPatches(main_module);
-
         if (comptime platform.is_x86_64) {
             // On x86_64, PE entry point is 32-bit code — use compat mode
-            const guest_stack_size = 1024 * 1024;
+            const guest_stack_size = 8 * 1024 * 1024; // 8MB
             const guest_stack_mem = try platform.mmap(null, guest_stack_size, true, -1, 0, false, false);
             const guest_esp: u32 = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size - 64);
             // Update TEB stack bounds to match the guest stack
@@ -652,39 +666,9 @@ pub fn main() !void {
             std.process.exit(0);
         }
     } else {
-        std.fs.File.stderr().writeAll("Error: no entry point found in executable.\n") catch {};
+        log.fatal("No entry point found in '{s}'.", .{exe_name});
         std.process.exit(1);
     }
-}
-
-// ---------------------------------------------------------------------------
-// AppCompat: runtime patches for known executables
-// ---------------------------------------------------------------------------
-
-fn applyAppCompatPatches(module: *@import("loader/module.zig").Module) void {
-    const mem = module.mapped_memory;
-
-    _ = mem;
-}
-
-fn scanAndPatch(mem: []align(4096) u8, pattern: []const u8, patch_offset: usize, patch: []const u8) bool {
-    if (mem.len < pattern.len) return false;
-    var i: usize = 0;
-    while (i + pattern.len <= mem.len) : (i += 1) {
-        if (std.mem.eql(u8, mem[i .. i + pattern.len], pattern)) {
-            log.info("AppCompat: Pattern found at mem offset 0x{X} (VA 0x{X})", .{ i, @intFromPtr(mem.ptr) + i });
-            log.info("AppCompat: Before patch: {X:0>2} {X:0>2} -> {X:0>2} {X:0>2}", .{
-                mem[i + patch_offset],
-                mem[i + patch_offset + 1],
-                patch[0],
-                patch[1],
-            });
-            const dest = mem[i + patch_offset .. i + patch_offset + patch.len];
-            @memcpy(dest, patch);
-            return true;
-        }
-    }
-    return false;
 }
 
 // ---------------------------------------------------------------------------

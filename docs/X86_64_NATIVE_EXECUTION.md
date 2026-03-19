@@ -161,7 +161,7 @@ On 32-bit Windows, SEH uses a dynamic linked list stored in `FS:0`. On 64-bit Wi
 - [ ] Ensure Zig correctly allocates 32-byte shadow space when Zine's `.Win64` functions call back into native Windows code (e.g., callbacks in GUI/Event loops).
 
 ### Phase 3: TEB, PEB, and GS Segment
-- [ ] Define `TEB64` and `PEB64` structures (with 64-bit pointers and correct padding) in `src/teb.zig`.
+- [ ] Define `TEB64` and `PEB64` structures (with 64-bit pointers and correct padding) in `src/win32/teb.zig`.
 - [ ] Update `platform/native.zig` to implement `setupGS()` using `arch_prctl(ARCH_SET_GS)`.
 - [ ] Modify the Zine bootstrapper to allocate and initialize the 64-bit PEB/TEB and bind it to the `GS` register for 64-bit apps.
 

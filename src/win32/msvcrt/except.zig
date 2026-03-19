@@ -226,23 +226,29 @@ fn jump_to_seh_handler_x86(handler_addr: usize, frame_ebp: usize) noreturn {
 }
 
 fn jump_to_seh_handler_x64(handler_addr: usize, frame_ebp: usize) noreturn {
-    // On x86_64, the SEH handler is 32-bit PE code — enter compat mode.
-    // The handler never returns (it does longjmp/unwind to a new context).
-    // Allocate a small stack for the handler and set ESP to EBP-0x100
-    // (enough room for the handler's local variables above EBP).
+    // On x86_64, the SEH __except handler is 32-bit PE code that reads locals
+    // via EBP (the establisher frame pointer). We write a small trampoline in
+    // the compat pool: `mov ebp, <frame_ebp>; jmp <handler_addr>` and enter
+    // compat mode at the trampoline. ESP is set to frame_ebp - 0x200 to give
+    // the handler stack space below the frame.
     const compat_thunks = @import("../../x86/compat_thunks.zig");
-    const platform_mod = @import("../../platform.zig");
-    const stack_mem = platform_mod.mmap(null, 64 * 1024, true, -1, 0, false, false) catch {
-        platform_mod.exitProcess(1);
+
+    // Write trampoline: BD xx xx xx xx  (mov ebp, imm32)
+    //                   E9 xx xx xx xx  (jmp rel32)
+    const tramp_addr = compat_thunks.allocThunkRaw(10) orelse {
+        @import("../../platform.zig").exitProcess(1);
     };
-    const stack_top: u32 = @intCast(@intFromPtr(stack_mem.ptr) + 64 * 1024 - 64);
-    // Set up a return-to-exit stub on the stack
-    const exit_stub = compat_thunks.makeExitStub();
-    @as(*u32, @ptrFromInt(@as(usize, stack_top))).* = exit_stub;
-    // The handler expects EBP to be the establisher frame. We can't set EBP
-    // from here (compat mode entry sets ESP via iretq, not EBP). The handler
-    // code will read locals relative to its own frame pointer setup.
-    // Use frame_ebp as ESP so the handler's push/pop aligns correctly.
-    _ = frame_ebp;
-    compat_thunks.enterCompatMode(@truncate(handler_addr), stack_top);
+    const base = @as([*]u8, @ptrFromInt(@as(usize, tramp_addr)));
+    base[0] = 0xBD; // mov ebp, imm32
+    @as(*align(1) u32, @ptrCast(base + 1)).* = @truncate(frame_ebp);
+    base[5] = 0xE9; // jmp rel32
+    const jmp_target: u32 = @truncate(handler_addr);
+    const jmp_src: u32 = tramp_addr + 10;
+    @as(*align(1) i32, @ptrCast(base + 6)).* = @bitCast(jmp_target -% jmp_src);
+
+    // Set ESP to the establisher frame's EBP. The __except handler
+    // resumes execution at the catch block which expects ESP near EBP.
+    // MSVC's _local_unwind / _except_handler3 restores ESP from EBP.
+    const esp: u32 = @truncate(frame_ebp);
+    compat_thunks.enterCompatMode(tramp_addr, esp);
 }

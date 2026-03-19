@@ -341,40 +341,6 @@ pub fn fileExistsHost(win_path: []const u8) bool {
 
 // --- Internal helpers for toHostPath ---
 
-/// If the path doesn't exist on disk, try lowercasing the filename component.
-/// Returns the (possibly corrected) length. Output is written in-place to `out`.
-fn tryFixCase(path: []const u8, out: []u8) usize {
-    // First, check if file exists as-is
-    if (hostPathExists(path)) return path.len;
-
-    // Try lowercasing just the filename
-    var last_slash: usize = 0;
-    for (0..path.len) |i| {
-        if (path[i] == '/') {
-            last_slash = i + 1;
-        }
-    }
-
-    // Lowercase the filename portion in-place
-    for (last_slash..path.len) |i| {
-        out[i] = std.ascii.toLower(out[i]);
-    }
-    if (hostPathExists(out[0..path.len])) return path.len;
-
-    // Try full case-insensitive directory scan
-    var ci_buf: [1024]u8 = undefined;
-    if (tryCaseInsensitiveResolve(path, &ci_buf)) |ci_path| {
-        const copy_len = @min(ci_path.len, out.len - 1);
-        @memcpy(out[0..copy_len], ci_path[0..copy_len]);
-        if (copy_len < out.len) out[copy_len] = 0;
-        return copy_len;
-    }
-
-    // Restore original case (undo lowercase) and return as-is
-    @memcpy(out[0..path.len], path);
-    return path.len;
-}
-
 fn hostPathExists(path: []const u8) bool {
     if (path.len == 0) return false;
     if (std.fs.path.isAbsolute(path)) {

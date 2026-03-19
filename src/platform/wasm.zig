@@ -54,27 +54,28 @@ pub fn readExceptionList() u32 {
 }
 
 /// Allocates or maps a memory region.
+/// Parameter names match native.zig for consistency across backends.
 pub fn mmap(
-    addr_hint: ?[*]align(4096) u8,
-    len: usize,
+    hint: ?[*]align(4096) u8,
+    size: usize,
     executable: bool,
-    fd: i32,
-    off: u64,
+    file_fd: i32,
+    file_offset: u64,
+    shared: bool,
     fixed: bool,
-    commit: bool,
 ) ![]align(4096) u8 {
-    _ = addr_hint;
+    _ = hint;
     _ = executable;
+    _ = shared;
     _ = fixed;
-    _ = commit;
 
-    const slice = try std.heap.page_allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(4096), len);
+    const slice = try std.heap.page_allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(4096), size);
 
     // When a file descriptor is provided, read file content into the mapping
     // (e.g. CreateFileMappingA + MapViewOfFileEx used by LINK.EXE).
-    if (fd >= 0) {
-        const file = std.fs.File{ .handle = fd };
-        file.seekTo(off) catch {};
+    if (file_fd >= 0) {
+        const file = std.fs.File{ .handle = file_fd };
+        file.seekTo(file_offset) catch {};
         const bytes_read = file.readAll(slice) catch 0;
         if (bytes_read < slice.len) @memset(slice[bytes_read..], 0);
     }

@@ -14,7 +14,6 @@
 
 const std = @import("std");
 const env = @import("../loader/env.zig");
-const trace = @import("../trace.zig");
 const w32 = @import("constants.zig");
 
 pub var global_env: ?*env.Environment = null;

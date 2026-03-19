@@ -82,6 +82,16 @@ pub fn allocThunk(thunk_id: u32) ?u32 {
     return pool_base_addr + offset;
 }
 
+/// Allocate raw bytes from the pool. Returns the 32-bit address.
+pub fn allocThunkRaw(size: u32) ?u32 {
+    if (pool_base == null) return null;
+    pool_cursor = (pool_cursor + 1) & ~@as(u32, 1);
+    if (pool_cursor + size > POOL_SIZE) return null;
+    const addr = pool_base_addr + pool_cursor;
+    pool_cursor += size;
+    return addr;
+}
+
 /// Copy data into the pool so it has a 32-bit address accessible to the guest.
 /// Returns the 32-bit address of the copied data.
 pub fn allocData(src: [*]const u8, size: u32) ?u32 {

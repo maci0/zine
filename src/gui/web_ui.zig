@@ -3,6 +3,7 @@
 const std = @import("std");
 const platform = @import("../platform.zig");
 const renderer = @import("renderer.zig");
+const log = @import("../log.zig");
 
 var clients: if (platform.is_native) std.ArrayListUnmanaged(std.net.Stream) else struct {} = if (platform.is_native) .{} else .{};
 var clients_mutex: if (platform.is_native) std.Thread.Mutex else struct {
@@ -224,7 +225,10 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
             };
 
             if (msg.opcode == .text) {
-                const parsed = std.json.parseFromSlice(std.json.Value, allocator, msg.data, .{}) catch continue;
+                const parsed = std.json.parseFromSlice(std.json.Value, allocator, msg.data, .{}) catch {
+                    log.warn("WebSocket: malformed JSON message (len={d})", .{msg.data.len});
+                    continue;
+                };
                 defer parsed.deinit();
                 const root = parsed.value;
 

@@ -9,6 +9,7 @@ comptime {
     _ = @import("x86/fpu.zig");
     _ = @import("x86/cpu.zig");
     _ = @import("x86/decoder.zig");
+    _ = @import("x86/decode_cache.zig");
     _ = @import("x86/execute.zig");
     _ = @import("x86/thunks.zig");
 
@@ -18,4 +19,10 @@ comptime {
 
     // Profiler tests
     _ = @import("profiler.zig");
+
+    // Win32 stub tests
+    _ = @import("win32/user32.zig");
+    _ = @import("win32/ntdll/ntapi.zig");
+    _ = @import("win32/advapi32/misc.zig");
+    _ = @import("win32/advapi32/security.zig");
 }

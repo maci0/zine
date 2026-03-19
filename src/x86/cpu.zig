@@ -93,7 +93,7 @@ pub const Cpu = struct {
     // --- Register access by index ---
 
     /// Gets the value of a general-purpose register by its 3-bit index.
-    pub fn getReg(self: *const Cpu, idx: RegIndex) u32 {
+    pub inline fn getReg(self: *const Cpu, idx: RegIndex) u32 {
         return switch (idx) {
             .eax => self.eax,
             .ecx => self.ecx,
@@ -107,7 +107,7 @@ pub const Cpu = struct {
     }
 
     /// Sets the value of a general-purpose register by its 3-bit index.
-    pub fn setReg(self: *Cpu, idx: RegIndex, val: u32) void {
+    pub inline fn setReg(self: *Cpu, idx: RegIndex, val: u32) void {
         switch (idx) {
             .eax => self.eax = val,
             .ecx => self.ecx = val,
@@ -123,7 +123,7 @@ pub const Cpu = struct {
     /// Get 8-bit register by index.
     /// 0-3 = AL, CL, DL, BL (low byte)
     /// 4-7 = AH, CH, DH, BH (high byte)
-    pub fn getReg8(self: *const Cpu, idx: u3) u8 {
+    pub inline fn getReg8(self: *const Cpu, idx: u3) u8 {
         return switch (idx) {
             0 => @truncate(self.eax), // AL
             1 => @truncate(self.ecx), // CL
@@ -137,7 +137,7 @@ pub const Cpu = struct {
     }
 
     /// Set 8-bit register by index.
-    pub fn setReg8(self: *Cpu, idx: u3, val: u8) void {
+    pub inline fn setReg8(self: *Cpu, idx: u3, val: u8) void {
         const v32: u32 = val;
         switch (idx) {
             0 => self.eax = (self.eax & 0xFFFFFF00) | v32, // AL
@@ -152,12 +152,12 @@ pub const Cpu = struct {
     }
 
     /// Get 16-bit register by index.
-    pub fn getReg16(self: *const Cpu, idx: u3) u16 {
+    pub inline fn getReg16(self: *const Cpu, idx: u3) u16 {
         return @truncate(self.getReg(@enumFromInt(idx)));
     }
 
     /// Set 16-bit register by index (preserves upper 16 bits).
-    pub fn setReg16(self: *Cpu, idx: u3, val: u16) void {
+    pub inline fn setReg16(self: *Cpu, idx: u3, val: u16) void {
         const ri: RegIndex = @enumFromInt(idx);
         const old = self.getReg(ri);
         self.setReg(ri, (old & 0xFFFF0000) | @as(u32, val));

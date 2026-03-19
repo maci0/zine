@@ -23,8 +23,8 @@ Provides binary serialization utilities required for generating a standard `.was
 
 ### 3. Translation Helpers (`translate.zig`)
 Factored-out primitives used by the compiler for instruction translation:
-- **`emitEffectiveAddress`**: Computes x86 memory operand addresses with full SIB support (base + index×scale + displacement).
-- **`emitLoadOperand` / `emitStoreOperand`**: Handles register, memory (with proper 8/16/32-bit load/store sizing), immediate, and relative operands.
+- **`emitEffectiveAddress`**: Computes x86 memory operand addresses using the compact Instruction struct's flat `mem_base`/`mem_index`/`mem_scale`/`mem_disp` fields (full SIB support: base + index×scale + displacement).
+- **`emitLoadOperand` / `emitStoreOperand`**: Handles register, memory (with proper 8/16/32-bit load/store sizing), immediate, and relative operands. Uses the `OpKind` enum and `op0_reg`/`op1_reg` fields from the compact Instruction format.
 - **`emitConditionCode`**: Emits Wasm code to evaluate any of the 16 x86 condition codes (JO/JNO/JB/JNB/JZ/JNZ/JBE/JA/JS/JNS/JP/JNP/JL/JGE/JLE/JG).
 - **`emitUpdateZfSf` / `emitClearCfOf`**: Flag computation helpers.
 - **`emitPush32` / `emitPop32`**: ESP manipulation + memory store/load for stack operations.
@@ -33,7 +33,7 @@ Factored-out primitives used by the compiler for instruction translation:
 The core orchestrator that bridges the x86 decoder and the WASM emitter.
 
 - **Register Mapping**: Maps x86 general-purpose registers (EAX...EDI) to contiguous WebAssembly local variables (`i32`).
-- **Translation Loop**: Decodes x86 instructions sequentially using `decoder.zig` and delegates them to the translation logic until it encounters an unsupported opcode or the block terminates.
+- **Translation Loop**: Decodes x86 instructions sequentially using `decoder.zig` (producing compact `Instruction` structs with flat `OpKind` operand encoding) and delegates them to the translation logic until it encounters an unsupported opcode or the block terminates. Uses `insn.has_modrm` and `insn.modrm_reg` for group instruction sub-opcode dispatch, and `insn.op0_kind`/`insn.op1_kind` for operand type dispatch.
 - **Instruction Support**: Translates all instruction categories handled by the interpreter — data movement, ALU, multiply/divide, shifts/rotates, control flow, flag manipulation, and more. Rarely-used instructions (FPU, I/O, BCD, segment ops) are stubbed as no-ops.
 
 ## Translation Concepts
@@ -59,9 +59,12 @@ The JIT emits `br` and `br_if` for unconditional and conditional jumps respectiv
 
 A crucial component of any dynamic recompiler is avoiding re-translating the same blocks of code.
 
-### Block Caching Strategy
+### Interpreter Decode Cache (Implemented)
+The interpreter uses a 1024-entry hash-indexed **instruction decode cache** (`decode_cache.zig`) that maps guest EIP addresses to previously decoded `Instruction` structs. Each entry is validated by both the EIP tag and the first 4 bytes of the instruction stream, which provides basic self-modifying code detection — if code is modified, the tag will mismatch on the next lookup, causing a cache miss and re-decode from the modified bytes.
+
+### JIT Block Caching Strategy (Planned)
 1. **Instruction Pointer Mapping:** The generated WebAssembly functions will be cached centrally. The cache will map the starting x86 Guest `EIP` (Instruction Pointer) directly to the compiled WebAssembly function reference.
-2. **Cache Invalidation:** Because x86 allows Self-Modifying Code (SMC), we must implement page-protection mechanisms tracking which x86 memory bounds correspond to cached WASM blocks. If the guest writes to these memory regions, the associated JIT cache entries must be evicted.
+2. **Cache Invalidation:** Because x86 allows Self-Modifying Code (SMC), we must implement page-protection mechanisms tracking which x86 memory bounds correspond to cached WASM blocks. If the guest writes to these memory regions, the associated JIT cache entries must be evicted. The interpreter's decode cache tag validation provides a basic level of SMC detection; for JIT blocks, mprotect-based detection (à la Blink) would provide zero-cost detection in the common case.
 3. **Trace Linking:** Frequently executed blocks (hot paths) that jump sequentially to other known blocks can be "linked," allowing WebAssembly to jump directly to the next translated block without exiting to the main interpreter loop.
 
 ## Handling Self-Modifying Code (SMC)
@@ -122,12 +125,17 @@ Operating outside of local registers requires translating hardware pointers into
 
 ### Phase 6: Advanced Recompilation (Dynarec Integration) (Not Started)
 The final phase lifts the JIT from compiling one-off instruction structures into a cohesive, high-speed emulation engine.
-- [ ] **Block Caching**: Hook the translation map directly into the core `cpu.zig` loop, mapped securely to guest Instruction Pointers (`EIP`). *(A HashMap struct field exists but has no implementation.)*
+- [x] **Block Caching**: Translation map hooked into the execution loop in `runner.zig` (`runWithJit`) and `wasm_main.zig` (`runWithJitHost`), using a HashMap keyed by guest EIP to avoid re-translating previously compiled blocks.
 - [ ] **Page Protection**: Implement MMU-level page protection memory interception algorithms to guarantee Cache Invalidation correctly catches SMC (Self-Modifying Code) writes instantly.
 - [ ] **Trace Linking**: Implement direct WebAssembly-to-WebAssembly block trampolines, allowing the engine to traverse "hot" code loops without costly context-switches back into the host Zig interpreter.
 
 ## Usage
-*Note: The JIT compiler is a standalone framework and is not yet hooked up into `zine`'s main execution loop. Code currently tests structurally through the standard `zig test` routines.*
+
+The JIT compiler is integrated into both the native and WASM execution paths:
+- **Native** (`--jit`): `runner.runWithJit()` runs a compile-only JIT loop that validates x86→WASM translation but falls back to the interpreter for execution.
+- **WASM** (`--jit`): `wasm_main.runWithJitHost()` compiles x86 blocks to WASM, sends them to the host runtime for compilation, and executes them via CPU state transfer through a shared `JitCpuState` struct in linear memory. Falls back to interpreter for uncached blocks.
+
+Unit tests are run via `zig build test`.
 
 ## References & Further Reading
 - [WebAssembly Core Specification (Opcodes & Binary Format)](https://webassembly.github.io/spec/core/binary/index.html)

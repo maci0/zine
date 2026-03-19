@@ -1,14 +1,22 @@
 //! x86 instruction execution loop and dispatcher.
 //!
-//! This module implements a simple fetch-decode-execute interpreter loop.
-//! It does not use any advanced optimizations like basic-block caching,
-//! threaded interpretation, or JIT compilation in its core dispatch loop.
+//! This module implements the fetch-decode-execute interpreter loop with
+//! several Blink-inspired optimizations:
+//!
+//! - **Decode cache**: A 1024-entry hash-indexed cache (`decode_cache.zig`)
+//!   eliminates redundant instruction decoding in loops.
+//! - **Branch fusion**: Short Jcc (0x70–0x7F) and near Jcc (0F 80–8F)
+//!   instructions are executed inline after the preceding instruction,
+//!   saving a full step() cycle for the common CMP/TEST + Jcc pattern.
+//! - **Inline hot paths**: readOperand, writeOperand, computeEffectiveAddress
+//!   and all register/memory accessors are marked inline.
 //!
 //! Execution flows through:
 //!   1. Instruction fetching from guest memory
-//!   2. Instruction decoding into structured Instruction representation
+//!   2. Decode cache lookup (or decode + cache store on miss)
 //!   3. Opcode dispatching to specific execution handlers
 //!   4. Flag updates and PC advancement
+//!   5. Branch fusion: peek at next instruction for Jcc
 
 const std = @import("std");
 const cpu_mod = @import("cpu.zig");
@@ -22,8 +30,7 @@ const profiler = @import("../profiler.zig");
 
 const Cpu = cpu_mod.Cpu;
 const Instruction = decoder.Instruction;
-const Operand = decoder.Operand;
-const MemOperand = decoder.MemOperand;
+const OpKind = decoder.OpKind;
 const OpSize = flags_mod.OpSize;
 const FlagOp = flags_mod.FlagOp;
 const Segment = cpu_mod.Segment;
@@ -99,6 +106,57 @@ pub fn step(cpu: *Cpu) void {
     profiler.tickOpcode(insn.opcode);
 
     executeInsn(cpu, &insn, eip);
+
+    // --- Branch fusion: fuse compare/test + conditional jump ---
+    // After executing an ALU/CMP/TEST instruction that sets flags, peek at
+    // the next instruction. If it is a short Jcc (70-7F, 2 bytes) or a
+    // near Jcc (0F 80-8F, 6 bytes), execute it inline to avoid a full
+    // decode cycle. This is a software analogue of hardware macro-op fusion.
+    const next_eip = cpu.eip;
+    if (cpu.memory.readSlice(next_eip, 2)) |peek| {
+        const next_byte = peek[0];
+        // Short Jcc fusion (70-7F): 1-byte opcode + 1-byte rel8
+        if (next_byte >= 0x70 and next_byte <= 0x7F) {
+            const cc: u4 = @truncate(next_byte);
+            cpu.eip = next_eip +% 2;
+            const rel8: i32 = @as(i32, @as(i8, @bitCast(peek[1])));
+
+            if (trace.enable_instructions) {
+                trace.print("x86: [EIP={X:0>8}] fused short Jcc {X:0>2}\n", .{ next_eip, next_byte });
+            }
+            profiler.tickEip(next_eip);
+            profiler.tickOpcode(@as(u16, next_byte));
+
+            if (cpu.flags.evaluateCC(cc)) {
+                cpu.eip = cpu.eip +% @as(u32, @bitCast(rel8));
+            }
+        }
+        // Near Jcc fusion (0F 80-8F): 2-byte opcode + 4-byte rel32
+        else if (next_byte == 0x0F) {
+            const next2 = peek[1];
+            if (next2 >= 0x80 and next2 <= 0x8F) {
+                if (cpu.memory.readSlice(next_eip + 2, 4)) |rel_bytes| {
+                    const cc: u4 = @truncate(next2);
+                    cpu.eip = next_eip +% 6;
+                    const b0: u32 = rel_bytes[0];
+                    const b1: u32 = rel_bytes[1];
+                    const b2: u32 = rel_bytes[2];
+                    const b3: u32 = rel_bytes[3];
+                    const rel32: u32 = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+
+                    if (trace.enable_instructions) {
+                        trace.print("x86: [EIP={X:0>8}] fused near Jcc 0F {X:0>2}\n", .{ next_eip, next2 });
+                    }
+                    profiler.tickEip(next_eip);
+                    profiler.tickOpcode(0x0F00 | @as(u16, next2));
+
+                    if (cpu.flags.evaluateCC(cc)) {
+                        cpu.eip = cpu.eip +% rel32;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Execute DLL code natively by calling through a cdecl trampoline.
@@ -398,13 +456,10 @@ pub fn buildInittermTrampoline(cpu: *Cpu) void {
 
 /// Execute an x87 FPU instruction.
 fn executeFpu(cpu: anytype, insn: anytype) void {
-    const modrm = insn.modrm orelse return;
-    const reg: u8 = modrm.reg;
-    const mem_addr: ?u32 = switch (insn.operands[0]) {
-        .mem => |m| computeEffectiveAddress(cpu, &m),
-        else => null,
-    };
-    const is_mem = (modrm.mod != 3);
+    if (!insn.has_modrm) return;
+    const reg: u8 = insn.modrm_reg;
+    const mem_addr: ?u32 = if (insn.op0_kind == .mem) computeEffectiveAddress(cpu, insn) else null;
+    const is_mem = (insn.op0_kind == .mem);
 
     switch (insn.opcode) {
         0xD8 => {
@@ -423,7 +478,7 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     }
                 }
             } else {
-                const sti = cpu.fpu.st(@truncate(modrm.rm));
+                const sti = cpu.fpu.st(insn.op0_reg);
                 switch (reg) {
                     0 => cpu.fpu.setSt(0, cpu.fpu.st(0) + sti),
                     1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * sti),
@@ -449,12 +504,12 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     }
                 }
             } else {
-                const rm3: u3 = @truncate(modrm.rm);
+                const rm3: u3 = insn.op0_reg;
                 switch (reg) {
                     0 => cpu.fpu.push(cpu.fpu.st(rm3)), // FLD ST(i)
                     1 => { const t = cpu.fpu.st(0); cpu.fpu.setSt(0, cpu.fpu.st(rm3)); cpu.fpu.setSt(rm3, t); }, // FXCH
-                    4 => switch (modrm.rm) { 0 => cpu.fpu.setSt(0, -cpu.fpu.st(0)), 1 => cpu.fpu.setSt(0, @abs(cpu.fpu.st(0))), else => {} }, // FCHS/FABS
-                    5 => switch (modrm.rm) { 6 => cpu.fpu.push(0.0), 0 => cpu.fpu.push(1.0), else => {} }, // FLDZ/FLD1
+                    4 => switch (insn.op0_reg) { 0 => cpu.fpu.setSt(0, -cpu.fpu.st(0)), 1 => cpu.fpu.setSt(0, @abs(cpu.fpu.st(0))), else => {} }, // FCHS/FABS
+                    5 => switch (insn.op0_reg) { 6 => cpu.fpu.push(0.0), 0 => cpu.fpu.push(1.0), else => {} }, // FLDZ/FLD1
                     else => {},
                 }
             }
@@ -499,7 +554,7 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     }
                 }
             } else {
-                if (reg == 4 and modrm.rm == 3) cpu.fpu.init(); // FNINIT (DB E3)
+                if (reg == 4 and insn.op0_reg == 3) cpu.fpu.init(); // FNINIT (DB E3)
             }
         },
         0xDC => {
@@ -520,7 +575,7 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     }
                 }
             } else {
-                const i: u3 = @truncate(modrm.rm);
+                const i: u3 = insn.op0_reg;
                 switch (reg) {
                     0 => cpu.fpu.setSt(i, cpu.fpu.st(i) + cpu.fpu.st(0)),
                     1 => cpu.fpu.setSt(i, cpu.fpu.st(i) * cpu.fpu.st(0)),
@@ -544,7 +599,7 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     }
                 }
             } else {
-                const i: u3 = @truncate(modrm.rm);
+                const i: u3 = insn.op0_reg;
                 switch (reg) {
                     0 => cpu.fpu.setSt(i, 0), // FFREE
                     2 => cpu.fpu.setSt(i, cpu.fpu.st(0)), // FST ST(i)
@@ -568,7 +623,7 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     }
                 }
             } else {
-                const i: u3 = @truncate(modrm.rm);
+                const i: u3 = insn.op0_reg;
                 switch (reg) {
                     0 => { cpu.fpu.setSt(i, cpu.fpu.st(i) + cpu.fpu.st(0)); _ = cpu.fpu.pop(); },
                     1 => { cpu.fpu.setSt(i, cpu.fpu.st(i) * cpu.fpu.st(0)); _ = cpu.fpu.pop(); },
@@ -602,7 +657,7 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     }
                 }
             } else {
-                if (reg == 4 and modrm.rm == 0) { // FNSTSW AX (DF E0)
+                if (reg == 4 and insn.op0_reg == 0) { // FNSTSW AX (DF E0)
                     cpu.eax = (cpu.eax & 0xFFFF0000) | cpu.fpu.getStatusWord();
                 }
             }
@@ -642,11 +697,10 @@ fn fpuCompare(cpu: anytype, a: f64, b: f64) void {
     // else: a > b — all clear
 }
 
-/// Apply a relative jump to EIP if the operand is .rel.
-inline fn applyRel(cpu: *Cpu, operand: Operand) void {
-    switch (operand) {
-        .rel => |r| cpu.eip = cpu.eip +% @as(u32, @bitCast(r)),
-        else => {},
+/// Apply a relative jump to EIP from the instruction's rel operand.
+inline fn applyRel(cpu: *Cpu, insn: *const Instruction) void {
+    if (insn.op0_kind == .rel) {
+        cpu.eip = cpu.eip +% insn.imm;
     }
 }
 
@@ -785,8 +839,8 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // MOV r/m16, Sreg (8C)
         0x8C => {
-            if (insn.modrm) |modrm| {
-                const sreg_val: u32 = switch (@as(Segment, @enumFromInt(@as(u3, modrm.reg)))) {
+            if (insn.has_modrm) {
+                const sreg_val: u32 = switch (@as(Segment, @enumFromInt(insn.modrm_reg))) {
                     .es => cpu.es,
                     .cs => cpu.cs,
                     .ss => cpu.ss,
@@ -800,24 +854,21 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // LEA reg, [mem]
         0x8D => {
-            switch (insn.operands[1]) {
-                .mem => |m| {
-                    const addr = computeEffectiveAddress(cpu, &m);
-                    if (insn.op_size == .word) {
-                        cpu.setReg16(insn.modrm.?.reg, @truncate(addr));
-                    } else {
-                        cpu.setReg(@enumFromInt(insn.modrm.?.reg), addr);
-                    }
-                },
-                else => {},
+            if (insn.op1_kind == .mem) {
+                const addr = computeEffectiveAddress(cpu, insn);
+                if (insn.op_size == .word) {
+                    cpu.setReg16(insn.modrm_reg, @truncate(addr));
+                } else {
+                    cpu.setReg(@enumFromInt(insn.modrm_reg), addr);
+                }
             }
         },
 
         // MOV Sreg, r/m16 (8E)
         0x8E => {
-            if (insn.modrm) |modrm| {
+            if (insn.has_modrm) {
                 const val: u16 = @truncate(readOperand(cpu, insn, 1));
-                switch (@as(Segment, @enumFromInt(@as(u3, modrm.reg)))) {
+                switch (@as(Segment, @enumFromInt(insn.modrm_reg))) {
                     .es => cpu.es = val,
                     .cs => cpu.cs = val,
                     .ss => cpu.ss = val,
@@ -874,11 +925,11 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // MOV AL/EAX, moffs (A0-A1) and moffs, AL/EAX (A2-A3)
         0xA0 => {
-            const addr = readMemAddr(cpu, insn.operands[0]);
+            const addr = readMemAddr(cpu, insn, 0);
             cpu.setReg8(0, cpu.memory.read8(addr));
         },
         0xA1 => {
-            const addr = readMemAddr(cpu, insn.operands[0]);
+            const addr = readMemAddr(cpu, insn, 0);
             if (insn.op_size == .word) {
                 cpu.setReg16(0, cpu.memory.read16(addr));
             } else {
@@ -886,11 +937,11 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             }
         },
         0xA2 => {
-            const addr = readMemAddr(cpu, insn.operands[1]);
+            const addr = readMemAddr(cpu, insn, 1);
             cpu.memory.write8(addr, cpu.getReg8(0));
         },
         0xA3 => {
-            const addr = readMemAddr(cpu, insn.operands[1]);
+            const addr = readMemAddr(cpu, insn, 1);
             if (insn.op_size == .word) {
                 cpu.memory.write16(addr, cpu.getReg16(0));
             } else {
@@ -925,10 +976,10 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             const sz: u32 = if (insn.opcode == 0xA6) 1 else 4;
             const os: OpSize = if (sz == 1) .byte else .dword;
             const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
-            if (insn.prefixes.rep or insn.prefixes.repne) {
+            if (insn.rep or insn.repne) {
                 // REPZ CMPS: loop while ECX > 0 AND ZF=1 (bytes equal)
                 // REPNZ CMPS: loop while ECX > 0 AND ZF=0 (bytes not equal)
-                const stop_on_zf = insn.prefixes.repne; // REPNZ stops when ZF=1
+                const stop_on_zf = insn.repne; // REPNZ stops when ZF=1
                 while (cpu.ecx > 0) {
                     const a = if (sz == 1) @as(u32, cpu.memory.read8(cpu.esi)) else cpu.memory.read32(cpu.esi);
                     const b = if (sz == 1) @as(u32, cpu.memory.read8(cpu.edi)) else cpu.memory.read32(cpu.edi);
@@ -962,10 +1013,10 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             const sz: u32 = if (insn.opcode == 0xAE) 1 else 4;
             const os: OpSize = if (sz == 1) .byte else .dword;
             const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
-            if (insn.prefixes.rep or insn.prefixes.repne) {
+            if (insn.rep or insn.repne) {
                 // REPNZ SCAS: scan until AL/EAX matches [EDI] or ECX=0
                 // REPZ SCAS: scan until AL/EAX differs from [EDI] or ECX=0
-                const stop_on_zf = insn.prefixes.repne; // REPNZ stops when ZF=1
+                const stop_on_zf = insn.repne; // REPNZ stops when ZF=1
                 while (cpu.ecx > 0) {
                     const a = if (sz == 1) @as(u32, cpu.getReg8(0)) else cpu.eax;
                     const b = if (sz == 1) @as(u32, cpu.memory.read8(cpu.edi)) else cpu.memory.read32(cpu.edi);
@@ -1009,33 +1060,33 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         // CALL rel32 (E8)
         0xE8 => {
             cpu.push32(cpu.eip);
-            applyRel(cpu, insn.operands[0]);
+            applyRel(cpu, insn);
         },
 
         // JMP rel32 (E9) / JMP rel8 (EB)
-        0xE9, 0xEB => applyRel(cpu, insn.operands[0]),
+        0xE9, 0xEB => applyRel(cpu, insn),
 
         // Jcc short (70-7F)
         0x70...0x7F => {
             const cc: u4 = @truncate(insn.opcode);
-            if (cpu.flags.evaluateCC(cc)) applyRel(cpu, insn.operands[0]);
+            if (cpu.flags.evaluateCC(cc)) applyRel(cpu, insn);
         },
 
         // LOOP/LOOPcc/JECXZ (E0-E3)
         0xE0 => { // LOOPNE
             cpu.ecx -%= 1;
-            if (cpu.ecx != 0 and !cpu.flags.getZF()) applyRel(cpu, insn.operands[0]);
+            if (cpu.ecx != 0 and !cpu.flags.getZF()) applyRel(cpu, insn);
         },
         0xE1 => { // LOOPE
             cpu.ecx -%= 1;
-            if (cpu.ecx != 0 and cpu.flags.getZF()) applyRel(cpu, insn.operands[0]);
+            if (cpu.ecx != 0 and cpu.flags.getZF()) applyRel(cpu, insn);
         },
         0xE2 => { // LOOP
             cpu.ecx -%= 1;
-            if (cpu.ecx != 0) applyRel(cpu, insn.operands[0]);
+            if (cpu.ecx != 0) applyRel(cpu, insn);
         },
         0xE3 => { // JECXZ
-            if (cpu.ecx == 0) applyRel(cpu, insn.operands[0]);
+            if (cpu.ecx == 0) applyRel(cpu, insn);
         },
 
         // Group 3: F6 (8-bit), F7 (32-bit)
@@ -1045,13 +1096,13 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         0xFF => execGroup5(cpu, insn, eip),
         // Group 4: FE (INC/DEC r/m8)
         0xFE => {
-            if (insn.modrm) |modrm| {
+            if (insn.has_modrm) {
                 const val = readOperand(cpu, insn, 0);
-                if (modrm.reg == 0) { // INC
+                if (insn.modrm_reg == 0) { // INC
                     const result = val +% 1;
                     writeOperand8(cpu, insn, 0, @truncate(result));
                     cpu.flags.update(.inc, .byte, result, val, 1);
-                } else if (modrm.reg == 1) { // DEC
+                } else if (insn.modrm_reg == 1) { // DEC
                     const result = val -% 1;
                     writeOperand8(cpu, insn, 0, @truncate(result));
                     cpu.flags.update(.dec, .byte, result, val, 1);
@@ -1072,7 +1123,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         // Jcc near (0F 80 - 0F 8F)
         0x0F80...0x0F8F => {
             const cc: u4 = @truncate(insn.opcode);
-            if (cpu.flags.evaluateCC(cc)) applyRel(cpu, insn.operands[0]);
+            if (cpu.flags.evaluateCC(cc)) applyRel(cpu, insn);
         },
 
         // SETcc (0F 90-9F)
@@ -1085,30 +1136,30 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         // MOVZX r32, r/m8 (0F B6)
         0x0FB6 => {
             const val: u32 = readOperand(cpu, insn, 1) & 0xFF;
-            cpu.setReg(@enumFromInt(insn.modrm.?.reg), val);
+            cpu.setReg(@enumFromInt(insn.modrm_reg), val);
         },
         // MOVZX r32, r/m16 (0F B7)
         0x0FB7 => {
             const val: u32 = readOperand(cpu, insn, 1) & 0xFFFF;
-            cpu.setReg(@enumFromInt(insn.modrm.?.reg), val);
+            cpu.setReg(@enumFromInt(insn.modrm_reg), val);
         },
         // MOVSX r32, r/m8 (0F BE)
         0x0FBE => {
             const val: u8 = @truncate(readOperand(cpu, insn, 1));
-            cpu.setReg(@enumFromInt(insn.modrm.?.reg), cpu_mod.signExtend8to32(val));
+            cpu.setReg(@enumFromInt(insn.modrm_reg), cpu_mod.signExtend8to32(val));
         },
         // MOVSX r32, r/m16 (0F BF)
         0x0FBF => {
             const val: u16 = @truncate(readOperand(cpu, insn, 1));
-            cpu.setReg(@enumFromInt(insn.modrm.?.reg), cpu_mod.signExtend16to32(val));
+            cpu.setReg(@enumFromInt(insn.modrm_reg), cpu_mod.signExtend16to32(val));
         },
 
         0x0FAF => {
-            const a: i32 = @bitCast(cpu.getReg(@enumFromInt(insn.modrm.?.reg)));
+            const a: i32 = @bitCast(cpu.getReg(@enumFromInt(insn.modrm_reg)));
             const b: i32 = @bitCast(readOperand(cpu, insn, 1));
             const result: i64 = @as(i64, a) * @as(i64, b);
             const r32: u32 = @truncate(@as(u64, @bitCast(result)));
-            cpu.setReg(@enumFromInt(insn.modrm.?.reg), r32);
+            cpu.setReg(@enumFromInt(insn.modrm_reg), r32);
             var ef = cpu.flags.toEflags();
             const sext: i64 = @as(i32, @bitCast(r32));
             if (result != sext) {
@@ -1124,7 +1175,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             const cc: u4 = @truncate(insn.opcode);
             if (cpu.flags.evaluateCC(cc)) {
                 const val = readOperand(cpu, insn, 1);
-                cpu.setReg(@enumFromInt(insn.modrm.?.reg), val);
+                cpu.setReg(@enumFromInt(insn.modrm_reg), val);
             }
         },
 
@@ -1224,7 +1275,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 cpu.flags.update(.logic, .dword, 0, 0, 0); // sets ZF
             } else {
                 const bit: u32 = @ctz(val);
-                cpu.setReg(@enumFromInt(insn.modrm.?.reg), bit);
+                cpu.setReg(@enumFromInt(insn.modrm_reg), bit);
                 cpu.flags.update(.logic, .dword, 1, 0, 0); // clears ZF
             }
         },
@@ -1235,16 +1286,16 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 cpu.flags.update(.logic, .dword, 0, 0, 0);
             } else {
                 const bit: u32 = 31 - @as(u32, @clz(val));
-                cpu.setReg(@enumFromInt(insn.modrm.?.reg), bit);
+                cpu.setReg(@enumFromInt(insn.modrm_reg), bit);
                 cpu.flags.update(.logic, .dword, 1, 0, 0);
             }
         },
 
         // BT/BTS/BTR/BTC (0F A3/AB/B3/BB)
         0x0FA3, 0x0FAB, 0x0FB3, 0x0FBB => {
-            if (insn.operands[0] == .mem) {
+            if (insn.op0_kind == .mem) {
                 // If base is memory and index is a register, indexing spans arbitrary bytes!
-                const orig_addr = computeEffectiveAddress(cpu, &insn.operands[0].mem);
+                const orig_addr = computeEffectiveAddress(cpu, insn);
                 const bit_index_raw = readOperand(cpu, insn, 1);
                 // Index is a signed offset for memory bit ops
                 const bit_index: i32 = if (insn.op_size == .word)
@@ -1330,7 +1381,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             const imm: i32 = @bitCast(insn.imm);
             const result: i64 = @as(i64, src) * @as(i64, imm);
             const r32: u32 = @truncate(@as(u64, @bitCast(result)));
-            cpu.setReg(@enumFromInt(insn.modrm.?.reg), r32);
+            cpu.setReg(@enumFromInt(insn.modrm_reg), r32);
             var ef = cpu.flags.toEflags();
             const sext: i64 = @as(i32, @bitCast(r32));
             if (result != sext) {
@@ -1474,13 +1525,13 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // BT/BTS/BTR/BTC imm8 (0F BA)
         0x0FBA => {
-            if (insn.modrm) |modrm| {
+            if (insn.has_modrm) {
                 const val = readOperand(cpu, insn, 0);
                 const bit: u5 = @truncate(insn.imm);
                 var ef = cpu.flags.toEflags();
                 if ((val >> bit) & 1 != 0) ef |= flags_mod.FLAG_CF else ef &= ~flags_mod.FLAG_CF;
                 cpu.flags.fromEflags(ef);
-                switch (modrm.reg) {
+                switch (insn.modrm_reg) {
                     5 => writeOperand(cpu, insn, 0, val | (@as(u32, 1) << bit)), // BTS
                     6 => writeOperand(cpu, insn, 0, val & ~(@as(u32, 1) << bit)), // BTR
                     7 => writeOperand(cpu, insn, 0, val ^ (@as(u32, 1) << bit)), // BTC
@@ -1582,36 +1633,37 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 // Operand read/write helpers
 // -----------------------------------------------------------------------
 
-fn readOperand(cpu: *Cpu, insn: *const Instruction, idx: u1) u32 {
-    const op = insn.operands[idx];
-    return switch (op) {
-        .reg => |r| if (insn.op_size == .byte) @as(u32, cpu.getReg8(r)) else cpu.getReg(@enumFromInt(r)),
-        .mem => |m| blk: {
-            const addr = computeEffectiveAddress(cpu, &m);
+inline fn readOperand(cpu: *Cpu, insn: *const Instruction, idx: u1) u32 {
+    const kind = if (idx == 0) insn.op0_kind else insn.op1_kind;
+    const reg = if (idx == 0) insn.op0_reg else insn.op1_reg;
+    return switch (kind) {
+        .none => 0,
+        .reg => if (insn.op_size == .byte) @as(u32, cpu.getReg8(reg)) else cpu.getReg(@enumFromInt(reg)),
+        .mem => blk: {
+            const addr = computeEffectiveAddress(cpu, insn);
             break :blk switch (insn.op_size) {
                 .byte => @as(u32, cpu.memory.read8(addr)),
                 .word => @as(u32, cpu.memory.read16(addr)),
                 .dword => cpu.memory.read32(addr),
             };
         },
-        .imm => |v| v,
-        .rel => |r| @bitCast(r),
-        .none => 0,
+        .imm, .rel => insn.imm,
     };
 }
 
-fn writeOperand(cpu: *Cpu, insn: *const Instruction, idx: u1, val: u32) void {
-    const op = insn.operands[idx];
-    switch (op) {
-        .reg => |r| {
+inline fn writeOperand(cpu: *Cpu, insn: *const Instruction, idx: u1, val: u32) void {
+    const kind = if (idx == 0) insn.op0_kind else insn.op1_kind;
+    const reg = if (idx == 0) insn.op0_reg else insn.op1_reg;
+    switch (kind) {
+        .reg => {
             if (insn.op_size == .word) {
-                cpu.setReg16(r, @truncate(val));
+                cpu.setReg16(reg, @truncate(val));
             } else {
-                cpu.setReg(@enumFromInt(r), val);
+                cpu.setReg(@enumFromInt(reg), val);
             }
         },
-        .mem => |m| {
-            const addr = computeEffectiveAddress(cpu, &m);
+        .mem => {
+            const addr = computeEffectiveAddress(cpu, insn);
             switch (insn.op_size) {
                 .byte => cpu.memory.write8(addr, @truncate(val)),
                 .word => cpu.memory.write16(addr, @truncate(val)),
@@ -1622,30 +1674,32 @@ fn writeOperand(cpu: *Cpu, insn: *const Instruction, idx: u1, val: u32) void {
     }
 }
 
-fn writeOperand8(cpu: *Cpu, insn: *const Instruction, idx: u1, val: u8) void {
-    const op = insn.operands[idx];
-    switch (op) {
-        .reg => |r| cpu.setReg8(r, val),
-        .mem => |m| {
-            const addr = computeEffectiveAddress(cpu, &m);
+inline fn writeOperand8(cpu: *Cpu, insn: *const Instruction, idx: u1, val: u8) void {
+    const kind = if (idx == 0) insn.op0_kind else insn.op1_kind;
+    const reg = if (idx == 0) insn.op0_reg else insn.op1_reg;
+    switch (kind) {
+        .reg => cpu.setReg8(reg, val),
+        .mem => {
+            const addr = computeEffectiveAddress(cpu, insn);
             cpu.memory.write8(addr, val);
         },
         else => {},
     }
 }
 
-fn writeOperandSized(cpu: *Cpu, insn: *const Instruction, idx: u1, val: u32, size: OpSize) void {
-    const op = insn.operands[idx];
-    switch (op) {
-        .reg => |r| {
+inline fn writeOperandSized(cpu: *Cpu, insn: *const Instruction, idx: u1, val: u32, size: OpSize) void {
+    const kind = if (idx == 0) insn.op0_kind else insn.op1_kind;
+    const reg = if (idx == 0) insn.op0_reg else insn.op1_reg;
+    switch (kind) {
+        .reg => {
             switch (size) {
-                .byte => cpu.setReg8(r, @truncate(val)),
-                .word => cpu.setReg16(r, @truncate(val)),
-                .dword => cpu.setReg(@enumFromInt(r), val),
+                .byte => cpu.setReg8(reg, @truncate(val)),
+                .word => cpu.setReg16(reg, @truncate(val)),
+                .dword => cpu.setReg(@enumFromInt(reg), val),
             }
         },
-        .mem => |m| {
-            const addr = computeEffectiveAddress(cpu, &m);
+        .mem => {
+            const addr = computeEffectiveAddress(cpu, insn);
             switch (size) {
                 .byte => cpu.memory.write8(addr, @truncate(val)),
                 .word => cpu.memory.write16(addr, @truncate(val)),
@@ -1656,22 +1710,20 @@ fn writeOperandSized(cpu: *Cpu, insn: *const Instruction, idx: u1, val: u32, siz
     }
 }
 
-fn readMemAddr(cpu: *const Cpu, op: Operand) u32 {
-    return switch (op) {
-        .mem => |m| computeEffectiveAddress(cpu, &m),
-        else => 0,
-    };
+inline fn readMemAddr(cpu: *const Cpu, insn: *const Instruction, idx: u1) u32 {
+    const kind = if (idx == 0) insn.op0_kind else insn.op1_kind;
+    return if (kind == .mem) computeEffectiveAddress(cpu, insn) else 0;
 }
 
-pub fn computeEffectiveAddress(cpu: *const Cpu, m: *const MemOperand) u32 {
+pub inline fn computeEffectiveAddress(cpu: *const Cpu, insn: *const Instruction) u32 {
     var addr: u32 = 0;
-    if (m.base) |base| addr +%= cpu.getReg(@enumFromInt(base));
-    if (m.index) |index| {
-        const idx_val = cpu.getReg(@enumFromInt(index));
-        addr +%= idx_val << m.scale;
+    if (insn.mem_base != 0xF) addr +%= cpu.getReg(@enumFromInt(@as(u3, @truncate(insn.mem_base))));
+    if (insn.mem_index != 0xF) {
+        const idx_val = cpu.getReg(@enumFromInt(@as(u3, @truncate(insn.mem_index))));
+        addr +%= idx_val << insn.mem_scale;
     }
-    addr +%= @bitCast(m.displacement);
-    return cpu.resolveSegmentAddress(m.segment, addr);
+    addr +%= @bitCast(insn.mem_disp);
+    return cpu.resolveSegmentAddress(insn.mem_seg, addr);
 }
 
 // -----------------------------------------------------------------------
@@ -1726,8 +1778,8 @@ fn execAlu(cpu: *Cpu, insn: *const Instruction) void {
 
 /// Executes Group 1 ALU instructions with immediate operands (80, 81, 83).
 fn execGroup1(cpu: *Cpu, insn: *const Instruction) void {
-    if (insn.modrm == null) return;
-    const sub_op = insn.modrm.?.reg;
+    if (!insn.has_modrm) return;
+    const sub_op = insn.modrm_reg;
     const val = readOperand(cpu, insn, 0);
     const imm = insn.imm;
     const cf: u32 = if (cpu.flags.getCF()) 1 else 0;
@@ -1769,8 +1821,8 @@ fn execGroup1(cpu: *Cpu, insn: *const Instruction) void {
 /// Executes Group 3 unary/arithmetic instructions (F6, F7).
 /// Handles TEST, NOT, NEG, MUL, IMUL, DIV, IDIV.
 fn execGroup3(cpu: *Cpu, insn: *const Instruction) void {
-    if (insn.modrm == null) return;
-    const sub_op = insn.modrm.?.reg;
+    if (!insn.has_modrm) return;
+    const sub_op = insn.modrm_reg;
     const val = readOperand(cpu, insn, 0);
     const is_byte = insn.opcode == 0xF6;
     const os: OpSize = if (is_byte) .byte else insn.op_size;
@@ -1893,8 +1945,8 @@ fn execGroup3(cpu: *Cpu, insn: *const Instruction) void {
 /// Handles INC, DEC, CALL, JMP, PUSH.
 fn execGroup5(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
     _ = eip;
-    if (insn.modrm == null) return;
-    const sub_op = insn.modrm.?.reg;
+    if (!insn.has_modrm) return;
+    const sub_op = insn.modrm_reg;
     switch (sub_op) {
         0 => { // INC r/m32
             const val = readOperand(cpu, insn, 0);
@@ -1928,8 +1980,8 @@ fn execGroup5(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
 /// Executes Group 2 shift and rotate instructions (C0, C1, D0-D3).
 fn execShift(cpu: *Cpu, insn: *const Instruction) void {
-    if (insn.modrm == null) return;
-    const sub_op = insn.modrm.?.reg;
+    if (!insn.has_modrm) return;
+    const sub_op = insn.modrm_reg;
     var val = readOperand(cpu, insn, 0);
     const count: u5 = switch (insn.opcode) {
         0xD0, 0xD1 => 1,
@@ -1963,7 +2015,7 @@ fn execShift(cpu: *Cpu, insn: *const Instruction) void {
 /// Executes the MOVSB string instruction (copy byte from ESI to EDI).
 fn execMovsb(cpu: *Cpu, insn: *const Instruction) void {
     const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
-    if (insn.prefixes.rep) {
+    if (insn.rep) {
         while (cpu.ecx > 0) : (cpu.ecx -= 1) {
             cpu.memory.write8(cpu.edi, cpu.memory.read8(cpu.esi));
             if (df) {
@@ -1989,7 +2041,7 @@ fn execMovsb(cpu: *Cpu, insn: *const Instruction) void {
 /// Executes the MOVSD string instruction (copy dword from ESI to EDI).
 fn execMovsd(cpu: *Cpu, insn: *const Instruction) void {
     const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
-    if (insn.prefixes.rep) {
+    if (insn.rep) {
         while (cpu.ecx > 0) : (cpu.ecx -= 1) {
             cpu.memory.write32(cpu.edi, cpu.memory.read32(cpu.esi));
             if (df) {
@@ -2016,7 +2068,7 @@ fn execMovsd(cpu: *Cpu, insn: *const Instruction) void {
 fn execStosb(cpu: *Cpu, insn: *const Instruction) void {
     const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
     const val = cpu.getReg8(0);
-    if (insn.prefixes.rep) {
+    if (insn.rep) {
         while (cpu.ecx > 0) : (cpu.ecx -= 1) {
             cpu.memory.write8(cpu.edi, val);
             if (df) cpu.edi -%= 1 else cpu.edi +%= 1;
@@ -2030,7 +2082,7 @@ fn execStosb(cpu: *Cpu, insn: *const Instruction) void {
 /// Executes the STOSD string instruction (store EAX at EDI).
 fn execStosd(cpu: *Cpu, insn: *const Instruction) void {
     const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
-    if (insn.prefixes.rep) {
+    if (insn.rep) {
         while (cpu.ecx > 0) : (cpu.ecx -= 1) {
             cpu.memory.write32(cpu.edi, cpu.eax);
             if (df) cpu.edi -%= 4 else cpu.edi +%= 4;
