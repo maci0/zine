@@ -229,6 +229,7 @@ pub fn main() !void {
 
         if (target_exe_opt == null) {
             target_exe_opt = arg;
+            end_of_options = true; // Stop parsing emulator flags once target is found
 
             // Push argv0 if provided, otherwise the target_exe
             var first_arg = if (argv0_opt) |a0| a0 else arg;

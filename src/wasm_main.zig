@@ -117,6 +117,7 @@ pub fn main() !void {
                 \\Run a Win32 PE executable in a WebAssembly environment.
                 \\
                 \\Options:
+                \\  -i, --interpret     Use x86 software interpreter (default on WASM)
                 \\      --jit           Use JIT compiler (x86-to-WASM translation)
                 \\      --argv0 <name>  Override argv[0] passed to the target
                 \\
@@ -175,6 +176,7 @@ pub fn main() !void {
 
         if (target_exe_opt == null) {
             target_exe_opt = arg;
+            end_of_options = true; // Stop parsing emulator flags once target is found
             // First positional arg is the target exe — convert to Win32 path for argv[0]
             const first_arg = if (argv0_opt) |a0| a0 else arg;
             var win_buf: [1024]u8 = undefined;
