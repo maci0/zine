@@ -91,15 +91,15 @@
 | D3D7-05 | Phase 7: D3D7 Render States | ✅ |
 | D3D7-06 | Phase 7: D3D7 Render States | ✅ |
 | D3D7-07 | Phase 7: D3D7 Render States | ✅ |
-| D3D7-10 | Phase 13: Europa 1400 Debugging | Pending |
-| DSND-01 | Phase 12: DirectSound Gap Closure | Pending |
-| DSND-02 | Phase 12: DirectSound Gap Closure | Pending |
+| D3D7-10 | Phase 13: Europa 1400 Debugging | ⚠️ needs retest |
+| DSND-01 | Phase 12: DirectSound Gap Closure | ✅ |
+| DSND-02 | Phase 12: DirectSound Gap Closure | ✅ |
 | JIT-01 | Phase 9: JIT Execution | ⚠️ |
-| JIT-02 | Phase 14: JIT Equivalence Tests | Pending |
+| JIT-02 | Phase 14: JIT Equivalence Tests | ⚠️ tech debt |
 | JIT-03 | Phase 9: JIT Execution | ✅ |
-| WASM-01 | Phase 15: WASM Test Verification | Pending |
-| WASM-02 | Phase 15: WASM Test Verification | Pending |
-| WASM-03 | Phase 15: WASM Test Verification | Pending |
-| EU14-01 | Phase 13: Europa 1400 Debugging | Pending |
-| EU14-02 | Phase 13: Europa 1400 Debugging | Pending |
-| EU14-03 | Phase 13: Europa 1400 Debugging | Pending |
+| WASM-01 | Phase 15: WASM Test Verification | ⚠️ build passes, runtime untested |
+| WASM-02 | Phase 15: WASM Test Verification | ⚠️ build passes, runtime untested |
+| WASM-03 | Phase 15: WASM Test Verification | ⚠️ build passes, runtime untested |
+| EU14-01 | Phase 13: Europa 1400 Debugging | ⚠️ SEH fix applied, needs retest |
+| EU14-02 | Phase 13: Europa 1400 Debugging | ⚠️ needs retest |
+| EU14-03 | Phase 13: Europa 1400 Debugging | ⚠️ needs retest |
