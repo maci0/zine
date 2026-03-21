@@ -203,16 +203,16 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "InterlockedIncrement", kernel32_sync.InterlockedIncrement);
     try environment.addBuiltinExportComptime(m, "InterlockedDecrement", kernel32_sync.InterlockedDecrement);
     try environment.addBuiltinExportComptime(m, "InterlockedExchange", kernel32_sync.InterlockedExchange);
-    try environment.addBuiltinExportComptime(m, "CreateEventA", kernel32_sync.stub_CreateEventA);
-    try environment.addBuiltinExportComptime(m, "SetEvent", kernel32_sync.stub_SetEvent);
-    try environment.addBuiltinExportComptime(m, "ResetEvent", kernel32_sync.stub_ResetEvent);
-    try environment.addBuiltinExportComptime(m, "OpenEventA", kernel32_sync.stub_OpenEventA);
-    try environment.addBuiltinExportComptime(m, "CreateMutexA", kernel32_sync.stub_CreateMutexA);
-    try environment.addBuiltinExportComptime(m, "ReleaseMutex", kernel32_sync.stub_ReleaseMutex);
-    try environment.addBuiltinExportComptime(m, "CreateSemaphoreA", kernel32_sync.stub_CreateSemaphoreA);
+    try environment.addBuiltinExportComptime(m, "CreateEventA", kernel32_sync.CreateEventA);
+    try environment.addBuiltinExportComptime(m, "SetEvent", kernel32_sync.SetEvent);
+    try environment.addBuiltinExportComptime(m, "ResetEvent", kernel32_sync.ResetEvent);
+    try environment.addBuiltinExportComptime(m, "OpenEventA", kernel32_sync.OpenEventA);
+    try environment.addBuiltinExportComptime(m, "CreateMutexA", kernel32_sync.CreateMutexA);
+    try environment.addBuiltinExportComptime(m, "ReleaseMutex", kernel32_sync.ReleaseMutex);
+    try environment.addBuiltinExportComptime(m, "CreateSemaphoreA", kernel32_sync.CreateSemaphoreA);
     try environment.addBuiltinExportComptime(m, "WaitForSingleObject", kernel32_sync.WaitForSingleObject);
-    try environment.addBuiltinExportComptime(m, "WaitForMultipleObjects", kernel32_sync.stub_WaitForMultipleObjects);
-    try environment.addBuiltinExportComptime(m, "ReleaseSemaphore", kernel32_sync.stub_ReleaseSemaphore);
+    try environment.addBuiltinExportComptime(m, "WaitForMultipleObjects", kernel32_sync.WaitForMultipleObjects);
+    try environment.addBuiltinExportComptime(m, "ReleaseSemaphore", kernel32_sync.ReleaseSemaphore);
     try environment.addBuiltinExportComptime(m, "TlsAlloc", kernel32_sync.TlsAlloc);
     try environment.addBuiltinExportComptime(m, "TlsGetValue", kernel32_sync.TlsGetValue);
     try environment.addBuiltinExportComptime(m, "TlsSetValue", kernel32_sync.TlsSetValue);
@@ -332,7 +332,7 @@ pub fn register(environment: *env.Environment) !void {
 
     // W variants needed by win2k apps
     try environment.addBuiltinExportComptime(m, "GetModuleHandleW", kernel32_process.GetModuleHandleW);
-    try environment.addBuiltinExportComptime(m, "CreateEventW", kernel32_sync.stub_CreateEventA);
+    try environment.addBuiltinExportComptime(m, "CreateEventW", kernel32_sync.CreateEventA);
     try environment.addBuiltinExportComptime(m, "GetStartupInfoW", kernel32_process.GetStartupInfoA);
     try environment.addBuiltinExportComptime(m, "GlobalReAlloc", kernel32_mem.GlobalReAlloc);
     try environment.addBuiltinExportComptime(m, "GetProfileIntW", stub_args3);
@@ -392,7 +392,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetDiskFreeSpaceExW", stub_args4);
     try environment.addBuiltinExportComptime(m, "GetTempPathW", kernel32_file.GetTempPathA);
     try environment.addBuiltinExportComptime(m, "GetTempFileNameW", stub_args4);
-    try environment.addBuiltinExportComptime(m, "CreateMutexW", kernel32_sync.stub_CreateMutexA);
+    try environment.addBuiltinExportComptime(m, "CreateMutexW", kernel32_sync.CreateMutexA);
     try environment.addBuiltinExportComptime(m, "SetProcessShutdownParameters", kernel32_console.stub_ret_true_2);
     try environment.addBuiltinExportComptime(m, "GetPriorityClass", kernel32_process.stub_GetPriorityClass);
     try environment.addBuiltinExportComptime(m, "SetProcessAffinityMask", kernel32_console.stub_ret_true_2);
@@ -456,11 +456,11 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "RtlCaptureStackBackTrace", stub_args4);
 
     // --- 7-Zip KERNEL32 stubs ---
-    try environment.addBuiltinExportComptime(m, "OpenEventW", kernel32_sync.stub_CreateEventA);
+    try environment.addBuiltinExportComptime(m, "OpenEventW", kernel32_sync.OpenEventA);
     try environment.addBuiltinExportComptime(m, "OpenFileMappingW", stub_args3);
     try environment.addBuiltinExportComptime(m, "GetDiskFreeSpaceW", stub_args5);
     try environment.addBuiltinExportComptime(m, "GetLogicalDriveStringsW", stub_args2);
-    try environment.addBuiltinExportComptime(m, "CreateSemaphoreW", kernel32_sync.stub_CreateSemaphoreA);
+    try environment.addBuiltinExportComptime(m, "CreateSemaphoreW", kernel32_sync.CreateSemaphoreA);
     try environment.addBuiltinExportComptime(m, "LocalFileTimeToFileTime", kernel32_time.FileTimeToLocalFileTime);
     try environment.addBuiltinExportComptime(m, "DosDateTimeToFileTime", stub_args3);
 }

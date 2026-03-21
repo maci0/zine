@@ -903,7 +903,7 @@ pub fn GetEnvironmentStringsW() callconv(w32cc.WINAPI) ?*anyopaque {
 }
 
 const ThreadStartFn = *const fn (usize) callconv(w32cc.WINAPI) u32;
-var next_thread_handle: usize = 0xA0000001;
+var next_thread_handle: usize = 0xA0010001;
 
 // --- Thread Handle Registry ---
 // Tracks guest threads for lifecycle management (WaitForSingleObject, ExitThread).

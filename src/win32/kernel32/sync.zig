@@ -13,7 +13,9 @@ pub fn InterlockedDecrement(lpAddend: *i32) callconv(w32cc.WINAPI) i32 {
     return @atomicRmw(i32, lpAddend, .Sub, 1, .seq_cst) - 1;
 }
 
-// --- Critical sections ---
+// -----------------------------------------------------------------------
+// Critical Sections
+// -----------------------------------------------------------------------
 // Win32 CRITICAL_SECTIONs are RECURSIVE — the same thread can enter
 // multiple times without deadlocking. We track owner thread + recursion count.
 
@@ -91,32 +93,168 @@ pub fn DeleteCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) vo
     }
 }
 
-/// --- Events ---
-/// Implementation status: Stub
-pub fn stub_CreateEventA(lpEventAttributes: usize, bManualReset: i32, bInitialState: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
-    _ = lpEventAttributes;
-    _ = bManualReset;
-    _ = bInitialState;
-    _ = lpName;
-    if (trace.enable_tracing) trace.print("KERNEL32: CreateEventA\n", .{});
-    return 0xE0000001;
+// -----------------------------------------------------------------------
+// Kernel Object Registry
+// -----------------------------------------------------------------------
+// Unified handle table for Events, Mutexes, and Semaphores.
+// WaitForSingleObject/WaitForMultipleObjects dispatch on object type.
+
+const MAX_KERNEL_OBJECTS = 128;
+
+const KernelObjectType = enum { event, mutex, semaphore };
+
+const EventData = struct {
+    manual_reset: bool = false,
+    signaled: bool = false,
+    mutex: std.Thread.Mutex = .{},
+    cond: std.Thread.Condition = .{},
+    name: [128]u8 = [_]u8{0} ** 128,
+    name_len: u8 = 0,
+};
+
+const MutexData = struct {
+    inner: std.Thread.Mutex = .{},
+    owner: std.Thread.Id = 0,
+    recursion: u32 = 0,
+    name: [128]u8 = [_]u8{0} ** 128,
+    name_len: u8 = 0,
+};
+
+const SemaphoreData = struct {
+    mutex: std.Thread.Mutex = .{},
+    cond: std.Thread.Condition = .{},
+    count: i32 = 0,
+    max_count: i32 = 1,
+    name: [128]u8 = [_]u8{0} ** 128,
+    name_len: u8 = 0,
+};
+
+const KernelObject = struct {
+    handle: usize = 0,
+    obj_type: KernelObjectType = .event,
+    event: EventData = .{},
+    mutex_obj: MutexData = .{},
+    semaphore: SemaphoreData = .{},
+};
+
+var kernel_objects: [MAX_KERNEL_OBJECTS]KernelObject = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
+var next_kernel_handle: usize = 0xE0000001;
+
+fn allocKernelObject(obj_type: KernelObjectType) ?*KernelObject {
+    for (&kernel_objects) |*ko| {
+        if (ko.handle == 0) {
+            ko.* = .{ .obj_type = obj_type };
+            ko.handle = next_kernel_handle;
+            next_kernel_handle += 1;
+            return ko;
+        }
+    }
+    return null;
 }
 
-/// stub_ResetEvent
-/// Implementation status: No-op fallback
-pub fn stub_ResetEvent(hEvent: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hEvent;
+/// Look up a kernel object by handle.
+/// Used by WaitForSingleObject/WaitForMultipleObjects.
+pub fn getKernelObject(handle: usize) ?*KernelObject {
+    for (&kernel_objects) |*ko| {
+        if (ko.handle == handle) return ko;
+    }
+    return null;
+}
+
+fn findByName(obj_type: KernelObjectType, name: []const u8) ?*KernelObject {
+    if (name.len == 0) return null;
+    for (&kernel_objects) |*ko| {
+        if (ko.handle == 0) continue;
+        if (ko.obj_type != obj_type) continue;
+        const stored = switch (obj_type) {
+            .event => ko.event.name[0..ko.event.name_len],
+            .mutex => ko.mutex_obj.name[0..ko.mutex_obj.name_len],
+            .semaphore => ko.semaphore.name[0..ko.semaphore.name_len],
+        };
+        if (std.mem.eql(u8, stored, name)) return ko;
+    }
+    return null;
+}
+
+fn copyName(dest: *[128]u8, dest_len: *u8, name: []const u8) void {
+    const copy_len = @min(name.len, 127);
+    @memcpy(dest[0..copy_len], name[0..copy_len]);
+    dest_len.* = @intCast(copy_len);
+}
+
+// -----------------------------------------------------------------------
+// Events
+// -----------------------------------------------------------------------
+
+/// CreateEventA: Creates or opens a named or unnamed event object.
+/// Implementation status: Partially implemented
+pub fn CreateEventA(lpEventAttributes: usize, bManualReset: i32, bInitialState: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
+    _ = lpEventAttributes;
+    if (trace.enable_tracing) trace.print("KERNEL32: CreateEventA(manual={d}, initial={d})\n", .{ bManualReset, bInitialState });
+
+    // Check for existing named event
+    if (lpName != 0) {
+        const name = trace.c_span(lpName);
+        if (findByName(.event, name)) |existing| return existing.handle;
+    }
+
+    const ko = allocKernelObject(.event) orelse return 0;
+    ko.event.manual_reset = (bManualReset != 0);
+    ko.event.signaled = (bInitialState != 0);
+
+    if (lpName != 0) {
+        const name = trace.c_span(lpName);
+        copyName(&ko.event.name, &ko.event.name_len, name);
+    }
+
+    return ko.handle;
+}
+
+/// SetEvent: Sets the specified event object to the signaled state.
+/// Implementation status: Partially implemented
+pub fn SetEvent(hEvent: usize) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("KERNEL32: SetEvent({x})\n", .{hEvent});
+    const ko = getKernelObject(hEvent) orelse return 1; // Unknown handle — succeed silently
+    if (ko.obj_type != .event) return 0;
+    ko.event.mutex.lock();
+    defer ko.event.mutex.unlock();
+    ko.event.signaled = true;
+    if (ko.event.manual_reset) {
+        ko.event.cond.broadcast();
+    } else {
+        ko.event.cond.signal();
+    }
     return 1;
 }
 
-/// stub_SetEvent
-/// Implementation status: No-op fallback
-pub fn stub_SetEvent(hEvent: usize) callconv(w32cc.WINAPI) i32 {
-    if (trace.enable_tracing) trace.print("KERNEL32: SetEvent({x})\n", .{hEvent});
-    return 1; // Success
+/// ResetEvent: Resets the specified event object to the nonsignaled state.
+/// Implementation status: Partially implemented
+pub fn ResetEvent(hEvent: usize) callconv(w32cc.WINAPI) i32 {
+    const ko = getKernelObject(hEvent) orelse return 1;
+    if (ko.obj_type != .event) return 0;
+    ko.event.mutex.lock();
+    defer ko.event.mutex.unlock();
+    ko.event.signaled = false;
+    return 1;
 }
 
-/// WAIT_OBJECT_0 = 0
+/// OpenEventA: Opens an existing named event object.
+/// Implementation status: Partially implemented
+pub fn OpenEventA(dwDesiredAccess: u32, bInheritHandle: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
+    _ = dwDesiredAccess;
+    _ = bInheritHandle;
+    if (lpName == 0) return 0;
+    const name = trace.c_span(lpName);
+    if (trace.enable_tracing) trace.print("KERNEL32: OpenEventA('{s}')\n", .{name});
+    if (findByName(.event, name)) |ko| return ko.handle;
+    return 0; // Not found
+}
+
+// -----------------------------------------------------------------------
+// WaitForSingleObject / WaitForMultipleObjects
+// -----------------------------------------------------------------------
+
+/// WAIT_OBJECT_0 = 0, WAIT_TIMEOUT = 258
 /// Implementation status: Partially implemented
 pub fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: WaitForSingleObject({x}, {d})\n", .{ hHandle, dwMilliseconds });
@@ -156,7 +294,12 @@ pub fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.W
         return 0; // WAIT_OBJECT_0
     }
 
-    // Yield to allow other threads to run
+    // Check if this is a kernel object (event, mutex, semaphore)
+    if (getKernelObject(hHandle)) |ko| {
+        return waitOnKernelObject(ko, dwMilliseconds);
+    }
+
+    // Fallback: unknown handle — yield
     if (dwMilliseconds > 0) {
         const sleep_ns: u64 = @min(@as(u64, dwMilliseconds) * 1_000_000, 10_000_000); // Cap at 10ms
         std.Thread.sleep(sleep_ns);
@@ -164,20 +307,181 @@ pub fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.W
     return 0; // WAIT_OBJECT_0
 }
 
-/// stub_WaitForMultipleObjects
-/// Implementation status: Stub
-pub fn stub_WaitForMultipleObjects(nCount: u32, lpHandles: usize, bWaitAll: i32, dwMilliseconds: u32) callconv(w32cc.WINAPI) u32 {
-    _ = nCount;
-    _ = lpHandles;
-    _ = bWaitAll;
-    if (dwMilliseconds > 0) {
-        const sleep_ns: u64 = @min(@as(u64, dwMilliseconds) * 1_000_000, 10_000_000);
-        std.Thread.sleep(sleep_ns);
+/// Wait on a kernel object with timeout.
+fn waitOnKernelObject(ko: *KernelObject, dwMilliseconds: u32) u32 {
+    switch (ko.obj_type) {
+        .event => {
+            ko.event.mutex.lock();
+            defer ko.event.mutex.unlock();
+            if (dwMilliseconds == 0) {
+                // Poll mode
+                if (!ko.event.signaled) return 258; // WAIT_TIMEOUT
+            } else {
+                // Block until signaled
+                while (!ko.event.signaled) {
+                    if (dwMilliseconds == 0xFFFFFFFF) {
+                        ko.event.cond.wait(&ko.event.mutex);
+                    } else {
+                        // Timed wait — use polling with sleep
+                        ko.event.mutex.unlock();
+                        std.Thread.sleep(1_000_000); // 1ms
+                        ko.event.mutex.lock();
+                        // For simplicity, just check again — real timeout tracking TBD
+                    }
+                }
+            }
+            if (!ko.event.manual_reset) {
+                ko.event.signaled = false; // Auto-reset
+            }
+            return 0; // WAIT_OBJECT_0
+        },
+        .mutex => {
+            const tid = std.Thread.getCurrentId();
+            if (ko.mutex_obj.owner == tid) {
+                ko.mutex_obj.recursion += 1;
+                return 0; // WAIT_OBJECT_0
+            }
+            if (dwMilliseconds == 0) {
+                if (ko.mutex_obj.inner.tryLock()) {
+                    ko.mutex_obj.owner = tid;
+                    ko.mutex_obj.recursion = 1;
+                    return 0;
+                }
+                return 258; // WAIT_TIMEOUT
+            }
+            ko.mutex_obj.inner.lock();
+            ko.mutex_obj.owner = tid;
+            ko.mutex_obj.recursion = 1;
+            return 0; // WAIT_OBJECT_0
+        },
+        .semaphore => {
+            ko.semaphore.mutex.lock();
+            defer ko.semaphore.mutex.unlock();
+            if (dwMilliseconds == 0) {
+                if (ko.semaphore.count <= 0) return 258; // WAIT_TIMEOUT
+            } else {
+                while (ko.semaphore.count <= 0) {
+                    if (dwMilliseconds == 0xFFFFFFFF) {
+                        ko.semaphore.cond.wait(&ko.semaphore.mutex);
+                    } else {
+                        ko.semaphore.mutex.unlock();
+                        std.Thread.sleep(1_000_000);
+                        ko.semaphore.mutex.lock();
+                    }
+                }
+            }
+            ko.semaphore.count -= 1;
+            return 0; // WAIT_OBJECT_0
+        },
     }
-    return 0; // WAIT_OBJECT_0
 }
 
-// --- Thread Local Storage ---
+/// Non-blocking attempt to acquire a sync object. Returns true if acquired.
+fn tryAcquire(handle: usize) bool {
+    // Thread handle?
+    const process = @import("process.zig");
+    if (process.getThreadInfo(handle)) |ti| {
+        return !ti.running; // Signaled when thread has finished
+    }
+    // Kernel object?
+    const ko = getKernelObject(handle) orelse return true; // Unknown handle = signaled
+    switch (ko.obj_type) {
+        .event => {
+            ko.event.mutex.lock();
+            defer ko.event.mutex.unlock();
+            if (ko.event.signaled) {
+                if (!ko.event.manual_reset) ko.event.signaled = false;
+                return true;
+            }
+            return false;
+        },
+        .mutex => {
+            const tid = std.Thread.getCurrentId();
+            if (ko.mutex_obj.owner == tid) {
+                ko.mutex_obj.recursion += 1;
+                return true;
+            }
+            if (ko.mutex_obj.inner.tryLock()) {
+                ko.mutex_obj.owner = tid;
+                ko.mutex_obj.recursion = 1;
+                return true;
+            }
+            return false;
+        },
+        .semaphore => {
+            ko.semaphore.mutex.lock();
+            defer ko.semaphore.mutex.unlock();
+            if (ko.semaphore.count > 0) {
+                ko.semaphore.count -= 1;
+                return true;
+            }
+            return false;
+        },
+    }
+}
+
+/// Check if a sync object is signaled without acquiring it.
+fn isSignaled(handle: usize) bool {
+    const process = @import("process.zig");
+    if (process.getThreadInfo(handle)) |ti| return !ti.running;
+    const ko = getKernelObject(handle) orelse return true;
+    return switch (ko.obj_type) {
+        .event => ko.event.signaled,
+        .mutex => ko.mutex_obj.owner == 0 or ko.mutex_obj.owner == std.Thread.getCurrentId(),
+        .semaphore => ko.semaphore.count > 0,
+    };
+}
+
+/// WaitForMultipleObjects: Waits until one or all of the specified objects are signaled.
+/// Implementation status: Partially implemented
+pub fn WaitForMultipleObjects(nCount: u32, lpHandles: usize, bWaitAll: i32, dwMilliseconds: u32) callconv(w32cc.WINAPI) u32 {
+    if (trace.enable_tracing) trace.print("KERNEL32: WaitForMultipleObjects(n={d}, all={d}, ms={d})\n", .{ nCount, bWaitAll, dwMilliseconds });
+
+    if (nCount == 0 or lpHandles == 0) return 258; // WAIT_TIMEOUT
+
+    const handles = @as([*]const u32, @ptrFromInt(lpHandles));
+    const count = @min(nCount, 64); // Win32 max is MAXIMUM_WAIT_OBJECTS (64)
+
+    if (bWaitAll == 0) {
+        // Wait for ANY — poll each handle, return first signaled
+        var iterations: u32 = 0;
+        while (true) {
+            for (0..count) |i| {
+                const h: usize = handles[i];
+                if (tryAcquire(h)) return @intCast(i); // WAIT_OBJECT_0 + i
+            }
+            if (dwMilliseconds == 0) return 258; // WAIT_TIMEOUT
+            iterations += 1;
+            if (dwMilliseconds != 0xFFFFFFFF and iterations >= dwMilliseconds) return 258;
+            std.Thread.sleep(1_000_000); // 1ms between polls
+        }
+    } else {
+        // Wait for ALL
+        var iterations: u32 = 0;
+        while (true) {
+            var all_signaled = true;
+            for (0..count) |i| {
+                if (!isSignaled(handles[i])) {
+                    all_signaled = false;
+                    break;
+                }
+            }
+            if (all_signaled) {
+                // Acquire all
+                for (0..count) |i| _ = tryAcquire(handles[i]);
+                return 0; // WAIT_OBJECT_0
+            }
+            if (dwMilliseconds == 0) return 258;
+            iterations += 1;
+            if (dwMilliseconds != 0xFFFFFFFF and iterations >= dwMilliseconds) return 258;
+            std.Thread.sleep(1_000_000);
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Thread Local Storage
+// -----------------------------------------------------------------------
 // Per-thread TLS using thread ID as key
 
 var tls_next: u32 = 0;
@@ -238,39 +542,119 @@ pub fn TlsSetValue(dwTlsIndex: u32, lpTlsValue: usize) callconv(w32cc.WINAPI) i3
     return 1;
 }
 
-var next_mutex_handle: usize = 0xB0000001;
+/// Implementation status: Partially implemented
+pub fn TlsFree(dwTlsIndex: u32) callconv(w32cc.WINAPI) i32 {
+    if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;
+    // Clear the value in all thread entries
+    for (&tls_threads) |*entry| {
+        if (entry.thread_id != 0) {
+            entry.slots[dwTlsIndex] = 0;
+        }
+    }
+    return 1; // TRUE
+}
 
-/// --- Mutexes ---
-/// Implementation status: No-op fallback
-pub fn stub_CreateMutexA(lpMutexAttributes: usize, bInitialOwner: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
+// -----------------------------------------------------------------------
+// Mutexes
+// -----------------------------------------------------------------------
+
+/// CreateMutexA: Creates or opens a named or unnamed mutex object.
+/// Implementation status: Partially implemented
+pub fn CreateMutexA(lpMutexAttributes: usize, bInitialOwner: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
     _ = lpMutexAttributes;
-    _ = bInitialOwner;
     if (lpName != 0) {
         const name = trace.c_span(lpName);
         if (trace.enable_tracing) trace.print("KERNEL32: CreateMutexA('{s}')\n", .{name});
+        if (findByName(.mutex, name)) |existing| return existing.handle;
+    } else {
+        if (trace.enable_tracing) trace.print("KERNEL32: CreateMutexA(unnamed)\n", .{});
     }
-    const handle = next_mutex_handle;
-    next_mutex_handle += 1;
-    return handle;
+
+    const ko = allocKernelObject(.mutex) orelse return 0;
+    if (bInitialOwner != 0) {
+        ko.mutex_obj.inner.lock();
+        ko.mutex_obj.owner = std.Thread.getCurrentId();
+        ko.mutex_obj.recursion = 1;
+    }
+
+    if (lpName != 0) {
+        const name = trace.c_span(lpName);
+        copyName(&ko.mutex_obj.name, &ko.mutex_obj.name_len, name);
+    }
+
+    return ko.handle;
 }
 
-/// stub_ReleaseMutex
-/// Implementation status: No-op fallback
-pub fn stub_ReleaseMutex(hMutex: usize) callconv(w32cc.WINAPI) i32 {
+/// ReleaseMutex: Releases ownership of the specified mutex object.
+/// Implementation status: Partially implemented
+pub fn ReleaseMutex(hMutex: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: ReleaseMutex({x})\n", .{hMutex});
+    const ko = getKernelObject(hMutex) orelse return 1; // Unknown handle — succeed silently
+    if (ko.obj_type != .mutex) return 0;
+    if (ko.mutex_obj.recursion > 1) {
+        ko.mutex_obj.recursion -= 1;
+        return 1;
+    }
+    ko.mutex_obj.owner = 0;
+    ko.mutex_obj.recursion = 0;
+    ko.mutex_obj.inner.unlock();
     return 1; // TRUE = success
 }
 
-/// stub_ReleaseSemaphore
-/// Implementation status: No-op fallback
-pub fn stub_ReleaseSemaphore(hSemaphore: usize, lReleaseCount: i32, lpPreviousCount: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hSemaphore;
-    _ = lReleaseCount;
-    if (lpPreviousCount != 0) {
-        @as(*i32, @ptrFromInt(lpPreviousCount)).* = 0;
+// -----------------------------------------------------------------------
+// Semaphores
+// -----------------------------------------------------------------------
+
+/// CreateSemaphoreA: Creates or opens a named or unnamed semaphore object.
+/// Implementation status: Partially implemented
+pub fn CreateSemaphoreA(lpSemaphoreAttributes: usize, lInitialCount: i32, lMaximumCount: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
+    _ = lpSemaphoreAttributes;
+    if (lpName != 0) {
+        const name = trace.c_span(lpName);
+        if (trace.enable_tracing) trace.print("KERNEL32: CreateSemaphoreA('{s}')\n", .{name});
+        if (findByName(.semaphore, name)) |existing| return existing.handle;
+    } else {
+        if (trace.enable_tracing) trace.print("KERNEL32: CreateSemaphoreA(unnamed, init={d}, max={d})\n", .{ lInitialCount, lMaximumCount });
     }
-    return 1; // TRUE = success
+
+    const ko = allocKernelObject(.semaphore) orelse return 0;
+    ko.semaphore.count = lInitialCount;
+    ko.semaphore.max_count = lMaximumCount;
+
+    if (lpName != 0) {
+        const name = trace.c_span(lpName);
+        copyName(&ko.semaphore.name, &ko.semaphore.name_len, name);
+    }
+
+    return ko.handle;
 }
+
+/// ReleaseSemaphore: Increases the count of the specified semaphore object.
+/// Implementation status: Partially implemented
+pub fn ReleaseSemaphore(hSemaphore: usize, lReleaseCount: i32, lpPreviousCount: usize) callconv(w32cc.WINAPI) i32 {
+    const ko = getKernelObject(hSemaphore) orelse {
+        if (lpPreviousCount != 0) @as(*i32, @ptrFromInt(lpPreviousCount)).* = 0;
+        return 1;
+    };
+    if (ko.obj_type != .semaphore) {
+        if (lpPreviousCount != 0) @as(*i32, @ptrFromInt(lpPreviousCount)).* = 0;
+        return 1;
+    }
+    ko.semaphore.mutex.lock();
+    defer ko.semaphore.mutex.unlock();
+    if (lpPreviousCount != 0) @as(*i32, @ptrFromInt(lpPreviousCount)).* = ko.semaphore.count;
+    ko.semaphore.count = @min(ko.semaphore.count + lReleaseCount, ko.semaphore.max_count);
+    // Wake waiters
+    var i: i32 = 0;
+    while (i < lReleaseCount) : (i += 1) {
+        ko.semaphore.cond.signal();
+    }
+    return 1;
+}
+
+// -----------------------------------------------------------------------
+// DuplicateHandle
+// -----------------------------------------------------------------------
 
 var next_dup_handle: usize = 0xD0000001;
 
@@ -314,7 +698,10 @@ pub fn DuplicateHandle(
     return 1; // TRUE = success
 }
 
-/// --- InterlockedCompareExchange ---
+// -----------------------------------------------------------------------
+// InterlockedCompareExchange / InterlockedExchange
+// -----------------------------------------------------------------------
+
 /// LONG InterlockedCompareExchange(LONG volatile *Destination, LONG Exchange, LONG Comperand)
 /// Implementation status: Partially implemented
 pub fn InterlockedCompareExchange(dest: usize, exchange: i32, comperand: i32) callconv(w32cc.WINAPI) i32 {
@@ -323,9 +710,19 @@ pub fn InterlockedCompareExchange(dest: usize, exchange: i32, comperand: i32) ca
     return @cmpxchgStrong(i32, ptr, comperand, exchange, .seq_cst, .seq_cst) orelse comperand;
 }
 
+/// Implementation status: Partially implemented
+pub fn InterlockedExchange(target: usize, value: i32) callconv(w32cc.WINAPI) i32 {
+    if (target == 0) return 0;
+    const ptr = @as(*i32, @ptrFromInt(target));
+    return @atomicRmw(i32, ptr, .Xchg, value, .seq_cst);
+}
+
+// -----------------------------------------------------------------------
+// File Change Notifications (stub)
+// -----------------------------------------------------------------------
+
 var next_change_handle: usize = 0xCE000001;
 
-/// --- File change notifications (stub: return fake handles, no-op poll) ---
 /// Implementation status: No-op fallback
 pub fn stub_FindFirstChangeNotificationW(path_ptr: usize, watch_subtree: i32, filter: u32) callconv(w32cc.WINAPI) usize {
     _ = path_ptr;
@@ -337,14 +734,16 @@ pub fn stub_FindFirstChangeNotificationW(path_ptr: usize, watch_subtree: i32, fi
     return h;
 }
 
-/// stub_FindNextChangeNotification
 /// Implementation status: No-op fallback
 pub fn stub_FindNextChangeNotification(hChangeHandle: usize) callconv(w32cc.WINAPI) i32 {
     _ = hChangeHandle;
     return 1; // TRUE
 }
 
-/// --- SList (Interlocked Singly Linked Lists) ---
+// -----------------------------------------------------------------------
+// SList (Interlocked Singly Linked Lists)
+// -----------------------------------------------------------------------
+
 /// Implementation status: Partially implemented
 pub fn InitializeSListHead(ListHead: usize) callconv(w32cc.WINAPI) void {
     // SLIST_HEADER is 8 bytes on x86 — zero it out
@@ -364,7 +763,10 @@ pub fn InterlockedFlushSList(ListHead: usize) callconv(w32cc.WINAPI) usize {
     return 0; // Empty list
 }
 
-/// --- Extended Critical Sections ---
+// -----------------------------------------------------------------------
+// Extended Critical Sections
+// -----------------------------------------------------------------------
+
 /// Implementation status: Partially implemented
 pub fn InitializeCriticalSectionEx(lpCriticalSection: usize, dwSpinCount: u32, flags: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: InitializeCriticalSectionEx(cs={X}, spin={d}, flags={X})\n", .{ lpCriticalSection, dwSpinCount, flags });
@@ -379,7 +781,10 @@ pub fn InitializeCriticalSectionAndSpinCount(lpCriticalSection: usize, dwSpinCou
     return 1; // TRUE = success
 }
 
-/// --- Pointer encoding (identity transform in emulation) ---
+// -----------------------------------------------------------------------
+// Pointer Encoding (identity transform in emulation)
+// -----------------------------------------------------------------------
+
 /// Implementation status: Partially implemented
 pub fn EncodePointer(ptr: usize) callconv(w32cc.WINAPI) usize {
     return ptr; // No encoding needed
@@ -390,12 +795,15 @@ pub fn DecodePointer(ptr: usize) callconv(w32cc.WINAPI) usize {
     return ptr; // No decoding needed
 }
 
+// -----------------------------------------------------------------------
+// Fiber Local Storage (FLS)
+// -----------------------------------------------------------------------
+
 var fls_next: u32 = 0;
 const MAX_FLS_SLOTS = 128;
 var fls_values: [MAX_FLS_SLOTS]usize = [_]usize{0} ** MAX_FLS_SLOTS;
 var fls_callbacks: [MAX_FLS_SLOTS]usize = [_]usize{0} ** MAX_FLS_SLOTS;
 
-/// --- Fiber Local Storage (FLS) ---
 /// FLS is like TLS but per-fiber. We're single-fiber, so just use simple slots.
 /// Implementation status: Partially implemented
 pub fn FlsAlloc(lpCallback: usize) callconv(w32cc.WINAPI) u32 {
@@ -427,61 +835,4 @@ pub fn FlsFree(dwFlsIndex: u32) callconv(w32cc.WINAPI) i32 {
     fls_values[dwFlsIndex] = 0;
     fls_callbacks[dwFlsIndex] = 0;
     return 1; // TRUE
-}
-
-/// --- Additional sync stubs ---
-/// Implementation status: Partially implemented
-pub fn InterlockedExchange(target: usize, value: i32) callconv(w32cc.WINAPI) i32 {
-    if (target == 0) return 0;
-    const ptr = @as(*i32, @ptrFromInt(target));
-    return @atomicRmw(i32, ptr, .Xchg, value, .seq_cst);
-}
-
-/// Implementation status: Partially implemented
-pub fn TlsFree(dwTlsIndex: u32) callconv(w32cc.WINAPI) i32 {
-    if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;
-    // Clear the value in all thread entries
-    for (&tls_threads) |*entry| {
-        if (entry.thread_id != 0) {
-            entry.slots[dwTlsIndex] = 0;
-        }
-    }
-    return 1; // TRUE
-}
-
-var next_semaphore_handle: usize = 0xA0000001;
-
-/// stub_CreateSemaphoreA
-/// Implementation status: Stub
-pub fn stub_CreateSemaphoreA(lpSemaphoreAttributes: usize, lInitialCount: i32, lMaximumCount: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
-    _ = lpSemaphoreAttributes;
-    _ = lInitialCount;
-    _ = lMaximumCount;
-    if (trace.enable_tracing) {
-        if (lpName != 0) {
-            trace.print("KERNEL32: CreateSemaphoreA('{s}')\n", .{trace.c_span(lpName)});
-        } else {
-            trace.print("KERNEL32: CreateSemaphoreA(unnamed)\n", .{});
-        }
-    }
-    const handle = next_semaphore_handle;
-    next_semaphore_handle += 1;
-    return handle;
-}
-
-var next_event_handle: usize = 0xE0000010;
-
-/// stub_OpenEventA
-/// Implementation status: Stub
-pub fn stub_OpenEventA(dwDesiredAccess: u32, bInheritHandle: i32, lpName: usize) callconv(w32cc.WINAPI) usize {
-    _ = dwDesiredAccess;
-    _ = bInheritHandle;
-    if (trace.enable_tracing) {
-        if (lpName != 0) {
-            trace.print("KERNEL32: OpenEventA('{s}')\n", .{trace.c_span(lpName)});
-        }
-    }
-    const handle = next_event_handle;
-    next_event_handle += 1;
-    return handle;
 }
