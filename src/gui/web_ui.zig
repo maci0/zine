@@ -503,7 +503,7 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
             .{ .name = "content-type", .value = content_type },
             .{ .name = "x-content-type-options", .value = "nosniff" },
             .{ .name = "x-frame-options", .value = "DENY" },
-            .{ .name = "content-security-policy", .value = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:1995" },
+            .{ .name = "content-security-policy", .value = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:1995" },
         } });
         return conn.stream.close();
     }

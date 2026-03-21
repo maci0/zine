@@ -718,6 +718,9 @@ canvas {
     align-items: center;
     gap: 2px;
     margin-bottom: 4px;
+    /* Reserve space for rotated slider: 80px tall + some padding */
+    height: 110px;
+    position: relative;
 }
 
 .volume-label-hi,
@@ -731,12 +734,18 @@ canvas {
 .volume-range {
     -webkit-appearance: none;
     appearance: none;
-    writing-mode: vertical-lr;
-    direction: rtl;
-    width: 22px;
-    height: 80px;
+    width: 80px;
+    height: 22px;
     background: transparent;
     margin: 0;
+    /* Rotate to make vertical — most reliable cross-browser method */
+    transform: rotate(-90deg);
+    transform-origin: center center;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    margin-left: -40px;
+    margin-top: -11px;
 }
 
 /* Track (channel) */
