@@ -17,7 +17,7 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 
 | # | Phase | Status |
 |---|-------|--------|
-| 1 | Thread Manager Core | 🔲 Not started |
+| 1 | Thread Manager Core | ✅ Complete |
 | 2 | Sync Primitives | 🔲 Not started |
 | 3 | GDI Font Subsystem | 🔲 Not started |
 | 4 | GDI Text Rendering | 🔲 Not started |
