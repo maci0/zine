@@ -127,7 +127,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetCurrentThread", kernel32_process.GetCurrentThread);
     try environment.addBuiltinExportComptime(m, "GetCurrentThreadId", kernel32_process.GetCurrentThreadId);
     try environment.addBuiltinExportComptime(m, "CreateThread", kernel32_process.CreateThread);
-    try environment.addBuiltinExportComptime(m, "ExitThread", kernel32_process.stub_ExitThread);
+    try environment.addBuiltinExportComptime(m, "ExitThread", kernel32_process.ExitThread);
     try environment.addBuiltinExportComptime(m, "GetStartupInfoA", kernel32_process.GetStartupInfoA);
     try environment.addBuiltinExportComptime(m, "GetCommandLineA", kernel32_process.GetCommandLineA);
     try environment.addBuiltinExportComptime(m, "GetCommandLineW", kernel32_process.GetCommandLineW);
@@ -172,7 +172,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetShortPathNameA", stub_args3);
     try environment.addBuiltinExportComptime(m, "GetProfileIntA", stub_args3);
     try environment.addBuiltinExportComptime(m, "GetPrivateProfileSectionA", kernel32_profile.GetPrivateProfileSectionA);
-    try environment.addBuiltinExportComptime(m, "FlushInstructionCache", stub_args3);
+    try environment.addBuiltinExportComptime(m, "FlushInstructionCache", kernel32_mem.FlushInstructionCache);
     try environment.addBuiltinExportComptime(m, "ExpandEnvironmentStringsA", kernel32_process.ExpandEnvironmentStringsA);
     try environment.addBuiltinExportComptime(m, "EnumSystemCodePagesA", stub_args2);
     try environment.addBuiltinExportComptime(m, "EnumResourceNamesA", stub_args4);
@@ -467,14 +467,14 @@ pub fn register(environment: *env.Environment) !void {
 
 // Re-export generic stubs from stub_common for backward compatibility
 const stub_common = @import("shared.zig");
-pub const stub_args0 = stub_common.stub_args0;
-pub const stub_args1 = stub_common.stub_args1;
-pub const stub_args2 = stub_common.stub_args2;
-pub const stub_args3 = stub_common.stub_args3;
-pub const stub_args4 = stub_common.stub_args4;
-pub const stub_args5 = stub_common.stub_args5;
-pub const stub_args6 = stub_common.stub_args6;
-pub const stub_args7 = stub_common.stub_args7;
-pub const stub_args8 = stub_common.stub_args8;
-pub const stub_args9 = stub_common.stub_args9;
-pub const stub_args10 = stub_common.stub_args10;
+pub const stub_args0 = stub_common.stub_args(0);
+pub const stub_args1 = stub_common.stub_args(1);
+pub const stub_args2 = stub_common.stub_args(2);
+pub const stub_args3 = stub_common.stub_args(3);
+pub const stub_args4 = stub_common.stub_args(4);
+pub const stub_args5 = stub_common.stub_args(5);
+pub const stub_args6 = stub_common.stub_args(6);
+pub const stub_args7 = stub_common.stub_args(7);
+pub const stub_args8 = stub_common.stub_args(8);
+pub const stub_args9 = stub_common.stub_args(9);
+pub const stub_args10 = stub_common.stub_args(10);

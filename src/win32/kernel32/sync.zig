@@ -142,6 +142,20 @@ pub fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.W
         }
     }
 
+    // Check if this is a thread handle
+    if (process.getThreadInfo(hHandle)) |ti| {
+        if (comptime platform.is_native) {
+            if (ti.thread) |thread| {
+                if (ti.running) {
+                    thread.join();
+                    ti.thread = null;
+                }
+            }
+        }
+        // On WASM, thread already ran synchronously
+        return 0; // WAIT_OBJECT_0
+    }
+
     // Yield to allow other threads to run
     if (dwMilliseconds > 0) {
         const sleep_ns: u64 = @min(@as(u64, dwMilliseconds) * 1_000_000, 10_000_000); // Cap at 10ms

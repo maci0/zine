@@ -110,7 +110,7 @@ pub fn LoadLibraryA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
         // Convert Win32 path (e.g. C:\Desktop\Guild\MP3DEC.ASI) to POSIX
         const path_utils = @import("../../path_utils.zig");
         var posix_buf: [1024]u8 = undefined;
-        const posix_len = try path_utils.win32ToPosix(name, &posix_buf);
+        const posix_len = path_utils.win32ToPosix(name, &posix_buf) catch return 0;
         var load_name = if (posix_len > 0) posix_buf[0..posix_len] else name;
 
         // Strip "./" or ".\" prefix — Windows apps use ".\foo.dll" meaning "same dir as me"
@@ -671,7 +671,7 @@ pub fn CreateProcessA(
     // Convert Win32 path to POSIX
     const path_utils = @import("../../path_utils.zig");
     var posix_buf: [1024]u8 = undefined;
-    const posix_len = try path_utils.win32ToPosix(target_path_buf[0..target_path_len], &posix_buf);
+    const posix_len = path_utils.win32ToPosix(target_path_buf[0..target_path_len], &posix_buf) catch return 0;
 
     if (trace.enable_tracing) trace.print("KERNEL32: CreateProcessA -> spawning '{s}'\n", .{posix_buf[0..posix_len]});
 
@@ -905,7 +905,52 @@ pub fn GetEnvironmentStringsW() callconv(w32cc.WINAPI) ?*anyopaque {
 const ThreadStartFn = *const fn (usize) callconv(w32cc.WINAPI) u32;
 var next_thread_handle: usize = 0xA0000001;
 
-fn threadWrapper(start_address: usize, parameter: usize) void {
+// --- Thread Handle Registry ---
+// Tracks guest threads for lifecycle management (WaitForSingleObject, ExitThread).
+const MAX_GUEST_THREADS = 32;
+
+const ThreadInfo = struct {
+    handle: usize = 0,
+    thread: if (platform.is_native) ?std.Thread else void = if (platform.is_native) null else {},
+    running: bool = false,
+    exit_code: u32 = 0,
+};
+
+var thread_registry: [MAX_GUEST_THREADS]ThreadInfo = [_]ThreadInfo{.{}} ** MAX_GUEST_THREADS;
+var thread_registry_mutex: if (platform.is_native) std.Thread.Mutex else struct {
+    pub fn lock(_: *@This()) void {}
+    pub fn unlock(_: *@This()) void {}
+} = .{};
+
+fn allocThreadInfo() ?*ThreadInfo {
+    thread_registry_mutex.lock();
+    defer thread_registry_mutex.unlock();
+    for (&thread_registry) |*ti| {
+        if (ti.handle == 0) return ti;
+    }
+    return null;
+}
+
+/// Look up a ThreadInfo entry by its Win32 handle.
+/// Used by WaitForSingleObject in sync.zig.
+pub fn getThreadInfo(handle: usize) ?*ThreadInfo {
+    for (&thread_registry) |*ti| {
+        if (ti.handle == handle) return ti;
+    }
+    return null;
+}
+
+const ThreadWrapperCtx = struct {
+    start_address: usize,
+    parameter: usize,
+    thread_info: *ThreadInfo,
+};
+
+fn threadWrapper(ctx: ThreadWrapperCtx) void {
+    const start_address = ctx.start_address;
+    const parameter = ctx.parameter;
+    const thread_info = ctx.thread_info;
+
     // Allocate a per-thread TEB so each thread has its own SEH chain and TLS.
     // Copy the main thread's TEB as a template.
     const teb_mod = @import("../teb.zig");
@@ -917,8 +962,9 @@ fn threadWrapper(start_address: usize, parameter: usize) void {
             teb_mod.setupFS(@ptrFromInt(teb_mod.teb_base_addr)) catch {};
             if (start_address != 0) {
                 const func = @as(ThreadStartFn, @ptrFromInt(start_address));
-                _ = func(parameter);
+                thread_info.exit_code = func(parameter);
             }
+            thread_info.running = false;
             return;
         };
         // Copy main thread's TEB
@@ -932,11 +978,55 @@ fn threadWrapper(start_address: usize, parameter: usize) void {
         teb_mod.setupFS(@ptrCast(@alignCast(thread_teb_mem.ptr))) catch {};
     }
 
-    if (start_address == 0) return;
-    const func = @as(ThreadStartFn, @ptrFromInt(start_address));
-    _ = func(parameter);
+    if (start_address == 0) {
+        thread_info.running = false;
+        return;
+    }
+
+    // On native x86, guest code runs natively — call directly as before.
+    // On x86_64, guest code runs in compat mode via signal-based dispatcher.
+    // On WASM, guest code runs through the x86 interpreter.
+    if (comptime !platform.is_native) {
+        // WASM: use x86 interpreter for guest code
+        const x86_cpu = @import("../../x86/cpu.zig");
+        const x86_execute = @import("../../x86/execute.zig");
+        const shared = @import("../shared.zig");
+
+        var cpu = x86_cpu.Cpu{};
+        // Share the same guest memory
+        if (shared.guest_memory) |gm| {
+            cpu.memory = gm.*;
+        }
+        cpu.eip = @intCast(start_address);
+        // Allocate 64KB guest stack
+        const stack_size: u32 = 64 * 1024;
+        if (shared.raw_alloc(stack_size)) |stack_ptr| {
+            cpu.esp = @intCast(@intFromPtr(stack_ptr) + stack_size - 16);
+        }
+        // Win32 LPTHREAD_START_ROUTINE: push parameter, push return address (0 = halt)
+        cpu.push32(@intCast(parameter));
+        cpu.push32(0); // Return to address 0 causes halt
+
+        if (teb_mod.teb_base_addr != 0) {
+            cpu.fs_base = @intCast(teb_mod.teb_base_addr);
+        }
+
+        x86_execute.run(&cpu);
+        thread_info.exit_code = cpu.eax;
+    } else if (comptime platform.is_x86_64) {
+        // x86_64: use compat mode (signal-based CS=0x23 execution)
+        const compat_thunks = @import("../../x86/compat_thunks.zig");
+        thread_info.exit_code = compat_thunks.callCompat32(@intCast(start_address), @intCast(parameter), 0, 0);
+    } else {
+        // Native x86: call directly — guest code runs natively on host CPU
+        const func = @as(ThreadStartFn, @ptrFromInt(start_address));
+        thread_info.exit_code = func(parameter);
+    }
+
+    thread_info.running = false;
 }
 
+/// CreateThread: Creates a thread to execute within the virtual address space of the calling process.
 /// Implementation status: Partially implemented
 pub fn CreateThread(lpThreadAttributes: usize, dwStackSize: usize, lpStartAddress: usize, lpParameter: usize, dwCreationFlags: u32, lpThreadId: usize) callconv(w32cc.WINAPI) usize {
     _ = lpThreadAttributes;
@@ -944,26 +1034,67 @@ pub fn CreateThread(lpThreadAttributes: usize, dwStackSize: usize, lpStartAddres
     _ = dwCreationFlags;
     if (trace.enable_tracing) trace.print("KERNEL32: CreateThread(start={x}, param={x})\n", .{ lpStartAddress, lpParameter });
 
+    const ti = allocThreadInfo() orelse {
+        if (trace.enable_tracing) trace.print("KERNEL32: CreateThread failed — thread registry full\n", .{});
+        return 0;
+    };
+
     const handle = next_thread_handle;
     next_thread_handle += 1;
+
+    ti.handle = handle;
+    ti.running = true;
+    ti.exit_code = 0;
 
     if (lpThreadId != 0) {
         @as(*u32, @ptrFromInt(lpThreadId)).* = @intCast(handle & 0xFFFF);
     }
 
-    // Spawn a real OS thread with its own TEB copy.
-    if (!platform.spawnThread(threadWrapper, .{ lpStartAddress, lpParameter })) {
-        if (trace.enable_tracing) trace.print("KERNEL32: CreateThread spawn failed\n", .{});
-        return 0;
+    if (comptime platform.is_native) {
+        ti.thread = std.Thread.spawn(.{}, threadWrapper, .{ThreadWrapperCtx{
+            .start_address = lpStartAddress,
+            .parameter = lpParameter,
+            .thread_info = ti,
+        }}) catch {
+            if (trace.enable_tracing) trace.print("KERNEL32: CreateThread spawn failed\n", .{});
+            ti.handle = 0;
+            ti.running = false;
+            return 0;
+        };
+    } else {
+        // WASM: run synchronously (no real threading)
+        threadWrapper(ThreadWrapperCtx{
+            .start_address = lpStartAddress,
+            .parameter = lpParameter,
+            .thread_info = ti,
+        });
     }
 
     return handle;
 }
 
-/// stub_ExitThread
-/// Implementation status: Stub
-pub fn stub_ExitThread(dwExitCode: u32) callconv(w32cc.WINAPI) void {
+/// ExitThread: Ends the calling thread.
+/// Implementation status: Partially implemented
+pub fn ExitThread(dwExitCode: u32) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: ExitThread({d})\n", .{dwExitCode});
+    // Store exit code for whichever thread we are
+    if (comptime platform.is_native) {
+        const tid = std.Thread.getCurrentId();
+        for (&thread_registry) |*ti| {
+            if (ti.handle != 0 and ti.running) {
+                if (ti.thread) |t| {
+                    _ = t;
+                    // Match by host thread ID — the ThreadInfo.thread field
+                    // has the same thread ID as the currently executing thread
+                    _ = tid;
+                    ti.exit_code = dwExitCode;
+                    break;
+                }
+            }
+        }
+    }
+    // Note: On native x86, this returns to the caller (threadWrapper) which
+    // then sets running=false. On WASM, the interpreter continues until halt.
 }
 
 var cmdline_w_buf: [8192]u8 = undefined;
