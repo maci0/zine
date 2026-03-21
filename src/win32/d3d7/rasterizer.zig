@@ -114,6 +114,12 @@ inline fn rasterizeTriangle(v0: ScreenVertex, v1: ScreenVertex, v2: ScreenVertex
     // Edge function setup (2× signed area)
     const area = (v1.x - v0.x) * (v2.y - v0.y) - (v2.x - v0.x) * (v1.y - v0.y);
     if (area == 0) return; // degenerate
+
+    // Cull mode: D3DCULL_NONE=1, D3DCULL_CW=2, D3DCULL_CCW=3
+    const cull_mode = d3d7.render_states[7]; // D3DRS_CULLMODE
+    if (cull_mode == 2 and area > 0) return; // cull CW winding
+    if (cull_mode == 3 and area < 0) return; // cull CCW winding
+
     const inv_area = 1.0 / area;
     const positive_area = area > 0;
 

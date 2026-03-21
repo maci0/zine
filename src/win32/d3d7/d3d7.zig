@@ -281,7 +281,7 @@ pub var transform_matrices: [MAX_TRANSFORMS][16]f32 = [_][16]f32{identity_4x4} *
 /// Render state table — D3DRENDERSTATETYPE values up to 255.
 /// Defaults are set at comptime matching D3D7 documentation.
 const MAX_RENDER_STATES = 256;
-var render_states: [MAX_RENDER_STATES]u32 = blk: {
+pub var render_states: [MAX_RENDER_STATES]u32 = blk: {
     var rs = [_]u32{0} ** MAX_RENDER_STATES;
     rs[7] = 2; // D3DRS_CULLMODE = D3DCULL_CCW
     rs[14] = 1; // D3DRS_ZWRITEENABLE = TRUE
@@ -715,26 +715,36 @@ fn device7_Clear(this: *IDirect3DDevice7, dwCount: u32, lpRects: usize, dwFlags:
     _ = this;
     _ = dwCount;
     _ = lpRects;
-    _ = dwFlags;
-    _ = dvZ;
     _ = dwStencil;
-    if (trace.enable_tracing) trace.print("D3D7: Clear(color=0x{x:0>8})\n", .{dwColor});
+    if (trace.enable_tracing) trace.print("D3D7: Clear(flags=0x{x}, color=0x{x:0>8}, z={d})\n", .{ dwFlags, dwColor, @as(u32, @bitCast(dvZ)) });
 
-    const vw = renderer.global_width;
-    const vh = renderer.global_height;
-    const pixels = vw * vh;
+    const D3DCLEAR_TARGET: u32 = 0x1;
+    const D3DCLEAR_ZBUFFER: u32 = 0x2;
 
-    if (ddraw_stubs.surface_buffer.len >= pixels * 4) {
-        const b: u8 = @intCast(dwColor & 0xFF);
-        const g: u8 = @intCast((dwColor >> 8) & 0xFF);
-        const r: u8 = @intCast((dwColor >> 16) & 0xFF);
-        for (0..pixels) |i| {
-            ddraw_stubs.surface_buffer[i * 4 + 0] = b;
-            ddraw_stubs.surface_buffer[i * 4 + 1] = g;
-            ddraw_stubs.surface_buffer[i * 4 + 2] = r;
-            ddraw_stubs.surface_buffer[i * 4 + 3] = 255;
+    // Clear color buffer
+    if (dwFlags & D3DCLEAR_TARGET != 0) {
+        const vw = renderer.global_width;
+        const vh = renderer.global_height;
+        const pixels = vw * vh;
+
+        if (ddraw_stubs.surface_buffer.len >= pixels * 4) {
+            const b: u8 = @intCast(dwColor & 0xFF);
+            const g: u8 = @intCast((dwColor >> 8) & 0xFF);
+            const r: u8 = @intCast((dwColor >> 16) & 0xFF);
+            for (0..pixels) |i| {
+                ddraw_stubs.surface_buffer[i * 4 + 0] = b;
+                ddraw_stubs.surface_buffer[i * 4 + 1] = g;
+                ddraw_stubs.surface_buffer[i * 4 + 2] = r;
+                ddraw_stubs.surface_buffer[i * 4 + 3] = 255;
+            }
         }
     }
+
+    // Clear z-buffer
+    if (dwFlags & D3DCLEAR_ZBUFFER != 0) {
+        rasterizer.clearZBuffer(dvZ);
+    }
+
     return w32.D3D_OK;
 }
 
