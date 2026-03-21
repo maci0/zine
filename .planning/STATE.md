@@ -1,43 +1,35 @@
-# Project State
+# Zine — State
 
-## Project Reference
+## Project Status
 
-See: .planning/PROJECT.md (updated 2026-03-21)
+See: .planning/PROJECT.md (updated 2026-03-22)
 
 **Core value:** Run Win98/Win2K era Windows applications and games faithfully on Linux and in the browser
-**Current focus:** Phase 13 — Europa 1400 Debugging
+**Current focus:** Phase 16 — Baseline Fix (native mode test failures)
 
 ## Current Milestone
 
-**v1: Win32 Compatibility Milestone**
-- 15 phases | 28 requirements
-- Status: Phases 1-7 complete, 8-11 validated with gaps, 12-15 gap closure
+**v2: Full Test Coverage**
+- 8 phases (16-23) | 16 requirements
+- Status: Starting — baseline analysis needed
 
 ## Phase Progress
 
 | # | Phase | Status |
 |---|-------|--------|
-| 1 | Thread Manager Core | ✅ Complete |
-| 2 | Sync Primitives | ✅ Complete |
-| 3 | GDI Font Subsystem | ✅ Complete |
-| 4 | GDI Text Rendering | ✅ Complete |
-| 5 | D3D7 Device & Pipeline | ✅ Complete |
-| 6 | D3D7 Rasterizer | ✅ Complete |
-| 7 | D3D7 Render States | ✅ Complete |
-| 8 | DirectSound Mixing | ✅ Complete (gaps → Phase 12) |
-| 9 | JIT Execution | ✅ Complete (gaps → Phase 14) |
-| 10 | MSVC WASM Fixes | ✅ Complete (gaps → Phase 15) |
-| 11 | Europa 1400 Integration | ✅ Complete (gaps → Phase 13) |
-| 12 | DirectSound Gap Closure | ✅ Complete (6e841a4) |
-| 13 | Europa 1400 Debugging | ✅ SEH fix (e1e9de0), needs retest |
-| 14 | JIT Equivalence Tests | ✅ Unit tests pass |
-| 15 | WASM Test Verification | ✅ Build fix, wasm32 passes |
+| 16 | Baseline Fix | 🔲 Not started |
+| 17 | Interpreter Mode Green | 🔲 Not started |
+| 18 | Native64 Mode Green | 🔲 Not started |
+| 19 | JIT Mode Green | 🔲 Not started |
+| 20 | External Stubs Green | 🔲 Not started |
+| 21 | WASM32 Green | 🔲 Not started |
+| 22 | WASM64 Support | 🔲 Not started |
+| 23 | Test Infra Polish | 🔲 Not started |
 
 ## Key Decisions Log
 
-| Decision | Phase | Date |
-|----------|-------|------|
-| *(none yet)* | | |
-
----
-*Last updated: 2026-03-21 after project initialization*
+| Decision | Rationale | Outcome |
+|----------|-----------|---------|
+| Phase numbering continues from v1 (16+) | Maintains continuity across milestones | — |
+| Fix native first, then expand | Establishes baseline before tackling harder modes | — |
+| 9 permutations (incl. wasm64) | User wants ALL possible execution paths covered | — |

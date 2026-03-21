@@ -1,105 +1,121 @@
-# Requirements — v1: Win32 Compatibility Milestone
+# v2: Full Test Coverage — Requirements
 
-## v1 Requirements
+## Goal
+Every test in `tests/test_msvc_cli.sh` passes across **all** execution permutations.
 
-### Threading
-- [ ] **THREAD-01**: Guest can create Win32 threads via CreateThread with isolated x86 CPU state per thread
-- [ ] **THREAD-02**: Guest can use critical sections (InitializeCriticalSection, Enter, Leave, Delete)
-- [ ] **THREAD-03**: Guest can create and signal events (CreateEvent, SetEvent, ResetEvent, WaitForSingleObject)
-- [ ] **THREAD-04**: Guest can create and release mutexes (CreateMutex, ReleaseMutex)
-- [ ] **THREAD-05**: Guest can wait on multiple handles (WaitForMultipleObjects)
-- [ ] **THREAD-06**: MSVCRT _beginthread and _beginthreadex map to CreateThread
-- [ ] **THREAD-07**: Thread local storage (TlsAlloc, TlsGetValue, TlsSetValue, TlsFree) works per-thread
+## Execution Permutation Matrix
 
-### Direct3D 7
-- [ ] **D3D7-01**: IDirect3D7::CreateDevice creates a software rendering device
-- [ ] **D3D7-02**: SetTransform handles WORLD, VIEW, PROJECTION matrices with correct T&L pipeline
-- [ ] **D3D7-03**: DrawPrimitive and DrawIndexedPrimitive render triangle lists, strips, and fans
-- [ ] **D3D7-04**: SetTexture and SetTextureStageState apply textures with correct blending
-- [ ] **D3D7-05**: SetRenderState handles alpha blending, z-buffer, fog, and culling modes
-- [ ] **D3D7-06**: BeginScene/EndScene/Present frame cycle works correctly
-- [ ] **D3D7-07**: D3D7 renders to DirectDraw surfaces shared with existing framebuffer
-- [ ] **D3D7-08**: Clear clears framebuffer and z-buffer with specified color/depth
-- [ ] **D3D7-09**: SetViewport configures rendering viewport dimensions
-- [ ] **D3D7-10**: Europa 1400 Gold renders gameplay scenes without major visual glitches
+### Native Linux (x86 binary)
 
-### GDI Fonts
-- [ ] **FONT-01**: CreateFont/CreateFontIndirect creates a logical font from LOGFONT struct
-- [ ] **FONT-02**: SelectObject selects font into DC; GetTextMetrics returns font metrics
-- [ ] **FONT-03**: TextOut and ExtTextOut render text to a DC surface
-- [ ] **FONT-04**: DrawText renders text with alignment and word wrap options
-- [ ] **FONT-05**: GetTextExtentPoint32 measures text width/height accurately
-- [ ] **FONT-06**: Europa 1400 Gold displays in-game text and menu fonts correctly
+| ID | Execution | Stubs | Flag |
+|----|-----------|-------|------|
+| P01 | Direct | Embedded | `--native` |
+| P02 | Interpreted | Embedded | `--interpret` |
+| P03 | JIT | Embedded | `--jit` |
+| P04 | Direct | External DLL | `--external` |
 
-### DirectSound
-- [ ] **DSND-01**: Multiple secondary buffers mix correctly with primary buffer
-- [ ] **DSND-02**: SetVolume and SetPan work on individual buffers
+### Native Linux (x86_64 binary)
 
-### JIT Execution
-- [ ] **JIT-01**: Compiled x86→WASM blocks execute via WASM runtime instead of interpreter
-- [ ] **JIT-02**: JIT-executed blocks produce identical results to interpreter execution
-- [ ] **JIT-03**: Interpreter and JIT can be toggled at runtime
+| ID | Execution | Stubs | Flag |
+|----|-----------|-------|------|
+| P05 | Direct (compat) | Embedded | `--native64` |
+| P06 | Interpreted | Embedded | `--interpret64` (new) |
+| P07 | Direct | External DLL | `--external64` (new) |
 
-### MSVC Toolchain (WASM)
-- [ ] **WASM-01**: MSVC cl.exe test suite passes on wasm32 target
-- [ ] **WASM-02**: MSVC cl.exe test suite passes on wasm64 target
-- [ ] **WASM-03**: MSVC link.exe test suite passes on WASM targets
+### WASM32 (via external runtime)
 
-### Europa 1400 Integration
-- [ ] **EU14-01**: Europa 1400 Gold progresses past main menu into gameplay
-- [ ] **EU14-02**: Europa 1400 Gold displays fonts and UI text correctly
-- [ ] **EU14-03**: Europa 1400 Gold plays sounds during gameplay
+| ID | Execution | Runtime | Flag |
+|----|-----------|---------|------|
+| P08 | Interpreted | wasmtime | `--wasmtime` |
+| P09 | Interpreted | wasmer | `--wasmer` |
+| P10 | JIT | wasmtime | `--jit-wasmtime` (new) |
+| P11 | JIT | wasmer | `--jit-wasmer` (new) |
 
-## v2 Requirements (Deferred)
-- [ ] Advanced GDI drawing (paths, regions, complex clipping)
-- [ ] DirectInput joystick support
-- [ ] TTF font loading from drive_c/Windows/Fonts/
-- [ ] 3D positional audio (IDirectSound3DBuffer)
-- [ ] WASM threading via SharedArrayBuffer
+### WASM64 (via external runtime)
 
-## Out of Scope
-- Direct3D 8/9 rendering — Europa 1400 uses D3D7
-- Winsock networking — not needed for single-player gameplay
-- COM/OLE automation — not needed for game compatibility
-- Windows Installer / MSI — not needed
-- Printing / WINSPOOL — not needed
-- macOS/Windows host support — Linux only this milestone
+| ID | Execution | Runtime | Flag |
+|----|-----------|---------|------|
+| P12 | Interpreted | wasmtime | `--wasm64-wasmtime` (new) |
+| P13 | Interpreted | wasmer | `--wasm64-wasmer` (new) |
+| P14 | JIT | wasmtime | `--jit-wasm64-wasmtime` (new) |
+| P15 | JIT | wasmer | `--jit-wasm64-wasmer` (new) |
+
+### zine-host (wasmer embedded host)
+
+| ID | Host arch | WASM target | Flag |
+|----|-----------|-------------|------|
+| P16 | x86 | wasm32 | `--zine-host` (new) |
+| P17 | x86 | wasm64 | `--zine-host-wasm64` (new) |
+| P18 | x86_64 | wasm32 | `--zine-host64` (new) |
+| P19 | x86_64 | wasm64 | `--zine-host64-wasm64` (new) |
+
+**Total: 19 permutations**
+
+## Test Sections (~25 tests)
+
+| Section | Tests | Description |
+|---------|-------|-------------|
+| Startup | 20 | Tool help/usage output and exit codes |
+| CL compile | 1 | Compile C to .obj |
+| CL preprocess | 1 | /EP macro expansion |
+| CL link | 1 | Compile + link to .exe |
+| CL syntax | 1 | Error reporting on bad code |
+| CL multi | 1 | Multi-file compile+link |
+| LINK | 1 | Link .obj to .exe |
+| DUMPBIN | 4 | Headers, exports, disasm, symbols |
+| LIB | 2 | Create .lib, list members |
+| RC | 1 | Compile .rc to .res |
+| CVTRES | 1 | Convert .res to .coff |
+| UNDNAME | 1 | C++ name demangling |
+| UUIDGEN | 1 | UUID generation |
+| E2E | 5 | Full pipeline: compile→link→dump→run |
+
+## Requirements
+
+### Baseline (fix native x86 failures first)
+
+- **TEST-01**: RC.EXE produces .res in native mode
+- **TEST-02**: CVTRES.EXE converts .res to .coff in native mode
+- **TEST-03**: E2E CL /c works with include paths in native mode
+- **TEST-04**: All 20 startup tests pass in native mode
+
+### Per-Permutation Green (19 permutations)
+
+- **TEST-P01** through **TEST-P19**: All tests pass in each permutation
+
+### Infrastructure
+
+- **TEST-INF-01**: `--all` flag includes all 19 permutations
+- **TEST-INF-02**: CI-friendly output (machine-parseable pass/fail summary)
+- **TEST-INF-03**: Test script returns 0 only when ALL tests pass
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| THREAD-01 | Phase 1: Thread Manager Core | ✅ |
-| THREAD-06 | Phase 1: Thread Manager Core | ✅ |
-| THREAD-07 | Phase 1: Thread Manager Core | ✅ |
-| THREAD-02 | Phase 2: Sync Primitives | ✅ |
-| THREAD-03 | Phase 2: Sync Primitives | ✅ |
-| THREAD-04 | Phase 2: Sync Primitives | ✅ |
-| THREAD-05 | Phase 2: Sync Primitives | ✅ |
-| FONT-01 | Phase 3: GDI Font Subsystem | ✅ |
-| FONT-02 | Phase 3: GDI Font Subsystem | ✅ |
-| FONT-05 | Phase 3: GDI Font Subsystem | ✅ |
-| FONT-03 | Phase 4: GDI Text Rendering | ✅ |
-| FONT-04 | Phase 4: GDI Text Rendering | ✅ |
-| FONT-06 | Phase 4: GDI Text Rendering | ✅ |
-| D3D7-01 | Phase 5: D3D7 Device & Pipeline | ✅ |
-| D3D7-02 | Phase 5: D3D7 Device & Pipeline | ✅ |
-| D3D7-09 | Phase 5: D3D7 Device & Pipeline | ✅ |
-| D3D7-03 | Phase 6: D3D7 Rasterizer | ✅ |
-| D3D7-04 | Phase 6: D3D7 Rasterizer | ✅ |
-| D3D7-08 | Phase 6: D3D7 Rasterizer | ✅ |
-| D3D7-05 | Phase 7: D3D7 Render States | ✅ |
-| D3D7-06 | Phase 7: D3D7 Render States | ✅ |
-| D3D7-07 | Phase 7: D3D7 Render States | ✅ |
-| D3D7-10 | Phase 13: Europa 1400 Debugging | ⚠️ needs retest |
-| DSND-01 | Phase 12: DirectSound Gap Closure | ✅ |
-| DSND-02 | Phase 12: DirectSound Gap Closure | ✅ |
-| JIT-01 | Phase 9: JIT Execution | ⚠️ |
-| JIT-02 | Phase 14: JIT Equivalence Tests | ⚠️ tech debt |
-| JIT-03 | Phase 9: JIT Execution | ✅ |
-| WASM-01 | Phase 15: WASM Test Verification | ⚠️ build passes, runtime untested |
-| WASM-02 | Phase 15: WASM Test Verification | ⚠️ build passes, runtime untested |
-| WASM-03 | Phase 15: WASM Test Verification | ⚠️ build passes, runtime untested |
-| EU14-01 | Phase 13: Europa 1400 Debugging | ⚠️ SEH fix applied, needs retest |
-| EU14-02 | Phase 13: Europa 1400 Debugging | ⚠️ needs retest |
-| EU14-03 | Phase 13: Europa 1400 Debugging | ⚠️ needs retest |
+| TEST-01 | TBD | 🔲 |
+| TEST-02 | TBD | 🔲 |
+| TEST-03 | TBD | 🔲 |
+| TEST-04 | TBD | 🔲 |
+| TEST-P01 | TBD | 🔲 |
+| TEST-P02 | TBD | 🔲 |
+| TEST-P03 | TBD | 🔲 |
+| TEST-P04 | TBD | 🔲 |
+| TEST-P05 | TBD | 🔲 |
+| TEST-P06 | TBD | 🔲 |
+| TEST-P07 | TBD | 🔲 |
+| TEST-P08 | TBD | 🔲 |
+| TEST-P09 | TBD | 🔲 |
+| TEST-P10 | TBD | 🔲 |
+| TEST-P11 | TBD | 🔲 |
+| TEST-P12 | TBD | 🔲 |
+| TEST-P13 | TBD | 🔲 |
+| TEST-P14 | TBD | 🔲 |
+| TEST-P15 | TBD | 🔲 |
+| TEST-P16 | TBD | 🔲 |
+| TEST-P17 | TBD | 🔲 |
+| TEST-P18 | TBD | 🔲 |
+| TEST-P19 | TBD | 🔲 |
+| TEST-INF-01 | TBD | 🔲 |
+| TEST-INF-02 | TBD | 🔲 |
+| TEST-INF-03 | TBD | 🔲 |

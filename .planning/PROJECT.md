@@ -44,9 +44,13 @@ Run Win98/Win2K era Windows applications and games faithfully on Linux and in th
 
 ### Active
 
-<!-- Current scope. Building toward these. -->
+<!-- v2: Full Test Coverage -->
 
-No active milestone. Run `/gsd-new-milestone` to define the next one.
+- [ ] All MSVC CLI tests pass in native x86 mode (fix RC, CVTRES, E2E)
+- [ ] All tests pass in interpreted, JIT, native64, and external-stubs modes
+- [ ] All tests pass on WASM32 (wasmtime + wasmer)
+- [ ] WASM64 build and test mode added, all tests pass
+- [ ] Test script enhanced with wasm64 flags and comprehensive `--all` mode
 
 ### Out of Scope
 
