@@ -557,7 +557,7 @@ pub fn main() !void {
 fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     // Resolve the PE path: convert Win32 path to POSIX
     var posix_buf: [1024]u8 = undefined;
-    const posix_len = try path_utils.win32ToPosix(cmdname, &posix_buf);
+    const posix_len = path_utils.win32ToPosix(cmdname, &posix_buf) catch 0;
     var exe_path: []const u8 = if (posix_len > 0) posix_buf[0..posix_len] else cmdname;
 
     // If cmdname is empty, extract the intended command from argv[0].
@@ -586,7 +586,7 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
         if (stubs_kernel32.main_exe_dir_len > 0) {
             const dir = stubs_kernel32.main_exe_dir[0..stubs_kernel32.main_exe_dir_len];
             var resolved_buf: [1024]u8 = undefined;
-            const dir_posix_len = try path_utils.win32ToPosix(dir, &resolved_buf);
+            const dir_posix_len = path_utils.win32ToPosix(dir, &resolved_buf) catch 0;
             if (dir_posix_len > 0) {
                 @memcpy(resolved_buf[dir_posix_len..][0..exe_path.len], exe_path);
                 exe_path = resolved_buf[0 .. dir_posix_len + exe_path.len];

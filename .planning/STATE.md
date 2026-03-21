@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 | 10 | MSVC WASM Fixes | ✅ Complete (gaps → Phase 15) |
 | 11 | Europa 1400 Integration | ✅ Complete (gaps → Phase 13) |
 | 12 | DirectSound Gap Closure | ✅ Complete (6e841a4) |
-| 13 | Europa 1400 Debugging | 🔲 Not started |
-| 14 | JIT Equivalence Tests | 🔲 Not started |
-| 15 | WASM Test Verification | 🔲 Not started |
+| 13 | Europa 1400 Debugging | ✅ SEH fix (e1e9de0), needs retest |
+| 14 | JIT Equivalence Tests | ✅ Unit tests pass |
+| 15 | WASM Test Verification | ✅ Build fix, wasm32 passes |
 
 ## Key Decisions Log
 
