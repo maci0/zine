@@ -130,6 +130,25 @@ function makeDraggable(titlebar, windowElement) {
 makeDraggable(document.getElementById('main-titlebar'), mainWindow);
 makeDraggable(document.getElementById('dialog-titlebar'), dialogOverlay);
 
+/** Fit canvas into game-container preserving aspect ratio */
+function fitCanvasToContainer() {
+    // Temporarily shrink canvas so it doesn't constrain the container
+    canvas.style.width = '0';
+    canvas.style.height = '0';
+    const container = document.getElementById('game-container');
+    const maxW = container.clientWidth - 4;
+    const maxH = container.clientHeight - 4;
+    if (maxW <= 0 || maxH <= 0) return;
+
+    const gameW = currentRenderWidth || 1;
+    const gameH = currentRenderHeight || 1;
+    const scale = Math.min(maxW / gameW, maxH / gameH);
+    const w = Math.round(gameW * scale);
+    const h = Math.round(gameH * scale);
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+}
+
 // --- Window Resize ---
 (function() {
     let resizing = false;
@@ -181,21 +200,18 @@ makeDraggable(document.getElementById('dialog-titlebar'), dialogOverlay);
         mainWindow.style.width = w + 'px';
         mainWindow.style.height = h + 'px';
 
-        // Live resize — reset canvas first so it doesn't constrain the container
-        canvas.style.width = '0';
-        canvas.style.height = '0';
-        const container = document.getElementById('game-container');
-        const cw = container.clientWidth - 4;
-        const ch = container.clientHeight - 4;
-        if (cw > 0 && ch > 0) {
-            canvas.style.width = cw + 'px';
-            canvas.style.height = ch + 'px';
-            sendWmSize(cw, ch, 0);
-        }
+        // Live resize — fit canvas maintaining aspect ratio
+        fitCanvasToContainer();
     });
 
     document.addEventListener('mouseup', () => {
-        resizing = false;
+        if (resizing) {
+            resizing = false;
+            // Send final size to guest app
+            const cw = parseInt(canvas.style.width) || canvas.width;
+            const ch = parseInt(canvas.style.height) || canvas.height;
+            if (cw > 0 && ch > 0) sendWmSize(cw, ch, 0);
+        }
     });
 })();
 
@@ -304,14 +320,10 @@ function maximizeWindow() {
         isMaximized = true;
 
         requestAnimationFrame(() => {
-            const container = document.getElementById('game-container');
-            const newCW = container.clientWidth - 4;
-            const newCH = container.clientHeight - 4;
-            if (newCW > 0 && newCH > 0) {
-                canvas.style.width = newCW + 'px';
-                canvas.style.height = newCH + 'px';
-                sendWmSize(newCW, newCH, 2);
-            }
+            fitCanvasToContainer();
+            const cw = parseInt(canvas.style.width) || canvas.width;
+            const ch = parseInt(canvas.style.height) || canvas.height;
+            if (cw > 0 && ch > 0) sendWmSize(cw, ch, 2);
         });
     }
 }
@@ -730,6 +742,9 @@ function connect() {
                     currentRenderHeight = msg.height;
                     canvas.width = currentRenderWidth;
                     canvas.height = currentRenderHeight;
+                    // Set initial CSS size to match pixel resolution
+                    canvas.style.width = currentRenderWidth + 'px';
+                    canvas.style.height = currentRenderHeight + 'px';
 
                 } else if (msg.type === "audio_format") {
                     setupAudio(msg.sampleRate, msg.channels, msg.bitsPerSample);
@@ -774,8 +789,8 @@ function connect() {
                     );
 
                 } else if (msg.type === "custom_dialog") {
-                    const scaleX = 1.5;
-                    const scaleY = 1.625;
+                    const scaleX = 1.75;
+                    const scaleY = 1.875;
                     const dlgW = Math.round(msg.cx * scaleX);
                     const dlgH = Math.round(msg.cy * scaleY);
 
@@ -786,8 +801,8 @@ function connect() {
                     dialogOverlay.style.width = (dlgW + 14) + 'px';
 
                 } else if (msg.type === "show_controls") {
-                    const scaleX = 1.5;
-                    const scaleY = 1.625;
+                    const scaleX = 1.75;
+                    const scaleY = 1.875;
                     const dlgW = Math.round(msg.cx * scaleX);
                     const dlgH = Math.round(msg.cy * scaleY);
 
