@@ -707,6 +707,23 @@ fn surface_Blt(this: *IDirectDrawSurface, lpDestRect: usize, lpDDSrcSurface_raw:
     return w32.DD_OK;
 }
 
+inline fn unpack16To32(src: [*]const u8, si: usize, di: usize) void {
+    const lo: u16 = src[si * 2];
+    const hi: u16 = src[si * 2 + 1];
+    const rgb565 = lo | (hi << 8);
+    renderer.global_framebuf[di * 4 + 0] = @truncate((rgb565 >> 11) << 3);
+    renderer.global_framebuf[di * 4 + 1] = @truncate(((rgb565 >> 5) & 0x3F) << 2);
+    renderer.global_framebuf[di * 4 + 2] = @truncate((rgb565 & 0x1F) << 3);
+    renderer.global_framebuf[di * 4 + 3] = 255;
+}
+
+inline fn unpack32To32(src: [*]const u8, si: usize, di: usize) void {
+    renderer.global_framebuf[di * 4 + 0] = src[si * 4 + 2]; // R <- B
+    renderer.global_framebuf[di * 4 + 1] = src[si * 4 + 1]; // G
+    renderer.global_framebuf[di * 4 + 2] = src[si * 4 + 0]; // B <- R
+    renderer.global_framebuf[di * 4 + 3] = 255; // A
+}
+
 /// Push frame from a specific source buffer (used for Blt to primary).
 /// Supports nearest-neighbor scaling when source dims differ from viewport.
 fn pushSurfaceFrameFrom(src: [*]u8, w: u32, h: u32) void {
@@ -723,24 +740,15 @@ fn pushSurfaceFrameFrom(src: [*]u8, w: u32, h: u32) void {
                 for (0..@as(usize, vw)) |x| {
                     const si = y * @as(usize, w) + x;
                     const di = y * @as(usize, vw) + x;
-                    const lo: u16 = src[si * 2];
-                    const hi: u16 = src[si * 2 + 1];
-                    const rgb565 = lo | (hi << 8);
-                    renderer.global_framebuf[di * 4 + 0] = @truncate((rgb565 >> 11) << 3);
-                    renderer.global_framebuf[di * 4 + 1] = @truncate(((rgb565 >> 5) & 0x3F) << 2);
-                    renderer.global_framebuf[di * 4 + 2] = @truncate((rgb565 & 0x1F) << 3);
-                    renderer.global_framebuf[di * 4 + 3] = 255;
+                    unpack16To32(src, si, di);
                 }
             }
         } else {
             for (0..@as(usize, vh)) |y| {
                 for (0..@as(usize, vw)) |x| {
-                    const si = (y * @as(usize, w) + x) * 4;
-                    const di = (y * @as(usize, vw) + x) * 4;
-                    renderer.global_framebuf[di + 0] = src[si + 2]; // R <- B
-                    renderer.global_framebuf[di + 1] = src[si + 1]; // G
-                    renderer.global_framebuf[di + 2] = src[si + 0]; // B <- R
-                    renderer.global_framebuf[di + 3] = 255; // A
+                    const si = y * @as(usize, w) + x;
+                    const di = y * @as(usize, vw) + x;
+                    unpack32To32(src, si, di);
                 }
             }
         }
@@ -753,13 +761,7 @@ fn pushSurfaceFrameFrom(src: [*]u8, w: u32, h: u32) void {
                     const sx = (dx * @as(usize, w)) / @as(usize, vw);
                     const si = sy * @as(usize, w) + sx;
                     const di = dy * @as(usize, vw) + dx;
-                    const lo: u16 = src[si * 2];
-                    const hi: u16 = src[si * 2 + 1];
-                    const rgb565 = lo | (hi << 8);
-                    renderer.global_framebuf[di * 4 + 0] = @truncate((rgb565 >> 11) << 3);
-                    renderer.global_framebuf[di * 4 + 1] = @truncate(((rgb565 >> 5) & 0x3F) << 2);
-                    renderer.global_framebuf[di * 4 + 2] = @truncate((rgb565 & 0x1F) << 3);
-                    renderer.global_framebuf[di * 4 + 3] = 255;
+                    unpack16To32(src, si, di);
                 }
             }
         } else {
@@ -767,12 +769,9 @@ fn pushSurfaceFrameFrom(src: [*]u8, w: u32, h: u32) void {
                 const sy = (dy * @as(usize, h)) / @as(usize, vh);
                 for (0..@as(usize, vw)) |dx| {
                     const sx = (dx * @as(usize, w)) / @as(usize, vw);
-                    const si = (sy * @as(usize, w) + sx) * 4;
-                    const di = (dy * @as(usize, vw) + dx) * 4;
-                    renderer.global_framebuf[di + 0] = src[si + 2]; // R <- B
-                    renderer.global_framebuf[di + 1] = src[si + 1]; // G
-                    renderer.global_framebuf[di + 2] = src[si + 0]; // B <- R
-                    renderer.global_framebuf[di + 3] = 255; // A
+                    const si = sy * @as(usize, w) + sx;
+                    const di = dy * @as(usize, vw) + dx;
+                    unpack32To32(src, si, di);
                 }
             }
         }
@@ -793,23 +792,11 @@ pub fn pushSurfaceFrame() void {
 
     if (display_mode_bpp == 16) {
         for (0..pixels) |i| {
-            const lo: u16 = surface_buffer[i * 2];
-            const hi: u16 = surface_buffer[i * 2 + 1];
-            const rgb565 = lo | (hi << 8);
-            const r: u8 = @truncate((rgb565 >> 11) << 3);
-            const g: u8 = @truncate(((rgb565 >> 5) & 0x3F) << 2);
-            const b: u8 = @truncate((rgb565 & 0x1F) << 3);
-            renderer.global_framebuf[i * 4 + 0] = r;
-            renderer.global_framebuf[i * 4 + 1] = g;
-            renderer.global_framebuf[i * 4 + 2] = b;
-            renderer.global_framebuf[i * 4 + 3] = 255;
+            unpack16To32(surface_buffer.ptr, i, i);
         }
     } else {
         for (0..pixels) |i| {
-            renderer.global_framebuf[i * 4 + 0] = surface_buffer[i * 4 + 2]; // R <- B
-            renderer.global_framebuf[i * 4 + 1] = surface_buffer[i * 4 + 1]; // G
-            renderer.global_framebuf[i * 4 + 2] = surface_buffer[i * 4 + 0]; // B <- R
-            renderer.global_framebuf[i * 4 + 3] = 255; // A
+            unpack32To32(surface_buffer.ptr, i, i);
         }
     }
     renderer.pushFrame();

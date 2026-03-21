@@ -185,131 +185,11 @@ fn ansiClassEql(class_ptr: usize, target: []const u8) bool {
     return true;
 }
 
-pub fn CreateWindowExA(
-    dwExStyle: u32, lpClassName: usize, lpWindowName: usize, dwStyle: u32,
+fn createWindowExInternal(
+    dwExStyle: u32, class_name: []const u8, window_name: []const u8, dwStyle: u32,
     x: i32, y: i32, nWidth: i32, nHeight: i32,
-    hWndParent: usize, hMenu: usize, hInstance: usize, lpParam: usize,
-) callconv(w32cc.WINAPI) usize {
-    _ = hInstance;
-    _ = lpParam;
-
-    const is_child = (dwStyle & w32.WS_CHILD) != 0;
-    const is_edit = ansiClassEql(lpClassName, "Edit");
-
-    if (!is_child) {
-        // Only update the renderer for the first two top-level windows
-        // (TApplication + main form). Subsequent top-level windows
-        // (Delphi utility windows) should not overwrite the main form's state.
-        const is_first_or_main = (user32.global_hwnd == 0) or !user32.main_form_created;
-
-        if (is_first_or_main) {
-            user32.window_style = dwStyle;
-            user32.window_exstyle = dwExStyle;
-            user32.window_x = x;
-            user32.window_y = y;
-            if (hMenu != 0) user32.window_has_menu = true;
-
-            applyWindowSize(dwStyle, dwExStyle, nWidth, nHeight);
-        }
-
-        if (trace.enable_tracing) trace.print("USER32: CreateWindowExA(style={x}, exstyle={x}, {d}x{d}, menu={x}) -> client {d}x{d}\n", .{ dwStyle, dwExStyle, nWidth, nHeight, hMenu, user32.current_client_width, user32.current_client_height });
-
-        if (is_first_or_main) {
-            if (lpWindowName != 0) {
-                const title = trace.c_span(lpWindowName);
-                renderer.setTitle(title);
-            }
-
-            if (user32.window_width > 0 and user32.window_height > 0) {
-                renderer.setWindowPos(user32.window_width, user32.window_height, user32.current_client_width, user32.current_client_height);
-            }
-
-            fillFramebufWhite();
-        }
-
-        if (user32.global_hwnd != 0 and !user32.main_form_created) {
-            user32.main_form_created = true;
-        }
-        user32.global_hwnd = 0x00000123;
-
-        // Dispatch WM_NCCREATE and WM_CREATE to WndProc (with SEH protection)
-        if (user32.global_wndproc) |wndproc| {
-            var cs: [12]u32 = std.mem.zeroes([12]u32);
-            cs[1] = @truncate(kernel32.main_module_handle); // hInstance
-            cs[2] = @truncate(hMenu); // hMenu
-            cs[4] = @bitCast(nHeight); // cy
-            cs[5] = @bitCast(nWidth);  // cx
-            cs[6] = @bitCast(y);       // y
-            cs[7] = @bitCast(x);       // x
-            cs[8] = dwStyle;           // style
-            cs[11] = dwExStyle;        // dwExStyle
-            const lp: isize = @bitCast(@intFromPtr(&cs));
-            const proc = @intFromPtr(wndproc);
-            var err_flag: u32 = 0;
-            const nc_result = user32.callWndProcSafe(proc, user32.global_hwnd, 0x0081, 0, lp, &err_flag); // WM_NCCREATE
-            if (trace.enable_tracing) trace.print("USER32: WM_NCCREATE -> {d} (err={d})\n", .{ nc_result, err_flag });
-            if (err_flag == 0) {
-                const create_result = user32.callWndProcSafe(proc, user32.global_hwnd, 0x0001, 0, lp, &err_flag); // WM_CREATE
-                if (trace.enable_tracing) trace.print("USER32: WM_CREATE -> {d} (err={d})\n", .{ create_result, err_flag });
-                if (err_flag == 0 and create_result == -1) {
-                    if (trace.enable_tracing) trace.print("USER32: WM_CREATE returned -1, window creation failed\n", .{});
-                    return 0;
-                }
-            }
-        }
-
-        return user32.global_hwnd;
-    }
-
-    // Child window
-    const child_hwnd = next_child_hwnd;
-    next_child_hwnd += 1;
-
-    const class_name = if (lpClassName > 0xFFFF) trace.c_span(lpClassName) else "?";
-    if (trace.enable_tracing) trace.print("USER32: CreateWindowExA child(class={s}, style={x}, parent={x}, pos={d},{d},{d},{d}) -> {x}\n", .{ class_name, dwStyle, hWndParent, x, y, nWidth, nHeight, child_hwnd });
-
-    // Store window info so GetWindowLong/SetWindowLong work for child windows
-    if (user32.getWindowInfo(child_hwnd)) |info| {
-        info.style = @bitCast(dwStyle);
-        info.exstyle = @bitCast(dwExStyle);
-        info.parent = hWndParent;
-    }
-
-    if (is_edit) {
-        const is_multiline = (dwStyle & w32.ES_MULTILINE) != 0;
-        user32.edit_hwnd = child_hwnd;
-        renderer.showEditControl(is_multiline);
-    }
-
-    return child_hwnd;
-}
-
-// Detect if a wide class name matches an ASCII string (case-insensitive)
-fn wideClassEql(class_ptr: usize, target: []const u8) bool {
-    if (class_ptr == 0 or class_ptr <= 0xFFFF) return false; // ATOM, not a string
-    const wide = @as([*]const u16, @ptrFromInt(class_ptr));
-    for (0..target.len) |i| {
-        const wc = wide[i];
-        if (wc == 0) return false;
-        const c: u8 = if (wc < 128) @intCast(wc) else return false;
-        if (std.ascii.toLower(c) != std.ascii.toLower(target[i])) return false;
-    }
-    return wide[target.len] == 0;
-}
-
-var next_child_hwnd: usize = 0x00001000;
-
-pub fn CreateWindowExW(
-    dwExStyle: u32, lpClassName: usize, lpWindowName: usize, dwStyle: u32,
-    x: i32, y: i32, nWidth: i32, nHeight: i32,
-    hWndParent: usize, hMenu: usize, hInstance: usize, lpParam: usize,
-) callconv(w32cc.WINAPI) usize {
-    _ = hInstance;
-    _ = lpParam;
-
-    const is_child = (dwStyle & w32.WS_CHILD) != 0;
-    const is_edit = wideClassEql(lpClassName, "Edit");
-
+    hWndParent: usize, hMenu: usize, is_child: bool, is_edit: bool,
+) usize {
     if (!is_child) {
         const is_first_or_main = (user32.global_hwnd == 0) or !user32.main_form_created;
 
@@ -322,26 +202,20 @@ pub fn CreateWindowExW(
             applyWindowSize(dwStyle, dwExStyle, nWidth, nHeight);
         }
 
-        if (trace.enable_tracing) trace.print("USER32: CreateWindowExW(style={x}, exstyle={x}, {d}x{d}, menu={x}) -> client {d}x{d}\n", .{ dwStyle, dwExStyle, nWidth, nHeight, hMenu, user32.current_client_width, user32.current_client_height });
+        if (trace.enable_tracing) trace.print("USER32: CreateWindowEx(style={x}, exstyle={x}, {d}x{d}, menu={x}) -> client {d}x{d}\n", .{ dwStyle, dwExStyle, nWidth, nHeight, hMenu, user32.current_client_width, user32.current_client_height });
 
         if (is_first_or_main) {
-            if (lpWindowName != 0) {
-                const title = wideToUtf8(lpWindowName);
-                if (title.len > 0) renderer.setTitle(title);
-            }
+            if (window_name.len > 0) renderer.setTitle(window_name);
             if (user32.window_width > 0 and user32.window_height > 0) {
                 renderer.setWindowPos(user32.window_width, user32.window_height, user32.current_client_width, user32.current_client_height);
             }
             fillFramebufWhite();
         }
 
-        if (user32.global_hwnd == 0x00000123) {
+        if (user32.global_hwnd == 0x00000123 and !user32.main_form_created) {
             // Second top-level window = main form
             user32.main_form_created = true;
             // Suppress access violations during Delphi form initialization.
-            // Delphi's CreateForm accesses uninitialized object pointers
-            // which crash on our system. Suppressing these allows the form
-            // to complete initialization with its paint/event handlers connected.
             const k32_err = @import("../kernel32/error.zig");
             k32_err.suppress_access_violations = true;
             // Show the main form on the web UI immediately
@@ -355,9 +229,7 @@ pub fn CreateWindowExW(
         user32.global_hwnd = 0x00000123;
 
         // Dispatch WM_NCCREATE (0x0081) and WM_CREATE (0x0001) to WndProc
-        // This is critical: apps initialize their state in WM_CREATE
         if (user32.global_wndproc) |wndproc| {
-            // Provide a valid CREATESTRUCT on the stack
             var cs: [12]u32 = std.mem.zeroes([12]u32);
             cs[1] = @truncate(kernel32.main_module_handle); // hInstance
             cs[2] = @truncate(hMenu); // hMenu
@@ -381,8 +253,7 @@ pub fn CreateWindowExW(
         }
 
         // For the main form, post WM_SIZE and WM_SHOWWINDOW so Delphi
-        // lays out controls and triggers painting. Normally Application.ShowMainForm
-        // does this, but if CreateForm's exception skips it, we do it here.
+        // lays out controls and triggers painting.
         if (user32.main_form_created) {
             const msg_mod = @import("message.zig");
             const cw: u16 = @intCast(@as(u32, @bitCast(user32.current_client_width)) & 0xFFFF);
@@ -396,12 +267,11 @@ pub fn CreateWindowExW(
         return user32.global_hwnd;
     }
 
-    // Child window (CreateWindowExW path)
+    // Child window
     const child_hwnd = next_child_hwnd;
     next_child_hwnd += 1;
 
-    const class_name = if (lpClassName > 0xFFFF) wideToUtf8(lpClassName) else "?";
-    if (trace.enable_tracing) trace.print("USER32: CreateWindowExW child(class={s}, style={x}, parent={x}, pos={d},{d},{d},{d}) -> {x}\n", .{ class_name, dwStyle, hWndParent, x, y, nWidth, nHeight, child_hwnd });
+    if (trace.enable_tracing) trace.print("USER32: CreateWindowEx child(class={s}, style={x}, parent={x}, pos={d},{d},{d},{d}) -> {x}\n", .{ class_name, dwStyle, hWndParent, x, y, nWidth, nHeight, child_hwnd });
 
     // Store window info so GetWindowLong works for child windows
     if (user32.getWindowInfo(child_hwnd)) |info| {
@@ -415,21 +285,67 @@ pub fn CreateWindowExW(
         const is_multiline = (dwStyle & w32.ES_MULTILINE) != 0;
         user32.edit_hwnd = child_hwnd;
         renderer.showEditControl(is_multiline);
-    } else if (lpClassName > 0xFFFF) {
+    } else if (class_name.len > 0 and class_name[0] != '?') {
         // Check for common controls and render them
-        const text = if (lpWindowName > 0xFFFF) wideToUtf8(lpWindowName) else "";
-        if (wideClassEql(lpClassName, "SysTabControl32") or
-            wideClassEql(lpClassName, "SysListView32") or
-            wideClassEql(lpClassName, "msctls_statusbar32") or
-            wideClassEql(lpClassName, "msctls_progress32") or
-            wideClassEql(lpClassName, "SysTreeView32") or
-            wideClassEql(lpClassName, "SysHeader32"))
+        if (std.ascii.eqlIgnoreCase(class_name, "SysTabControl32") or
+            std.ascii.eqlIgnoreCase(class_name, "SysListView32") or
+            std.ascii.eqlIgnoreCase(class_name, "msctls_statusbar32") or
+            std.ascii.eqlIgnoreCase(class_name, "msctls_progress32") or
+            std.ascii.eqlIgnoreCase(class_name, "SysTreeView32") or
+            std.ascii.eqlIgnoreCase(class_name, "SysHeader32"))
         {
-            renderer.addControl(class_name, child_hwnd, x, y, nWidth, nHeight, dwStyle, text);
+            renderer.addControl(class_name, child_hwnd, x, y, nWidth, nHeight, dwStyle, window_name);
         }
     }
 
     return child_hwnd;
+}
+
+// Detect if a wide class name matches an ASCII string (case-insensitive)
+fn wideClassEql(class_ptr: usize, target: []const u8) bool {
+    if (class_ptr == 0 or class_ptr <= 0xFFFF) return false; // ATOM, not a string
+    const wide = @as([*]const u16, @ptrFromInt(class_ptr));
+    for (0..target.len) |i| {
+        const wc = wide[i];
+        if (wc == 0) return false;
+        const c: u8 = if (wc < 128) @intCast(wc) else return false;
+        if (std.ascii.toLower(c) != std.ascii.toLower(target[i])) return false;
+    }
+    return wide[target.len] == 0;
+}
+
+var next_child_hwnd: usize = 0x00001000;
+
+pub fn CreateWindowExA(
+    dwExStyle: u32, lpClassName: usize, lpWindowName: usize, dwStyle: u32,
+    x: i32, y: i32, nWidth: i32, nHeight: i32,
+    hWndParent: usize, hMenu: usize, hInstance: usize, lpParam: usize,
+) callconv(w32cc.WINAPI) usize {
+    _ = hInstance;
+    _ = lpParam;
+
+    const is_child = (dwStyle & w32.WS_CHILD) != 0;
+    const is_edit = ansiClassEql(lpClassName, "Edit");
+    const class_name = if (lpClassName > 0xFFFF) trace.c_span(lpClassName) else "?";
+    const window_name = if (lpWindowName > 0xFFFF) trace.c_span(lpWindowName) else "";
+
+    return createWindowExInternal(dwExStyle, class_name, window_name, dwStyle, x, y, nWidth, nHeight, hWndParent, hMenu, is_child, is_edit);
+}
+
+pub fn CreateWindowExW(
+    dwExStyle: u32, lpClassName: usize, lpWindowName: usize, dwStyle: u32,
+    x: i32, y: i32, nWidth: i32, nHeight: i32,
+    hWndParent: usize, hMenu: usize, hInstance: usize, lpParam: usize,
+) callconv(w32cc.WINAPI) usize {
+    _ = hInstance;
+    _ = lpParam;
+
+    const is_child = (dwStyle & w32.WS_CHILD) != 0;
+    const is_edit = wideClassEql(lpClassName, "Edit");
+    const class_name = if (lpClassName > 0xFFFF) wideToUtf8(lpClassName) else "?";
+    const window_name = if (lpWindowName > 0xFFFF) wideToUtf8(lpWindowName) else "";
+
+    return createWindowExInternal(dwExStyle, class_name, window_name, dwStyle, x, y, nWidth, nHeight, hWndParent, hMenu, is_child, is_edit);
 }
 
 fn fillFramebufWhite() void {
