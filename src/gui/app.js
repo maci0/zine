@@ -223,13 +223,34 @@ function showDialog(title, content) {
 
     // Move focus into the dialog for accessibility
     requestAnimationFrame(() => {
-        const focusable = dialogOverlay.querySelector('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
-        if (focusable) focusable.focus();
+        const focusables = dialogOverlay.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+        if (focusables.length > 0) focusables[0].focus();
+        
+        // Trap focus
+        dialogOverlay.onkeydown = (e) => {
+            if (e.key === 'Tab') {
+                const els = dialogOverlay.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+                if (els.length === 0) {
+                    e.preventDefault();
+                    return;
+                }
+                const first = els[0];
+                const last = els[els.length - 1];
+                if (e.shiftKey && document.activeElement === first) {
+                    e.preventDefault();
+                    last.focus();
+                } else if (!e.shiftKey && document.activeElement === last) {
+                    e.preventDefault();
+                    first.focus();
+                }
+            }
+        };
     });
 }
 
 function closeDialog(suppressBackend = false) {
     dialogOverlay.style.display = 'none';
+    dialogOverlay.onkeydown = null;
     document.getElementById('main-titlebar').classList.remove('inactive');
     window._fileDialogUpdate = null; // Clean up file dialog navigation handler
     if (!suppressBackend && ws && ws.readyState === WebSocket.OPEN) {
@@ -424,8 +445,36 @@ document.addEventListener('contextmenu', (e) => {
     }
 });
 
+// Dismiss menus and dialogs via Escape key
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const ctxMenu = document.getElementById('taskbar-context-menu');
+        if (ctxMenu && window.getComputedStyle(ctxMenu).display !== 'none') {
+            ctxMenu.style.display = 'none';
+            return;
+        }
+        
+        const popups = document.querySelectorAll('.popup-menu');
+        let closedMenu = false;
+        popups.forEach(p => {
+            if (window.getComputedStyle(p).display !== 'none') {
+                p.style.display = 'none';
+                closedMenu = true;
+                // De-bounce the popup rendering bug
+                setTimeout(() => p.style.display = '', 100);
+            }
+        });
+        if (closedMenu) return;
+
+        if (dialogOverlay.style.display === 'flex' || window.getComputedStyle(dialogOverlay).display === 'flex') {
+            closeDialog();
+            sendCommand(2); // IDCANCEL
+        }
+    }
+});
+
 // --- Dialog Control Rendering (VanJS) ---
-function DialogControl(item, scaleX, scaleY) {
+function DialogControl(item, scaleX, scaleY, allItems = []) {
     const px = Math.round(item.x * scaleX);
     const py = Math.round(item.y * scaleY);
     const pcx = Math.round(item.cx * scaleX);
@@ -464,7 +513,16 @@ function DialogControl(item, scaleX, scaleY) {
 
     // Edit
     if (cls === 'Edit') {
-        return input({type: 'text', class: 'win2k-edit', style: absPos, value: item.text, "data-id": item.id});
+        let ariaLabel = "Text input";
+        const siblingLabel = allItems.find(sibling => 
+            sibling.class === 'Static' && 
+            Math.abs(sibling.y - item.y) < 10 && 
+            sibling.x < item.x
+        );
+        if (siblingLabel && siblingLabel.text) {
+            ariaLabel = siblingLabel.text.replace(/&/g, "");
+        }
+        return input({type: 'text', class: 'win2k-edit', style: absPos, value: item.text, "aria-label": ariaLabel, "data-id": item.id});
     }
 
     // ListBox
@@ -661,7 +719,13 @@ function connect() {
             try {
                 const msg = JSON.parse(event.data);
 
-                if (msg.type === "set_resolution") {
+                if (msg.type === "error") {
+                    console.error("Zine API Error:", msg.message);
+                    statusEl.textContent = "API Error: " + msg.message;
+                    statusEl.style.display = 'block';
+                    statusEl.style.color = "#f87171";
+                    setTimeout(() => statusEl.style.display = 'none', 4000);
+                } else if (msg.type === "set_resolution") {
                     currentRenderWidth = msg.width;
                     currentRenderHeight = msg.height;
                     canvas.width = currentRenderWidth;
@@ -716,7 +780,7 @@ function connect() {
                     const dlgH = Math.round(msg.cy * scaleY);
 
                     const container = div({style: `position:relative; width:${dlgW}px; height:${dlgH}px; background-color:var(--sys-face);`},
-                        ...(msg.items || []).map(item => DialogControl(item, scaleX, scaleY))
+                        ...(msg.items || []).map(item => DialogControl(item, scaleX, scaleY, msg.items))
                     );
                     showDialog(msg.title, container);
                     dialogOverlay.style.width = (dlgW + 14) + 'px';
@@ -733,7 +797,7 @@ function connect() {
                     ctrlContainer.innerHTML = '';
 
                     (msg.items || []).forEach(item => {
-                        van.add(ctrlContainer, DialogControl(item, scaleX, scaleY));
+                        van.add(ctrlContainer, DialogControl(item, scaleX, scaleY, msg.items));
                     });
 
                     const inset = canvas.parentElement;

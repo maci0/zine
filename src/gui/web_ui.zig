@@ -165,6 +165,12 @@ fn handleClient(conn: std.net.Server.Connection, _: std.mem.Allocator) void {
     };
 }
 
+fn sendError(ws: *std.http.Server.WebSocket, msg: []const u8) void {
+    var buf: [1024]u8 = undefined;
+    const json = std.fmt.bufPrint(&buf, "{{\"type\":\"error\",\"message\":\"{s}\"}}", .{msg}) catch return;
+    _ = ws.writeMessage(json, .text) catch {};
+}
+
 fn handleClientInner(conn: std.net.Server.Connection) !void {
     // Each client handler gets its own arena to avoid thread-safety issues
     // with the shared ArenaAllocator from main.
@@ -253,10 +259,14 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                                         "Desktop";
 
                                     // Security: reject path traversal in both dir and filename
-                                    if (std.mem.indexOf(u8, dir_path, "..") != null) continue;
-                                    if (std.mem.indexOf(u8, file_val.string, "..") != null) continue;
-                                    if (std.mem.indexOfScalar(u8, dir_path, 0) != null) continue;
-                                    if (std.mem.indexOfScalar(u8, file_val.string, 0) != null) continue;
+                                    if (std.mem.indexOf(u8, dir_path, "..") != null or
+                                        std.mem.indexOf(u8, file_val.string, "..") != null or
+                                        std.mem.indexOfScalar(u8, dir_path, 0) != null or
+                                        std.mem.indexOfScalar(u8, file_val.string, 0) != null)
+                                    {
+                                        sendError(&ws, "Invalid path traversal attempt");
+                                        continue;
+                                    }
 
                                     const path = std.fmt.bufPrint(&selected_file_path, "drive_c/{s}/{s}", .{ dir_path, file_val.string }) catch null;
                                     if (path) |p| {
@@ -270,11 +280,13 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                                 if (path_val == .string) {
                                     const req_path = path_val.string;
                                     // Security: reject path traversal and null bytes
-                                    if (std.mem.indexOf(u8, req_path, "..") == null and
-                                        std.mem.indexOfScalar(u8, req_path, 0) == null)
+                                    if (std.mem.indexOf(u8, req_path, "..") != null or
+                                        std.mem.indexOfScalar(u8, req_path, 0) != null)
                                     {
-                                        renderer.listDirectory(req_path);
+                                        sendError(&ws, "Invalid path traversal attempt");
+                                        continue;
                                     }
+                                    renderer.listDirectory(req_path);
                                 }
                             }
                         } else if (std.mem.eql(u8, type_val.?.string, "launch")) {
@@ -283,13 +295,15 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                                 if (path_val == .string) {
                                     const req_path = path_val.string;
                                     // Security: reject path traversal and null bytes
-                                    if (std.mem.indexOf(u8, req_path, "..") == null and
-                                        std.mem.indexOfScalar(u8, req_path, 0) == null)
+                                    if (std.mem.indexOf(u8, req_path, "..") != null or
+                                        std.mem.indexOfScalar(u8, req_path, 0) != null)
                                     {
-                                        const path = std.fmt.bufPrint(&selected_file_path, "drive_c/{s}", .{req_path}) catch null;
-                                        if (path) |p| {
-                                            if (renderer.on_file_uploaded) |cb| cb(p);
-                                        }
+                                        sendError(&ws, "Invalid path traversal attempt");
+                                        continue;
+                                    }
+                                    const path = std.fmt.bufPrint(&selected_file_path, "drive_c/{s}", .{req_path}) catch null;
+                                    if (path) |p| {
+                                        if (renderer.on_file_uploaded) |cb| cb(p);
                                     }
                                 }
                             }
@@ -345,6 +359,10 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                             // Frontend syncs textarea content to backend cache
                             if (root.object.get("text")) |text_val| {
                                 if (text_val == .string) {
+                                    if (text_val.string.len > 65536) {
+                                        sendError(&ws, "Text payload exceeds maximum size");
+                                        continue;
+                                    }
                                     renderer.setEditTextFromSlice(text_val.string);
                                 }
                             }
@@ -352,6 +370,10 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                             // Browser clipboard → backend clipboard buffer
                             if (root.object.get("text")) |text_val| {
                                 if (text_val == .string) {
+                                    if (text_val.string.len > 65536) {
+                                        sendError(&ws, "Clipboard payload exceeds maximum size");
+                                        continue;
+                                    }
                                     renderer.setClipboardFromSlice(text_val.string);
                                 }
                             }

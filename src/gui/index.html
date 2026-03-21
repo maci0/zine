@@ -66,14 +66,14 @@
             <span id="taskbar-title"></span>
         </div>
         <div class="taskbar-tray">
-            <div class="tray-volume" id="tray-volume" role="button" tabindex="0" aria-label="Volume" onclick="toggleVolumePopup(event)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleVolumePopup(event)}">
+            <button type="button" class="tray-volume" id="tray-volume" aria-label="Volume" onclick="toggleVolumePopup(event)">
                 <svg viewBox="0 0 16 16" width="16" height="16" class="volume-icon">
                     <polygon points="2,6 2,10 5,10 9,13 9,3 5,6" fill="currentColor"/>
                     <path id="vol-wave1" d="M10,5.5 Q12,8 10,10.5" fill="none" stroke="currentColor" stroke-width="1.2"/>
                     <path id="vol-wave2" d="M11,3.5 Q14,8 11,12.5" fill="none" stroke="currentColor" stroke-width="1.2"/>
                     <line id="vol-mute-line" x1="2" y1="3" x2="14" y2="13" stroke="red" stroke-width="2" style="display:none"/>
                 </svg>
-            </div>
+            </button>
             <div class="volume-popup" id="volume-popup">
                 <div class="volume-popup-title">Volume</div>
                 <div class="volume-slider-container">
