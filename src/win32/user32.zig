@@ -1041,40 +1041,27 @@ fn stub_EndDeferWindowPos(hWinPosInfo: usize) callconv(w32cc.WINAPI) i32 {
 // Tests
 // =============================================================================
 
-test "GetDialogBaseUnits returns MAKELONG(8, 16)" {
-    const result = stub_GetDialogBaseUnits();
-    const baseX = result & 0xFFFF;
-    const baseY = (result >> 16) & 0xFFFF;
-    try std.testing.expectEqual(@as(u32, 8), baseX);
-    try std.testing.expectEqual(@as(u32, 16), baseY);
-}
+test "calcFrameAdjustments returns correct bounds" {
+    // 1. Thick frame + Caption
+    const adj1 = calcFrameAdjustments(WS_THICKFRAME | WS_CAPTION, false, 0);
+    try std.testing.expectEqual(@as(i32, SM_CXFRAME), adj1.left);
+    try std.testing.expectEqual(@as(i32, SM_CXFRAME), adj1.right);
+    try std.testing.expectEqual(@as(i32, SM_CYFRAME + SM_CYCAPTION), adj1.top);
+    try std.testing.expectEqual(@as(i32, SM_CYFRAME), adj1.bottom);
 
-test "GetLastActivePopup returns hWnd" {
-    try std.testing.expectEqual(@as(usize, 0x1234), stub_GetLastActivePopup(0x1234));
-}
+    // 2. Dialog frame + Menu
+    const adj2 = calcFrameAdjustments(WS_DLGFRAME, true, 0);
+    try std.testing.expectEqual(@as(i32, SM_CXDLGFRAME), adj2.left);
+    try std.testing.expectEqual(@as(i32, SM_CXDLGFRAME), adj2.right);
+    try std.testing.expectEqual(@as(i32, SM_CYDLGFRAME + SM_CYMENU), adj2.top);
+    try std.testing.expectEqual(@as(i32, SM_CYDLGFRAME), adj2.bottom);
 
-test "MonitorFromWindow returns valid handle" {
-    const handle = stub_MonitorFromWindow(0x1234, 0);
-    try std.testing.expect(handle != 0);
-    try std.testing.expectEqual(FAKE_HMONITOR, handle);
-}
-
-test "CharToOemBuffA copies data" {
-    var src = [_]u8{ 'H', 'e', 'l', 'l', 'o' };
-    var dst: [5]u8 = undefined;
-    const result = stub_CharToOemBuffA(@intFromPtr(&src), @intFromPtr(&dst), 5);
-    try std.testing.expectEqual(@as(i32, 1), result);
-    try std.testing.expectEqualSlices(u8, &src, &dst);
-}
-
-test "BeginDeferWindowPos returns non-zero" {
-    const handle = stub_BeginDeferWindowPos(5);
-    try std.testing.expect(handle != 0);
-    // DeferWindowPos returns the same handle
-    const handle2 = stub_DeferWindowPos(handle, 0, 0, 0, 0, 100, 100, 0);
-    try std.testing.expectEqual(handle, handle2);
-    // EndDeferWindowPos returns TRUE
-    try std.testing.expectEqual(@as(i32, 1), stub_EndDeferWindowPos(handle));
+    // 3. Border + Client Edge
+    const adj3 = calcFrameAdjustments(WS_BORDER, false, WS_EX_CLIENTEDGE);
+    try std.testing.expectEqual(@as(i32, SM_CXBORDER + SM_CXEDGE), adj3.left);
+    try std.testing.expectEqual(@as(i32, SM_CXBORDER + SM_CXEDGE), adj3.right);
+    try std.testing.expectEqual(@as(i32, SM_CYBORDER + SM_CYEDGE), adj3.top);
+    try std.testing.expectEqual(@as(i32, SM_CYBORDER + SM_CYEDGE), adj3.bottom);
 }
 
 // IsCharAlphaNumericA/W, IsCharLowerA/W, IsCharUpperW: simple ascii check

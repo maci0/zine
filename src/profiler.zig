@@ -23,12 +23,12 @@ var start_ns: ?i128 = null;
 
 /// Record the profiling start time. Called when profiling begins.
 pub fn start() void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    if (comptime builtin.target.cpu.arch.isWasm()) return;
     start_ns = std.time.nanoTimestamp();
 }
 
 fn getElapsedMs() u64 {
-    if (comptime builtin.target.cpu.arch == .wasm32) return 0;
+    if (comptime builtin.target.cpu.arch.isWasm()) return 0;
     const s = start_ns orelse return 0;
     const now = std.time.nanoTimestamp();
     const delta = now - s;

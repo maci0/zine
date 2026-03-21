@@ -33,7 +33,7 @@ fn getUseColor() bool {
 }
 
 fn detectColorImpl() bool {
-    if (builtin.target.cpu.arch == .wasm32) return false;
+    if (builtin.target.cpu.arch.isWasm()) return false;
     if (std.process.hasEnvVarConstant("NO_COLOR")) return false;
     const handle = std.fs.File.stderr().handle;
     return std.posix.isatty(handle);
@@ -53,7 +53,7 @@ const ESC_DIM = "\x1b[2m"; // dim / faint
 var start_ns: ?i128 = null;
 
 fn getElapsedMs() u64 {
-    if (comptime builtin.target.cpu.arch == .wasm32) return 0;
+    if (comptime builtin.target.cpu.arch.isWasm()) return 0;
     const now = std.time.nanoTimestamp();
     if (start_ns == null) {
         start_ns = now;
@@ -162,7 +162,7 @@ pub fn trace(comptime fmt: []const u8, args: anytype) void {
 /// Initialize log level from ZINE_LOG_LEVEL environment variable.
 /// Call during startup, after env vars are available.
 pub fn initFromEnv() void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    if (comptime builtin.target.cpu.arch.isWasm()) return;
     const val = std.process.getEnvVarOwned(std.heap.page_allocator, "ZINE_LOG_LEVEL") catch return;
     defer std.heap.page_allocator.free(val);
     if (std.mem.eql(u8, val, "fatal")) {

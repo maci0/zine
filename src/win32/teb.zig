@@ -223,8 +223,8 @@ pub fn initTEB(allocator: std.mem.Allocator) !*TEB {
     // to detect stack overflows. If they are 0 or unrealistic, they abort with C1063.
     const frame_addr: usize = @frameAddress();
     const bounds = platform.getStackBounds(frame_addr);
-    teb_val.NtTib.StackBase = bounds.stack_base;
-    teb_val.NtTib.StackLimit = bounds.stack_limit;
+    teb_val.NtTib.StackBase = @truncate(bounds.stack_base);
+    teb_val.NtTib.StackLimit = @truncate(bounds.stack_limit);
 
     return teb_val;
 }

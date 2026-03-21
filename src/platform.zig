@@ -5,7 +5,7 @@
 
 const builtin = @import("builtin");
 
-const backend = if (builtin.target.cpu.arch == .wasm32)
+const backend = if (builtin.target.cpu.arch.isWasm())
     @import("platform/wasm.zig")
 else
     @import("platform/native.zig");

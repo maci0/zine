@@ -27,7 +27,11 @@ fn queryForArch(arch: std.Target.Cpu.Arch) std.Target.Query {
             .cpu_arch = .wasm32,
             .os_tag = .wasi,
         },
-        else => @panic("Unsupported architecture. Use x86, x86_64, or wasm32."),
+        .wasm64 => .{
+            .cpu_arch = .wasm64,
+            .os_tag = .wasi,
+        },
+        else => @panic("Unsupported architecture. Use x86, x86_64, wasm32, or wasm64."),
     };
 }
 
@@ -36,6 +40,7 @@ fn nameForArch(arch: std.Target.Cpu.Arch) []const u8 {
         .x86 => "zine.x86",
         .x86_64 => "zine.x86_64",
         .wasm32 => "zine.wasm32",
+        .wasm64 => "zine.wasm64",
         else => "zine",
     };
 }
@@ -109,6 +114,7 @@ fn addNativeExe(
 
 fn addWasmExe(
     b: *std.Build,
+    arch: std.Target.Cpu.Arch,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     toml_mod: *std.Build.Module,
@@ -116,7 +122,7 @@ fn addWasmExe(
     enable_jit_host: bool,
 ) *std.Build.Step.Compile {
     const wasm_lib = b.addExecutable(.{
-        .name = nameForArch(.wasm32),
+        .name = nameForArch(arch),
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/wasm_main.zig"),
             .target = target,
@@ -142,8 +148,8 @@ fn addWasmExe(
 }
 
 pub fn build(b: *std.Build) void {
-    const arch = b.option(std.Target.Cpu.Arch, "arch", "Target architecture (x86, x86_64, or wasm32)");
-    const build_all = b.option(bool, "all", "Build all targets (x86 + x86_64 + wasm32)") orelse false;
+    const arch = b.option(std.Target.Cpu.Arch, "arch", "Target architecture (x86, x86_64, wasm32, or wasm64)");
+    const build_all = b.option(bool, "all", "Build all targets (x86 + x86_64 + wasm32 + wasm64)") orelse false;
 
     const use_fltk = b.option(bool, "fltk", "Enable FLTK native GUI backend (x86 only)") orelse false;
     const embed_stubs = !(b.option(bool, "external-stubs", "Load Win32 stubs from external DLLs instead of embedding them") orelse false);
@@ -152,7 +158,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const archs_to_build: []const std.Target.Cpu.Arch = if (build_all)
-        &.{ .x86, .x86_64, .wasm32 }
+        &.{ .x86, .x86_64, .wasm32, .wasm64 }
     else if (arch) |a|
         @as([]const std.Target.Cpu.Arch, &.{a})
     else
@@ -167,8 +173,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
 
-        if (a == .wasm32) {
-            const wasm_lib = addWasmExe(b, target, optimize, toml_dep.module("toml"), embed_stubs, enable_jit_host);
+        if (a == .wasm32 or a == .wasm64) {
+            const wasm_lib = addWasmExe(b, a, target, optimize, toml_dep.module("toml"), embed_stubs, enable_jit_host);
             b.installArtifact(wasm_lib);
         } else {
             const exe = addNativeExe(b, a, target, optimize, toml_dep.module("toml"), use_fltk, embed_stubs);

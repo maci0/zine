@@ -614,18 +614,6 @@ pub fn stub_XcptFilter(xcptnum: u32, pxcptinfoptrs: *anyopaque) callconv(.c) i32
     return 0;
 }
 
-/// Pending init function callbacks for WASM — shared through stub_common
-/// so x86/execute.zig can read them without importing msvcrt directly.
-const initterm_state = struct {
-    const sc = @import("../shared.zig");
-    fn callbacks() *[64]u32 {
-        return &sc.pending_initterm_callbacks;
-    }
-    fn count() *usize {
-        return &sc.pending_initterm_count;
-    }
-};
-
 /// initterm
 /// Implementation status: Partially implemented
 pub fn initterm(pfbegin: [*]const ?*const fn () callconv(.c) void, pfend: [*]const ?*const fn () callconv(.c) void) callconv(.c) void {
@@ -637,16 +625,15 @@ pub fn initterm(pfbegin: [*]const ?*const fn () callconv(.c) void, pfend: [*]con
         const end_addr = @intFromPtr(pfend);
         if (trace.enable_tracing) trace.print("MSVCRT: _initterm({x}, {x}) [WASM collect]\n", .{ begin_addr, end_addr });
 
+        const x86_thunks = @import("../../x86/thunks.zig");
+
         // Each entry is a 4-byte guest function pointer
         var current = begin_addr;
         while (current < end_addr) : (current += 4) {
             const func_ptr = @as(*const u32, @ptrFromInt(current)).*;
             if (func_ptr != 0) {
                 if (trace.enable_tracing) trace.print("  -> enqueuing init func at guest {x}\n", .{func_ptr});
-                if (initterm_state.count().* < 64) {
-                    initterm_state.callbacks().*[initterm_state.count().*] = func_ptr;
-                    initterm_state.count().* += 1;
-                }
+                x86_thunks.queueInittermCallback(func_ptr);
             }
         }
         return;
@@ -681,10 +668,8 @@ pub fn initterm_e(pfbegin: [*]const ?*const fn () callconv(.c) i32, pfend: [*]co
         while (current < end_addr) : (current += 4) {
             const func_ptr = @as(*const u32, @ptrFromInt(current)).*;
             if (func_ptr != 0) {
-                if (initterm_state.count().* < 64) {
-                    initterm_state.callbacks().*[initterm_state.count().*] = func_ptr;
-                    initterm_state.count().* += 1;
-                }
+                const x86_thunks = @import("../../x86/thunks.zig");
+                x86_thunks.queueInittermCallback(func_ptr);
             }
         }
         return 0;

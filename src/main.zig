@@ -33,47 +33,25 @@ const log = @import("log.zig");
 const profiler = @import("profiler.zig");
 const version = @import("version.zig");
 const build_options = @import("build_options");
+const pe = @import("pe.zig");
 
-/// Fallback function for unimplemented Win32 APIs.
-/// It attempts to resolve the name of the missing API and logs a fatal error.
-fn not_implemented() callconv(.c) void {
-    const ra = @returnAddress();
-    const name = x86_thunks.lookupUnresolvedName(ra);
-    if (name) |func_name| {
-        log.fatal("Unimplemented Win32 API: {s} (called from 0x{X})", .{ func_name, ra });
-    } else {
-        // Also try to identify via E8→FF25 thunk chain: the caller did
-        // E8 rel32 → jmp [IAT], so RA-5 has `E8 rel32`. Resolve the E8
-        // target and check if that's a `FF 25 addr32` (jmp thunk).
-        var found_name: ?[]const u8 = null;
-        if (ra >= 5) {
-            const call_site: [*]const u8 = @ptrFromInt(ra - 5);
-            if (call_site[0] == 0xE8) {
-                const rel = @as(*align(1) const i32, @ptrCast(call_site + 1)).*;
-                const target: usize = @intCast(@as(isize, @intCast(ra)) + rel);
-                const thunk_ptr: [*]const u8 = @ptrFromInt(target);
-                if (thunk_ptr[0] == 0xFF and thunk_ptr[1] == 0x25) {
-                    const iat_slot = @as(*align(1) const u32, @ptrCast(thunk_ptr + 2)).*;
-                    found_name = x86_thunks.lookupUnresolvedName_bySlot(iat_slot);
-                }
+fn buildCmdLineString(allocator: std.mem.Allocator, app_args_items: []const ?[*:0]u8) !usize {
+    var cmdline_buf = try allocator.alloc(u8, 4096);
+    @memset(cmdline_buf, 0);
+    var pos: usize = 0;
+    for (app_args_items) |arg_opt| {
+        if (arg_opt) |arg| {
+            const span = std.mem.span(arg);
+            if (pos > 0 and pos < 4095) {
+                cmdline_buf[pos] = ' ';
+                pos += 1;
             }
-        }
-        if (found_name) |func_name| {
-            log.fatal("Unimplemented Win32 API: {s} (called from 0x{X})", .{ func_name, ra });
-        } else {
-            log.fatal("Unimplemented Win32 API called from 0x{X}", .{ra});
-            // Dump stack for diagnostics
-            const esp: usize = @frameAddress();
-            if (esp > 0x1000) {
-                const stack = @as([*]const u32, @ptrFromInt(esp));
-                log.fatal("  Stack context:", .{});
-                for (0..8) |i| {
-                    log.fatal("    [{d}] = 0x{X}", .{ i, stack[i] });
-                }
-            }
+            const copy_len = @min(span.len, 4095 - pos);
+            @memcpy(cmdline_buf[pos .. pos + copy_len], span[0..copy_len]);
+            pos += copy_len;
         }
     }
-    std.process.exit(1);
+    return @intFromPtr(cmdline_buf.ptr);
 }
 
 /// The entry point for the native Zine executable.
@@ -309,7 +287,7 @@ pub fn main() !void {
     var environment = Environment.init(allocator);
     defer environment.deinit();
 
-    try runner.registerAllStubs(&environment, @intFromPtr(&not_implemented));
+    try runner.registerAllStubs(&environment, @intFromPtr(&x86_thunks.not_implemented_stub));
 
     // On x86_64, initialize the compat thunk pool for 32-bit PE execution
     if (comptime platform.is_x86_64) {
@@ -350,10 +328,9 @@ pub fn main() !void {
     {
         const pe_base = @intFromPtr(main_module.mapped_memory.ptr);
         {
-            const IMAGE_SCN_CNT_CODE = 0x20;
             const sections = main_module.parser.sections;
             for (sections) |sec| {
-                if (sec.Characteristics & IMAGE_SCN_CNT_CODE != 0) {
+                if (sec.Characteristics & pe.IMAGE_SCN_CNT_CODE != 0) {
                     stubs_kernel32.app_code_start = pe_base + sec.VirtualAddress;
                     stubs_kernel32.app_code_end = pe_base + sec.VirtualAddress + sec.Misc.VirtualSize;
                     break;
@@ -398,9 +375,8 @@ pub fn main() !void {
         }
     }
 
-    const IMAGE_SUBSYSTEM_WINDOWS_GUI = 2;
     const subsystem = main_module.parser.getNtHeaders().OptionalHeader.Subsystem;
-    const is_gui = (subsystem == IMAGE_SUBSYSTEM_WINDOWS_GUI);
+    const is_gui = (subsystem == pe.IMAGE_SUBSYSTEM_WINDOWS_GUI);
     if (is_gui) {
         if (trace.enable_tracing) trace.print("Detected GUI application (subsystem={d})\n", .{subsystem});
     } else {
@@ -438,24 +414,7 @@ pub fn main() !void {
     stubs_msvcrt.global_argv = app_args.items.ptr;
 
     // Build _acmdln string from argv for MSVCRT data export
-    {
-        var cmdline_buf = try allocator.alloc(u8, 4096);
-        @memset(cmdline_buf, 0);
-        var pos: usize = 0;
-        for (app_args.items) |arg_opt| {
-            if (arg_opt) |arg| {
-                const span = std.mem.span(arg);
-                if (pos > 0 and pos < 4095) {
-                    cmdline_buf[pos] = ' ';
-                    pos += 1;
-                }
-                const copy_len = @min(span.len, 4095 - pos);
-                @memcpy(cmdline_buf[pos .. pos + copy_len], span[0..copy_len]);
-                pos += copy_len;
-            }
-        }
-        stubs_msvcrt.msvcrt_acmdln = @intFromPtr(cmdline_buf.ptr);
-    }
+    stubs_msvcrt.msvcrt_acmdln = try buildCmdLineString(allocator, app_args.items);
 
     // Dump arguments
     if (trace.enable_tracing) {

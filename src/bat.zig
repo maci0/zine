@@ -35,6 +35,11 @@ pub const BatEnv = struct {
 
     /// Frees all resources associated with the batch environment.
     pub fn deinit(self: *BatEnv) void {
+        var it = self.env.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
         self.env.deinit();
     }
 
@@ -315,7 +320,7 @@ test "expand: %* with no extra args" {
 test "expand: environment variable" {
     var bat = testBatEnv();
     defer bat.deinit();
-    try bat.env.put("FOO", "bar");
+    try bat.env.put(try testing.allocator.dupe(u8, "FOO"), try testing.allocator.dupe(u8, "bar"));
 
     const result = try bat.expand("value=%FOO%", &.{}, "C:\\bat");
     defer testing.allocator.free(result);
@@ -325,7 +330,7 @@ test "expand: environment variable" {
 test "expand: env var case insensitive" {
     var bat = testBatEnv();
     defer bat.deinit();
-    try bat.env.put("MyVar", "hello");
+    try bat.env.put(try testing.allocator.dupe(u8, "MyVar"), try testing.allocator.dupe(u8, "hello"));
 
     const result = try bat.expand("%myvar%", &.{}, "C:\\bat");
     defer testing.allocator.free(result);
@@ -358,4 +363,49 @@ test "expand: out of range ordinal arg" {
     const result = try bat.expand("%1", &args, "C:\\bat");
     defer testing.allocator.free(result);
     try testing.expectEqualStrings("", result);
+}
+
+test "parseFile: state machine and env tracking" {
+    var bat = testBatEnv();
+    defer bat.deinit();
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const bat_name = "test_script.bat";
+    const bat_content =
+        \\@echo off
+        \\set TEST_VAR=123
+        \\if "%TEST_VAR%"=="123" set COND_VAR=success
+        \\if not "%TEST_VAR%"=="456" set NOT_VAR=yes
+        \\final_target.exe "arg1"
+    ;
+    try tmp_dir.dir.writeFile(.{ .sub_path = bat_name, .data = bat_content });
+
+    const abs_path = try tmp_dir.dir.realpathAlloc(testing.allocator, bat_name);
+    defer testing.allocator.free(abs_path);
+
+    // Call parseFile
+    const final_args = try bat.parseFile(abs_path, &[_][]const u8{});
+    defer if (final_args) |args| {
+        for (args) |arg| testing.allocator.free(arg);
+        testing.allocator.free(args);
+    };
+
+    try testing.expect(final_args != null);
+    try testing.expectEqual(@as(usize, 2), final_args.?.len);
+    try testing.expectEqualStrings("final_target.exe", final_args.?[0]);
+    try testing.expectEqualStrings("arg1", final_args.?[1]);
+
+    const test_var = bat.env.get("TEST_VAR");
+    try testing.expect(test_var != null);
+    try testing.expectEqualStrings("123", test_var.?);
+
+    const cond_var = bat.env.get("COND_VAR");
+    try testing.expect(cond_var != null);
+    try testing.expectEqualStrings("success", cond_var.?);
+
+    const not_var = bat.env.get("NOT_VAR");
+    try testing.expect(not_var != null);
+    try testing.expectEqualStrings("yes", not_var.?);
 }

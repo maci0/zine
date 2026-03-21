@@ -927,7 +927,7 @@ fn threadWrapper(start_address: usize, parameter: usize) void {
         // Initialize per-thread fields
         const thread_teb = @as(*teb_mod.TEB, @ptrCast(@alignCast(thread_teb_mem.ptr)));
         thread_teb.NtTib.ExceptionList = 0xFFFFFFFF; // Empty SEH chain
-        thread_teb.NtTib.Self = @intFromPtr(thread_teb_mem.ptr) + 0x18; // Self pointer
+        thread_teb.NtTib.Self = @truncate(@intFromPtr(thread_teb_mem.ptr) + 0x18); // Self pointer
         // Set up FS to point to this thread's TEB
         teb_mod.setupFS(@ptrCast(@alignCast(thread_teb_mem.ptr))) catch {};
     }

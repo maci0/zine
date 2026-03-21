@@ -45,6 +45,23 @@ pub const MAX_THUNKS = 4096;
 var thunk_entries: [MAX_THUNKS]?ThunkEntry = .{null} ** MAX_THUNKS;
 var thunk_count: u32 = 0;
 
+/// Shared _initterm callback queue (WASM only).
+///
+/// On WASM, _initterm collects guest x86 function addresses here.
+/// After the stub returns, x86/execute.zig reads them to build a
+/// trampoline.
+pub var pending_initterm_callbacks: [64]u32 = [_]u32{0} ** 64;
+pub var pending_initterm_count: usize = 0;
+
+pub fn queueInittermCallback(addr: u32) void {
+    if (pending_initterm_count < pending_initterm_callbacks.len) {
+        pending_initterm_callbacks[pending_initterm_count] = addr;
+        pending_initterm_count += 1;
+    } else {
+        log.warn("x86 thunks: _initterm queue full, dropping callback 0x{X}", .{addr});
+    }
+}
+
 /// Look up a thunk entry by ID (used by compat_thunks signal dispatcher).
 pub fn getEntry(id: u32) ?*const ThunkEntry {
     if (id >= MAX_THUNKS) return null;
@@ -105,8 +122,7 @@ pub fn dispatch(cpu: *Cpu) void {
         // Build an x86 trampoline to execute them before returning
         // to the guest CRT startup code.
         if (comptime !@import("../platform.zig").is_native) {
-            const sc = @import("../win32/shared.zig");
-            if (sc.pending_initterm_count > 0) {
+            if (pending_initterm_count > 0) {
                 @import("execute.zig").buildInittermTrampoline(cpu);
             }
         }
@@ -477,6 +493,45 @@ pub fn lookupUnresolvedName_bySlot(iat_slot: u32) ?[]const u8 {
         return slice[i].name[0..slice[i].name_len];
     }
     return null;
+}
+
+/// Fallback function for unimplemented Win32 APIs, moved from main.zig.
+/// It attempts to resolve the name of the missing API and logs a fatal error.
+pub fn not_implemented_stub() callconv(.c) void {
+    const ra = @returnAddress();
+    const name = lookupUnresolvedName(ra);
+    if (name) |func_name| {
+        log.fatal("Unimplemented Win32 API: {s} (called from 0x{X})", .{ func_name, ra });
+    } else {
+        // Try to identify via E8->FF25 thunk chain
+        var found_name: ?[]const u8 = null;
+        if (ra >= 5) {
+            const call_site: [*]const u8 = @ptrFromInt(ra - 5);
+            if (call_site[0] == 0xE8) {
+                const rel = @as(*align(1) const i32, @ptrCast(call_site + 1)).*;
+                const target: usize = @intCast(@as(isize, @intCast(ra)) + rel);
+                const thunk_ptr: [*]const u8 = @ptrFromInt(target);
+                if (thunk_ptr[0] == 0xFF and thunk_ptr[1] == 0x25) {
+                    const iat_slot = @as(*align(1) const u32, @ptrCast(thunk_ptr + 2)).*;
+                    found_name = lookupUnresolvedName_bySlot(iat_slot);
+                }
+            }
+        }
+        if (found_name) |func_name| {
+            log.fatal("Unimplemented Win32 API: {s} (called from 0x{X})", .{ func_name, ra });
+        } else {
+            log.fatal("Unimplemented Win32 API called from 0x{X}", .{ra});
+            const esp: usize = @frameAddress();
+            if (esp > 0x1000) {
+                const stack = @as([*]const u32, @ptrFromInt(esp));
+                log.fatal("  Stack context:", .{});
+                for (0..8) |i| {
+                    log.fatal("    [{d}] = 0x{X}", .{ i, stack[i] });
+                }
+            }
+        }
+    }
+    std.process.exit(1);
 }
 
 // -----------------------------------------------------------------------

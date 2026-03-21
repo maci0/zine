@@ -157,15 +157,7 @@ pub fn raw_realloc(old_ptr: ?*anyopaque, new_size: usize) ?*anyopaque {
     return @ptrCast(new_data);
 }
 
-/// Shared _initterm callback queue (WASM only).
-///
-/// On WASM, _initterm collects guest x86 function addresses here.
-/// After the stub returns, x86/execute.zig reads them to build a
-/// trampoline. Previously this state lived in msvcrt/process.zig,
-/// creating a layer violation (x86 interpreter → CRT stubs).
-pub var pending_initterm_callbacks: [64]u32 = [_]u32{0} ** 64;
-/// The number of pending _initterm callbacks.
-pub var pending_initterm_count: usize = 0;
+
 
 /// Shared tracing logic for all stubs. Must be `inline` so that
 /// `@returnAddress()` resolves to the caller of the stub, not this helper.

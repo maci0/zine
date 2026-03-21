@@ -133,7 +133,7 @@ pub fn SHGetSpecialFolderLocation(hwndOwner: usize, nFolder: i32, ppidl: usize) 
     buf[2] = 0; // padding
     buf[3] = 0; // terminator SHITEMID (cb=0)
 
-    @as(*u32, @ptrFromInt(ppidl)).* = @intFromPtr(pidl_ptr);
+    @as(*u32, @ptrFromInt(ppidl)).* = @truncate(@intFromPtr(pidl_ptr));
     return 0; // S_OK
 }
 

@@ -11,6 +11,14 @@ pub const IMAGE_DOS_SIGNATURE = 0x5A4D;
 /// The NT header signature "PE\0\0".
 pub const IMAGE_NT_SIGNATURE = 0x00004550;
 
+/// Windows GUI subsystem.
+pub const IMAGE_SUBSYSTEM_WINDOWS_GUI = 2;
+/// Windows CUI (console) subsystem.
+pub const IMAGE_SUBSYSTEM_WINDOWS_CUI = 3;
+
+/// Section contains executable code.
+pub const IMAGE_SCN_CNT_CODE = 0x00000020;
+
 /// Index of the Export Directory in the Data Directory.
 pub const IMAGE_DIRECTORY_ENTRY_EXPORT = 0;
 /// Index of the Import Directory in the Data Directory.
