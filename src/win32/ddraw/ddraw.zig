@@ -261,9 +261,6 @@ fn surface_BltFast(this: *IDirectDrawSurface, dwX: u32, dwY: u32, lpDDSrcSurface
 /// IDirectDraw::QueryInterface — queries the object for a specific interface.
 /// Implementation status: Partially implemented (supports IDirect3D3 and IDirect3D7)
 fn ddraw_QueryInterface(this: *anyopaque, riid: usize, ppvObj: *?*anyopaque) callconv(w32cc.WINAPI) i32 {
-    // Check if IID looks like IDirect3D7 or another D3D interface.
-    // IID_IDirect3D7 = {f5049e77-4861-11d2-a407-00a0c90629a8}
-    // First DWORD = 0xF5049E77. We check the first 4 bytes of the GUID.
     if (riid != 0) {
         const first_dword = @as(*const u32, @ptrFromInt(riid)).*;
         if (trace.enable_tracing) trace.print("DDRAW: QueryInterface(riid=0x{x}, guid_dword=0x{x:0>8})\n", .{ riid, first_dword });
@@ -279,12 +276,16 @@ fn ddraw_QueryInterface(this: *anyopaque, riid: usize, ppvObj: *?*anyopaque) cal
             ppvObj.* = @ptrCast(&d3d7.global_d3d7);
             return w32.S_OK;
         }
+        if (first_dword == 0x93281502) { // IID_IDirect3DTexture2
+            if (trace.enable_tracing) trace.print("DDRAW: QueryInterface -> IDirect3DTexture2\n", .{});
+            ppvObj.* = @ptrCast(d3d7.allocTexture());
+            return w32.S_OK;
+        }
     } else {
         if (trace.enable_tracing) trace.print("DDRAW: QueryInterface(riid=NULL)\n", .{});
     }
 
     // For IDirectDraw upgrades (IDirectDraw4, IDirectDraw7, etc.), return self
-    // since our DD vtable is a superset covering all DDraw versions
     ppvObj.* = this;
     return w32.S_OK;
 }

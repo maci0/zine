@@ -782,6 +782,11 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
 
     const skip_appcompat_null = blk: {
         if (fault_addr < 0x1000 and ip != 0 and is_app_code) {
+            // For null+offset faults (e.g., [NULL+0x74]), always use AppCompat handler
+            // rather than deferring to SEH. Games often have null struct pointers with
+            // field offsets that their SEH handlers don't handle properly. Skipping the
+            // instruction and zeroing the destination register is the safer recovery.
+            if (fault_addr > 0) break :blk false;
             if (ip == S.last_null_ip) {
                 S.null_repeat_count += 1;
                 if (S.null_repeat_count > 3) break :blk false;
@@ -951,11 +956,16 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         uctx.mcontext.gregs[REG.CSGSFS] = @bitCast((csgsfs & ~@as(usize, 0xFFFF)) | 0x33);
     }
 
-    if (trace.enable_tracing) trace.print("SEH: Redirecting to RaiseException(code={x}) for exception at 0x{X}, fault_addr=0x{X}, EAX=0x{X} EBX=0x{X} ECX=0x{X}\n", .{
+    if (trace.enable_tracing) trace.print("SEH: Redirecting to RaiseException(code={x}) for exception at 0x{X}, fault_addr=0x{X}, EAX=0x{X} EBX=0x{X} ECX=0x{X} EDX=0x{X} ESI=0x{X} EDI=0x{X} ESP=0x{X} EBP=0x{X}\n", .{
         exc_code, ip, fault_addr,
         @as(usize, @bitCast(uctx.mcontext.gregs[reg_ax])),
         @as(usize, @bitCast(uctx.mcontext.gregs[reg_bx])),
         @as(usize, @bitCast(uctx.mcontext.gregs[reg_cx])),
+        @as(usize, @bitCast(uctx.mcontext.gregs[reg_dx])),
+        @as(usize, @bitCast(uctx.mcontext.gregs[reg_si])),
+        @as(usize, @bitCast(uctx.mcontext.gregs[reg_di])),
+        @as(usize, @bitCast(uctx.mcontext.gregs[reg_sp])),
+        @as(usize, @bitCast(uctx.mcontext.gregs[reg_bp])),
     });
     return;
 

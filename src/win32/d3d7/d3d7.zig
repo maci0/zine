@@ -237,6 +237,28 @@ const IDirect3DLightVtbl = extern struct {
     GetLight: usize, // 5
 };
 
+// ===== IDirect3DTexture2 =====
+
+pub const IDirect3DTexture2 = extern struct {
+    lpVtbl: *const IDirect3DTexture2Vtbl,
+};
+
+const IDirect3DTexture2Vtbl = extern struct {
+    // IUnknown (0-2)
+    QueryInterface: usize, // 0
+    AddRef: usize, // 1
+    Release: usize, // 2
+    // IDirect3DTexture2 (3-5)
+    GetHandle: *const fn (*IDirect3DTexture2, usize, *u32) callconv(w32cc.WINAPI) i32, // 3
+    PaletteChanged: usize, // 4
+    Load: usize, // 5
+};
+
+const MAX_TEXTURES = 64;
+var texture_pool: [MAX_TEXTURES]IDirect3DTexture2 = undefined;
+var texture_pool_count: u32 = 0;
+var texture2_vtbl: IDirect3DTexture2Vtbl = undefined;
+
 // ===== Instances =====
 
 pub var global_d3d7: IDirect3D7 = undefined;
@@ -254,6 +276,18 @@ var device3_vtbl: IDirect3DDevice3Vtbl = undefined;
 var viewport3_vtbl: IDirect3DViewport3Vtbl = undefined;
 var material3_vtbl: IDirect3DMaterial3Vtbl = undefined;
 var light_vtbl: IDirect3DLightVtbl = undefined;
+
+/// Allocate a texture object from the pool for QueryInterface.
+pub fn allocTexture() *IDirect3DTexture2 {
+    if (texture_pool_count < MAX_TEXTURES) {
+        const idx = texture_pool_count;
+        texture_pool[idx].lpVtbl = &texture2_vtbl;
+        texture_pool_count += 1;
+        return &texture_pool[idx];
+    }
+    // Out of pool — recycle last one
+    return &texture_pool[MAX_TEXTURES - 1];
+}
 
 // Storage for viewport data — D3DVIEWPORT2 is 44 bytes
 var viewport2_data: [44]u8 = [_]u8{0} ** 44;
@@ -612,6 +646,19 @@ fn d3d3_FindDevice(this: *IDirect3D7, pSearch: usize, pResult: usize) callconv(w
         const dest = @as([*]u8, @ptrFromInt(pResult + 4));
         @memcpy(dest[0..16], &hal_guid);
     }
+    return w32.D3D_OK;
+}
+
+// ===== IDirect3DTexture2 Implementation =====
+
+fn texture2_GetHandle(this: *IDirect3DTexture2, hDevice: usize, lpHandle: *u32) callconv(w32cc.WINAPI) i32 {
+    _ = hDevice;
+    // Return a unique handle based on pool index (1-based, 0 = no texture)
+    const base = @intFromPtr(&texture_pool[0]);
+    const addr = @intFromPtr(this);
+    const idx: u32 = if (addr >= base) @intCast((addr - base) / @sizeOf(IDirect3DTexture2)) else 0;
+    lpHandle.* = idx + 1;
+    if (trace.enable_tracing) trace.print("D3D7: IDirect3DTexture2::GetHandle -> {d}\n", .{idx + 1});
     return w32.D3D_OK;
 }
 
@@ -1173,6 +1220,16 @@ pub fn init() void {
         .GetLight = N2,
     };
 
+    // IDirect3DTexture2 vtable — 6 methods
+    texture2_vtbl = .{
+        .QueryInterface = N3,
+        .AddRef = N1,
+        .Release = N1,
+        .GetHandle = texture2_GetHandle,
+        .PaletteChanged = N2,
+        .Load = N3,
+    };
+
     global_d3d7.lpVtbl = &d3d7_vtbl;
     global_d3d3.lpVtbl = @ptrCast(&d3d3_vtbl);
     global_d3d7_device.lpVtbl = &device7_vtbl;
@@ -1192,4 +1249,5 @@ pub fn registerVtables(environment: anytype) void {
     environment.addBuiltinVtableComptime(IDirect3DViewport3Vtbl, &viewport3_vtbl);
     environment.addBuiltinVtableComptime(IDirect3DMaterial3Vtbl, &material3_vtbl);
     environment.addBuiltinVtableComptime(IDirect3DLightVtbl, &light_vtbl);
+    environment.addBuiltinVtableComptime(IDirect3DTexture2Vtbl, &texture2_vtbl);
 }
