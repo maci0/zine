@@ -64,7 +64,7 @@ pub fn getCwd(buf: []u8) usize {
     defer std.heap.page_allocator.free(cwd);
 
     var win_buf: [1024]u8 = undefined;
-    const win_len = path_utils.posixToWin32(cwd, &win_buf);
+    const win_len = try path_utils.posixToWin32(cwd, &win_buf);
     if (win_len == 0 or win_len >= buf.len) return 0;
 
     @memcpy(buf[0..win_len], win_buf[0..win_len]);

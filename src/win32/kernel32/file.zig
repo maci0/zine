@@ -95,7 +95,7 @@ pub fn CreateFileA(lpFileName_ptr: usize, dwDesiredAccess: u32, dwShareMode: u32
 
     const path_utils = @import("../../path_utils.zig");
     var fixed_path: [1024]u8 = undefined;
-    const len = path_utils.win32ToPosix(name, &fixed_path);
+    const len = try path_utils.win32ToPosix(name, &fixed_path);
     const fixed_slice = fixed_path[0..len];
     fixed_path[len] = 0;
 
@@ -445,7 +445,7 @@ pub fn DeleteFileA(lpFileName: usize) callconv(w32cc.WINAPI) i32 {
 
     const path_utils = @import("../../path_utils.zig");
     var fixed_path: [1024]u8 = undefined;
-    const len = path_utils.win32ToPosix(name, &fixed_path);
+    const len = try path_utils.win32ToPosix(name, &fixed_path);
 
     const cwd = std.fs.cwd();
     cwd.deleteFile(fixed_path[0..len]) catch {
@@ -644,7 +644,7 @@ pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: *align(1) w32.W
     // Convert path using win32ToPosix
     const path_utils = @import("../../path_utils.zig");
     var fixed_buf: [1024]u8 = undefined;
-    const len = path_utils.win32ToPosix(filename, &fixed_buf);
+    const len = try path_utils.win32ToPosix(filename, &fixed_buf);
     const fixed_slice = fixed_buf[0..len];
 
     // Split into directory and file pattern at last slash
@@ -1038,9 +1038,9 @@ pub fn CopyFileA(lpExistingFileName: usize, lpNewFileName: usize, bFailIfExists:
 
     const path_utils = @import("../../path_utils.zig");
     var src_buf: [1024]u8 = undefined;
-    const src_len = path_utils.win32ToPosix(src_name, &src_buf);
+    const src_len = try path_utils.win32ToPosix(src_name, &src_buf);
     var dst_buf: [1024]u8 = undefined;
-    const dst_len = path_utils.win32ToPosix(dst_name, &dst_buf);
+    const dst_len = try path_utils.win32ToPosix(dst_name, &dst_buf);
 
     // Attempt actual copy via filesystem
     const cwd = std.fs.cwd();

@@ -221,7 +221,7 @@ pub fn main() !void {
 
             // Convert to proper Win32 path (drive_c/... -> C:\..., /abs -> Z:\...)
             var win_path_buf: [1024]u8 = undefined;
-            const win_len = path_utils.posixToWin32(first_arg, &win_path_buf);
+            const win_len = try path_utils.posixToWin32(first_arg, &win_path_buf);
             const win_arg = try allocator.dupeZ(u8, win_path_buf[0..win_len]);
 
             try app_args.append(allocator, win_arg);
@@ -231,7 +231,7 @@ pub fn main() !void {
             // Other args (flags like /nologo, relative names, numbers) are passed as-is.
             if (path_utils.isInsideDriveC(arg)) {
                 var win_path_buf: [1024]u8 = undefined;
-                const win_len = path_utils.posixToWin32(arg, &win_path_buf);
+                const win_len = try path_utils.posixToWin32(arg, &win_path_buf);
                 try app_args.append(allocator, try allocator.dupeZ(u8, win_path_buf[0..win_len]));
             } else {
                 try app_args.append(allocator, try allocator.dupeZ(u8, arg));
@@ -348,7 +348,7 @@ pub fn main() !void {
         if (std.fs.path.dirname(fixed_exe)) |dir| {
             // Convert the exe directory to Win32 path
             var win_dir_buf: [1024]u8 = undefined;
-            const win_dir_len = path_utils.posixToWin32(dir, &win_dir_buf);
+            const win_dir_len = try path_utils.posixToWin32(dir, &win_dir_buf);
             const copy_len = @min(win_dir_len, stubs_kernel32.main_exe_dir.len - 2);
             @memcpy(stubs_kernel32.main_exe_dir[0..copy_len], win_dir_buf[0..copy_len]);
             var pos = copy_len;
@@ -363,7 +363,7 @@ pub fn main() !void {
             // This ensures relative file opens (e.g. "hello.c") resolve against where the user invoked zine
             if (std.fs.cwd().realpathAlloc(allocator, ".")) |real_cwd| {
                 var cwd_win_buf: [1024]u8 = undefined;
-                const cwd_win_len = path_utils.posixToWin32(real_cwd, &cwd_win_buf);
+                const cwd_win_len = try path_utils.posixToWin32(real_cwd, &cwd_win_buf);
                 const cwd_copy_len = @min(cwd_win_len, kernel32_path.current_directory.len - 1);
                 @memcpy(kernel32_path.current_directory[0..cwd_copy_len], cwd_win_buf[0..cwd_copy_len]);
                 kernel32_path.current_directory_len = cwd_copy_len;

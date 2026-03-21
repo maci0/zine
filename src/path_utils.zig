@@ -26,7 +26,7 @@ fn startsWithDriveC(path: []const u8) bool {
 /// `Desktop\file.txt`     → `drive_c/Desktop/file.txt` (relative → inside drive_c)
 ///
 /// Returns the number of bytes written to `out`.
-pub fn win32ToPosix(win_path: []const u8, out: []u8) usize {
+pub fn win32ToPosix(win_path: []const u8, out: []u8) !usize {
     var src = win_path;
 
     // Strip UNC prefix `\\?\` or `\\.\`
@@ -52,26 +52,26 @@ pub fn win32ToPosix(win_path: []const u8, out: []u8) usize {
                 pos += 1;
             }
             for (src) |c| {
-                if (pos >= out.len) break;
+                if (pos >= out.len) return error.BufferTooSmall;
                 out[pos] = if (c == '\\') '/' else c;
                 pos += 1;
             }
-            if (pos < out.len) out[pos] = 0;
+            if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
             return pos;
         } else {
             // C: (or any other) drive → drive_c/ prefix
             var pos: usize = 0;
             for (DRIVE_ROOT) |c| {
-                if (pos >= out.len) break;
+                if (pos >= out.len) return error.BufferTooSmall;
                 out[pos] = c;
                 pos += 1;
             }
             for (src) |c| {
-                if (pos >= out.len) break;
+                if (pos >= out.len) return error.BufferTooSmall;
                 out[pos] = if (c == '\\') '/' else c;
                 pos += 1;
             }
-            if (pos < out.len) out[pos] = 0;
+            if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
             return pos;
         }
     }
@@ -82,11 +82,11 @@ pub fn win32ToPosix(win_path: []const u8, out: []u8) usize {
         // Pass it through unchanged — it's a real filesystem path.
         var pos: usize = 0;
         for (src) |c| {
-            if (pos >= out.len) break;
+            if (pos >= out.len) return error.BufferTooSmall;
             out[pos] = c;
             pos += 1;
         }
-        if (pos < out.len) out[pos] = 0;
+        if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
         return pos;
     }
 
@@ -98,16 +98,16 @@ pub fn win32ToPosix(win_path: []const u8, out: []u8) usize {
         }
         var pos: usize = 0;
         for (DRIVE_ROOT) |c| {
-            if (pos >= out.len) break;
+            if (pos >= out.len) return error.BufferTooSmall;
             out[pos] = c;
             pos += 1;
         }
         for (src) |c| {
-            if (pos >= out.len) break;
+            if (pos >= out.len) return error.BufferTooSmall;
             out[pos] = if (c == '\\') '/' else c;
             pos += 1;
         }
-        if (pos < out.len) out[pos] = 0;
+        if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
         return pos;
     }
 
@@ -115,11 +115,11 @@ pub fn win32ToPosix(win_path: []const u8, out: []u8) usize {
     // The caller (toHostPath) resolves these against the virtual CWD.
     var pos: usize = 0;
     for (src) |c| {
-        if (pos >= out.len) break;
+        if (pos >= out.len) return error.BufferTooSmall;
         out[pos] = if (c == '\\') '/' else c;
         pos += 1;
     }
-    if (pos < out.len) out[pos] = 0;
+    if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
     return pos;
 }
 
@@ -130,17 +130,17 @@ pub fn win32ToPosix(win_path: []const u8, out: []u8) usize {
 /// `Desktop/file.txt`         → `C:\Desktop\file.txt`
 ///
 /// Returns the number of bytes written to `out`.
-pub fn posixToWin32(posix_path: []const u8, out: []u8) usize {
+pub fn posixToWin32(posix_path: []const u8, out: []u8) !usize {
     var pos: usize = 0;
 
     // Already has a drive letter? Just normalize slashes.
     if (hasDriveLetter(posix_path)) {
         for (posix_path) |c| {
-            if (pos >= out.len) break;
+            if (pos >= out.len) return error.BufferTooSmall;
             out[pos] = if (c == '/') '\\' else c;
             pos += 1;
         }
-        if (pos < out.len) out[pos] = 0;
+        if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
         return pos;
     }
 
@@ -153,11 +153,11 @@ pub fn posixToWin32(posix_path: []const u8, out: []u8) usize {
             pos = 3;
         }
         for (posix_path[1..]) |c| {
-            if (pos >= out.len) break;
+            if (pos >= out.len) return error.BufferTooSmall;
             out[pos] = if (c == '/') '\\' else c;
             pos += 1;
         }
-        if (pos < out.len) out[pos] = 0;
+        if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
         return pos;
     }
 
@@ -175,12 +175,12 @@ pub fn posixToWin32(posix_path: []const u8, out: []u8) usize {
     }
 
     for (src) |c| {
-        if (pos >= out.len) break;
+        if (pos >= out.len) return error.BufferTooSmall;
         out[pos] = if (c == '/') '\\' else c;
         pos += 1;
     }
 
-    if (pos < out.len) out[pos] = 0;
+    if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
     return pos;
 }
 
@@ -352,7 +352,7 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
     if (kernel32_path.current_directory_len > 0) {
         const cwd_win = kernel32_path.current_directory[0..kernel32_path.current_directory_len];
         var cwd_posix: [1024]u8 = undefined;
-        const cwd_len = win32ToPosix(cwd_win, &cwd_posix);
+        const cwd_len = win32ToPosix(cwd_win, &cwd_posix) catch return 0;
         // Strip trailing slash
         var cwd_end = cwd_len;
         while (cwd_end > 0 and cwd_posix[cwd_end - 1] == '/') cwd_end -= 1;
@@ -401,73 +401,73 @@ const testing = @import("std").testing;
 
 test "posixToWin32: drive_c/ prefix → C:\\" {
     var buf: [256]u8 = undefined;
-    const len = posixToWin32("drive_c/Desktop/file.txt", &buf);
+    const len = try posixToWin32("drive_c/Desktop/file.txt", &buf);
     try testing.expectEqualStrings("C:\\Desktop\\file.txt", buf[0..len]);
 }
 
 test "posixToWin32: absolute POSIX → Z:\\" {
     var buf: [256]u8 = undefined;
-    const len = posixToWin32("/home/user/foo", &buf);
+    const len = try posixToWin32("/home/user/foo", &buf);
     try testing.expectEqualStrings("Z:\\home\\user\\foo", buf[0..len]);
 }
 
 test "posixToWin32: relative path → C:\\" {
     var buf: [256]u8 = undefined;
-    const len = posixToWin32("Desktop/file.txt", &buf);
+    const len = try posixToWin32("Desktop/file.txt", &buf);
     try testing.expectEqualStrings("C:\\Desktop\\file.txt", buf[0..len]);
 }
 
 test "posixToWin32: already has drive letter" {
     var buf: [256]u8 = undefined;
-    const len = posixToWin32("D:/games/run.exe", &buf);
+    const len = try posixToWin32("D:/games/run.exe", &buf);
     try testing.expectEqualStrings("D:\\games\\run.exe", buf[0..len]);
 }
 
 test "posixToWin32: root path" {
     var buf: [256]u8 = undefined;
-    const len = posixToWin32("/", &buf);
+    const len = try posixToWin32("/", &buf);
     try testing.expectEqualStrings("Z:\\", buf[0..len]);
 }
 
 test "win32ToPosix: C:\\ → drive_c/" {
     var buf: [256]u8 = undefined;
-    const len = win32ToPosix("C:\\Desktop\\file.txt", &buf);
+    const len = try win32ToPosix("C:\\Desktop\\file.txt", &buf);
     try testing.expectEqualStrings("drive_c/Desktop/file.txt", buf[0..len]);
 }
 
 test "win32ToPosix: Z:\\ → /" {
     var buf: [256]u8 = undefined;
-    const len = win32ToPosix("Z:\\home\\user\\foo", &buf);
+    const len = try win32ToPosix("Z:\\home\\user\\foo", &buf);
     try testing.expectEqualStrings("/home/user/foo", buf[0..len]);
 }
 
 test "win32ToPosix: lowercase drive letter" {
     var buf: [256]u8 = undefined;
-    const len = win32ToPosix("c:\\test.txt", &buf);
+    const len = try win32ToPosix("c:\\test.txt", &buf);
     try testing.expectEqualStrings("drive_c/test.txt", buf[0..len]);
 }
 
 test "win32ToPosix: UNC prefix stripped" {
     var buf: [256]u8 = undefined;
-    const len = win32ToPosix("\\\\?\\C:\\Windows\\System32", &buf);
+    const len = try win32ToPosix("\\\\?\\C:\\Windows\\System32", &buf);
     try testing.expectEqualStrings("drive_c/Windows/System32", buf[0..len]);
 }
 
 test "win32ToPosix: backslash-rooted path → drive_c/" {
     var buf: [256]u8 = undefined;
-    const len = win32ToPosix("\\project\\game", &buf);
+    const len = try win32ToPosix("\\project\\game", &buf);
     try testing.expectEqualStrings("drive_c/project/game", buf[0..len]);
 }
 
 test "win32ToPosix: POSIX path passed through" {
     var buf: [256]u8 = undefined;
-    const len = win32ToPosix("/usr/lib/foo.so", &buf);
+    const len = try win32ToPosix("/usr/lib/foo.so", &buf);
     try testing.expectEqualStrings("/usr/lib/foo.so", buf[0..len]);
 }
 
 test "win32ToPosix: relative path" {
     var buf: [256]u8 = undefined;
-    const len = win32ToPosix("game.ini", &buf);
+    const len = try win32ToPosix("game.ini", &buf);
     try testing.expectEqualStrings("game.ini", buf[0..len]);
 }
 
@@ -500,20 +500,20 @@ test "win32ToPosix and posixToWin32 roundtrip" {
     // C:\ path roundtrip
     var buf1: [256]u8 = undefined;
     var buf2: [256]u8 = undefined;
-    const posix_len = win32ToPosix("C:\\Program Files\\app.exe", &buf1);
-    const win_len = posixToWin32(buf1[0..posix_len], &buf2);
+    const posix_len = try win32ToPosix("C:\\Program Files\\app.exe", &buf1);
+    const win_len = try posixToWin32(buf1[0..posix_len], &buf2);
     try testing.expectEqualStrings("C:\\Program Files\\app.exe", buf2[0..win_len]);
 }
 
 test "win32ToPosix: Z:\\ root only" {
     var buf: [256]u8 = undefined;
-    const len = win32ToPosix("Z:\\", &buf);
+    const len = try win32ToPosix("Z:\\", &buf);
     try testing.expectEqualStrings("/", buf[0..len]);
 }
 
 test "win32ToPosix: drive_c/ already present in relative" {
     var buf: [256]u8 = undefined;
-    const len = win32ToPosix("drive_c/test/file.txt", &buf);
+    const len = try win32ToPosix("drive_c/test/file.txt", &buf);
     try testing.expectEqualStrings("drive_c/test/file.txt", buf[0..len]);
 }
 
@@ -551,13 +551,13 @@ test "toHostPath: C: drive traversal is blocked" {
 
 test "win32ToPosix: empty string" {
     var buf: [256]u8 = undefined;
-    const len = win32ToPosix("", &buf);
+    const len = try win32ToPosix("", &buf);
     try testing.expectEqual(@as(usize, 0), len);
 }
 
 test "posixToWin32: empty string becomes C:\\" {
     var buf: [256]u8 = undefined;
-    const len = posixToWin32("", &buf);
+    const len = try posixToWin32("", &buf);
     // Empty relative path gets C:\ prefix (relative path handling)
     try testing.expectEqualStrings("C:\\", buf[0..len]);
 }
@@ -597,7 +597,7 @@ test "normalizePath: only dots" {
 
 test "win32ToPosix: multiple trailing backslashes after drive" {
     var buf: [256]u8 = undefined;
-    const len = win32ToPosix("C:\\\\\\file.txt", &buf);
+    const len = try win32ToPosix("C:\\\\\\file.txt", &buf);
     try testing.expectEqualStrings("drive_c/file.txt", buf[0..len]);
 }
 

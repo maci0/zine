@@ -110,7 +110,7 @@ pub fn LoadLibraryA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
         // Convert Win32 path (e.g. C:\Desktop\Guild\MP3DEC.ASI) to POSIX
         const path_utils = @import("../../path_utils.zig");
         var posix_buf: [1024]u8 = undefined;
-        const posix_len = path_utils.win32ToPosix(name, &posix_buf);
+        const posix_len = try path_utils.win32ToPosix(name, &posix_buf);
         var load_name = if (posix_len > 0) posix_buf[0..posix_len] else name;
 
         // Strip "./" or ".\" prefix — Windows apps use ".\foo.dll" meaning "same dir as me"
@@ -671,7 +671,7 @@ pub fn CreateProcessA(
     // Convert Win32 path to POSIX
     const path_utils = @import("../../path_utils.zig");
     var posix_buf: [1024]u8 = undefined;
-    const posix_len = path_utils.win32ToPosix(target_path_buf[0..target_path_len], &posix_buf);
+    const posix_len = try path_utils.win32ToPosix(target_path_buf[0..target_path_len], &posix_buf);
 
     if (trace.enable_tracing) trace.print("KERNEL32: CreateProcessA -> spawning '{s}'\n", .{posix_buf[0..posix_len]});
 
