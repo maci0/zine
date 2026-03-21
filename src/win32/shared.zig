@@ -63,9 +63,10 @@ pub fn get_aligned_hint(size: usize) usize {
     return hint;
 }
 
-// Internal heap uses a separate address range (0x50000000+) to avoid
-// being adjacent to guest VirtualAlloc regions (0x61000000+).
-var internal_heap_hint: usize = 0x50000000;
+// Internal heap uses a separate address range from guest VirtualAlloc regions.
+// NOTE: Guest args (ensureGuestArgs) maps 256KB at 0x50000000, so we must
+// start AFTER that range to avoid heapAlloc overwriting argv/envp arrays.
+var internal_heap_hint: usize = 0x54000000;
 
 fn heapAlloc(size: usize) ?[*]u8 {
     const aligned = (size + 7) & ~@as(usize, 7); // 8-byte align

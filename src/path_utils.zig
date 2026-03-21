@@ -363,8 +363,14 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
             @memcpy(out[cwd_end + 1 .. cwd_end + 1 + src.len], src[0..src.len]);
             const total = cwd_end + 1 + src.len;
             if (total < out.len) out[total] = 0;
-            // Normalize: if CWD is inside drive_c, anchor there
-            const anchor = if (isInsideDriveC(out[0..total])) drive_root_len else 0;
+            // Normalize: if CWD is inside drive_c, anchor there;
+            // if absolute (starts with /), anchor at position 1 to preserve the root slash
+            const anchor = if (isInsideDriveC(out[0..total]))
+                drive_root_len
+            else if (total > 0 and out[0] == '/')
+                @as(usize, 1)
+            else
+                @as(usize, 0);
             return normalizePath(out, total, anchor);
         }
     }

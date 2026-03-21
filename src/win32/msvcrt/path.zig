@@ -4,23 +4,48 @@ const trace = @import("../../trace.zig");
 /// MSVCRT path utilities: _splitpath, _makepath, _fullpath,
 /// _searchenv, _getcwd, _tempnam, _mktemp.
 /// --- Path utilities ---
-/// Implementation status: Partially implemented
+/// _mktemp: Replace trailing 'X' characters in template with unique alphanumeric chars.
+/// On Windows, the last 6 positions XXXXXX are replaced with digit+alpha combinations.
+/// Implementation status: Partially implemented (counter-based, not checking file existence)
+var mktemp_counter: u32 = 0;
 pub fn mktemp(template: ?*anyopaque) callconv(.c) ?*anyopaque {
     if (template) |t| {
         const slice = @as([*]u8, @ptrCast(t));
-        var i: usize = 0;
-        if (slice[0] == 't' and slice[1] == 'm' and slice[2] == 'p' and slice[3] == '\\') {
-            slice[0] = 't';
-            slice[1] = 'm';
-            slice[2] = 'p';
+
+        // Find length and convert tmp\ prefix to tmp_ for posix compatibility
+        var len: usize = 0;
+        while (slice[len] != 0 and len < 4096) : (len += 1) {}
+
+        // Convert backslash-based tmp path prefix to underscore for POSIX
+        if (len >= 4 and slice[0] == 't' and slice[1] == 'm' and slice[2] == 'p' and slice[3] == '\\') {
             slice[3] = '_';
         }
 
-        while (slice[i] != 0 and i < 4096) {
-            if (slice[i] == 'X') slice[i] = '1';
-            i += 1;
+        // Find the rightmost run of 'X' characters
+        var x_start: usize = len;
+        while (x_start > 0 and slice[x_start - 1] == 'X') : (x_start -= 1) {}
+        const x_count = len - x_start;
+
+        if (x_count > 0) {
+            // Generate unique suffix from counter
+            const count = @atomicRmw(u32, &mktemp_counter, .Add, 1, .monotonic);
+            const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+            var val = count;
+            var i: usize = 0;
+            while (i < x_count) : (i += 1) {
+                // Fill from right to left
+                const pos = len - 1 - i;
+                slice[pos] = chars[val % chars.len];
+                val /= @intCast(chars.len);
+            }
         }
-        if (trace.enable_tracing) trace.print("MSVCRT: _mktemp -> '{s}'\n", .{slice[0..i]});
+
+        // Also replace backslashes with forward slashes for posix file operations
+        for (0..len) |i| {
+            if (slice[i] == '\\') slice[i] = '/';
+        }
+
+        if (trace.enable_tracing) trace.print("MSVCRT: _mktemp -> '{s}'\n", .{slice[0..len]});
         return t;
     }
     return null;
