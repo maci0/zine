@@ -575,6 +575,16 @@ pub const OSVERSIONINFOA = extern struct {
     szCSDVersion: [128]u8 = [_]u8{0} ** 128,
 };
 
+/// OSVERSIONINFOW — 276 bytes.
+pub const OSVERSIONINFOW = extern struct {
+    dwOSVersionInfoSize: u32 = 276,
+    dwMajorVersion: u32 = 0,
+    dwMinorVersion: u32 = 0,
+    dwBuildNumber: u32 = 0,
+    dwPlatformId: u32 = 0,
+    szCSDVersion: [256]u8 = [_]u8{0} ** 256,
+};
+
 /// VER_PLATFORM_WIN32_NT constant.
 pub const VER_PLATFORM_WIN32_NT: u32 = 2;
 

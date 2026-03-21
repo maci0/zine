@@ -2,6 +2,7 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const user32 = @import("../user32.zig");
 const kernel32 = @import("../kernel32.zig");
+const gdi32 = @import("../gdi32.zig");
 const renderer = @import("../../gui/renderer.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
@@ -196,27 +197,39 @@ pub fn CreateWindowExA(
     const is_edit = ansiClassEql(lpClassName, "Edit");
 
     if (!is_child) {
-        user32.window_style = dwStyle;
-        user32.window_exstyle = dwExStyle;
-        user32.window_x = x;
-        user32.window_y = y;
-        if (hMenu != 0) user32.window_has_menu = true;
+        // Only update the renderer for the first two top-level windows
+        // (TApplication + main form). Subsequent top-level windows
+        // (Delphi utility windows) should not overwrite the main form's state.
+        const is_first_or_main = (user32.global_hwnd == 0) or !user32.main_form_created;
 
-        applyWindowSize(dwStyle, dwExStyle, nWidth, nHeight);
+        if (is_first_or_main) {
+            user32.window_style = dwStyle;
+            user32.window_exstyle = dwExStyle;
+            user32.window_x = x;
+            user32.window_y = y;
+            if (hMenu != 0) user32.window_has_menu = true;
+
+            applyWindowSize(dwStyle, dwExStyle, nWidth, nHeight);
+        }
 
         if (trace.enable_tracing) trace.print("USER32: CreateWindowExA(style={x}, exstyle={x}, {d}x{d}, menu={x}) -> client {d}x{d}\n", .{ dwStyle, dwExStyle, nWidth, nHeight, hMenu, user32.current_client_width, user32.current_client_height });
 
-        if (lpWindowName != 0) {
-            const title = trace.c_span(lpWindowName);
-            renderer.setTitle(title);
+        if (is_first_or_main) {
+            if (lpWindowName != 0) {
+                const title = trace.c_span(lpWindowName);
+                renderer.setTitle(title);
+            }
+
+            if (user32.window_width > 0 and user32.window_height > 0) {
+                renderer.setWindowPos(user32.window_width, user32.window_height, user32.current_client_width, user32.current_client_height);
+            }
+
+            fillFramebufWhite();
         }
 
-        if (user32.window_width > 0 and user32.window_height > 0) {
-            renderer.setWindowPos(user32.window_width, user32.window_height, user32.current_client_width, user32.current_client_height);
+        if (user32.global_hwnd != 0 and !user32.main_form_created) {
+            user32.main_form_created = true;
         }
-
-        fillFramebufWhite();
-
         user32.global_hwnd = 0x00000123;
 
         // Dispatch WM_NCCREATE and WM_CREATE to WndProc (with SEH protection)
@@ -233,9 +246,11 @@ pub fn CreateWindowExA(
             const lp: isize = @bitCast(@intFromPtr(&cs));
             const proc = @intFromPtr(wndproc);
             var err_flag: u32 = 0;
-            _ = user32.callWndProcSafe(proc, user32.global_hwnd, 0x0081, 0, lp, &err_flag); // WM_NCCREATE
+            const nc_result = user32.callWndProcSafe(proc, user32.global_hwnd, 0x0081, 0, lp, &err_flag); // WM_NCCREATE
+            if (trace.enable_tracing) trace.print("USER32: WM_NCCREATE -> {d} (err={d})\n", .{ nc_result, err_flag });
             if (err_flag == 0) {
                 const create_result = user32.callWndProcSafe(proc, user32.global_hwnd, 0x0001, 0, lp, &err_flag); // WM_CREATE
+                if (trace.enable_tracing) trace.print("USER32: WM_CREATE -> {d} (err={d})\n", .{ create_result, err_flag });
                 if (err_flag == 0 and create_result == -1) {
                     if (trace.enable_tracing) trace.print("USER32: WM_CREATE returned -1, window creation failed\n", .{});
                     return 0;
@@ -251,7 +266,14 @@ pub fn CreateWindowExA(
     next_child_hwnd += 1;
 
     const class_name = if (lpClassName > 0xFFFF) trace.c_span(lpClassName) else "?";
-    if (trace.enable_tracing) trace.print("USER32: CreateWindowExA child(class={s}, style={x}, parent={x}) -> {x}\n", .{ class_name, dwStyle, hWndParent, child_hwnd });
+    if (trace.enable_tracing) trace.print("USER32: CreateWindowExA child(class={s}, style={x}, parent={x}, pos={d},{d},{d},{d}) -> {x}\n", .{ class_name, dwStyle, hWndParent, x, y, nWidth, nHeight, child_hwnd });
+
+    // Store window info so GetWindowLong/SetWindowLong work for child windows
+    if (user32.getWindowInfo(child_hwnd)) |info| {
+        info.style = @bitCast(dwStyle);
+        info.exstyle = @bitCast(dwExStyle);
+        info.parent = hWndParent;
+    }
 
     if (is_edit) {
         const is_multiline = (dwStyle & w32.ES_MULTILINE) != 0;
@@ -289,28 +311,47 @@ pub fn CreateWindowExW(
     const is_edit = wideClassEql(lpClassName, "Edit");
 
     if (!is_child) {
-        // Top-level window
-        user32.window_style = dwStyle;
-        user32.window_exstyle = dwExStyle;
-        user32.window_x = x;
-        user32.window_y = y;
-        if (hMenu != 0) user32.window_has_menu = true;
+        const is_first_or_main = (user32.global_hwnd == 0) or !user32.main_form_created;
 
-        applyWindowSize(dwStyle, dwExStyle, nWidth, nHeight);
+        if (is_first_or_main) {
+            user32.window_style = dwStyle;
+            user32.window_exstyle = dwExStyle;
+            user32.window_x = x;
+            user32.window_y = y;
+            if (hMenu != 0) user32.window_has_menu = true;
+            applyWindowSize(dwStyle, dwExStyle, nWidth, nHeight);
+        }
 
         if (trace.enable_tracing) trace.print("USER32: CreateWindowExW(style={x}, exstyle={x}, {d}x{d}, menu={x}) -> client {d}x{d}\n", .{ dwStyle, dwExStyle, nWidth, nHeight, hMenu, user32.current_client_width, user32.current_client_height });
 
-        if (lpWindowName != 0) {
-            const title = wideToUtf8(lpWindowName);
-            if (title.len > 0) renderer.setTitle(title);
+        if (is_first_or_main) {
+            if (lpWindowName != 0) {
+                const title = wideToUtf8(lpWindowName);
+                if (title.len > 0) renderer.setTitle(title);
+            }
+            if (user32.window_width > 0 and user32.window_height > 0) {
+                renderer.setWindowPos(user32.window_width, user32.window_height, user32.current_client_width, user32.current_client_height);
+            }
+            fillFramebufWhite();
         }
 
-        if (user32.window_width > 0 and user32.window_height > 0) {
-            renderer.setWindowPos(user32.window_width, user32.window_height, user32.current_client_width, user32.current_client_height);
+        if (user32.global_hwnd == 0x00000123) {
+            // Second top-level window = main form
+            user32.main_form_created = true;
+            // Suppress access violations during Delphi form initialization.
+            // Delphi's CreateForm accesses uninitialized object pointers
+            // which crash on our system. Suppressing these allows the form
+            // to complete initialization with its paint/event handlers connected.
+            const k32_err = @import("../kernel32/error.zig");
+            k32_err.suppress_access_violations = true;
+            // Show the main form on the web UI immediately
+            if (user32.current_client_width > 0 and user32.current_client_height > 0) {
+                renderer.setResolution(
+                    @intCast(user32.current_client_width),
+                    @intCast(user32.current_client_height),
+                );
+            }
         }
-
-        fillFramebufWhite();
-
         user32.global_hwnd = 0x00000123;
 
         // Dispatch WM_NCCREATE (0x0081) and WM_CREATE (0x0001) to WndProc
@@ -339,15 +380,35 @@ pub fn CreateWindowExW(
             }
         }
 
+        // For the main form, post WM_SIZE and WM_SHOWWINDOW so Delphi
+        // lays out controls and triggers painting. Normally Application.ShowMainForm
+        // does this, but if CreateForm's exception skips it, we do it here.
+        if (user32.main_form_created) {
+            const msg_mod = @import("message.zig");
+            const cw: u16 = @intCast(@as(u32, @bitCast(user32.current_client_width)) & 0xFFFF);
+            const ch: u16 = @intCast(@as(u32, @bitCast(user32.current_client_height)) & 0xFFFF);
+            const size_lp: isize = @bitCast(@as(usize, cw) | (@as(usize, ch) << 16));
+            _ = msg_mod.PostMessageA(user32.global_hwnd, 0x0005, 0, size_lp); // WM_SIZE
+            _ = msg_mod.PostMessageA(user32.global_hwnd, 0x0018, 1, 0); // WM_SHOWWINDOW
+            user32.needs_paint = true;
+        }
+
         return user32.global_hwnd;
     }
 
-    // Child window
+    // Child window (CreateWindowExW path)
     const child_hwnd = next_child_hwnd;
     next_child_hwnd += 1;
 
     const class_name = if (lpClassName > 0xFFFF) wideToUtf8(lpClassName) else "?";
     if (trace.enable_tracing) trace.print("USER32: CreateWindowExW child(class={s}, style={x}, parent={x}, pos={d},{d},{d},{d}) -> {x}\n", .{ class_name, dwStyle, hWndParent, x, y, nWidth, nHeight, child_hwnd });
+
+    // Store window info so GetWindowLong works for child windows
+    if (user32.getWindowInfo(child_hwnd)) |info| {
+        info.style = @bitCast(dwStyle);
+        info.exstyle = @bitCast(dwExStyle);
+        info.parent = hWndParent;
+    }
 
     if (is_edit) {
         // Multiline edit control → show native textarea in web UI
@@ -381,14 +442,15 @@ fn fillFramebufWhite() void {
         fb[i * 4 + 2] = 0xFF; // B
         fb[i * 4 + 3] = 0xFF; // A
     }
+    // Ensure WM_ERASEBKGND fires on next BeginPaint to fill with correct color
+    user32.bg_needs_erase = true;
 }
 
 pub fn stub_SetWindowTextA(hWnd: usize, lpString: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
-    if (trace.enable_tracing) trace.print("USER32: SetWindowTextA\n", .{});
-
     if (lpString != 0) {
         const title = trace.c_span(lpString);
+        if (trace.enable_tracing) trace.print("USER32: SetWindowTextA('{s}')\n", .{title});
         renderer.setTitle(title);
     }
 
@@ -428,11 +490,19 @@ pub fn stub_GetWindowRect(hWnd: usize, lpRect: *user32.RECT) callconv(w32cc.WINA
 pub fn stub_DefWindowProcA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) callconv(w32cc.WINAPI) isize {
     _ = lParam;
 
+    // WM_PAINT: call BeginPaint/EndPaint to validate the paint region
+    if (Msg == 0x000F) { // WM_PAINT
+        var ps: [64]u8 = undefined;
+        const paint_hdc = stub_BeginPaint(hWnd, @intFromPtr(&ps));
+        _ = paint_hdc;
+        _ = stub_EndPaint(0, @intFromPtr(&ps));
+        return 0;
+    }
+
     // WM_ERASEBKGND: actually fill the client area with class's hbrBackground
     if (Msg == 0x0014) { // WM_ERASEBKGND
         const hdc = wParam;
         const drawing = @import("../gdi32/drawing.zig");
-        const gdi32 = @import("../gdi32.zig");
         const rend = @import("../../gui/renderer.zig");
 
         if (drawing.getFramebufferForDc(hdc)) |fb| {
@@ -461,7 +531,6 @@ pub fn stub_DefWindowProcA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) 
         return 1;
     }
 
-    _ = hWnd;
     return switch (Msg) {
         0x0081 => 1, // WM_NCCREATE: must return TRUE to continue creation
         0x0001 => 0, // WM_CREATE: 0 = continue, -1 = fail
@@ -485,6 +554,7 @@ pub fn stub_GetWindowLongA(hWnd: usize, nIndex: i32) callconv(w32cc.WINAPI) i32 
             w32.GWL_USERDATA => info.userdata,
             w32.GWL_ID => info.id,
             w32.GWL_HINSTANCE => @bitCast(@as(u32, @truncate(kernel32.main_module_handle))),
+            -8 => @bitCast(@as(u32, @truncate(info.parent))), // GWL_HWNDPARENT
             else => 0,
         };
     } else {
@@ -508,6 +578,7 @@ pub fn stub_GetWindowLongA(hWnd: usize, nIndex: i32) callconv(w32cc.WINAPI) i32 
 pub fn stub_SetWindowLongA(hWnd: usize, nIndex: i32, dwNewLong: i32) callconv(w32cc.WINAPI) i32 {
     const old = stub_GetWindowLongA(hWnd, nIndex);
     const is_main = (hWnd == user32.global_hwnd) or (hWnd == 0);
+    var return_value = old;
 
     if (user32.getWindowInfo(hWnd)) |info| {
         switch (nIndex) {
@@ -523,6 +594,19 @@ pub fn stub_SetWindowLongA(hWnd: usize, nIndex: i32, dwNewLong: i32) callconv(w3
             w32.GWL_ID => info.id = dwNewLong,
             w32.GWL_WNDPROC => {
                 if (dwNewLong != 0) {
+                    const old_u: u32 = @bitCast(old);
+                    // Track the original (non-trampoline) WndProc for this window.
+                    // Delphi's MakeObjectInstance creates x86 trampolines via VirtualAlloc
+                    // (addresses >= 0x20000000). When SetWindowLong replaces one trampoline
+                    // with another, Delphi stores the return value in object fields and later
+                    // dereferences it as a Delphi object. Returning the original class WndProc
+                    // (a code address in the PE image) prevents this corruption.
+                    if (old_u != 0 and old_u < 0x20000000 and info.original_proc == 0) {
+                        info.original_proc = old_u;
+                    }
+                    if (old_u >= 0x20000000 and info.original_proc != 0) {
+                        return_value = @bitCast(info.original_proc);
+                    }
                     info.proc = @as(usize, @bitCast(@as(isize, dwNewLong)));
                     if (is_main) user32.global_wndproc = @ptrFromInt(info.proc);
                 }
@@ -531,8 +615,8 @@ pub fn stub_SetWindowLongA(hWnd: usize, nIndex: i32, dwNewLong: i32) callconv(w3
         }
     }
 
-    if (trace.enable_tracing) trace.print("USER32: SetWindowLongA(hwnd={x}, index={d}, val={x})\n", .{ hWnd, nIndex, @as(u32, @bitCast(dwNewLong)) });
-    return old;
+    if (trace.enable_tracing) trace.print("USER32: SetWindowLongA(hwnd={x}, index={d}, val={x}) -> old={x}\n", .{ hWnd, nIndex, @as(u32, @bitCast(dwNewLong)), @as(u32, @bitCast(return_value)) });
+    return return_value;
 }
 
 pub fn stub_SetWindowPos(hWnd: usize, hWndInsertAfter: usize, X: i32, Y: i32, cx: i32, cy: i32, uFlags: u32) callconv(w32cc.WINAPI) i32 {
@@ -579,8 +663,22 @@ pub fn stub_MoveWindow(hWnd: usize, X: i32, Y: i32, nWidth: i32, nHeight: i32, b
 
 
 pub fn stub_ShowWindow(hWnd: usize, nCmdShow: i32) callconv(w32cc.WINAPI) i32 {
-    _ = hWnd;
-    if (trace.enable_tracing) trace.print("USER32: ShowWindow(nCmdShow={d})\n", .{nCmdShow});
+    if (trace.enable_tracing) trace.print("USER32: ShowWindow(hwnd={x}, nCmdShow={d})\n", .{ hWnd, nCmdShow });
+
+    // When showing (not hiding), trigger a paint cycle and dispatch
+    // WM_SIZE + WM_SHOWWINDOW so Delphi lays out controls
+    if (nCmdShow != 0 and (hWnd == user32.global_hwnd or hWnd == 0)) {
+        user32.needs_paint = true;
+        // Dispatch WM_SHOWWINDOW(TRUE) to the WndProc
+        const wndproc_addr: usize = if (user32.getWndProc(hWnd)) |p| p
+            else if (user32.global_wndproc) |p| @intFromPtr(p)
+            else 0;
+        if (wndproc_addr != 0) {
+            var err: u32 = 0;
+            _ = user32.callWndProcSafe(wndproc_addr, hWnd, 0x0018, 1, 0, &err); // WM_SHOWWINDOW
+        }
+    }
+
     return 1;
 }
 
@@ -701,7 +799,6 @@ pub fn stub_MapWindowPoints(hWndFrom: usize, hWndTo: usize, lpPoints: usize, cPo
 
 pub fn stub_FillRect(hDC: usize, lprc: usize, hbr: usize) callconv(w32cc.WINAPI) i32 {
     const drawing = @import("../gdi32/drawing.zig");
-    const gdi32 = @import("../gdi32.zig");
     const rend = @import("../../gui/renderer.zig");
 
     if (drawing.getFramebufferForDc(hDC)) |fb| {
@@ -735,8 +832,16 @@ pub fn stub_FillRect(hDC: usize, lprc: usize, hbr: usize) callconv(w32cc.WINAPI)
     return 1;
 }
 
+var window_dc_registered: bool = false;
+
 pub fn stub_GetDC(hWnd: usize) callconv(w32cc.WINAPI) usize {
-    _ = hWnd;
+    if (trace.enable_tracing) trace.print("USER32: GetDC(hwnd={x})\n", .{hWnd});
+    // Ensure the window DC is registered in the GDI DC table so that
+    // SelectObject, SaveDC, and drawing functions can find its state.
+    if (!window_dc_registered) {
+        gdi32.registerDc(0xDC123);
+        window_dc_registered = true;
+    }
     return 0xDC123;
 }
 
@@ -746,11 +851,24 @@ pub fn stub_ReleaseDC(hWnd: usize, hDC: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 pub fn stub_BeginPaint(hWnd: usize, lpPaint: usize) callconv(w32cc.WINAPI) usize {
-    _ = lpPaint;
     const hdc: usize = 0xDC123;
 
-    // In real Windows, BeginPaint sends WM_ERASEBKGND only if the background
-    // hasn't been erased since the last InvalidateRect. Use the one-shot flag.
+    // Fill the PAINTSTRUCT so Delphi knows the paint area
+    if (lpPaint != 0) {
+        const ps = @as([*]u8, @ptrFromInt(lpPaint));
+        @memset(ps[0..64], 0); // zero PAINTSTRUCT
+        @as(*u32, @ptrFromInt(lpPaint + 0)).* = @truncate(hdc); // hdc
+        @as(*i32, @ptrFromInt(lpPaint + 4)).* = 1; // fErase = TRUE
+        // rcPaint = full client area
+        @as(*i32, @ptrFromInt(lpPaint + 8)).* = 0; // left
+        @as(*i32, @ptrFromInt(lpPaint + 12)).* = 0; // top
+        @as(*i32, @ptrFromInt(lpPaint + 16)).* = user32.current_client_width; // right
+        @as(*i32, @ptrFromInt(lpPaint + 20)).* = user32.current_client_height; // bottom
+    }
+
+    if (trace.enable_tracing) trace.print("USER32: BeginPaint(hwnd={x}) -> dc={x}, rect=0,0,{d},{d}\n", .{ hWnd, hdc, user32.current_client_width, user32.current_client_height });
+
+    // Send WM_ERASEBKGND if background needs erasing
     if (user32.bg_needs_erase) {
         user32.bg_needs_erase = false;
 
@@ -922,7 +1040,6 @@ pub fn stub_DrawFocusRect(hDC: usize, lprc: usize) callconv(w32cc.WINAPI) i32 {
 pub fn stub_FrameRect(hDC: usize, lprc: usize, hbr: usize) callconv(w32cc.WINAPI) i32 {
     if (lprc == 0) return 0;
     const drawing = @import("../gdi32/drawing.zig");
-    const gdi32 = @import("../gdi32.zig");
     const rend = @import("../../gui/renderer.zig");
     const display = @import("display.zig");
 
@@ -1218,3 +1335,140 @@ pub fn stub_DrawMenuBar(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     return 1;
 }
+
+// -------------------------------------------------------------------------
+// Window query / property / rect functions (moved from misc.zig)
+// -------------------------------------------------------------------------
+
+pub fn stub_SetActiveWindow(hWnd: usize) callconv(w32cc.WINAPI) usize {
+    if (trace.enable_tracing) trace.print("USER32: SetActiveWindow(0x{X})\n", .{hWnd});
+    return hWnd;
+}
+
+pub fn stub_GetParent(hWnd: usize) callconv(w32cc.WINAPI) usize {
+    _ = hWnd;
+    return 0;
+}
+
+pub fn stub_FindWindowA(lpClassName: usize, lpWindowName: usize) callconv(w32cc.WINAPI) usize {
+    if (trace.enable_tracing) {
+        const cls = if (lpClassName != 0 and lpClassName > 0xFFFF) trace.c_span(lpClassName) else "(null)";
+        const name = if (lpWindowName != 0) trace.c_span(lpWindowName) else "(null)";
+        trace.print("USER32: FindWindowA(class='{s}', name='{s}') -> 0\n", .{ cls, name });
+    }
+    return 0;
+}
+
+pub fn stub_GetWindowTextA(hWnd: usize, lpString: usize, nMaxCount: i32) callconv(w32cc.WINAPI) i32 {
+    _ = hWnd;
+    if (lpString != 0 and nMaxCount > 0) {
+        @as([*]u8, @ptrFromInt(lpString))[0] = 0;
+    }
+    return 0;
+}
+
+pub fn stub_GetWindowTextLengthA(hWnd: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hWnd;
+    return 0;
+}
+
+pub fn stub_IsZoomed(hWnd: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hWnd;
+    return 0;
+}
+
+pub fn stub_GetSystemMenu(hWnd: usize, bRevert: i32) callconv(w32cc.WINAPI) usize {
+    _ = hWnd;
+    _ = bRevert;
+    if (trace.enable_tracing) trace.print("USER32: GetSystemMenu\n", .{});
+    return 0x00000BBB;
+}
+
+pub fn GetWindowPlacement(hWnd: usize, lpwndpl: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hWnd;
+    if (lpwndpl != 0) {
+        const wp = @as(*w32.WINDOWPLACEMENT, @ptrFromInt(lpwndpl));
+        wp.* = .{}; // zero all, length defaults to 44
+    }
+    return 1;
+}
+
+pub fn stub_SetWindowPlacement(hWnd: usize, lpwndpl: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hWnd;
+    _ = lpwndpl;
+    return 1;
+}
+
+pub fn stub_ValidateRect(hWnd: usize, lpRect: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hWnd;
+    _ = lpRect;
+    return 1;
+}
+
+pub fn stub_IsWindowVisible(hWnd: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hWnd;
+    return 1;
+}
+
+pub fn stub_BringWindowToTop(hWnd: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hWnd;
+    return 1;
+}
+
+pub fn stub_GetWindow(hWnd: usize, uCmd: u32) callconv(w32cc.WINAPI) usize {
+    _ = hWnd;
+    _ = uCmd;
+    return 0; // No window found
+}
+
+pub fn stub_GetTopWindow(hWnd: usize) callconv(w32cc.WINAPI) usize {
+    _ = hWnd;
+    return 0;
+}
+
+pub fn GetWindowThreadProcessId(hWnd: usize, lpdwProcessId: usize) callconv(w32cc.WINAPI) u32 {
+    _ = hWnd;
+    if (lpdwProcessId != 0) {
+        @as(*u32, @ptrFromInt(lpdwProcessId)).* = 1000; // fake PID
+    }
+    return 1000; // fake thread ID
+}
+
+/// Adds a new entry or changes an existing entry in the property list of the specified window.
+pub fn SetPropA(hWnd: usize, lpString: usize, hData: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hData;
+    if (trace.enable_tracing) {
+        if (lpString != 0 and lpString > 0xFFFF) {
+            trace.print("USER32: SetPropA(hWnd=0x{X}, prop='{s}') -> 1\n", .{ hWnd, trace.c_span(lpString) });
+        } else {
+            trace.print("USER32: SetPropA(hWnd=0x{X}, atom=0x{X}) -> 1\n", .{ hWnd, lpString });
+        }
+    }
+    return 1;
+}
+
+/// Retrieves a data handle from the property list of the specified window,
+/// or removes an entry from the property list. Used by both GetPropA and RemovePropA.
+pub fn GetRemovePropA(hWnd: usize, lpString: usize) callconv(w32cc.WINAPI) usize {
+    if (trace.enable_tracing) {
+        if (lpString != 0 and lpString > 0xFFFF) {
+            trace.print("USER32: GetRemovePropA(hWnd=0x{X}, prop='{s}') -> 0\n", .{ hWnd, trace.c_span(lpString) });
+        } else {
+            trace.print("USER32: GetRemovePropA(hWnd=0x{X}, atom=0x{X}) -> 0\n", .{ hWnd, lpString });
+        }
+    }
+    return 0;
+}
+
+/// Retrieves a handle to the window that contains the specified point.
+pub fn WindowFromPoint(x: i32, y: i32) callconv(w32cc.WINAPI) usize {
+    if (trace.enable_tracing) trace.print("USER32: WindowFromPoint({d}, {d}) -> 0x{X}\n", .{ x, y, user32.global_hwnd });
+    return user32.global_hwnd;
+}
+
+/// Determines whether the specified window is a native Unicode window.
+pub fn IsWindowUnicode(hWnd: usize) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("USER32: IsWindowUnicode(0x{X}) -> 0\n", .{hWnd});
+    return 0;
+}
+

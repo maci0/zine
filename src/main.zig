@@ -27,10 +27,12 @@ const x86_thunks = @import("x86/thunks.zig");
 const x86_memory = @import("x86/memory.zig");
 const compat_thunks = if (platform.is_x86_64) @import("x86/compat_thunks.zig") else struct {};
 
+const path_utils = @import("path_utils.zig");
 const trace = @import("trace.zig");
 const log = @import("log.zig");
 const profiler = @import("profiler.zig");
 const version = @import("version.zig");
+const build_options = @import("build_options");
 
 /// Fallback function for unimplemented Win32 APIs.
 /// It attempts to resolve the name of the missing API and logs a fatal error.
@@ -102,6 +104,8 @@ pub fn main() !void {
     var use_jit = false;
     var no_gui = false;
 
+    log.initFromEnv();
+
     if (std.process.hasEnvVarConstant("ZINE_TRACE")) {
         trace.enable_tracing = true;
     }
@@ -144,6 +148,10 @@ pub fn main() !void {
             continue;
         }
         if (!end_of_options and std.mem.eql(u8, arg, "--fltk")) {
+            if (!build_options.use_fltk) {
+                std.fs.File.stderr().writeAll("Error: --fltk is not available in this build.\nRebuild with: zig build -Dfltk\nTry 'zine --help' for more information.\n") catch {};
+                std.process.exit(2);
+            }
             renderer.active_backend = .fltk;
             continue;
         }
@@ -201,6 +209,10 @@ pub fn main() !void {
                 }
                 argv0_opt = val;
             } else if (args.next()) |val| {
+                if (val.len == 0) {
+                    std.fs.File.stderr().writeAll("Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n") catch {};
+                    std.process.exit(2);
+                }
                 argv0_opt = val;
             } else {
                 std.fs.File.stderr().writeAll("Error: --argv0 requires a value.\nTry 'zine --help' for more information.\n") catch {};
@@ -229,7 +241,6 @@ pub fn main() !void {
             first_arg = std.mem.trim(u8, first_arg, " \t\r\n\"");
 
             // Convert to proper Win32 path (drive_c/... -> C:\..., /abs -> Z:\...)
-            const path_utils = @import("path_utils.zig");
             var win_path_buf: [1024]u8 = undefined;
             const win_len = path_utils.posixToWin32(first_arg, &win_path_buf);
             const win_arg = try allocator.dupeZ(u8, win_path_buf[0..win_len]);
@@ -239,7 +250,6 @@ pub fn main() !void {
             // Convert args that reference our virtual filesystem to Win32 format.
             // Only convert if the arg starts with "drive_c/" → C:\...
             // Other args (flags like /nologo, relative names, numbers) are passed as-is.
-            const path_utils = @import("path_utils.zig");
             if (path_utils.isInsideDriveC(arg)) {
                 var win_path_buf: [1024]u8 = undefined;
                 const win_len = path_utils.posixToWin32(arg, &win_path_buf);
@@ -339,9 +349,10 @@ pub fn main() !void {
     {
         const pe_base = @intFromPtr(main_module.mapped_memory.ptr);
         {
+            const IMAGE_SCN_CNT_CODE = 0x20;
             const sections = main_module.parser.sections;
             for (sections) |sec| {
-                if (sec.Characteristics & 0x20 != 0) { // IMAGE_SCN_CNT_CODE
+                if (sec.Characteristics & IMAGE_SCN_CNT_CODE != 0) {
                     stubs_kernel32.app_code_start = pe_base + sec.VirtualAddress;
                     stubs_kernel32.app_code_end = pe_base + sec.VirtualAddress + sec.Misc.VirtualSize;
                     break;
@@ -352,7 +363,6 @@ pub fn main() !void {
 
     // Store the exe's directory as a Windows-style path for GetModuleFileNameA
     {
-        const path_utils = @import("path_utils.zig");
         const kernel32_path = @import("win32/kernel32/path.zig");
         const fixed_exe = try allocator.dupe(u8, target_exe);
         defer allocator.free(fixed_exe);
@@ -387,9 +397,9 @@ pub fn main() !void {
         }
     }
 
-    // Check PE subsystem: IMAGE_SUBSYSTEM_WINDOWS_GUI = 2
+    const IMAGE_SUBSYSTEM_WINDOWS_GUI = 2;
     const subsystem = main_module.parser.getNtHeaders().OptionalHeader.Subsystem;
-    const is_gui = (subsystem == 2);
+    const is_gui = (subsystem == IMAGE_SUBSYSTEM_WINDOWS_GUI);
     if (is_gui) {
         if (trace.enable_tracing) trace.print("Detected GUI application (subsystem={d})\n", .{subsystem});
     } else {
@@ -466,10 +476,14 @@ pub fn main() !void {
         }
     }
 
-    log.info("Executing {s}...", .{exe_name});
-    if (trace.enable_tracing) {
-        log.info("Execution tracing enabled", .{});
-    }
+    log.info("zine {s} | exe={s} | mode={s} | gui={s} | trace={s} | profile={s}", .{
+        version.string,
+        exe_name,
+        if (use_jit) "jit" else if (use_interpreter) "interpret" else if (platform.is_x86_64) "compat64" else "native",
+        if (renderer.active_backend == .none) "off" else "web",
+        if (trace.enable_tracing and trace.enable_instructions) "all" else if (trace.enable_tracing) "api" else if (trace.enable_instructions) "insn" else "off",
+        if (profiler.enabled) "on" else "off",
+    });
 
     if (final_envp) |envp| {
         stubs_msvcrt.global_envp = @ptrCast(envp);
@@ -563,6 +577,8 @@ pub fn main() !void {
 
     try teb.setupFS(thread_env);
 
+    if (profiler.enabled) profiler.start();
+
     if (use_interpreter or use_jit) {
         // x86 software interpreter path — jump straight to the entry point.
         // The PE entry point calls CRT init and DllMain itself, so we skip
@@ -573,7 +589,7 @@ pub fn main() !void {
         };
         const base: u32 = @truncate(main_module.image_base);
         // Allocate a dedicated 1MB stack for the interpreter
-        const stack_size = 1024 * 1024;
+        const stack_size = 1 * 1024 * 1024;
         const stack_mem = try platform.mmap(null, stack_size, true, -1, 0, false, false);
 
         var cpu = x86_cpu.Cpu{};
@@ -675,4 +691,3 @@ pub fn main() !void {
 // JIT-integrated execution loop
 // ---------------------------------------------------------------------------
 
-// JIT and scanBlock are in runner.zig

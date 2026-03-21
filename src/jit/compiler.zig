@@ -303,6 +303,8 @@ pub const JitCompiler = struct {
         try body.appendUleb128(host.JitCpuState.OFF_STATUS);
     }
 
+    /// Translates a single non-control-flow x86 instruction into equivalent WASM operations.
+    /// It appends the resulting WASM bytecode to the execution `body`.
     fn translateInstruction(self: *JitCompiler, body: *Body, insn: *const decoder.Instruction) !void {
         _ = self;
         switch (insn.opcode) {
@@ -1028,6 +1030,8 @@ pub const JitCompiler = struct {
 // Sub-translators (factored out to keep the main switch readable)
 // =======================================================================
 
+/// Translates basic arithmetic and logic instructions (ADD, OR, ADC, SBB, AND, SUB, XOR, CMP)
+/// covering the 8/32-bit reg/mem to reg/mem variants, as well as AL/EAX immediate forms.
 fn translateAlu(body: *Body, insn: *const decoder.Instruction) !void {
     const group: u3 = @truncate(insn.opcode >> 3);
     const wasm_op = t.aluGroupToWasmOp(group) orelse return;
@@ -1059,6 +1063,8 @@ fn translateAlu(body: *Body, insn: *const decoder.Instruction) !void {
     }
 }
 
+/// Translates Group 1 instructions (ADD, OR, ADC, SBB, AND, SUB, XOR, CMP) where
+/// the destination is a register/memory operand and the source is an immediate value.
 fn translateGroup1(body: *Body, insn: *const decoder.Instruction) !void {
     if (!insn.has_modrm) return;
     const sub_op = insn.modrm_reg;
@@ -1085,6 +1091,8 @@ fn translateGroup1(body: *Body, insn: *const decoder.Instruction) !void {
     }
 }
 
+/// Translates Group 2 shift/rotate instructions (ROL, ROR, RCL, RCR, SHL, SHR, SAR)
+/// matching opcode C0/C1 (imm8 shift) and D0-D3 (1 or CL shift).
 fn translateShift(body: *Body, insn: *const decoder.Instruction) !void {
     if (!insn.has_modrm) return;
     const sub_op = insn.modrm_reg;
@@ -1131,6 +1139,8 @@ fn translateShift(body: *Body, insn: *const decoder.Instruction) !void {
     try t.emitUpdateZfSf(body);
 }
 
+/// Translates Group 3 unary instructions (TEST imm, NOT, NEG, MUL, IMUL, DIV, IDIV)
+/// matching opcode F6 (8-bit) and F7 (32-bit).
 fn translateGroup3(body: *Body, insn: *const decoder.Instruction) !void {
     if (!insn.has_modrm) return;
     switch (insn.modrm_reg) {
@@ -1221,6 +1231,8 @@ fn translateGroup3(body: *Body, insn: *const decoder.Instruction) !void {
     }
 }
 
+/// Translates Group 5 unary instructions (INC, DEC, CALL, CALLF, JMP, JMPF, PUSH)
+/// targeting a general register or memory operand (opcode FF).
 fn translateGroup5(body: *Body, insn: *const decoder.Instruction) !void {
     if (!insn.has_modrm) return;
     switch (insn.modrm_reg) {
@@ -1272,6 +1284,57 @@ fn translateGroup5(body: *Body, insn: *const decoder.Instruction) !void {
 // Tests
 // =======================================================================
 
+/// Verify a compiled WASM binary has correct header and required sections.
+fn expectValidWasmModule(wasm_bin: []const u8) !void {
+    // Valid WASM binary: magic \0asm + version 1
+    try std.testing.expect(wasm_bin.len >= 8);
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
+    try std.testing.expectEqualSlices(u8, &.{ 0x01, 0x00, 0x00, 0x00 }, wasm_bin[4..8]);
+
+    // Walk sections and verify expected section IDs are present
+    var has_type = false;
+    var has_import = false;
+    var has_func = false;
+    var has_export = false;
+    var has_code = false;
+    var pos: usize = 8;
+    while (pos < wasm_bin.len) {
+        const section_id = wasm_bin[pos];
+        pos += 1;
+        // Decode section length (ULEB128)
+        var section_len: u32 = 0;
+        var shift: u5 = 0;
+        while (pos < wasm_bin.len) {
+            const b = wasm_bin[pos];
+            pos += 1;
+            section_len |= @as(u32, b & 0x7F) << shift;
+            if (b & 0x80 == 0) break;
+            shift +%= 7;
+        }
+        switch (section_id) {
+            1 => has_type = true,
+            2 => has_import = true,
+            3 => has_func = true,
+            7 => {
+                has_export = true;
+                // Verify the export section contains "run"
+                if (section_len > 0 and pos + section_len <= wasm_bin.len) {
+                    const section_data = wasm_bin[pos .. pos + section_len];
+                    try std.testing.expect(std.mem.indexOf(u8, section_data, "run") != null);
+                }
+            },
+            10 => has_code = true,
+            else => {},
+        }
+        pos += section_len;
+    }
+    try std.testing.expect(has_type);
+    try std.testing.expect(has_import);
+    try std.testing.expect(has_func);
+    try std.testing.expect(has_export);
+    try std.testing.expect(has_code);
+}
+
 test "jit compiler basic structure" {
     var compiler = JitCompiler.init(std.testing.allocator, 0);
     defer compiler.deinit();
@@ -1285,10 +1348,7 @@ test "jit compiler basic structure" {
     const wasm_bin = try compiler.compile(0x1000, &x86_test_code);
     defer std.testing.allocator.free(wasm_bin);
 
-    // Valid WASM binary: starts with magic \0asm
-    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
-    // 3 x86 instructions should produce substantial WASM output
-    try std.testing.expect(wasm_bin.len > 40);
+    try expectValidWasmModule(wasm_bin);
 }
 
 test "jit compiler push/pop" {

@@ -1,3 +1,9 @@
+//! Windows batch file (.bat / .cmd) parser and environment manager.
+//!
+//! Provides variable expansion (%VAR%, %0–9, %~dp0) and a simplified
+//! interpreter for SET, CALL, and IF statements used in MSVC toolchain
+//! batch scripts (e.g. VCVARS32.BAT).
+
 const std = @import("std");
 
 pub const BatEnv = struct {
@@ -11,7 +17,10 @@ pub const BatEnv = struct {
             .env = std.StringHashMap([]const u8).init(allocator),
         };
         // Load initial env
-        var it = std.process.getEnvMap(allocator) catch unreachable;
+        var it = std.process.getEnvMap(allocator) catch |e| {
+            std.debug.print("bat: failed to load environment: {}\n", .{e});
+            return e;
+        };
         defer it.deinit();
 
         var env_it = it.iterator();
@@ -99,8 +108,10 @@ pub const BatEnv = struct {
         if (open_path.len >= 2 and open_path[1] == ':' and std.ascii.isAlphabetic(open_path[0])) {
             open_path = open_path[2..];
         }
-        var file = std.fs.cwd().openFile(open_path, .{}) catch |err| {
-            std.debug.print("Failed to open bat file {s}: {s}\n", .{open_path, @errorName(err)});
+        var file = std.fs.cwd().openFile(open_path, .{}) catch {
+            var err_buf: [512]u8 = undefined;
+            const msg = std.fmt.bufPrint(&err_buf, "Error: failed to open batch file '{s}'.\n", .{open_path}) catch "Error: failed to open batch file.\n";
+            std.fs.File.stderr().writeAll(msg) catch {};
             return null;
         };
         defer file.close();
@@ -203,9 +214,8 @@ pub const BatEnv = struct {
                 continue;
             }
 
-            // If we get here and the command isn't a known keyword, it's the final execution command!
-            // We just return it as args.
-            // Simplified parsing by spaces, ignoring quotes for simplicity, but let's do a naive split
+            // Unrecognized command — treat as the final executable invocation.
+            // Split by whitespace with basic quote stripping.
             var final_args: std.ArrayList([]const u8) = .{};
             var it = std.mem.tokenizeAny(u8, cmd_line, " \t");
             while (it.next()) |token| {
@@ -249,3 +259,103 @@ pub const BatEnv = struct {
         return (try envp_list.toOwnedSlice(self.allocator)).ptr;
     }
 };
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
+
+const testing = std.testing;
+
+fn testBatEnv() BatEnv {
+    return .{
+        .allocator = testing.allocator,
+        .env = std.StringHashMap([]const u8).init(testing.allocator),
+    };
+}
+
+test "expand: literal text passes through" {
+    var bat = testBatEnv();
+    defer bat.deinit();
+
+    const result = try bat.expand("hello world", &.{}, "C:\\bat");
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("hello world", result);
+}
+
+test "expand: ordinal args %0-%9" {
+    var bat = testBatEnv();
+    defer bat.deinit();
+
+    var args = [_][]const u8{ "script.bat", "arg1", "arg2" };
+    const result = try bat.expand("%0 %1 %2", &args, "C:\\bat");
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("script.bat arg1 arg2", result);
+}
+
+test "expand: %* expands all args after %0" {
+    var bat = testBatEnv();
+    defer bat.deinit();
+
+    var args = [_][]const u8{ "cmd.bat", "first", "second", "third" };
+    const result = try bat.expand("echo %*", &args, "C:\\bat");
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("echo first second third", result);
+}
+
+test "expand: %* with no extra args" {
+    var bat = testBatEnv();
+    defer bat.deinit();
+
+    var args = [_][]const u8{"cmd.bat"};
+    const result = try bat.expand("echo %*", &args, "C:\\bat");
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("echo ", result);
+}
+
+test "expand: environment variable" {
+    var bat = testBatEnv();
+    defer bat.deinit();
+    try bat.env.put("FOO", "bar");
+
+    const result = try bat.expand("value=%FOO%", &.{}, "C:\\bat");
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("value=bar", result);
+}
+
+test "expand: env var case insensitive" {
+    var bat = testBatEnv();
+    defer bat.deinit();
+    try bat.env.put("MyVar", "hello");
+
+    const result = try bat.expand("%myvar%", &.{}, "C:\\bat");
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("hello", result);
+}
+
+test "expand: undefined env var expands to empty" {
+    var bat = testBatEnv();
+    defer bat.deinit();
+
+    const result = try bat.expand("x%UNDEFINED%y", &.{}, "C:\\bat");
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("xy", result);
+}
+
+test "expand: %~dp0 expands to bat dir with backslash" {
+    var bat = testBatEnv();
+    defer bat.deinit();
+
+    const result = try bat.expand("%~dp0file.exe", &.{}, "C:\\tools");
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("C:\\tools\\file.exe", result);
+}
+
+test "expand: out of range ordinal arg" {
+    var bat = testBatEnv();
+    defer bat.deinit();
+
+    var args = [_][]const u8{"only_one"};
+    const result = try bat.expand("%1", &args, "C:\\bat");
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("", result);
+}

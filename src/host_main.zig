@@ -9,9 +9,10 @@
 //!      - jit_call(block_id: i32)
 //!
 //! Build:  zig build -Dhost
-//! Usage:  zine-host zine.wasm [-- args...]
+//! Usage:  zine-host [options] <zine.wasm> [-- args...]
 
 const std = @import("std");
+const version = @import("version.zig");
 const c = @cImport({
     @cInclude("wasmer.h");
 });
@@ -127,13 +128,19 @@ fn jitCall(args: [*c]const c.wasm_val_vec_t, results: [*c]c.wasm_val_vec_t) call
 // Main
 // ---------------------------------------------------------------------------
 
+fn writeErr(msg: []const u8) void {
+    std.fs.File.stderr().writeAll(msg) catch {};
+}
+
 fn printWasmerError() void {
     const len = c.wasmer_last_error_length();
     if (len > 0) {
         var buf: [4096]u8 = undefined;
         const actual: usize = @intCast(c.wasmer_last_error_message(&buf, buf.len));
         if (actual > 0) {
-            std.debug.print("wasmer error: {s}\n", .{buf[0 .. actual - 1]});
+            writeErr("wasmer error: ");
+            writeErr(buf[0 .. actual - 1]);
+            writeErr("\n");
         }
     }
 }
@@ -148,39 +155,81 @@ pub fn main() !void {
     defer sys_args.deinit();
     _ = sys_args.next(); // skip argv[0]
 
-    const wasm_path = sys_args.next() orelse {
-        std.debug.print("Usage: zine-host <zine.wasm> [-- args...]\n", .{});
-        std.process.exit(1);
-    };
-
+    var wasm_path: ?[]const u8 = null;
     var guest_args: std.ArrayListUnmanaged([]const u8) = .{};
     defer guest_args.deinit(allocator);
+    var past_separator = false;
+
     while (sys_args.next()) |arg| {
-        if (std.mem.eql(u8, arg, "--")) continue; // skip separator
-        try guest_args.append(allocator, arg);
+        if (!past_separator and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
+            std.fs.File.stdout().writeAll(
+                \\Usage: zine-host [options] <zine.wasm> [-- args...]
+                \\
+                \\Run zine.wasm with a native WASM runtime and JIT support.
+                \\
+                \\Options:
+                \\  -h, --help          Show this help message
+                \\  -v, --version       Show version information
+                \\  --                  Stop processing options; remaining args are passed to the guest
+                \\
+                \\Examples:
+                \\  zine-host zine.wasm -- myapp.exe
+                \\  zine-host zine.wasm -- --trace myapp.exe
+                \\
+            ) catch {};
+            std.process.exit(0);
+        }
+        if (!past_separator and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
+            std.fs.File.stdout().writeAll("zine-host " ++ version.string ++ "\n") catch {};
+            std.process.exit(0);
+        }
+        if (!past_separator and std.mem.eql(u8, arg, "--")) {
+            past_separator = true;
+            continue;
+        }
+        if (wasm_path == null and !past_separator and arg.len > 1 and arg[0] == '-') {
+            var err_buf: [512]u8 = undefined;
+            const msg = std.fmt.bufPrint(&err_buf, "Error: unknown option '{s}'.\nTry 'zine-host --help' for more information.\n", .{arg}) catch "Error: unknown option.\n";
+            std.fs.File.stderr().writeAll(msg) catch {};
+            std.process.exit(2);
+        }
+        if (wasm_path == null) {
+            wasm_path = arg;
+        } else {
+            try guest_args.append(allocator, arg);
+        }
+    }
+
+    if (wasm_path == null) {
+        std.fs.File.stderr().writeAll("Error: missing required argument <zine.wasm>.\nTry 'zine-host --help' for more information.\n") catch {};
+        std.process.exit(2);
     }
 
     // Read WASM file
-    const wasm_file = std.fs.cwd().openFile(wasm_path, .{}) catch |err| {
-        std.debug.print("zine-host: cannot open {s}: {}\n", .{ wasm_path, err });
+    const wasm_file = std.fs.cwd().openFile(wasm_path.?, .{}) catch {
+        writeErr("Error: cannot open '");
+        writeErr(wasm_path.?);
+        writeErr("'.\n");
         std.process.exit(1);
     };
     defer wasm_file.close();
-    const wasm_data = wasm_file.readToEndAlloc(allocator, 256 * 1024 * 1024) catch |err| {
-        std.debug.print("zine-host: cannot read {s}: {}\n", .{ wasm_path, err });
+    const wasm_data = wasm_file.readToEndAlloc(allocator, 256 * 1024 * 1024) catch { // 256MB max
+        writeErr("Error: cannot read '");
+        writeErr(wasm_path.?);
+        writeErr("'.\n");
         std.process.exit(1);
     };
     defer allocator.free(wasm_data);
 
     // Create wasmer engine + store
     const engine = c.wasm_engine_new() orelse {
-        std.debug.print("zine-host: failed to create wasmer engine\n", .{});
+        writeErr("Error: failed to create wasmer engine.\n");
         std.process.exit(1);
     };
     defer c.wasm_engine_delete(engine);
 
     const store = c.wasm_store_new(engine) orelse {
-        std.debug.print("zine-host: failed to create wasmer store\n", .{});
+        writeErr("Error: failed to create wasmer store.\n");
         std.process.exit(1);
     };
     defer c.wasm_store_delete(store);
@@ -192,7 +241,7 @@ pub fn main() !void {
     defer c.wasm_byte_vec_delete(&wasm_bytes);
 
     const module = c.wasm_module_new(store, &wasm_bytes) orelse {
-        std.debug.print("zine-host: failed to compile module\n", .{});
+        writeErr("Error: failed to compile WASM module.\n");
         printWasmerError();
         std.process.exit(1);
     };
@@ -200,7 +249,7 @@ pub fn main() !void {
 
     // Set up WASI
     const wasi_config = c.wasi_config_new("zine") orelse {
-        std.debug.print("zine-host: failed to create WASI config\n", .{});
+        writeErr("Error: failed to create WASI config.\n");
         std.process.exit(1);
     };
 
@@ -226,7 +275,7 @@ pub fn main() !void {
 
     // Inherit environment
     var env_iter = std.process.getEnvMap(allocator) catch {
-        std.debug.print("zine-host: failed to get env\n", .{});
+        writeErr("Error: failed to get environment.\n");
         std.process.exit(1);
     };
     defer env_iter.deinit();
@@ -237,7 +286,7 @@ pub fn main() !void {
 
     // Get WASI imports
     const wasi_env = c.wasi_env_new(store, wasi_config) orelse {
-        std.debug.print("zine-host: failed to create WASI env\n", .{});
+        writeErr("Error: failed to create WASI environment.\n");
         printWasmerError();
         std.process.exit(1);
     };
@@ -279,7 +328,7 @@ pub fn main() !void {
     // WASI imports are resolved by wasi_get_imports; we patch in JIT functions
     var wasi_imports: c.wasm_extern_vec_t = undefined;
     if (!c.wasi_get_imports(store, wasi_env, module, &wasi_imports)) {
-        std.debug.print("zine-host: failed to get WASI imports\n", .{});
+        writeErr("Error: failed to get WASI imports.\n");
         printWasmerError();
         std.process.exit(1);
     }
@@ -306,12 +355,13 @@ pub fn main() !void {
     // Instantiate
     var trap: ?*c.wasm_trap_t = null;
     const instance = c.wasm_instance_new(store, module, &wasi_imports, &trap) orelse {
-        std.debug.print("zine-host: failed to instantiate module\n", .{});
+        writeErr("Error: failed to instantiate WASM module.\n");
         if (trap) |t| {
             var msg: c.wasm_message_t = undefined;
             c.wasm_trap_message(t, &msg);
             if (msg.size > 0) {
-                std.debug.print("trap: {s}\n", .{msg.data[0..msg.size]});
+                writeErr(msg.data[0..msg.size]);
+                writeErr("\n");
                 c.wasm_byte_vec_delete(&msg);
             }
             c.wasm_trap_delete(t);
@@ -338,14 +388,14 @@ pub fn main() !void {
 
     // Initialize WASI (set memory on the env)
     if (!c.wasi_env_initialize_instance(wasi_env, store, instance)) {
-        std.debug.print("zine-host: failed to initialize WASI instance\n", .{});
+        writeErr("Error: failed to initialize WASI instance.\n");
         printWasmerError();
         std.process.exit(1);
     }
 
     // Find and call _start
     const start_func = c.wasi_get_start_function(instance) orelse {
-        std.debug.print("zine-host: no _start function found\n", .{});
+        writeErr("Error: no _start function found in WASM module.\n");
         printWasmerError();
         std.process.exit(1);
     };
@@ -362,7 +412,9 @@ pub fn main() !void {
             const s = msg.data[0..msg.size];
             // wasmer encodes proc_exit as a trap message
             if (std.mem.indexOf(u8, s, "exit") == null) {
-                std.debug.print("zine-host: trap: {s}\n", .{s});
+                writeErr("Error: WASM trap: ");
+                writeErr(s);
+                writeErr("\n");
             }
             c.wasm_byte_vec_delete(&msg);
         }

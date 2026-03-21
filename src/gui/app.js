@@ -91,9 +91,11 @@ function updateClock() {
     const now = new Date();
     document.getElementById('taskbar-clock').textContent =
         now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // Schedule next update at the start of the next minute
+    const msToNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+    setTimeout(updateClock, msToNextMinute + 50);
 }
 updateClock();
-setInterval(updateClock, 30000);
 
 // --- Window Dragging ---
 function makeDraggable(titlebar, windowElement) {
@@ -200,7 +202,7 @@ makeDraggable(document.getElementById('dialog-titlebar'), dialogOverlay);
 // --- Dialog Management ---
 function showDialog(title, content) {
     const dialogContent = document.getElementById('dialog-content');
-    document.getElementById('dialog-title').innerText = title;
+    document.getElementById('dialog-title').textContent = title;
 
     // Accept either a DOM node or an HTML string
     if (typeof content === 'string') {
@@ -218,6 +220,12 @@ function showDialog(title, content) {
     dialogOverlay.style.zIndex = 3000;
 
     document.getElementById('main-titlebar').classList.add('inactive');
+
+    // Move focus into the dialog for accessibility
+    requestAnimationFrame(() => {
+        const focusable = dialogOverlay.querySelector('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+        if (focusable) focusable.focus();
+    });
 }
 
 function closeDialog(suppressBackend = false) {
@@ -332,7 +340,7 @@ function PopupItem(sub, onAfterClick) {
     }
     const isChecked = (sub.flags & 0x0008) !== 0; // MF_CHECKED
     const isDisabled = (sub.flags & 0x0003) !== 0; // MF_GRAYED | MF_DISABLED
-    return div({class: 'popup-item' + (isChecked ? ' checked' : '') + (isDisabled ? ' disabled' : ''), 'data-cmd-id': sub.id, onclick: (e) => {
+    return div({class: 'popup-item' + (isChecked ? ' checked' : '') + (isDisabled ? ' disabled' : ''), role: 'menuitem', 'aria-disabled': isDisabled ? 'true' : 'false', 'data-cmd-id': sub.id, onclick: (e) => {
         e.stopPropagation();
         if (isDisabled) return;
         sendCommand(sub.id);
@@ -347,15 +355,15 @@ function renderMenu(menuData) {
     menuData.forEach(item => {
         let menuItem;
         if (item.popup) {
-            const popup = div({class: 'popup-menu'},
+            const popup = div({class: 'popup-menu', role: 'menu'},
                 ...item.popup.map(sub => PopupItem(sub, () => {
                     popup.style.display = 'none';
                     setTimeout(() => popup.style.display = '', 100);
                 }))
             );
-            menuItem = div({class: 'menu-item'}, menuLabel(item.name), popup);
+            menuItem = div({class: 'menu-item', role: 'menuitem', 'aria-haspopup': 'true'}, menuLabel(item.name), popup);
         } else {
-            menuItem = div({class: 'menu-item', onclick: (e) => {
+            menuItem = div({class: 'menu-item', role: 'menuitem', onclick: (e) => {
                 e.stopPropagation();
                 sendCommand(item.id);
             }}, menuLabel(item.name));
@@ -587,7 +595,7 @@ function connect() {
         // Reset window title
         document.title = 'Zine';
         const titleEl = document.getElementById('window-title');
-        if (titleEl) titleEl.innerText = '';
+        if (titleEl) titleEl.textContent = '';
 
         // Reset edit control
         if (hasEditControl.val) {
@@ -632,7 +640,7 @@ function connect() {
 
     ws.onclose = () => {
         statusEl.style.display = 'block';
-        statusEl.innerText = "Disconnected. Reconnecting...";
+        statusEl.textContent = "Disconnected. Reconnecting...";
         statusEl.style.color = "#f87171";
         setTimeout(connect, 1000);
     };
@@ -667,8 +675,8 @@ function connect() {
 
                 } else if (msg.type === "check_menu_item") {
                     // Toggle checkmark on a menu item by command ID
-                    document.querySelectorAll('.popup-item[data-cmd-id="' + msg.id + '"]').forEach(el => {
-                        el.classList.toggle('checked', msg.checked);
+                    document.querySelectorAll('.popup-item').forEach(el => {
+                        if (el.dataset.cmdId == msg.id) el.classList.toggle('checked', msg.checked);
                     });
                     // Also update currentMenuData so reconnects show correct state
                     if (currentMenuData) {
@@ -685,9 +693,14 @@ function connect() {
                     }
 
                 } else if (msg.type === "message_box") {
-                    const mbText = (msg.text || '').replace(/\n/g, '<br>');
                     const textEl = div({style: 'padding:8px 12px; margin:0 0 12px 0;'});
-                    textEl.innerHTML = mbText;
+                    // Safely render message text: escape HTML entities, then
+                    // convert newlines to <br> elements to preserve formatting.
+                    const rawText = msg.text || '';
+                    rawText.split('\n').forEach((line, i) => {
+                        if (i > 0) textEl.appendChild(document.createElement('br'));
+                        textEl.appendChild(document.createTextNode(line));
+                    });
                     showDialog(msg.title,
                         div(
                             textEl,
@@ -729,8 +742,8 @@ function connect() {
 
                     if (msg.title && msg.title.length > 0) {
                         document.title = msg.title;
-                        document.getElementById('window-title').innerText = msg.title;
-                        document.getElementById('taskbar-title').innerText = msg.title;
+                        document.getElementById('window-title').textContent = msg.title;
+                        document.getElementById('taskbar-title').textContent = msg.title;
                     }
 
                 } else if (msg.type === "add_control") {
@@ -742,7 +755,7 @@ function connect() {
 
                 } else if (msg.type === "update_control_text") {
                     // Update text of an existing control by its data-id attribute
-                    const el = document.querySelector(`[data-id="${msg.id}"]`);
+                    const el = Array.from(document.querySelectorAll('[data-id]')).find(e => e.dataset.id == msg.id);
                     if (el) {
                         // Strip Win32 '&' accelerator prefix for display
                         const displayText = (msg.text || '').replace(/&([^&])/g, '$1').replace(/&&/g, '&');
@@ -925,7 +938,7 @@ function connect() {
                                 button({class: 'win2k-button', onclick: () => {
                                     // If a folder name is typed, navigate into it
                                     const val = filenameInput.value;
-                                    const folderItem = fileListEl.querySelector('.file-item[data-type="folder"][data-name="' + val + '"]');
+                                    const folderItem = Array.from(fileListEl.querySelectorAll('.file-item[data-type="folder"]')).find(el => el.dataset.name === val);
                                     if (folderItem) {
                                         navigateTo(currentPath + '/' + val);
                                         return;
@@ -1132,10 +1145,11 @@ function connect() {
 
                 } else if (msg.type === "close_dialog") {
                     dialogOverlay.style.display = 'none';
+                    document.getElementById('main-titlebar').classList.remove('inactive');
 
                 } else if (msg.type === "set_edit_font") {
                     // Apply font to a child control by hwnd, fallback to #edit-control
-                    let el = document.querySelector('[data-hwnd="' + msg.hwnd + '"]');
+                    let el = Array.from(document.querySelectorAll('[data-hwnd]')).find(e => e.dataset.hwnd == msg.hwnd);
                     if (!el) el = document.getElementById('edit-control');
                     if (el) {
                         el.style.fontFamily = "'" + msg.face + "', monospace";
@@ -1186,8 +1200,8 @@ function connect() {
 
                 } else if (msg.type === "enable_menu_item") {
                     // EnableMenuItem: add/remove .disabled class from menu items
-                    const items = document.querySelectorAll('[data-cmd-id="' + msg.id + '"]');
-                    items.forEach(item => {
+                    document.querySelectorAll('[data-cmd-id]').forEach(item => {
+                        if (item.dataset.cmdId != msg.id) return;
                         if (msg.enabled) {
                             item.classList.remove('disabled');
                         } else {
@@ -1232,7 +1246,7 @@ function connect() {
                     // Update status bar pane text
                     const sb = document.querySelector('.win2k-statusbar');
                     if (sb) {
-                        const pane = sb.querySelector('[data-pane-idx="' + msg.part + '"]');
+                        const pane = Array.from(sb.querySelectorAll('[data-pane-idx]')).find(e => e.dataset.paneIdx == msg.part);
                         if (pane) {
                             pane.textContent = msg.text;
                         } else {
@@ -1308,8 +1322,8 @@ function connect() {
 
                 } else if (msg.type === "set_title") {
                     document.title = msg.title;
-                    document.getElementById('window-title').innerText = msg.title;
-                    document.getElementById('taskbar-title').innerText = msg.title;
+                    document.getElementById('window-title').textContent = msg.title;
+                    document.getElementById('taskbar-title').textContent = msg.title;
 
                 } else if (msg.type === "set_window_pos") {
                     const clientWidth = msg.clientW || Math.max(1, msg.cx - 8);
@@ -1345,15 +1359,20 @@ function connect() {
                     editEl.focus();
 
                     // Sync textarea content to backend on input (debounced)
+                    // Remove previous listener to prevent duplicates
+                    if (editEl._textSyncHandler) {
+                        editEl.removeEventListener('input', editEl._textSyncHandler);
+                    }
                     let textSyncTimer = null;
-                    editEl.addEventListener('input', () => {
+                    editEl._textSyncHandler = () => {
                         if (textSyncTimer) clearTimeout(textSyncTimer);
                         textSyncTimer = setTimeout(() => {
                             if (ws.readyState === WebSocket.OPEN) {
                                 ws.send(JSON.stringify({ type: 'text_sync', text: editEl.value }));
                             }
                         }, 150);
-                    });
+                    };
+                    editEl.addEventListener('input', editEl._textSyncHandler);
 
                 } else if (msg.type === "resize_edit_control") {
                     const editEl = document.getElementById('edit-control');
@@ -1460,6 +1479,38 @@ window.addEventListener('resize', () => {
     }
 });
 
+// --- Global Escape Key Handler ---
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        // Close volume popup
+        const volumePopup = document.getElementById('volume-popup');
+        if (volumePopup && volumePopup.style.display === 'flex') {
+            volumePopup.style.display = 'none';
+            return;
+        }
+        // Close taskbar context menu
+        const ctxMenu = document.getElementById('taskbar-context-menu');
+        if (ctxMenu && ctxMenu.style.display === 'block') {
+            ctxMenu.style.display = 'none';
+            return;
+        }
+        // Close canvas context menu overlay
+        const ctxOverlay = document.getElementById('context-menu-overlay');
+        if (ctxOverlay) {
+            ctxOverlay.remove();
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'context_menu_select', id: 0 }));
+            }
+            return;
+        }
+        // Close dialog
+        if (dialogOverlay.style.display !== 'none' && dialogOverlay.style.display !== '') {
+            closeDialog();
+            return;
+        }
+    }
+});
+
 // --- Keyboard Input ---
 window.addEventListener('keydown', (e) => {
     if (hasEditControl.val && document.activeElement === document.getElementById('edit-control')) {
@@ -1519,6 +1570,41 @@ canvas.addEventListener('mousemove', (e) => {
 });
 
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// --- Touch Input (mapped to mouse events for mobile support) ---
+function getTouchCanvasCoords(touch) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+        x: Math.round((touch.clientX - rect.left) * scaleX),
+        y: Math.round((touch.clientY - rect.top) * scaleY)
+    };
+}
+
+canvas.addEventListener('touchstart', (e) => {
+    if (ws && ws.readyState === WebSocket.OPEN && e.touches.length > 0) {
+        const c = getTouchCanvasCoords(e.touches[0]);
+        ws.send(JSON.stringify({ type: 'mousedown', x: c.x, y: c.y, button: 0 }));
+    }
+    e.preventDefault();
+}, { passive: false });
+
+canvas.addEventListener('touchend', (e) => {
+    if (ws && ws.readyState === WebSocket.OPEN && e.changedTouches.length > 0) {
+        const c = getTouchCanvasCoords(e.changedTouches[0]);
+        ws.send(JSON.stringify({ type: 'mouseup', x: c.x, y: c.y, button: 0 }));
+    }
+    e.preventDefault();
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+    if (ws && ws.readyState === WebSocket.OPEN && e.touches.length > 0) {
+        const c = getTouchCanvasCoords(e.touches[0]);
+        ws.send(JSON.stringify({ type: 'mousemove', x: c.x, y: c.y, button: 0 }));
+    }
+    e.preventDefault();
+}, { passive: false });
 
 // --- Initialize ---
 connect();

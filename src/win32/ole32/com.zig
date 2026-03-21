@@ -121,7 +121,6 @@ pub fn stub_CoCreateInstance(rclsid: usize, pUnkOuter: usize, dwClsContext: u32,
     return @as(i32, @bitCast(@as(u32, 0x80004002))); // E_NOINTERFACE
 }
 
-/// CoTaskMemAlloc
 /// Implementation status: Partially implemented
 pub fn CoTaskMemAlloc(cb: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("OLE32: CoTaskMemAlloc({d})\n", .{cb});
@@ -149,7 +148,6 @@ pub fn stub_DoDragDrop(pDataObj: usize, pDropSource: usize, dwOKEffects: u32, pd
     return @as(i32, @bitCast(@as(u32, 0x80004001))); // E_NOTIMPL
 }
 
-/// SysFreeString
 /// Implementation status: Partially implemented
 pub fn SysFreeString(bstrString: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("OLEAUT32: SysFreeString(0x{X})\n", .{bstrString});
@@ -219,7 +217,6 @@ pub fn SysStringByteLen(bstr: usize) callconv(w32cc.WINAPI) u32 {
     return @as(*align(1) const u32, @ptrFromInt(bstr - 4)).*;
 }
 
-/// SysAllocString
 /// Implementation status: Partially implemented
 pub fn SysAllocString(strIn: usize) callconv(w32cc.WINAPI) usize {
     if (strIn == 0) return 0;

@@ -368,7 +368,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     const cmdname = trace.c_span(cmdname_ptr);
     if (trace.enable_tracing) trace.print("spawnvp cmd: {s}\n", .{cmdname});
 
-    const raw_loader_exe = std.fs.selfExePathAlloc(std.heap.page_allocator) catch "winloader";
+    const raw_loader_exe = std.fs.selfExePathAlloc(std.heap.page_allocator) catch "zine";
     const loader_exe = std.fmt.allocPrint(std.heap.page_allocator, "{s}\x00", .{raw_loader_exe}) catch return -1;
 
     args.append(std.heap.page_allocator, loader_exe[0 .. loader_exe.len - 1]) catch return -1;
@@ -560,15 +560,18 @@ pub fn putenv(envstring_ptr: usize) callconv(.c) i32 {
     const key = envstring[0..idx];
     const val = envstring[idx + 1 ..];
 
-    const key_dupe = std.heap.page_allocator.dupe(u8, key) catch return -1;
-    const val_dupe = std.heap.page_allocator.dupe(u8, val) catch return -1;
-
+    // Check for existing key first to avoid unnecessary allocation
     for (msvcrt.msvcrt_env_vars.items) |*v| {
-        if (std.mem.eql(u8, v.key, key_dupe)) {
+        if (std.mem.eql(u8, v.key, key)) {
+            const val_dupe = std.heap.page_allocator.dupe(u8, val) catch return -1;
+            std.heap.page_allocator.free(v.val);
             v.val = val_dupe;
             return 0;
         }
     }
+
+    const key_dupe = std.heap.page_allocator.dupe(u8, key) catch return -1;
+    const val_dupe = std.heap.page_allocator.dupe(u8, val) catch return -1;
     msvcrt.msvcrt_env_vars.append(std.heap.page_allocator, .{ .key = key_dupe, .val = val_dupe }) catch return -1;
     return 0;
 }

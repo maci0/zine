@@ -68,7 +68,7 @@ Guest App
 
 Every rendering path currently:
 1. Writes BGRA/RGB565 pixels into a CPU buffer
-2. Converts to RGBA in `renderer.global_framebuf`
+2. Converts to BGRA in `renderer.global_framebuf`
 3. Pushes the frame over WebSocket as raw pixel data
 
 This is inherently slow — all pixel conversion and blitting happens on the CPU
@@ -2182,7 +2182,7 @@ The stubs use comptime platform selection to choose between native rendering
 (current WebSocket path) and WebGPU:
 
 ```zig
-const platform = @import("../platform/interface.zig");
+const platform = @import("../platform.zig");
 
 fn pushSurfaceFrame() void {
     if (platform.is_wasm) {
@@ -2560,7 +2560,7 @@ pub fn presentFrame(device: Device, queue: Queue, texture_view: c.WGPUTextureVie
 The platform layer selects the backend at comptime:
 
 ```zig
-// platform/interface.zig
+// platform.zig (comptime backend selection)
 const builtin = @import("builtin");
 
 pub const is_wasm = builtin.target.cpu.arch == .wasm32;

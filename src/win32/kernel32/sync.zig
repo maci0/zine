@@ -9,7 +9,6 @@ pub fn InterlockedIncrement(lpAddend: *i32) callconv(w32cc.WINAPI) i32 {
     return @atomicRmw(i32, lpAddend, .Add, 1, .seq_cst) + 1;
 }
 
-/// InterlockedDecrement
 pub fn InterlockedDecrement(lpAddend: *i32) callconv(w32cc.WINAPI) i32 {
     return @atomicRmw(i32, lpAddend, .Sub, 1, .seq_cst) - 1;
 }
@@ -46,14 +45,12 @@ fn getOrCreateCS(addr: usize) ?*CriticalSection {
     return null;
 }
 
-/// InitializeCriticalSection
 /// Implementation status: Partially implemented
 pub fn InitializeCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: InitializeCriticalSection({x})\n", .{lpCriticalSection});
     if (lpCriticalSection != 0) _ = getOrCreateCS(lpCriticalSection);
 }
 
-/// EnterCriticalSection
 /// Implementation status: Partially implemented
 pub fn EnterCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
     if (lpCriticalSection == 0) return;
@@ -69,7 +66,6 @@ pub fn EnterCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) voi
     cs.recursion = 1;
 }
 
-/// LeaveCriticalSection
 /// Implementation status: Partially implemented
 pub fn LeaveCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
     if (lpCriticalSection == 0) return;
@@ -83,7 +79,6 @@ pub fn LeaveCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) voi
     cs.mutex.unlock();
 }
 
-/// DeleteCriticalSection
 /// Implementation status: Partially implemented
 pub fn DeleteCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: DeleteCriticalSection({x})\n", .{lpCriticalSection});
@@ -206,7 +201,6 @@ fn getOrCreateTlsEntry() *TlsThreadEntry {
     return &tls_threads[0];
 }
 
-/// TlsAlloc
 /// Implementation status: Partially implemented
 pub fn TlsAlloc() callconv(w32cc.WINAPI) u32 {
     if (tls_next >= MAX_TLS_SLOTS) return 0xFFFFFFFF; // TLS_OUT_OF_INDEXES
@@ -215,7 +209,6 @@ pub fn TlsAlloc() callconv(w32cc.WINAPI) u32 {
     return idx;
 }
 
-/// TlsGetValue
 /// Implementation status: Partially implemented
 pub fn TlsGetValue(dwTlsIndex: u32) callconv(w32cc.WINAPI) usize {
     if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;
@@ -223,7 +216,6 @@ pub fn TlsGetValue(dwTlsIndex: u32) callconv(w32cc.WINAPI) usize {
     return entry.slots[dwTlsIndex];
 }
 
-/// TlsSetValue
 /// Implementation status: Partially implemented
 pub fn TlsSetValue(dwTlsIndex: u32, lpTlsValue: usize) callconv(w32cc.WINAPI) i32 {
     if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;
@@ -268,7 +260,6 @@ pub fn stub_ReleaseSemaphore(hSemaphore: usize, lReleaseCount: i32, lpPreviousCo
 
 var next_dup_handle: usize = 0xD0000001;
 
-/// DuplicateHandle
 /// Implementation status: Partially implemented
 pub fn DuplicateHandle(
     hSourceProcessHandle: usize,
@@ -348,7 +339,6 @@ pub fn InitializeSListHead(ListHead: usize) callconv(w32cc.WINAPI) void {
     }
 }
 
-/// InterlockedFlushSList
 /// Implementation status: Partially implemented
 pub fn InterlockedFlushSList(ListHead: usize) callconv(w32cc.WINAPI) usize {
     if (ListHead != 0) {
@@ -368,7 +358,6 @@ pub fn InitializeCriticalSectionEx(lpCriticalSection: usize, dwSpinCount: u32, f
     return 1; // TRUE = success
 }
 
-/// InitializeCriticalSectionAndSpinCount
 /// Implementation status: Partially implemented
 pub fn InitializeCriticalSectionAndSpinCount(lpCriticalSection: usize, dwSpinCount: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: InitializeCriticalSectionAndSpinCount(cs={X}, spin={d})\n", .{ lpCriticalSection, dwSpinCount });
@@ -382,7 +371,6 @@ pub fn EncodePointer(ptr: usize) callconv(w32cc.WINAPI) usize {
     return ptr; // No encoding needed
 }
 
-/// DecodePointer
 /// Implementation status: Partially implemented
 pub fn DecodePointer(ptr: usize) callconv(w32cc.WINAPI) usize {
     return ptr; // No decoding needed
@@ -406,14 +394,12 @@ pub fn FlsAlloc(lpCallback: usize) callconv(w32cc.WINAPI) u32 {
     return idx;
 }
 
-/// FlsGetValue
 /// Implementation status: Partially implemented
 pub fn FlsGetValue(dwFlsIndex: u32) callconv(w32cc.WINAPI) usize {
     if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
     return fls_values[dwFlsIndex];
 }
 
-/// FlsSetValue
 /// Implementation status: Partially implemented
 pub fn FlsSetValue(dwFlsIndex: u32, lpFlsData: usize) callconv(w32cc.WINAPI) i32 {
     if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
@@ -421,7 +407,6 @@ pub fn FlsSetValue(dwFlsIndex: u32, lpFlsData: usize) callconv(w32cc.WINAPI) i32
     return 1; // TRUE
 }
 
-/// FlsFree
 /// Implementation status: Partially implemented
 pub fn FlsFree(dwFlsIndex: u32) callconv(w32cc.WINAPI) i32 {
     if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
@@ -438,7 +423,6 @@ pub fn InterlockedExchange(target: usize, value: i32) callconv(w32cc.WINAPI) i32
     return @atomicRmw(i32, ptr, .Xchg, value, .seq_cst);
 }
 
-/// TlsFree
 /// Implementation status: Partially implemented
 pub fn TlsFree(dwTlsIndex: u32) callconv(w32cc.WINAPI) i32 {
     if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;

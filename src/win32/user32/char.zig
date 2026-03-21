@@ -42,6 +42,21 @@ pub fn CharLowerA(lpsz: usize) callconv(w32cc.WINAPI) usize {
     return lpsz;
 }
 
+pub fn CharUpperA(lpsz: usize) callconv(w32cc.WINAPI) usize {
+    if (lpsz <= 0xFF) {
+        // Single character passed as LOBYTE — convert and return
+        if (lpsz >= 'a' and lpsz <= 'z') return lpsz - 32;
+        return lpsz;
+    }
+    // In-place string conversion
+    const buf = @as([*]u8, @ptrFromInt(lpsz));
+    const span = trace.c_span(lpsz);
+    for (0..span.len) |i| {
+        if (buf[i] >= 'a' and buf[i] <= 'z') buf[i] -= 32;
+    }
+    return lpsz;
+}
+
 pub fn CharUpperW(lpsz: usize) callconv(w32cc.WINAPI) usize {
     if (lpsz <= 0xFFFF) {
         // Single character — convert and return

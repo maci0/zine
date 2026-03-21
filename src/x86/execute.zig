@@ -21,6 +21,7 @@
 const std = @import("std");
 const cpu_mod = @import("cpu.zig");
 const decoder = @import("decoder.zig");
+const decode_cache = @import("decode_cache.zig");
 const flags_mod = @import("flags.zig");
 const thunks = @import("thunks.zig");
 const trace = @import("../trace.zig");
@@ -49,7 +50,7 @@ pub fn run(cpu: *Cpu) void {
 /// Executes a single x86 instruction at the current EIP.
 /// This function handles:
 ///   1. Checking for native imports (thunks).
-///   2. Decoding the instruction at the current memory location.
+///   2. Decode cache lookup, falling back to full decode on miss.
 ///   3. Advancing EIP.
 ///   4. Dispatching to the appropriate execution handler via `executeInsn`.
 pub fn step(cpu: *Cpu) void {
@@ -86,7 +87,13 @@ pub fn step(cpu: *Cpu) void {
         return;
     };
 
-    const insn = decoder.decode(code);
+    const insn = cpu.decode_cache.lookup(eip, code) orelse blk: {
+        const decoded = decoder.decode(code);
+        if (decoded.length > 0) {
+            cpu.decode_cache.store(eip, code, decoded);
+        }
+        break :blk decoded;
+    };
 
     if (insn.length == 0) {
         log.err("x86: zero-length instruction at 0x{X} (byte 0x{X:0>2})", .{ eip, code[0] });
@@ -310,19 +317,9 @@ fn dispatchNativeCall(cpu: *Cpu) void {
         const old_seh = cpu.memory.read32(cpu.fs_base); // fs:[0]
         cpu.push32(old_seh);
         cpu.memory.write32(cpu.fs_base, cpu.esp); // mov fs:[0], esp
-        // [esp+12] is where ret_addr was before we pushed 3 values.
-        // But we already popped ret_addr at line 180, so we need to
-        // simulate: the return address is ret_addr, and [esp+12] should
-        // get EBP stored there. Since we popped ret_addr, the 3 pushes
-        // put us 12 bytes below where ret_addr would have been. The
-        // original code reads [esp+12] which is the slot above our 3 pushes.
-        // That slot is the first guest arg (args[0]) which was below ret_addr.
-        // But actually, _EH_prolog is called with the stack:
-        //   [ESP] = ret_addr (already popped by us)
-        //   [ESP+4..] = caller's locals
-        // After our 3 pushes: [ESP+12] = where ret_addr was = now args[0].
-        // But we already popped ret_addr, so [ESP+12] is actually the
-        // caller's EBP save slot. We just write EBP there.
+        // We already popped ret_addr above in dispatchNativeCall, then
+        // pushed 3 values (-1, scope table, old SEH). [ESP+12] is the
+        // slot where ret_addr was — now the caller's EBP save slot.
         cpu.memory.write32(cpu.esp +% 12, cpu.ebp);
         cpu.ebp = cpu.esp +% 12;
         cpu.eip = ret_addr;
@@ -350,14 +347,14 @@ fn dispatchNativeCall(cpu: *Cpu) void {
     }
 
     // Call the native function through a generic function pointer.
-    const is_cdecl = thunks.isTargetCdecl(target_addr);
+    // Single lookup to get both calling convention and param count.
+    const import_info = thunks.getImportInfo(target_addr);
     var result: u32 = 0;
 
-    if (is_cdecl) {
+    if (import_info.is_cdecl) {
         result = thunks.callNativeCdecl(target_addr, args);
     } else {
-        const param_bytes = thunks.getParamBytes(target_addr);
-        result = thunks.callNativeByArity(target_addr, param_bytes, args);
+        result = thunks.callNativeByArity(target_addr, import_info.param_bytes, args);
     }
 
     cpu.eax = result;
@@ -365,7 +362,7 @@ fn dispatchNativeCall(cpu: *Cpu) void {
 
     // Adjust guest ESP for stdcall cleanup — the PE code expects the
     // callee to have popped parameter bytes, but our cdecl call didn't.
-    const cleanup = thunks.getStdcallCleanup(target_addr);
+    const cleanup = import_info.param_bytes;
 
     if (trace.enable_tracing) {
         // Try to identify the function name for unresolved imports.
@@ -381,16 +378,16 @@ fn dispatchNativeCall(cpu: *Cpu) void {
             }
         }
         if (func_name) |name| {
-            trace.print("x86_execute: Native call to {X:0>8} [{s}] (cleanup={d} is_cdecl={}) ret={X}\n", .{ target_addr, name, cleanup, is_cdecl, result });
+            trace.print("x86_execute: Native call to {X:0>8} [{s}] (cleanup={d} is_cdecl={}) ret={X}\n", .{ target_addr, name, cleanup, import_info.is_cdecl, result });
         } else {
-            trace.print("x86_execute: Native call to {X:0>8} (cleanup={d} is_cdecl={}) ret={X}\n", .{ target_addr, cleanup, is_cdecl, result });
+            trace.print("x86_execute: Native call to {X:0>8} (cleanup={d} is_cdecl={}) ret={X}\n", .{ target_addr, cleanup, import_info.is_cdecl, result });
         }
     }
 
     // For cdecl functions, the caller cleans up — the guest code will
     // do `add esp, N` itself. We should NOT adjust ESP here.
     // For stdcall, the callee cleans up — we must simulate that.
-    if (!is_cdecl) {
+    if (!import_info.is_cdecl) {
         cpu.esp +%= cleanup;
     }
 
@@ -454,7 +451,10 @@ pub fn buildInittermTrampoline(cpu: *Cpu) void {
     }
 }
 
-/// Execute an x87 FPU instruction.
+/// Executes an x87 FPU instruction.
+/// This acts as a secondary dispatcher for opcodes D8 through DF, decoding the
+/// ModRM byte to determine the specific FPU operation. It interacts with the 
+/// 8-register FPU stack and handles both register-to-register and memory-to-register operations.
 fn executeFpu(cpu: anytype, insn: anytype) void {
     if (!insn.has_modrm) return;
     const reg: u8 = insn.modrm_reg;
@@ -832,10 +832,9 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         },
 
         // --- MOV r/m, reg and reg, r/m (88-8B) ---
-        0x88 => writeOperand8(cpu, insn, 0, @truncate(readOperand(cpu, insn, 1))),
-        0x89 => writeOperand(cpu, insn, 0, readOperand(cpu, insn, 1)),
-        0x8A => writeOperand8(cpu, insn, 0, @truncate(readOperand(cpu, insn, 1))),
-        0x8B => writeOperand(cpu, insn, 0, readOperand(cpu, insn, 1)),
+        // Decoder resolves operand direction; executor always writes operand 0.
+        0x88, 0x8A => writeOperand8(cpu, insn, 0, @truncate(readOperand(cpu, insn, 1))),
+        0x89, 0x8B => writeOperand(cpu, insn, 0, readOperand(cpu, insn, 1)),
 
         // MOV r/m16, Sreg (8C)
         0x8C => {
@@ -966,16 +965,16 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         0xAB => execStosd(cpu, insn),
         0xAC => { // LODSB
             cpu.setReg8(0, cpu.memory.read8(cpu.esi));
-            if (cpu.flags.toEflags() & flags_mod.FLAG_DF != 0) cpu.esi -%= 1 else cpu.esi +%= 1;
+            if (cpu.flags.getDF()) cpu.esi -%= 1 else cpu.esi +%= 1;
         },
         0xAD => { // LODSD
             cpu.eax = cpu.memory.read32(cpu.esi);
-            if (cpu.flags.toEflags() & flags_mod.FLAG_DF != 0) cpu.esi -%= 4 else cpu.esi +%= 4;
+            if (cpu.flags.getDF()) cpu.esi -%= 4 else cpu.esi +%= 4;
         },
         0xA6, 0xA7 => { // CMPSB/CMPSD
             const sz: u32 = if (insn.opcode == 0xA6) 1 else 4;
             const os: OpSize = if (sz == 1) .byte else .dword;
-            const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
+            const df = cpu.flags.getDF();
             if (insn.rep or insn.repne) {
                 // REPZ CMPS: loop while ECX > 0 AND ZF=1 (bytes equal)
                 // REPNZ CMPS: loop while ECX > 0 AND ZF=0 (bytes not equal)
@@ -992,7 +991,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                         cpu.esi +%= sz;
                         cpu.edi +%= sz;
                     }
-                    const zf = cpu.flags.toEflags() & flags_mod.FLAG_ZF != 0;
+                    const zf = cpu.flags.getZF();
                     if (stop_on_zf and zf) break;  // REPNZ: stop when equal
                     if (!stop_on_zf and !zf) break; // REPZ: stop when not equal
                 }
@@ -1012,7 +1011,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         0xAE, 0xAF => { // SCASB / SCASD
             const sz: u32 = if (insn.opcode == 0xAE) 1 else 4;
             const os: OpSize = if (sz == 1) .byte else .dword;
-            const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
+            const df = cpu.flags.getDF();
             if (insn.rep or insn.repne) {
                 // REPNZ SCAS: scan until AL/EAX matches [EDI] or ECX=0
                 // REPZ SCAS: scan until AL/EAX differs from [EDI] or ECX=0
@@ -1023,7 +1022,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                     cpu.flags.update(.sub, os, a -% b, a, b);
                     cpu.ecx -= 1;
                     if (df) cpu.edi -%= sz else cpu.edi +%= sz;
-                    const zf = cpu.flags.toEflags() & flags_mod.FLAG_ZF != 0;
+                    const zf = cpu.flags.getZF();
                     if (stop_on_zf and zf) break;  // REPNZ: found match
                     if (!stop_on_zf and !zf) break; // REPZ: found mismatch
                 }
@@ -2014,7 +2013,7 @@ fn execShift(cpu: *Cpu, insn: *const Instruction) void {
 
 /// Executes the MOVSB string instruction (copy byte from ESI to EDI).
 fn execMovsb(cpu: *Cpu, insn: *const Instruction) void {
-    const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
+    const df = cpu.flags.getDF();
     if (insn.rep) {
         while (cpu.ecx > 0) : (cpu.ecx -= 1) {
             cpu.memory.write8(cpu.edi, cpu.memory.read8(cpu.esi));
@@ -2040,7 +2039,7 @@ fn execMovsb(cpu: *Cpu, insn: *const Instruction) void {
 
 /// Executes the MOVSD string instruction (copy dword from ESI to EDI).
 fn execMovsd(cpu: *Cpu, insn: *const Instruction) void {
-    const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
+    const df = cpu.flags.getDF();
     if (insn.rep) {
         while (cpu.ecx > 0) : (cpu.ecx -= 1) {
             cpu.memory.write32(cpu.edi, cpu.memory.read32(cpu.esi));
@@ -2066,7 +2065,7 @@ fn execMovsd(cpu: *Cpu, insn: *const Instruction) void {
 
 /// Executes the STOSB string instruction (store AL at EDI).
 fn execStosb(cpu: *Cpu, insn: *const Instruction) void {
-    const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
+    const df = cpu.flags.getDF();
     const val = cpu.getReg8(0);
     if (insn.rep) {
         while (cpu.ecx > 0) : (cpu.ecx -= 1) {
@@ -2081,7 +2080,7 @@ fn execStosb(cpu: *Cpu, insn: *const Instruction) void {
 
 /// Executes the STOSD string instruction (store EAX at EDI).
 fn execStosd(cpu: *Cpu, insn: *const Instruction) void {
-    const df = cpu.flags.toEflags() & flags_mod.FLAG_DF != 0;
+    const df = cpu.flags.getDF();
     if (insn.rep) {
         while (cpu.ecx > 0) : (cpu.ecx -= 1) {
             cpu.memory.write32(cpu.edi, cpu.eax);

@@ -1,10 +1,10 @@
 //! x86 FPU emulation.
 
-// Minimal x87 FPU state for the x86 interpreter.
+// x87 FPU state for the x86 interpreter.
 //
-// Most Win32 apps use only basic floating point.  This provides enough
-// state to survive CRT initialisation (FNINIT, FNSTCW, FLDCW) without
-// crashing.  Full FPU instruction implementation is deferred.
+// Supports a broad set of x87 instructions including arithmetic (FADD,
+// FMUL, FSUB, FDIV), loads/stores (FLD, FST, FILD, FISTP), comparisons
+// (FCOM, FUCOM), and control (FNINIT, FNSTCW, FLDCW, FXCH, FCHS, FABS).
 
 const std = @import("std");
 
@@ -47,12 +47,10 @@ pub const FpuState = struct {
         return val;
     }
 
-    /// Read ST(i).
     pub fn st(self: *const FpuState, i: u3) f64 {
         return self.stack[self.top +% i];
     }
 
-    /// Write ST(i).
     pub fn setSt(self: *FpuState, i: u3, val: f64) void {
         self.stack[self.top +% i] = val;
     }
@@ -85,4 +83,46 @@ test "fpu: push and pop" {
     try testing.expectEqual(@as(f64, 1.0), fpu.st(1));
     try testing.expectEqual(@as(f64, 2.0), fpu.pop());
     try testing.expectEqual(@as(f64, 1.0), fpu.st(0));
+}
+
+test "fpu: getStatusWord embeds TOP field" {
+    var fpu = FpuState{};
+    // Initial TOP = 0, status_word = 0 → bits 11-13 should be 000
+    try testing.expectEqual(@as(u16, 0), fpu.getStatusWord());
+
+    fpu.push(1.0); // TOP decrements to 7
+    const sw = fpu.getStatusWord();
+    // TOP field is bits 11-13
+    const top_bits = (sw >> 11) & 0x7;
+    try testing.expectEqual(@as(u16, 7), top_bits);
+}
+
+test "fpu: setSt modifies specific register" {
+    var fpu = FpuState{};
+    fpu.push(0.0);
+    fpu.push(0.0);
+    fpu.setSt(1, 42.0);
+    try testing.expectEqual(@as(f64, 42.0), fpu.st(1));
+    try testing.expectEqual(@as(f64, 0.0), fpu.st(0));
+}
+
+test "fpu: stack wraps around" {
+    var fpu = FpuState{};
+    // Push 8 values (fills the stack)
+    var i: u3 = 0;
+    while (true) {
+        fpu.push(@floatFromInt(i));
+        if (i == 7) break;
+        i += 1;
+    }
+    // ST(0) should be the last pushed value (7)
+    try testing.expectEqual(@as(f64, 7.0), fpu.st(0));
+    // Pop all 8
+    var j: u3 = 0;
+    while (true) {
+        _ = fpu.pop();
+        if (j == 7) break;
+        j += 1;
+    }
+    try testing.expectEqual(@as(u3, 0), fpu.top);
 }

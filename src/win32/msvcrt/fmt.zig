@@ -162,7 +162,7 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
 }
 
 /// Prints formatted output to the standard output stream.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 // On x86_64 compat mode, use the WASM-style stub (positional fmt + ap args)
 // because the compat thunk dispatcher passes the va_list as a positional arg,
 // not through the C variadic mechanism.
@@ -188,7 +188,7 @@ fn printf_impl(fmt: [*:0]const u8, ap: usize) i32 {
 }
 
 /// Prints formatted output to the standard output stream using a pointer to a list of arguments.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn vprintf(fmt: [*:0]const u8, ap: [*]const u32) callconv(.c) i32 {
     var buf: [4096]u8 = undefined;
     const len = x86_vsnprintf(&buf, 4096, fmt, @intFromPtr(ap));
@@ -199,7 +199,7 @@ pub fn vprintf(fmt: [*:0]const u8, ap: [*]const u32) callconv(.c) i32 {
 }
 
 /// Writes formatted output to a stream using a pointer to a list of arguments.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn vfprintf(stream: ?*anyopaque, fmt: [*:0]const u8, ap: [*]const u32) callconv(.c) i32 {
     var buf: [4096]u8 = undefined;
     const len = x86_vsnprintf(&buf, 4096, fmt, @intFromPtr(ap));
@@ -220,7 +220,7 @@ pub fn vfprintf(stream: ?*anyopaque, fmt: [*:0]const u8, ap: [*]const u32) callc
 }
 
 /// Writes formatted data to a string using a pointer to a list of arguments.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn vsnprintf(out: [*]u8, max: usize, fmt: [*:0]const u8, ap: [*]const u32) callconv(.c) i32 {
     if (max == 0) return 0;
     var buf: [4096]u8 = undefined;
@@ -233,7 +233,7 @@ pub fn vsnprintf(out: [*]u8, max: usize, fmt: [*:0]const u8, ap: [*]const u32) c
 }
 
 /// Writes formatted data to a string.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub const snprintf = if (platform.is_wasm or platform.is_x86_64) stub_snprintf_wasm else stub_snprintf_native;
 
 fn stub_snprintf_wasm(out: [*]u8, max: usize, fmt: [*:0]const u8, ap: usize) callconv(.c) i32 {
@@ -258,7 +258,7 @@ fn snprintf_impl(out: [*]u8, max: usize, fmt: [*:0]const u8, ap: usize) i32 {
 }
 
 /// Writes formatted data to a wide-character string.
-/// Implementation status: Partially implemented.
+/// Implementation status: Partially implemented
 pub const swprintf = if (platform.is_wasm or platform.is_x86_64) stub_swprintf_wasm else stub_swprintf_native;
 
 fn stub_swprintf_wasm(out: [*]u16, fmt_w: [*]const u16, ap: usize) callconv(.c) i32 {
@@ -294,7 +294,7 @@ fn swprintf_impl(out: [*]u16, fmt_w: [*]const u16, ap: usize) i32 {
 }
 
 /// Writes formatted data to a string.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub const sprintf = if (platform.is_wasm or platform.is_x86_64) stub_sprintf_wasm else stub_sprintf_native;
 
 fn stub_sprintf_wasm(out: [*]u8, fmt: [*:0]const u8, ap: usize) callconv(.c) i32 {
@@ -317,7 +317,7 @@ fn sprintf_impl(out: [*]u8, fmt: [*:0]const u8, ap: usize) i32 {
 }
 
 /// Writes a string to the standard output stream and appends a newline character.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn puts(str: [*:0]const u8) callconv(.c) i32 {
     const s = std.mem.span(str);
     const f = @import("../host_io.zig").fileFromFd(1);
@@ -338,7 +338,7 @@ pub fn fputs(str: [*:0]const u8, file_ptr: ?*anyopaque) callconv(.c) i32 {
 }
 
 /// Reads formatted data from a string.
-/// Implementation status: Partially implemented.
+/// Implementation status: Partially implemented
 pub const sscanf = if (platform.is_wasm or platform.is_x86_64) stub_sscanf_wasm else stub_sscanf_native;
 
 fn stub_sscanf_wasm(input: [*:0]const u8, fmt: [*:0]const u8, ap: usize) callconv(.c) i32 {

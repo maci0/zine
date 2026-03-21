@@ -169,3 +169,46 @@ pub fn stub_CheckMenuRadioItem(hMenu: usize, first: u32, last: u32, check: u32, 
     _ = flags;
     return 1;
 }
+
+/// Retrieves information about a menu item.
+/// Implementation status: Partially implemented (returns safe defaults for common fMask values)
+pub fn GetMenuItemInfoA(hMenu: usize, uItem: u32, fByPosition: i32, lpmii: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hMenu;
+    if (trace.enable_tracing) trace.print("USER32: GetMenuItemInfoA(item={d}, byPos={d})\n", .{ uItem, fByPosition });
+    if (lpmii == 0) return 0;
+
+    // Read fMask at offset +4
+    const fMask = @as(*align(1) const u32, @ptrFromInt(lpmii + 4)).*;
+
+    const MIIM_ID: u32 = 0x02;
+    const MIIM_SUBMENU: u32 = 0x04;
+    const MIIM_TYPE: u32 = 0x10;
+    const MIIM_STRING: u32 = 0x40;
+
+    // If fMask has MIIM_TYPE (0x10), set fType at +8 to MFT_STRING (0)
+    if (fMask & MIIM_TYPE != 0) {
+        @as(*align(1) u32, @ptrFromInt(lpmii + 8)).* = 0; // MFT_STRING
+    }
+
+    // If fMask has MIIM_ID (0x02), set wID at +12 to uItem
+    if (fMask & MIIM_ID != 0) {
+        @as(*align(1) u32, @ptrFromInt(lpmii + 12)).* = uItem;
+    }
+
+    // If fMask has MIIM_SUBMENU (0x04), set hSubMenu at +20 to 0
+    if (fMask & MIIM_SUBMENU != 0) {
+        @as(*align(1) u32, @ptrFromInt(lpmii + 20)).* = 0;
+    }
+
+    // If fMask has MIIM_STRING (0x40), write empty string to dwTypeData
+    if (fMask & MIIM_STRING != 0) {
+        const dwTypeData = @as(*align(1) u32, @ptrFromInt(lpmii + 32)).*;
+        if (dwTypeData != 0) {
+            @as(*u8, @ptrFromInt(dwTypeData)).* = 0; // empty string
+        }
+        // Set cch at +36 to 0 (empty string length)
+        @as(*align(1) u32, @ptrFromInt(lpmii + 36)).* = 0;
+    }
+
+    return 1; // success
+}

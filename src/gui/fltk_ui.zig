@@ -12,7 +12,6 @@
 const std = @import("std");
 const renderer = @import("renderer.zig");
 const build_options = @import("build_options");
-const log = @import("../log.zig");
 
 /// Conditionally import the C bridge — only available when -Dfltk=true
 const c = if (build_options.use_fltk) @cImport({

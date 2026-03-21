@@ -252,6 +252,14 @@ body {
     justify-content: center;
     padding: 0;
     position: relative;
+    font: inherit;
+    color: inherit;
+    cursor: default;
+    outline: none;
+}
+.win2k-titlebar-btn:focus-visible {
+    outline: 1px dotted var(--sys-title-text);
+    outline-offset: -3px;
 }
 
 .win2k-titlebar-btn:active {
@@ -331,9 +339,11 @@ body {
     padding: 2px 6px;     /* 6px horizontal padding per spec */
 }
 
-.menu-item:hover {
+.menu-item:hover,
+.menu-item:focus-visible {
     background-color: var(--sys-sel);
     color: var(--sys-sel-text);
+    outline: none;
 }
 
 /* Popup / dropdown menu */
@@ -378,9 +388,11 @@ body {
     pointer-events: none;
 }
 
-.popup-item:hover {
+.popup-item:hover,
+.popup-item:focus-visible {
     background-color: var(--sys-sel);
     color: var(--sys-sel-text);
+    outline: none;
 }
 
 .popup-separator {
@@ -650,10 +662,24 @@ canvas {
     align-items: center;
     justify-content: center;
     margin-right: 4px;
+    /* Extend touch target beyond visual bounds for accessibility */
+    position: relative;
 }
 
-.tray-volume:hover {
+.tray-volume::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    left: -8px;
+    right: -8px;
+    bottom: -8px;
+}
+
+.tray-volume:hover,
+.tray-volume:focus-visible {
     color: var(--sys-hot);
+    outline: 1px dotted var(--sys-text);
+    outline-offset: 1px;
 }
 
 /* Volume popup — styled after Win2K sndvol32 */
@@ -2657,6 +2683,11 @@ select.win2k-edit:disabled {
     outline: 1px dotted var(--sys-sel-text);
 }
 
+.win2k-desktop-icon:focus-visible .win2k-desktop-icon-label {
+    outline: 1px dotted var(--sys-sel-text);
+    outline-offset: 1px;
+}
+
 /* ===================================================================
  * Pager Control  (SysPager)
  * =================================================================== */
@@ -2882,3 +2913,15 @@ select.win2k-edit:disabled {
 
 .win2k-wait { cursor: wait; }
 .win2k-busy { cursor: progress; }
+
+/* ===================================================================
+ * Reduced Motion
+ * =================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}

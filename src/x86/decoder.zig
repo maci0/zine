@@ -229,11 +229,7 @@ pub fn decode(bytes: []const u8) Instruction {
         },
 
         // --- INC/DEC reg (40-4F) ---
-        0x40...0x47 => {
-            insn.op0_kind = .reg;
-            insn.op0_reg = @truncate(insn.opcode);
-        },
-        0x48...0x4F => {
+        0x40...0x4F => {
             insn.op0_kind = .reg;
             insn.op0_reg = @truncate(insn.opcode);
         },

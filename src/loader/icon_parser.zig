@@ -6,6 +6,7 @@
 const std = @import("std");
 const Module = @import("module.zig").Module;
 const log = @import("../log.zig");
+const trace = @import("../trace.zig");
 const res = @import("../pe_resources.zig");
 
 /// Extracts an icon resource from a PE module and returns it as a base64-encoded JSON message.
@@ -31,7 +32,7 @@ pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_gro
         
         if (idReserved != 0 or idType != 1 or idCount == 0) return null;
         
-        // Just take the first icon from the group for now
+        // Use the first icon entry from the group
         if (data.len < 6 + 14) return null;
         
         const bWidth = try reader.readByte();
@@ -47,7 +48,7 @@ pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_gro
         
         if (icon_data.len != dwBytesInRes) {
             log.warn("Icon data length mismatch: expected {}, got {}", .{dwBytesInRes, icon_data.len});
-            // Proceed anyway
+            // Size mismatch is common with compressed icons; proceed with actual data length
         }
         
         // Build ICO buffer
@@ -79,13 +80,11 @@ pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_gro
         _ = b64_encoder.encode(b64_buf, ico_buf.items);
         
         const json_str = try std.fmt.allocPrint(allocator, "{{\"type\":\"set_icon\",\"base64\":\"{s}\"}}", .{b64_buf});
-        
-        const trace = @import("../trace.zig");
+
         if (trace.enable_tracing) trace.print("ICON PARSER: Successfully extracted icon and encoded to base64\n", .{});
         return json_str;
     }
     
-    const trace = @import("../trace.zig");
     if (trace.enable_tracing) trace.print("ICON PARSER: Failed to extract icon\n", .{});
     return null;
 }

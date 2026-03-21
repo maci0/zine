@@ -20,12 +20,14 @@ pub fn init(allocator: std.mem.Allocator) !void {
     g_allocator = std.heap.page_allocator;
     clients = .{};
 
-    // Clear buffer to black
-    for (0..(1024 * 1024)) |i| {
-        renderer.global_framebuf[i * 4 + 0] = 0; // R
-        renderer.global_framebuf[i * 4 + 1] = 0; // G
-        renderer.global_framebuf[i * 4 + 2] = 0; // B
-        renderer.global_framebuf[i * 4 + 3] = 255; // A
+    // Clear buffer to black (BGRA pixel order: B=0, G=0, R=0, A=255)
+    @memset(renderer.global_framebuf[0 .. 1024 * 1024 * 4], 0);
+    // Set alpha channel to 255 for all pixels
+    {
+        var i: usize = 3;
+        while (i < 1024 * 1024 * 4) : (i += 4) {
+            renderer.global_framebuf[i] = 255;
+        }
     }
 
     if (comptime platform.is_native) {
@@ -57,7 +59,7 @@ pub fn pushFrame() void {
         if (ws.writeMessage(payload, .binary)) {
             i += 1;
         } else |_| {
-            _ = clients.orderedRemove(i);
+            _ = clients.swapRemove(i);
         }
     }
 }
@@ -81,11 +83,11 @@ pub fn pushMessage(json: []const u8) void {
                 std.posix.SO.ERROR,
                 std.mem.asBytes(&sock_err),
             ) catch {
-                _ = clients.orderedRemove(i);
+                _ = clients.swapRemove(i);
                 continue;
             };
             if (sock_err != 0) {
-                _ = clients.orderedRemove(i);
+                _ = clients.swapRemove(i);
                 continue;
             }
         }
@@ -101,7 +103,7 @@ pub fn pushMessage(json: []const u8) void {
         if (ws.writeMessage(json, .text)) {
             i += 1;
         } else |_| {
-            _ = clients.orderedRemove(i);
+            _ = clients.swapRemove(i);
         }
     }
 }
@@ -129,13 +131,13 @@ pub fn pushAudio(data: []const u8) void {
         if (ws.writeMessageVec(&bufs, .binary)) {
             i += 1;
         } else |_| {
-            _ = clients.orderedRemove(i);
+            _ = clients.swapRemove(i);
         }
     }
 }
 
 fn serverLoop(allocator: std.mem.Allocator) void {
-    const address = std.net.Address.parseIp4("0.0.0.0", 1995) catch |err| {
+    const address = std.net.Address.parseIp4("127.0.0.1", 1995) catch |err| {
         std.debug.print("WebUI: failed to parse address: {}\n", .{err});
         return;
     };
@@ -145,7 +147,7 @@ fn serverLoop(allocator: std.mem.Allocator) void {
     };
     defer server.deinit();
 
-    std.debug.print("\n>>> Winloader Web UI running on http://127.0.0.1:1995 <<<\n\n", .{});
+    std.debug.print("\n>>> Zine Web UI running on http://127.0.0.1:1995 <<<\n\n", .{});
 
     while (true) {
         const conn = server.accept() catch continue;
@@ -238,7 +240,7 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                         if (std.mem.eql(u8, type_val.?.string, "command")) {
                             if (root.object.get("id")) |id_val| {
                                 if (id_val == .integer) {
-                                    if (renderer.on_command) |cb| cb(@intCast(id_val.integer));
+                                    if (renderer.on_command) |cb| cb(std.math.cast(u32, id_val.integer) orelse continue);
                                 }
                             }
                         } else if (std.mem.eql(u8, type_val.?.string, "open_file")) {
@@ -250,8 +252,11 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                                     else
                                         "Desktop";
 
-                                    // Validate: reject path traversal
+                                    // Security: reject path traversal in both dir and filename
                                     if (std.mem.indexOf(u8, dir_path, "..") != null) continue;
+                                    if (std.mem.indexOf(u8, file_val.string, "..") != null) continue;
+                                    if (std.mem.indexOfScalar(u8, dir_path, 0) != null) continue;
+                                    if (std.mem.indexOfScalar(u8, file_val.string, 0) != null) continue;
 
                                     const path = std.fmt.bufPrint(&selected_file_path, "drive_c/{s}/{s}", .{ dir_path, file_val.string }) catch null;
                                     if (path) |p| {
@@ -264,8 +269,10 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                             if (root.object.get("path")) |path_val| {
                                 if (path_val == .string) {
                                     const req_path = path_val.string;
-                                    // Validate: reject path traversal
-                                    if (std.mem.indexOf(u8, req_path, "..") == null) {
+                                    // Security: reject path traversal and null bytes
+                                    if (std.mem.indexOf(u8, req_path, "..") == null and
+                                        std.mem.indexOfScalar(u8, req_path, 0) == null)
+                                    {
                                         renderer.listDirectory(req_path);
                                     }
                                 }
@@ -275,8 +282,10 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                             if (root.object.get("path")) |path_val| {
                                 if (path_val == .string) {
                                     const req_path = path_val.string;
-                                    // Validate: reject path traversal
-                                    if (std.mem.indexOf(u8, req_path, "..") == null) {
+                                    // Security: reject path traversal and null bytes
+                                    if (std.mem.indexOf(u8, req_path, "..") == null and
+                                        std.mem.indexOfScalar(u8, req_path, 0) == null)
+                                    {
                                         const path = std.fmt.bufPrint(&selected_file_path, "drive_c/{s}", .{req_path}) catch null;
                                         if (path) |p| {
                                             if (renderer.on_file_uploaded) |cb| cb(p);
@@ -288,11 +297,11 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                             const cw = root.object.get("clientW");
                             const ch = root.object.get("clientH");
                             if (cw != null and ch != null and cw.? == .integer and ch.? == .integer) {
-                                const new_cw: i32 = @intCast(@as(i64, cw.?.integer));
-                                const new_ch: i32 = @intCast(@as(i64, ch.?.integer));
+                                const new_cw = std.math.cast(i32, cw.?.integer) orelse continue;
+                                const new_ch = std.math.cast(i32, ch.?.integer) orelse continue;
                                 const size_type_val = root.object.get("sizeType");
                                 const size_type: usize = if (size_type_val != null and size_type_val.? == .integer)
-                                    @intCast(@as(i64, size_type_val.?.integer))
+                                    std.math.cast(usize, size_type_val.?.integer) orelse 0
                                 else
                                     0;
                                 if (renderer.on_resize) |cb| cb(new_cw, new_ch, size_type);
@@ -308,7 +317,7 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                             if (face_val != null and face_val.? == .string and
                                 size_val != null and size_val.? == .integer)
                             {
-                                const pt_size: i32 = @intCast(@as(i64, size_val.?.integer));
+                                const pt_size = std.math.cast(i32, size_val.?.integer) orelse continue;
                                 const is_bold = if (bold_val != null and bold_val.? == .bool) bold_val.?.bool else false;
                                 const is_italic = if (italic_val != null and italic_val.? == .bool) italic_val.?.bool else false;
                                 if (renderer.on_font_chosen) |cb| cb(face_val.?.string, pt_size, is_bold, is_italic);
@@ -379,9 +388,9 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                             const y_val = root.object.get("y");
                             const btn_val = root.object.get("button");
                             if (x_val != null and y_val != null and x_val.? == .integer and y_val.? == .integer) {
-                                const x: i32 = @intCast(x_val.?.integer);
-                                const y: i32 = @intCast(y_val.?.integer);
-                                const button: i32 = if (btn_val != null and btn_val.? == .integer) @intCast(btn_val.?.integer) else 0;
+                                const x = std.math.cast(i32, x_val.?.integer) orelse continue;
+                                const y = std.math.cast(i32, y_val.?.integer) orelse continue;
+                                const button: i32 = if (btn_val != null and btn_val.? == .integer) std.math.cast(i32, btn_val.?.integer) orelse 0 else 0;
                                 const w32 = @import("../win32/constants.zig");
                                 var msg_id: u32 = w32.WM_MOUSEMOVE;
                                 if (std.mem.eql(u8, type_val.?.string, "mousedown")) {
@@ -401,7 +410,7 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
         clients_mutex.lock();
         for (clients.items, 0..) |stream, i| {
             if (stream.handle == conn.stream.handle) {
-                _ = clients.orderedRemove(i);
+                _ = clients.swapRemove(i);
                 break;
             }
         }
@@ -414,7 +423,20 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
         }
         if (std.mem.eql(u8, req_path, "/")) req_path = "/index.html";
 
-        if (std.mem.indexOf(u8, req_path, "..") != null) {
+        // Security: reject path traversal sequences, encoded variants, and null bytes.
+        // Check for ".." (literal), "%2e" / "%2E" (percent-encoded dot), and null bytes.
+        if (std.mem.indexOf(u8, req_path, "..") != null or
+            std.mem.indexOf(u8, req_path, "%2e") != null or
+            std.mem.indexOf(u8, req_path, "%2E") != null or
+            std.mem.indexOf(u8, req_path, "%00") != null or
+            std.mem.indexOfScalar(u8, req_path, 0) != null)
+        {
+            try req.respond("Forbidden", .{ .status = .forbidden });
+            return conn.stream.close();
+        }
+
+        // Only allow paths starting with / and containing only safe characters
+        if (req_path.len == 0 or req_path[0] != '/') {
             try req.respond("Forbidden", .{ .status = .forbidden });
             return conn.stream.close();
         }
@@ -455,7 +477,12 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
              return conn.stream.close();
         };
         const bytes_read = try file.readAll(content);
-        try req.respond(content[0..bytes_read], .{ .extra_headers = &.{ .{ .name = "content-type", .value = content_type } } });
+        try req.respond(content[0..bytes_read], .{ .extra_headers = &.{
+            .{ .name = "content-type", .value = content_type },
+            .{ .name = "x-content-type-options", .value = "nosniff" },
+            .{ .name = "x-frame-options", .value = "DENY" },
+            .{ .name = "content-security-policy", .value = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:1995" },
+        } });
         return conn.stream.close();
     }
 }

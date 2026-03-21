@@ -98,9 +98,9 @@ pub fn exitProcess(code: u8) noreturn {
     std.process.exit(code);
 }
 
-/// Returns a high-resolution timestamp in nanoseconds.
+/// Returns the current timestamp as a Unix epoch value (seconds).
+/// Stubbed to 0 on WASM — not needed for current use cases.
 pub fn timestamp() i64 {
-    // WASI timestamp is available, but for now we return 0
     return 0;
 }
 
@@ -140,6 +140,11 @@ pub fn mprotect(addr: usize, len: usize, readable: bool, writable: bool, executa
     _ = readable;
     _ = writable;
     _ = executable;
+}
+
+pub fn mprotectExec(addr: *anyopaque, len: usize) !void {
+    _ = addr;
+    _ = len;
 }
 
 /// Creates a unidirectional data channel.

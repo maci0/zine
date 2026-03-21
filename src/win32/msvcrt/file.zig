@@ -26,7 +26,7 @@ pub fn get_fd_file(fd: i32) ?std.fs.File {
 const FILE = io.MSVCRT_FILE;
 
 /// Determines if a file has the specified access permissions.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn access(path_ptr: usize, mode: i32) callconv(.c) i32 {
     if (path_ptr == 0) return -1;
     const path = trace.c_span(path_ptr);
@@ -37,7 +37,7 @@ pub fn access(path_ptr: usize, mode: i32) callconv(.c) i32 {
 }
 
 /// Opens a file with shared access.
-/// Implementation status: Partially implemented.
+/// Implementation status: Partially implemented
 pub fn sopen(path_ptr: usize, oflag: i32, shflag: i32, pmode: i32) callconv(.c) i32 {
     _ = shflag;
     _ = pmode;
@@ -75,7 +75,7 @@ pub fn sopen(path_ptr: usize, oflag: i32, shflag: i32, pmode: i32) callconv(.c) 
 }
 
 /// Reads data from a file.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn read(fd: i32, buffer: [*]u8, count: u32) callconv(.c) i32 {
     if (trace.enable_tracing) trace.print("MSVCRT: _read(fd={d}, count={d})\n", .{ fd, count });
     if (count == 0) return 0;
@@ -93,7 +93,7 @@ pub fn read(fd: i32, buffer: [*]u8, count: u32) callconv(.c) i32 {
 }
 
 /// Writes data to a file.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn write(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
     if (trace.enable_tracing) trace.print("MSVCRT: _write(fd={d}, buf={x}, count={d})\n", .{ fd, buffer_ptr, count });
     if (buffer_ptr == 0 or count == 0) return 0;
@@ -116,7 +116,7 @@ pub fn write(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
 }
 
 /// Moves the file pointer to the specified location.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn lseek(fd: i32, offset: i32, origin: i32) callconv(.c) i32 {
     const file = @import("../host_io.zig").fileFromFd(fd);
     switch (origin) {
@@ -135,7 +135,7 @@ pub fn lseek(fd: i32, offset: i32, origin: i32) callconv(.c) i32 {
 }
 
 /// Closes the specified file.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn close(fd: i32) callconv(.c) i32 {
     if (fd >= 3) {
         const file = @import("../host_io.zig").fileFromFd(fd);
@@ -146,7 +146,7 @@ pub fn close(fd: i32) callconv(.c) i32 {
 }
 
 /// Retrieves the file descriptor associated with a stream.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn fileno(file_ptr: ?*FILE) callconv(.c) i32 {
     if (file_ptr) |ms_file| {
         return ms_file._file;
@@ -155,21 +155,21 @@ pub fn fileno(file_ptr: ?*FILE) callconv(.c) i32 {
 }
 
 /// Determines whether a file descriptor is associated with a character device.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn stub_isatty(fd: i32) callconv(.c) i32 {
     if (fd == 0 or fd == 1 or fd == 2) return 1;
     return 0;
 }
 
 /// Gets the current position of the file pointer.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn tell(fd: i32) callconv(.c) i32 {
     const file = @import("../host_io.zig").fileFromFd(fd);
     return @intCast(file.getPos() catch return -1);
 }
 
 /// Changes the size of a file.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn chsize(fd: i32, size: i32) callconv(.c) i32 {
     const file = @import("../host_io.zig").fileFromFd(fd);
     file.setEndPos(@intCast(size)) catch return -1;
@@ -177,7 +177,7 @@ pub fn chsize(fd: i32, size: i32) callconv(.c) i32 {
 }
 
 /// Gets the length of a file.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn filelength(fd: i32) callconv(.c) i32 {
     const file = @import("../host_io.zig").fileFromFd(fd);
     if (file.getEndPos()) |pos| {
@@ -190,7 +190,7 @@ pub fn filelength(fd: i32) callconv(.c) i32 {
 }
 
 /// Gets status information on a file.
-/// Implementation status: Partially implemented.
+/// Implementation status: Partially implemented
 pub fn stat(path_str: [*:0]const u8, stat_out: [*]u8) callconv(.c) i32 {
     const path = std.mem.span(path_str);
 
@@ -213,7 +213,7 @@ pub fn stat(path_str: [*:0]const u8, stat_out: [*]u8) callconv(.c) i32 {
 }
 
 /// Gets status information on an open file.
-/// Implementation status: Partially implemented.
+/// Implementation status: Partially implemented
 pub fn fstat(fd: i32, stat_out: [*]u8) callconv(.c) i32 {
     {
         const file = @import("../host_io.zig").fileFromFd(fd);
@@ -236,7 +236,7 @@ pub fn fstat(fd: i32, stat_out: [*]u8) callconv(.c) i32 {
 }
 
 /// Finds the first instance of a filename that matches the file specified in the argument.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 pub fn stub_findfirst(path_ptr: usize, find_data: usize) callconv(.c) isize {
     _ = path_ptr;
     _ = find_data;
@@ -245,7 +245,7 @@ pub fn stub_findfirst(path_ptr: usize, find_data: usize) callconv(.c) isize {
 }
 
 /// Finds the next name, if any, that matches the argument specified in a previous call to _findfirst.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 pub fn stub_findnext(handle: isize, find_data: usize) callconv(.c) i32 {
     _ = handle;
     _ = find_data;
@@ -253,13 +253,13 @@ pub fn stub_findnext(handle: isize, find_data: usize) callconv(.c) i32 {
 }
 
 /// Retrieves the operating-system file handle that is associated with the specified file descriptor.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn get_osfhandle(fd: i32) callconv(.c) isize {
     return @as(isize, @intCast(fd));
 }
 
 /// Associates a C run-time file descriptor with an existing operating-system file handle.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn open_osfhandle(osfhandle: isize, flags: i32) callconv(.c) i32 {
     _ = flags;
     return @intCast(osfhandle);

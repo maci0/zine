@@ -6,6 +6,7 @@
 
 const env = @import("../../loader/env.zig");
 const trace = @import("../../trace.zig");
+const log = @import("../../log.zig");
 const renderer = @import("../../gui/renderer.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
@@ -203,7 +204,7 @@ fn getOrAllocSurfaceBuffer(this_addr: usize) ?[*]u8 {
 }
 
 /// IDirectDrawSurface::BltFast — fast blt from source surface to (dwX,dwY) on this surface.
-/// Implementation status: Partially implemented (supports clipping and bpp conversion).
+/// Implementation status: Partially implemented (supports clipping and bpp conversion)
 fn surface_BltFast(this: *IDirectDrawSurface, dwX: u32, dwY: u32, lpDDSrcSurface_raw: usize, lpSrcRect: usize, dwTrans: u32) callconv(w32cc.WINAPI) i32 {
     _ = dwTrans;
     if (trace.enable_tracing) trace.print("DDRAW: IDirectDrawSurface::BltFast(dst=0x{x} x={d} y={d} src=0x{x})\n", .{ @intFromPtr(this), dwX, dwY, lpDDSrcSurface_raw });
@@ -258,7 +259,7 @@ fn surface_BltFast(this: *IDirectDrawSurface, dwX: u32, dwY: u32, lpDDSrcSurface
 // --- Implementations ---
 
 /// IDirectDraw::QueryInterface — queries the object for a specific interface.
-/// Implementation status: Partially implemented (supports IDirect3D3 and IDirect3D7).
+/// Implementation status: Partially implemented (supports IDirect3D3 and IDirect3D7)
 fn ddraw_QueryInterface(this: *anyopaque, riid: usize, ppvObj: *?*anyopaque) callconv(w32cc.WINAPI) i32 {
     // Check if IID looks like IDirect3D7 or another D3D interface.
     // IID_IDirect3D7 = {f5049e77-4861-11d2-a407-00a0c90629a8}
@@ -289,14 +290,14 @@ fn ddraw_QueryInterface(this: *anyopaque, riid: usize, ppvObj: *?*anyopaque) cal
 }
 
 /// IDirectDraw::Release — decrements the reference count.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 fn ddraw_Release(this: *anyopaque) callconv(w32cc.WINAPI) u32 {
     _ = this;
     return 0;
 }
 
 /// IDirectDraw::Dummy — placeholder for unimplemented methods.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 fn ddraw_Dummy(this: *anyopaque) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("DDRAW: Dummy(this=0x{x})\n", .{@intFromPtr(this)});
     return w32.DD_OK;
@@ -391,7 +392,7 @@ fn surf_tn6(comptime name: []const u8) fn (usize, usize, usize, usize, usize, us
 }
 
 /// IDirectDrawClipper::SetHWnd — sets the window handle to be used for clipping.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 fn clipper_SetHWnd(this: *IDirectDrawClipper, dwFlags: u32, hWnd: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
     _ = dwFlags;
@@ -401,7 +402,7 @@ fn clipper_SetHWnd(this: *IDirectDrawClipper, dwFlags: u32, hWnd: usize) callcon
 }
 
 /// IDirectDraw::CreateClipper — creates a DirectDrawClipper object.
-/// Implementation status: Partially implemented (returns global instance).
+/// Implementation status: Partially implemented (returns global instance)
 fn ddraw_CreateClipper(this: *IDirectDraw, dwFlags: u32, lplpDDClipper: *?*IDirectDrawClipper, pUnkOuter: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
     _ = dwFlags;
@@ -412,7 +413,7 @@ fn ddraw_CreateClipper(this: *IDirectDraw, dwFlags: u32, lplpDDClipper: *?*IDire
 }
 
 /// IDirectDraw::CreateSurface — creates a DirectDrawSurface object.
-/// Implementation status: Partially implemented (supports primary, backbuffer, and offscreen surfaces).
+/// Implementation status: Partially implemented (supports primary, backbuffer, and offscreen surfaces)
 fn ddraw_CreateSurface(this: *IDirectDraw, lpDDSurfaceDesc: usize, lplpDDSurface: *?*IDirectDrawSurface, pUnkOuter: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
     _ = pUnkOuter;
@@ -420,7 +421,10 @@ fn ddraw_CreateSurface(this: *IDirectDraw, lpDDSurfaceDesc: usize, lplpDDSurface
     // Ensure shared surface buffer exists (fallback for shared operations)
     if (surface_buffer.len == 0) {
         if (@import("../kernel32.zig").global_env) |genv| {
-            surface_buffer = genv.allocator.alloc(u8, 2048 * 2048 * 4) catch unreachable;
+            surface_buffer = genv.allocator.alloc(u8, 2048 * 2048 * 4) catch {
+                log.err("ddraw: failed to allocate 16MB surface buffer", .{});
+                return @bitCast(@as(u32, 0x8007000E)); // E_OUTOFMEMORY
+            };
             @memset(surface_buffer, 0);
         }
     }
@@ -491,7 +495,7 @@ fn ddraw_CreateSurface(this: *IDirectDraw, lpDDSurfaceDesc: usize, lplpDDSurface
 }
 
 /// IDirectDraw::SetCooperativeLevel — determines how the application interacts with the display.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 fn ddraw_SetCooperativeLevel(this: *IDirectDraw, hWnd: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = this;
     _ = hWnd;
@@ -501,7 +505,7 @@ fn ddraw_SetCooperativeLevel(this: *IDirectDraw, hWnd: usize, dwFlags: u32) call
 }
 
 /// IDirectDraw::SetDisplayMode — sets the mode of the display-device hardware.
-/// Implementation status: Partially implemented (updates internal state and renderer resolution).
+/// Implementation status: Partially implemented (updates internal state and renderer resolution)
 fn ddraw_SetDisplayMode(this: *IDirectDraw, dwWidth: u32, dwHeight: u32, dwBPP: u32, dwRefreshRate: u32, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = this;
     _ = dwRefreshRate;
@@ -527,7 +531,7 @@ fn ddraw_SetDisplayMode(this: *IDirectDraw, dwWidth: u32, dwHeight: u32, dwBPP: 
 }
 
 /// IDirectDraw::RestoreDisplayMode — restores the display mode to the original mode.
-/// Implementation status: Partially implemented (resets to 640x480x32).
+/// Implementation status: Partially implemented (resets to 640x480x32)
 fn ddraw_RestoreDisplayMode(this: *IDirectDraw) callconv(w32cc.WINAPI) i32 {
     _ = this;
     if (trace.enable_tracing) trace.print("DDRAW: IDirectDraw::RestoreDisplayMode\n", .{});
@@ -538,7 +542,7 @@ fn ddraw_RestoreDisplayMode(this: *IDirectDraw) callconv(w32cc.WINAPI) i32 {
 }
 
 /// IDirectDraw::WaitForVerticalBlank — waits for the vertical blank interval.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 fn ddraw_WaitForVerticalBlank(this: *IDirectDraw, dwFlags: u32, hEvent: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
     _ = dwFlags;
@@ -547,7 +551,7 @@ fn ddraw_WaitForVerticalBlank(this: *IDirectDraw, dwFlags: u32, hEvent: usize) c
 }
 
 /// IDirectDraw::GetDisplayMode — retrieves the current display mode.
-/// Implementation status: Partially implemented (returns current width, height, and pixel format).
+/// Implementation status: Partially implemented (returns current width, height, and pixel format)
 fn ddraw_GetDisplayMode(this: *IDirectDraw, lpDDSurfaceDesc: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
     const ret_addr = @returnAddress();
@@ -580,7 +584,7 @@ fn ddraw_GetDisplayMode(this: *IDirectDraw, lpDDSurfaceDesc: usize) callconv(w32
 }
 
 /// IDirectDraw::EnumDisplayModes — enumerates all of the display modes the hardware supports.
-/// Implementation status: Partially implemented (enumerates several common modes).
+/// Implementation status: Partially implemented (enumerates several common modes)
 fn ddraw_EnumDisplayModes(this: *IDirectDraw, dwFlags: u32, lpDDSurfaceDesc: usize, lpContext: usize, lpEnumCallback: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
     _ = dwFlags;
@@ -631,7 +635,7 @@ fn ddraw_EnumDisplayModes(this: *IDirectDraw, dwFlags: u32, lpDDSurfaceDesc: usi
 }
 
 /// IDirectDrawSurface::Blt — performs a bit block transfer.
-/// Implementation status: Partially implemented (supports color fill and basic blitting to primary).
+/// Implementation status: Partially implemented (supports color fill and basic blitting to primary)
 fn surface_Blt(this: *IDirectDrawSurface, lpDestRect: usize, lpDDSrcSurface_raw: usize, lpSrcRect: usize, dwFlags: u32, lpDDBltFx: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) {
         trace.print("DDRAW: IDirectDrawSurface::Blt (dst=0x{x} src=0x{x} flags=0x{x})\n", .{ @intFromPtr(this), lpDDSrcSurface_raw, dwFlags });
@@ -776,9 +780,9 @@ fn pushSurfaceFrameFrom(src: [*]u8, w: u32, h: u32) void {
     renderer.pushFrame();
 }
 
-/// Convert surface_buffer to RGBA in global_framebuf and push frame.
+/// Convert surface_buffer to BGRA in global_framebuf and push frame.
 /// Handles both 16bpp RGB565 and 32bpp BGRA based on current display mode.
-/// Implementation status: Partially implemented (supports direct copy from surface_buffer).
+/// Implementation status: Partially implemented (supports direct copy from surface_buffer)
 pub fn pushSurfaceFrame() void {
     const vw = renderer.global_width;
     const vh = renderer.global_height;
@@ -812,7 +816,7 @@ pub fn pushSurfaceFrame() void {
 }
 
 /// IDirectDrawSurface::Lock — obtains a pointer to the surface memory.
-/// Implementation status: Partially implemented (returns pointer to per-surface buffer).
+/// Implementation status: Partially implemented (returns pointer to per-surface buffer)
 fn surface_Lock(this: *IDirectDrawSurface, lpDestRect: usize, lpDDSurfaceDesc: usize, dwFlags: u32, hEvent: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpDestRect;
     _ = dwFlags;
@@ -837,7 +841,7 @@ fn surface_Lock(this: *IDirectDrawSurface, lpDestRect: usize, lpDDSurfaceDesc: u
 }
 
 /// IDirectDrawSurface::GetDC — retrieves a device context for the surface.
-/// Implementation status: Stub (returns dummy DC handle).
+/// Implementation status: Stub (returns dummy DC handle)
 fn surface_GetDC(this: *IDirectDrawSurface, lphDC: *u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("DDRAW: IDirectDrawSurface::GetDC(this=0x{x})\n", .{@intFromPtr(this)});
     // Return a dummy DC handle (non-zero so caller thinks it succeeded)
@@ -846,7 +850,7 @@ fn surface_GetDC(this: *IDirectDrawSurface, lphDC: *u32) callconv(w32cc.WINAPI) 
 }
 
 /// IDirectDrawSurface::ReleaseDC — releases the device context.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 fn surface_ReleaseDC(this: *IDirectDrawSurface, hDC: u32) callconv(w32cc.WINAPI) i32 {
     _ = this;
     if (trace.enable_tracing) trace.print("DDRAW: IDirectDrawSurface::ReleaseDC(hDC=0x{x})\n", .{hDC});
@@ -854,7 +858,7 @@ fn surface_ReleaseDC(this: *IDirectDrawSurface, hDC: u32) callconv(w32cc.WINAPI)
 }
 
 /// IDirectDrawSurface::Unlock — notifies DirectDraw that the surface memory is no longer being used.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 fn surface_Unlock(this: *IDirectDrawSurface, lpRect: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpRect;
     if (trace.enable_tracing) {
@@ -876,7 +880,7 @@ fn surface_Unlock(this: *IDirectDrawSurface, lpRect: usize) callconv(w32cc.WINAP
 }
 
 /// IDirectDrawSurface::Flip — makes the surface memory associated with the back buffer associated with the primary surface.
-/// Implementation status: Partially implemented (presents the backbuffer to the renderer).
+/// Implementation status: Partially implemented (presents the backbuffer to the renderer)
 fn surface_Flip(this: *IDirectDrawSurface, lpDDSurfaceTargetOverride: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = dwFlags;
     if (trace.enable_tracing) trace.print("DDRAW: IDirectDrawSurface::Flip (this=0x{x} override=0x{x} bb=0x{x})\n", .{
@@ -920,7 +924,7 @@ fn surface_Flip(this: *IDirectDrawSurface, lpDDSurfaceTargetOverride: usize, dwF
 }
 
 /// IDirectDrawSurface::GetAttachedSurface — retrieves the attached surface.
-/// Implementation status: Partially implemented (returns the backbuffer).
+/// Implementation status: Partially implemented (returns the backbuffer)
 fn surface_GetAttachedSurface(this: *IDirectDrawSurface, lpDDSCaps: usize, lplpDDAttachedSurface: *?*IDirectDrawSurface) callconv(w32cc.WINAPI) i32 {
     _ = this;
     _ = lpDDSCaps;
@@ -935,7 +939,7 @@ fn surface_GetAttachedSurface(this: *IDirectDrawSurface, lpDDSCaps: usize, lplpD
 }
 
 /// IDirectDrawSurface::GetCaps — retrieves the capabilities of the surface.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 fn surface_GetCaps(this: *IDirectDrawSurface, lpDDSCaps: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
     if (lpDDSCaps != 0) {
@@ -945,7 +949,7 @@ fn surface_GetCaps(this: *IDirectDrawSurface, lpDDSCaps: usize) callconv(w32cc.W
 }
 
 /// IDirectDrawSurface::GetSurfaceDesc — retrieves a description of the surface.
-/// Implementation status: Partially implemented (returns dimensions and pixel format).
+/// Implementation status: Partially implemented (returns dimensions and pixel format)
 fn surface_GetSurfaceDesc(this: *IDirectDrawSurface, lpDDSurfaceDesc: usize) callconv(w32cc.WINAPI) i32 {
     const dims = getSurfaceDims(this);
     const bytes_per_pixel: u32 = if (display_mode_bpp == 16) 2 else 4;
@@ -980,7 +984,7 @@ fn surface_GetSurfaceDesc(this: *IDirectDrawSurface, lpDDSurfaceDesc: usize) cal
 }
 
 /// IDirectDrawSurface::GetPixelFormat — retrieves the pixel format of the surface.
-/// Implementation status: Partially implemented (returns current display mode pixel format).
+/// Implementation status: Partially implemented (returns current display mode pixel format)
 fn surface_GetPixelFormat(this: *IDirectDrawSurface, lpDDPixelFormat: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
     if (trace.enable_tracing) trace.print("DDRAW: IDirectDrawSurface::GetPixelFormat\n", .{});
@@ -1007,21 +1011,21 @@ fn surface_GetPixelFormat(this: *IDirectDrawSurface, lpDDPixelFormat: usize) cal
 }
 
 /// IDirectDrawSurface::IsLost — determines whether the surface memory has been freed.
-/// Implementation status: Stub (always returns DD_OK).
+/// Implementation status: Stub (always returns DD_OK)
 fn surface_IsLost(this: *IDirectDrawSurface) callconv(w32cc.WINAPI) i32 {
     _ = this;
     return w32.DD_OK; // not lost
 }
 
 /// IDirectDrawSurface::Restore — restores a surface that has been lost.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 fn surface_Restore(this: *IDirectDrawSurface) callconv(w32cc.WINAPI) i32 {
     _ = this;
     return w32.DD_OK;
 }
 
 /// IDirectDrawSurface::SetClipper — attaches a clipper object to the surface.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 fn surface_SetClipper(this: *IDirectDrawSurface, lpDDClipper: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
     _ = lpDDClipper;
@@ -1033,7 +1037,7 @@ var ddraw_vtbl: IDirectDrawVtbl = undefined;
 var surface_vtbl: IDirectDrawSurfaceVtbl = undefined;
 
 /// Registers the DirectDraw module and its vtables.
-/// Implementation status: Partially implemented.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const comPtr = @import("../../x86/thunks.zig").comPtr;
     const D1: usize = comPtr(ddraw_Dummy, "IDirectDraw::Dummy1");
@@ -1160,7 +1164,7 @@ pub fn register(environment: *env.Environment) !void {
 }
 
 /// DirectDrawCreate — creates an instance of a DirectDraw object.
-/// Implementation status: Partially implemented (returns global instance).
+/// Implementation status: Partially implemented (returns global instance)
 fn stub_DirectDrawCreate(lpGUID: usize, lplpDD: *?*IDirectDraw, pUnkOuter: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpGUID;
     _ = pUnkOuter;
@@ -1171,7 +1175,7 @@ fn stub_DirectDrawCreate(lpGUID: usize, lplpDD: *?*IDirectDraw, pUnkOuter: usize
 }
 
 /// DirectDrawCreateEx — creates an instance of a DirectDraw object that supports the IDirectDraw7 interface.
-/// Implementation status: Partially implemented (returns global instance).
+/// Implementation status: Partially implemented (returns global instance)
 fn stub_DirectDrawCreateEx(lpGUID: usize, lplpDD: *?*anyopaque, iid: usize, pUnkOuter: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpGUID;
     _ = iid;
@@ -1182,7 +1186,7 @@ fn stub_DirectDrawCreateEx(lpGUID: usize, lplpDD: *?*anyopaque, iid: usize, pUnk
 }
 
 /// DirectDrawEnumerateExA — enumerates all DirectDraw devices.
-/// Implementation status: Partially implemented (calls back once with the primary display driver).
+/// Implementation status: Partially implemented (calls back once with the primary display driver)
 fn stub_DirectDrawEnumerateExA(lpCallback: usize, lpContext: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = dwFlags;
     if (trace.enable_tracing) trace.print("DDRAW: DirectDrawEnumerateExA()\n", .{});

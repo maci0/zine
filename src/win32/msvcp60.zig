@@ -11,8 +11,8 @@ pub fn register(environment: *env.Environment) !void {
     // --- std::basic_string<char> constructors ---
     // All C++ string operations are mapped to generic stubs.
     // These return 0 (EAX), which makes the guest code think construction/operations
-    // "failed" or returned null. This is acceptable for initial launch since Notepad2
-    // may not exercise msvcp60 heavily during startup.
+    // "failed" or returned null. This is acceptable for initial launch since most apps
+    // do not exercise msvcp60 heavily during startup.
 
     // ??0?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAE@ABV?$allocator@D@1@@Z
     //   basic_string(const allocator&)  -- default ctor

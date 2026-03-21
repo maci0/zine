@@ -45,7 +45,6 @@ fn addNativeExe(
     arch: std.Target.Cpu.Arch,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    zine_mod: *std.Build.Module,
     toml_mod: *std.Build.Module,
     use_fltk: bool,
     embed_stubs: bool,
@@ -58,7 +57,6 @@ fn addNativeExe(
             .optimize = optimize,
             .single_threaded = false,
             .imports = &.{
-                .{ .name = "zine", .module = zine_mod },
                 .{ .name = "toml", .module = toml_mod },
             },
         }),
@@ -67,7 +65,7 @@ fn addNativeExe(
     // Move the host binary to a high address so that the low address
     // space (0x00400000+) is free for guest Win32 PEs.
     // On x86: 0x70000000 (same approach Wine uses)
-    // On x86_64: 0x200000000 (above 4GB, completely out of the guest's way)
+    // On x86_64: 0x70000000 (same as x86, within the low 4GB for MAP_32BIT compat)
     if (arch == .x86) {
         exe.image_base = 0x70000000;
     } else if (arch == .x86_64) {
@@ -113,7 +111,6 @@ fn addWasmExe(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    zine_mod: *std.Build.Module,
     toml_mod: *std.Build.Module,
     embed_stubs: bool,
     enable_jit_host: bool,
@@ -126,7 +123,6 @@ fn addWasmExe(
             .optimize = optimize,
             .single_threaded = true,
             .imports = &.{
-                .{ .name = "zine", .module = zine_mod },
                 .{ .name = "toml", .module = toml_mod },
             },
         }),
@@ -146,10 +142,10 @@ fn addWasmExe(
 }
 
 pub fn build(b: *std.Build) void {
-    const arch = b.option(std.Target.Cpu.Arch, "arch", "Target architecture (x86, x86_64, wasm32, or 'all')");
+    const arch = b.option(std.Target.Cpu.Arch, "arch", "Target architecture (x86, x86_64, or wasm32)");
     const build_all = b.option(bool, "all", "Build all targets (x86 + x86_64 + wasm32)") orelse false;
 
-    const use_fltk = b.option(bool, "fltk", "Enable FLTK native GUI backend") orelse false;
+    const use_fltk = b.option(bool, "fltk", "Enable FLTK native GUI backend (x86 only)") orelse false;
     const embed_stubs = !(b.option(bool, "external-stubs", "Load Win32 stubs from external DLLs instead of embedding them") orelse false);
     const enable_jit_host = b.option(bool, "jit_host", "Enable JIT host imports (requires zine-host or browser)") orelse false;
 
@@ -171,16 +167,11 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
 
-        const zine_mod = b.addModule(if (a == .x86) "zine" else if (a == .x86_64) "zine64" else "zinew", .{
-            .root_source_file = b.path("src/root.zig"),
-            .target = target,
-        });
-
         if (a == .wasm32) {
-            const wasm_lib = addWasmExe(b, target, optimize, zine_mod, toml_dep.module("toml"), embed_stubs, enable_jit_host);
+            const wasm_lib = addWasmExe(b, target, optimize, toml_dep.module("toml"), embed_stubs, enable_jit_host);
             b.installArtifact(wasm_lib);
         } else {
-            const exe = addNativeExe(b, a, target, optimize, zine_mod, toml_dep.module("toml"), use_fltk, embed_stubs);
+            const exe = addNativeExe(b, a, target, optimize, toml_dep.module("toml"), use_fltk, embed_stubs);
             b.installArtifact(exe);
 
             // Only add run step for the default (x86) target
@@ -198,10 +189,10 @@ pub fn build(b: *std.Build) void {
 
     // -----------------------------------------------------------------------
     // DLL build: compile stubs as standalone Windows DLLs
-    // Usage: zig build -Ddll=true    (builds all DLLs into zig-out/bin/dll/)
+    // Usage: zig build -Ddll=all     (builds all DLLs into zig-out/bin/dll/)
     //        zig build -Ddll=msvcrt  (builds just MSVCRT.dll)
     // -----------------------------------------------------------------------
-    const dll_arg = b.option([]const u8, "dll", "Build Windows DLLs (true=all, or name like msvcrt)");
+    const dll_arg = b.option([]const u8, "dll", "Build Windows DLLs ('all' for all, or a name like 'msvcrt')");
     if (dll_arg) |arg| {
         const dll_target = b.resolveTargetQuery(.{
             .cpu_arch = .x86,

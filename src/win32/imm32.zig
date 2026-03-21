@@ -21,6 +21,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "ImmNotifyIME", kernel32.stub_args4);
     try environment.addBuiltinExportComptime(m, "ImmGetCompositionWindow", kernel32.stub_args2);
     try environment.addBuiltinExportComptime(m, "ImmAssociateContext", kernel32.stub_args2);
+    try environment.addBuiltinExportComptime(m, "ImmGetDefaultIMEWnd", kernel32.stub_args1);
 }
 
 fn stub_ImmGetContext(hWnd: usize) callconv(w32cc.WINAPI) usize {

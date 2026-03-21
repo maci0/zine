@@ -38,7 +38,7 @@ const EXCEPTION_POINTERS = extern struct {
 };
 
 /// Called when an exception occurs that is not handled by any exception handlers.
-/// Implementation status: Fully implemented (logs and exits).
+/// Implementation status: Fully implemented (logs and exits)
 pub fn UnhandledExceptionFilter(ExceptionInfo: usize) callconv(w32cc.WINAPI) u32 {
     if (ExceptionInfo != 0) {
         const ptrs = @as(*EXCEPTION_POINTERS, @ptrFromInt(ExceptionInfo));
@@ -67,7 +67,7 @@ pub fn UnhandledExceptionFilter(ExceptionInfo: usize) callconv(w32cc.WINAPI) u32
 }
 
 /// Ends the calling process and all its threads.
-/// Implementation status: Fully implemented (exits the WASM/native host).
+/// Implementation status: Fully implemented (exits the WASM/native host)
 pub fn ExitProcess(exitCode: u32) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: ExitProcess({d})\n", .{exitCode});
     // In WASM child-process mode, store the exit code and halt the child
@@ -99,7 +99,7 @@ pub fn stub_DisableThreadLibraryCalls(hLibModule: ?*anyopaque) callconv(w32cc.WI
 }
 
 /// Loads the specified module into the address space of the calling process.
-/// Implementation status: Partially implemented (supports DLL loading and builtin stubs).
+/// Implementation status: Partially implemented (supports DLL loading and builtin stubs)
 pub fn LoadLibraryA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
     if (lpFileName_ptr == 0) return 0;
     const name = trace.c_span(lpFileName_ptr);
@@ -219,7 +219,7 @@ pub fn LoadLibraryA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
 }
 
 /// Retrieves the address of an exported function or variable from the specified DLL.
-/// Implementation status: Partially implemented (supports builtin exports and mapped modules).
+/// Implementation status: Partially implemented (supports builtin exports and mapped modules)
 pub fn GetProcAddress(hModule: usize, lpProcName_ptr: usize) callconv(w32cc.WINAPI) usize {
     if (hModule == 0 or lpProcName_ptr == 0) return 0;
 
@@ -269,17 +269,19 @@ pub fn GetProcAddress(hModule: usize, lpProcName_ptr: usize) callconv(w32cc.WINA
             }
         }
     }
+    if (trace.enable_tracing and !is_ordinal) {
+        const name = trace.c_span(lpProcName_ptr);
+        trace.print("KERNEL32: GetProcAddress('{s}') -> NOT FOUND\n", .{name});
+    }
     return 0;
 }
 
-/// GetStartupInfoA
 /// Implementation status: Partially implemented
 pub fn GetStartupInfoA(si: *w32.STARTUPINFOA) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: GetStartupInfoA\n", .{});
     si.* = .{}; // zero all, cb defaults to 68
 }
 
-/// GetModuleHandleA
 /// Implementation status: Partially implemented
 pub fn GetModuleHandleA(lpModuleName_ptr: usize) callconv(w32cc.WINAPI) usize {
     @setRuntimeSafety(false);
@@ -336,7 +338,6 @@ pub fn GetModuleHandleA(lpModuleName_ptr: usize) callconv(w32cc.WINAPI) usize {
     return 0;
 }
 
-/// GetModuleHandleW
 /// Implementation status: Partially implemented
 pub fn GetModuleHandleW(lpModuleName_ptr: usize) callconv(w32cc.WINAPI) usize {
     if (lpModuleName_ptr == 0) {
@@ -366,7 +367,7 @@ pub fn resetCommandLine() void {
 }
 
 /// Retrieves the command-line string for the current process.
-/// Implementation status: Partially implemented (constructs command line from guest arguments).
+/// Implementation status: Partially implemented (constructs command line from guest arguments)
 pub fn GetCommandLineA() callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineA\n", .{});
 
@@ -452,24 +453,19 @@ pub fn GetCommandLineA() callconv(w32cc.WINAPI) usize {
 }
 
 /// Retrieves a pseudo-handle for the current process.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn GetCurrentProcess() callconv(w32cc.WINAPI) usize {
     return 0xFFFFFFFF; // Pseudo-handle for current process
 }
 
-/// GetCurrentProcessId
-/// Implementation status: Partially implemented
 pub fn GetCurrentProcessId() callconv(w32cc.WINAPI) u32 {
     return platform.getProcessId();
 }
 
-/// GetCurrentThreadId
-/// Implementation status: Partially implemented
 pub fn GetCurrentThreadId() callconv(w32cc.WINAPI) u32 {
     return @intCast(std.Thread.getCurrentId());
 }
 
-/// SetEnvironmentVariableA
 /// Implementation status: Partially implemented
 pub fn SetEnvironmentVariableA(lpName: usize, lpValue: usize) callconv(w32cc.WINAPI) i32 {
     if (lpName != 0 and lpValue != 0) {
@@ -478,15 +474,19 @@ pub fn SetEnvironmentVariableA(lpName: usize, lpValue: usize) callconv(w32cc.WIN
         if (trace.enable_tracing) trace.print("KERNEL32: SetEnvironmentVariableA('{s}', '{s}')\n", .{ name, value });
 
         const msvcrt = @import("../msvcrt.zig");
-        const key_dupe = std.heap.page_allocator.dupe(u8, name) catch return 0;
-        const val_dupe = std.heap.page_allocator.dupe(u8, value) catch return 0;
 
+        // Check for existing key first to avoid unnecessary allocation
         for (msvcrt.msvcrt_env_vars.items) |*v| {
-            if (std.mem.eql(u8, v.key, key_dupe)) {
+            if (std.mem.eql(u8, v.key, name)) {
+                const val_dupe = std.heap.page_allocator.dupe(u8, value) catch return 0;
+                std.heap.page_allocator.free(v.val);
                 v.val = val_dupe;
                 return 1;
             }
         }
+
+        const key_dupe = std.heap.page_allocator.dupe(u8, name) catch return 0;
+        const val_dupe = std.heap.page_allocator.dupe(u8, value) catch return 0;
         msvcrt.msvcrt_env_vars.append(std.heap.page_allocator, .{ .key = key_dupe, .val = val_dupe }) catch return 0;
 
         return 1;
@@ -494,7 +494,6 @@ pub fn SetEnvironmentVariableA(lpName: usize, lpValue: usize) callconv(w32cc.WIN
     return 0; // FALSE
 }
 
-/// GetEnvironmentVariableA
 /// Implementation status: Partially implemented
 pub fn GetEnvironmentVariableA(lpName: usize, lpBuffer: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
     const name = trace.c_span(lpName);
@@ -536,7 +535,15 @@ pub fn GetEnvironmentVariableA(lpName: usize, lpBuffer: usize, nSize: u32) callc
     return 0; // Not found
 }
 
-/// GetModuleFileNameA
+/// GetEnvironmentVariableW — retrieves the value of an environment variable (wide).
+/// Returns 0 (variable not found).
+pub fn GetEnvironmentVariableW(lpName: usize, lpBuffer: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
+    _ = lpBuffer;
+    _ = nSize;
+    if (trace.enable_tracing) trace.print("KERNEL32: GetEnvironmentVariableW(name={x}) -> 0 (not found)\n", .{lpName});
+    return 0;
+}
+
 /// Implementation status: Partially implemented
 pub fn GetModuleFileNameA(hModule: usize, lpFilename: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
     _ = hModule;
@@ -596,7 +603,7 @@ pub fn getChildProc(handle: usize) ?*ChildProc {
 }
 
 /// Creates a new process and its primary thread.
-/// Implementation status: Partially implemented (spawns a new instance of zine with the target PE).
+/// Implementation status: Partially implemented (spawns a new instance of zine with the target PE)
 pub fn CreateProcessA(
     lpApplicationName: usize,
     lpCommandLine: usize,
@@ -769,7 +776,6 @@ pub fn CreateProcessA(
     return 1; // TRUE
 }
 
-/// CreateProcessW
 /// Implementation status: Partially implemented
 pub fn CreateProcessW(
     lpApplicationName: usize,
@@ -824,7 +830,6 @@ pub fn CreateProcessW(
     );
 }
 
-/// GetEnvironmentStringsA
 /// Implementation status: Partially implemented
 pub fn GetEnvironmentStringsA() callconv(w32cc.WINAPI) ?*anyopaque {
     if (trace.enable_tracing) trace.print("KERNEL32: GetEnvironmentStringsA()\n", .{});
@@ -854,21 +859,18 @@ pub fn GetEnvironmentStringsA() callconv(w32cc.WINAPI) ?*anyopaque {
     return ptr;
 }
 
-/// FreeEnvironmentStringsA
 /// Implementation status: Partially implemented
 pub fn FreeEnvironmentStringsA(penv: usize) callconv(w32cc.WINAPI) i32 {
     _ = penv;
     return 1;
 }
 
-/// FreeEnvironmentStringsW
 /// Implementation status: Partially implemented
 pub fn FreeEnvironmentStringsW(penv: usize) callconv(w32cc.WINAPI) i32 {
     _ = penv;
     return 1;
 }
 
-/// GetEnvironmentStringsW
 /// Implementation status: Partially implemented
 pub fn GetEnvironmentStringsW() callconv(w32cc.WINAPI) ?*anyopaque {
     if (trace.enable_tracing) trace.print("KERNEL32: GetEnvironmentStringsW()\n", .{});
@@ -904,11 +906,37 @@ const ThreadStartFn = *const fn (usize) callconv(w32cc.WINAPI) u32;
 var next_thread_handle: usize = 0xA0000001;
 
 fn threadWrapper(start_address: usize, parameter: usize) void {
+    // Allocate a per-thread TEB so each thread has its own SEH chain and TLS.
+    // Copy the main thread's TEB as a template.
+    const teb_mod = @import("../teb.zig");
+
+    if (teb_mod.teb_base_addr != 0) {
+        const teb_size = @sizeOf(teb_mod.TEB);
+        const thread_teb_mem = std.heap.page_allocator.alloc(u8, teb_size) catch {
+            // Fallback: share main thread's TEB
+            teb_mod.setupFS(@ptrFromInt(teb_mod.teb_base_addr)) catch {};
+            if (start_address != 0) {
+                const func = @as(ThreadStartFn, @ptrFromInt(start_address));
+                _ = func(parameter);
+            }
+            return;
+        };
+        // Copy main thread's TEB
+        const main_teb = @as([*]const u8, @ptrFromInt(teb_mod.teb_base_addr));
+        @memcpy(thread_teb_mem[0..teb_size], main_teb[0..teb_size]);
+        // Initialize per-thread fields
+        const thread_teb = @as(*teb_mod.TEB, @ptrCast(@alignCast(thread_teb_mem.ptr)));
+        thread_teb.NtTib.ExceptionList = 0xFFFFFFFF; // Empty SEH chain
+        thread_teb.NtTib.Self = @intFromPtr(thread_teb_mem.ptr) + 0x18; // Self pointer
+        // Set up FS to point to this thread's TEB
+        teb_mod.setupFS(@ptrCast(@alignCast(thread_teb_mem.ptr))) catch {};
+    }
+
+    if (start_address == 0) return;
     const func = @as(ThreadStartFn, @ptrFromInt(start_address));
     _ = func(parameter);
 }
 
-/// CreateThread
 /// Implementation status: Partially implemented
 pub fn CreateThread(lpThreadAttributes: usize, dwStackSize: usize, lpStartAddress: usize, lpParameter: usize, dwCreationFlags: u32, lpThreadId: usize) callconv(w32cc.WINAPI) usize {
     _ = lpThreadAttributes;
@@ -923,6 +951,7 @@ pub fn CreateThread(lpThreadAttributes: usize, dwStackSize: usize, lpStartAddres
         @as(*u32, @ptrFromInt(lpThreadId)).* = @intCast(handle & 0xFFFF);
     }
 
+    // Spawn a real OS thread with its own TEB copy.
     if (!platform.spawnThread(threadWrapper, .{ lpStartAddress, lpParameter })) {
         if (trace.enable_tracing) trace.print("KERNEL32: CreateThread spawn failed\n", .{});
         return 0;
@@ -940,7 +969,6 @@ pub fn stub_ExitThread(dwExitCode: u32) callconv(w32cc.WINAPI) void {
 var cmdline_w_buf: [8192]u8 = undefined;
 var cmdline_w_initialized: bool = false;
 
-/// GetModuleFileNameW
 /// Implementation status: Partially implemented
 pub fn GetModuleFileNameW(hModule: usize, lpFilename: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
     _ = hModule;
@@ -962,7 +990,6 @@ pub fn GetModuleFileNameW(hModule: usize, lpFilename: usize, nSize: u32) callcon
     return 0;
 }
 
-/// GetCommandLineW
 /// Implementation status: Partially implemented
 pub fn GetCommandLineW() callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineW\n", .{});
@@ -991,7 +1018,6 @@ pub fn GetCommandLineW() callconv(w32cc.WINAPI) usize {
     return @intFromPtr(&cmdline_w_buf);
 }
 
-/// LoadLibraryW
 /// Implementation status: Partially implemented
 pub fn LoadLibraryW(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
     if (lpFileName_ptr == 0) return 0;
@@ -1027,7 +1053,6 @@ pub fn stub_SetHandleInformation(hObject: usize, dwMask: u32, dwFlags: u32) call
     return 1;
 }
 
-/// CreatePipe
 /// Implementation status: Partially implemented
 pub fn CreatePipe(hReadPipe: usize, hWritePipe: usize, lpPipeAttributes: usize, nSize: u32) callconv(w32cc.WINAPI) i32 {
     _ = lpPipeAttributes;
@@ -1064,7 +1089,6 @@ pub fn LoadLibraryExA(lpLibFileName: usize, hFile: usize, dwFlags: u32) callconv
     return LoadLibraryA(lpLibFileName);
 }
 
-/// LoadLibraryExW
 /// Implementation status: Partially implemented
 pub fn LoadLibraryExW(lpLibFileName: usize, hFile: usize, dwFlags: u32) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: LoadLibraryExW(hFile={X}, flags=0x{X})\n", .{ hFile, dwFlags });
@@ -1072,7 +1096,6 @@ pub fn LoadLibraryExW(lpLibFileName: usize, hFile: usize, dwFlags: u32) callconv
     return LoadLibraryW(lpLibFileName);
 }
 
-/// GetModuleHandleExW
 /// Implementation status: Partially implemented
 pub fn GetModuleHandleExW(dwFlags: u32, lpModuleName: usize, phModule: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetModuleHandleExW(flags=0x{X})\n", .{dwFlags});
@@ -1100,7 +1123,6 @@ pub fn GetModuleHandleExW(dwFlags: u32, lpModuleName: usize, phModule: usize) ca
     return if (handle != 0) 1 else 0;
 }
 
-/// IsDebuggerPresent
 /// Implementation status: Partially implemented
 pub fn IsDebuggerPresent() callconv(w32cc.WINAPI) i32 {
     return 0; // Not being debugged
@@ -1149,7 +1171,6 @@ pub fn stub_TerminateProcess(hProcess: usize, uExitCode: u32) callconv(w32cc.WIN
     return 1; // TRUE
 }
 
-/// GetExitCodeProcess
 /// Implementation status: Partially implemented
 pub fn GetExitCodeProcess(hProcess: usize, lpExitCode: usize) callconv(w32cc.WINAPI) i32 {
     if (lpExitCode == 0) return 1;
@@ -1180,4 +1201,98 @@ pub fn stub_SuspendThread(hThread: usize) callconv(w32cc.WINAPI) u32 {
 pub fn stub_GetThreadPriority(hThread: usize) callconv(w32cc.WINAPI) i32 {
     _ = hThread;
     return 0; // THREAD_PRIORITY_NORMAL
+}
+
+// -------------------------------------------------------------------------
+// Module / atom / env-string functions (moved from misc.zig)
+// -------------------------------------------------------------------------
+
+/// Returns the path of the executable file of the current process.
+pub fn GetModuleFileNameA_Full(hModule: usize, lpFilename: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
+    if (trace.enable_tracing) trace.print("KERNEL32: GetModuleFileNameA(hModule={x})\n", .{hModule});
+    if (lpFilename == 0 or nSize == 0) return 0;
+    const buf = @as([*]u8, @ptrFromInt(lpFilename));
+
+    // For the main module (hModule == 0 or matches main_module_handle), return real exe path
+    if (hModule == 0 or hModule == kernel32.main_module_handle) {
+        const result = GetModuleFileNameA(hModule, lpFilename, nSize);
+        if (result > 0) return result;
+
+        // Fallback to exe dir + generic name
+        const dir = kernel32.main_exe_dir[0..kernel32.main_exe_dir_len];
+        const exe_name = "program.exe";
+        const total = dir.len + exe_name.len;
+        if (total < nSize) {
+            @memcpy(buf[0..dir.len], dir);
+            @memcpy(buf[dir.len..total], exe_name);
+            buf[total] = 0;
+            return @intCast(total);
+        }
+    }
+
+    // Fallback: try to find module name from registry
+    if (kernel32.global_env) |genv| {
+        var it = genv.registry.modules.valueIterator();
+        while (it.next()) |m| {
+            if (@intFromPtr(m.*.mapped_memory.ptr) == hModule) {
+                const dir = kernel32.main_exe_dir[0..kernel32.main_exe_dir_len];
+                const mname = m.*.name;
+                const total = dir.len + mname.len;
+                if (total < nSize) {
+                    @memcpy(buf[0..dir.len], dir);
+                    @memcpy(buf[dir.len..total], mname);
+                    buf[total] = 0;
+                    return @intCast(total);
+                }
+            }
+        }
+    }
+
+    // Last resort fallback: use main_exe_dir if available
+    if (kernel32.main_exe_dir_len > 0) {
+        const dir = kernel32.main_exe_dir[0..kernel32.main_exe_dir_len];
+        const exe_name = "program.exe";
+        const total = dir.len + exe_name.len;
+        if (total < nSize) {
+            @memcpy(buf[0..dir.len], dir);
+            @memcpy(buf[dir.len..total], exe_name);
+            buf[total] = 0;
+            return @intCast(total);
+        }
+    }
+    const name = "C:\\program.exe";
+    const copy_len = @min(name.len, @as(usize, nSize) - 1);
+    @memcpy(buf[0..copy_len], name[0..copy_len]);
+    buf[copy_len] = 0;
+    return @intCast(copy_len);
+}
+
+/// Adds a character string to the global atom table and returns a unique value (an atom).
+pub fn GlobalAddAtomA(lpString: usize) callconv(w32cc.WINAPI) u16 {
+    const state = struct {
+        var next_atom: u16 = 0xC000;
+    };
+    const atom = state.next_atom;
+    if (state.next_atom < 0xFFFF) state.next_atom += 1;
+    if (trace.enable_tracing) {
+        const name = if (lpString != 0) trace.c_span(lpString) else "(null)";
+        trace.print("KERNEL32: GlobalAddAtomA('{s}') -> 0x{X}\n", .{ name, atom });
+    }
+    return atom;
+}
+
+/// ExpandEnvironmentStringsA — expands %VARIABLE% references in a string.
+pub fn ExpandEnvironmentStringsA(lpSrc: usize, lpDst: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
+    if (lpSrc == 0) return 0;
+    const src = trace.c_span(lpSrc);
+    if (trace.enable_tracing) trace.print("KERNEL32: ExpandEnvironmentStringsA('{s}')\n", .{src});
+
+    // Simple passthrough — copy src to dst without expansion
+    const copy_len = @min(src.len, if (nSize > 0) nSize - 1 else 0);
+    if (lpDst != 0 and copy_len > 0) {
+        const dst = @as([*]u8, @ptrFromInt(lpDst));
+        for (0..copy_len) |i| dst[i] = src[i];
+        dst[copy_len] = 0;
+    }
+    return @intCast(src.len + 1);
 }

@@ -4,65 +4,35 @@ const ordinals = @import("ordinals.zig");
 const stubs = @import("ws2_32/winsock.zig");
 
 // Re-export symbols used by wsock32.zig
-/// WSAStartup function.
 pub const WSAStartup = stubs.WSAStartup;
-/// WSACleanup function.
 pub const WSACleanup = stubs.WSACleanup;
-/// WSAGetLastError function stub.
 pub const stub_WSAGetLastError = stubs.stub_WSAGetLastError;
-/// WSASetLastError function stub.
 pub const stub_WSASetLastError = stubs.stub_WSASetLastError;
-/// accept function.
 pub const accept = stubs.accept;
-/// bind function.
 pub const bind = stubs.bind;
-/// closesocket function.
 pub const closesocket = stubs.closesocket;
-/// connect function.
 pub const connect = stubs.connect;
-/// getpeername function.
 pub const getpeername = stubs.getpeername;
-/// getsockname function.
 pub const getsockname = stubs.getsockname;
-/// getsockopt function.
 pub const getsockopt = stubs.getsockopt;
-/// htonl function.
 pub const htonl = stubs.htonl;
-/// htons function.
 pub const htons = stubs.htons;
-/// ioctlsocket function.
 pub const ioctlsocket = stubs.ioctlsocket;
-/// inet_addr function.
 pub const inet_addr = stubs.inet_addr;
-/// inet_ntoa function.
 pub const inet_ntoa = stubs.inet_ntoa;
-/// listen function.
 pub const listen = stubs.listen;
-/// ntohl function.
 pub const ntohl = stubs.ntohl;
-/// ntohs function.
 pub const ntohs = stubs.ntohs;
-/// recv function.
 pub const recv = stubs.recv;
-/// recvfrom function.
 pub const recvfrom = stubs.recvfrom;
-/// select function.
 pub const select = stubs.select;
-/// send function.
 pub const send = stubs.send;
-/// sendto function.
 pub const sendto = stubs.sendto;
-/// setsockopt function.
 pub const setsockopt = stubs.setsockopt;
-/// shutdown function stub.
 pub const stub_shutdown = stubs.stub_shutdown;
-/// socket function.
 pub const socket = stubs.socket;
-/// gethostbyaddr function.
 pub const gethostbyaddr = stubs.gethostbyaddr;
-/// gethostbyname function.
 pub const gethostbyname = stubs.gethostbyname;
-/// gethostname function.
 pub const gethostname = stubs.gethostname;
 
 /// Registers WS2_32.dll functions with the environment.
@@ -150,7 +120,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, ordinals.WS2_32.WSAStartup, stubs.WSAStartup); // WSAStartup
     try environment.addBuiltinExportComptime(m, ordinals.WS2_32.WSACleanup, stubs.WSACleanup); // WSACleanup
 
-    // Geekbench ordinal imports
+    // --- Additional WinSock ordinal imports ---
     try environment.addBuiltinExportComptime(m, ordinals.WS2_32.__WSAFDIsSet, kernel32.stub_args3); // __WSAFDIsSet
     try environment.addBuiltinExportComptime(m, ordinals.WS2_32.WSAGetOverlappedResult, kernel32.stub_args4); // WSAGetOverlappedResult
     try environment.addBuiltinExportComptime(m, ordinals.WS2_32.WSASocketW, kernel32.stub_args6); // WSASocketW

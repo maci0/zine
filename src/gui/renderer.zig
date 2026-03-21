@@ -1,7 +1,7 @@
 //! Unified GUI rendering and input abstraction layer.
 //!
 //! This module provides a common interface for different rendering backends
-//! (Web UI via WASM/JS or native FLTK) and manages the shared framebuffer,
+//! (Web UI via WebSocket or native FLTK) and manages the shared framebuffer,
 //! input state, and UI component synchronization.
 
 const std = @import("std");
@@ -10,7 +10,7 @@ const fltk_ui = @import("fltk_ui.zig");
 
 /// Available rendering backends.
 pub const Backend = enum {
-    /// Web-based UI using WASM/JS and HTML5 Canvas.
+    /// Web-based UI using a WebSocket server and HTML5 Canvas frontend.
     web_ui,
     /// Native UI using the Fast Light Tool Kit (FLTK).
     fltk,
@@ -83,7 +83,7 @@ fn jsonEscape(text: []const u8, out: []u8) usize {
 
 // --- Framebuffer (shared rendering surface) ---
 
-/// Shared RGBA framebuffer surface.
+/// Shared BGRA framebuffer surface.
 pub var global_framebuf: []u8 = &[_]u8{};
 /// Current width of the framebuffer in pixels.
 pub var global_width: u32 = 1;

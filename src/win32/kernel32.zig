@@ -30,7 +30,6 @@ pub var app_code_end: usize = 0x700000;
 const kernel32_file = @import("kernel32/file.zig");
 const kernel32_mem = @import("kernel32/mem.zig");
 const kernel32_process = @import("kernel32/process.zig");
-const kernel32_misc = @import("kernel32/misc.zig");
 const kernel32_sync = @import("kernel32/sync.zig");
 const kernel32_time = @import("kernel32/time.zig");
 const kernel32_locale = @import("kernel32/locale.zig");
@@ -137,7 +136,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "FreeLibrary", kernel32_process.stub_FreeLibrary);
     try environment.addBuiltinExportComptime(m, "GetModuleHandleA", kernel32_process.GetModuleHandleA);
     try environment.addBuiltinExportComptime(m, "GetProcAddress", kernel32_process.GetProcAddress);
-    try environment.addBuiltinExportComptime(m, "GetModuleFileNameA", kernel32_misc.GetModuleFileNameA);
+    try environment.addBuiltinExportComptime(m, "GetModuleFileNameA", kernel32_process.GetModuleFileNameA_Full);
     try environment.addBuiltinExportComptime(m, "GetModuleFileNameW", kernel32_process.GetModuleFileNameW);
     try environment.addBuiltinExportComptime(m, "SetConsoleCtrlHandler", kernel32_process.stub_SetConsoleCtrlHandler);
     try environment.addBuiltinExportComptime(m, "DisableThreadLibraryCalls", kernel32_process.stub_DisableThreadLibraryCalls);
@@ -154,6 +153,30 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "SetHandleInformation", kernel32_process.stub_SetHandleInformation);
     try environment.addBuiltinExportComptime(m, "CreatePipe", kernel32_process.CreatePipe);
     try environment.addBuiltinExportComptime(m, "PeekNamedPipe", stub_args6); // stub — returns 0 (no data)
+    try environment.addBuiltinExportComptime(m, "SetNamedPipeHandleState", stub_args4); // stub — returns 0
+    try environment.addBuiltinExportComptime(m, "TransactNamedPipe", stub_args7); // stub — returns 0
+    try environment.addBuiltinExportComptime(m, "CreateNamedPipeW", stub_args8); // stub — returns INVALID_HANDLE_VALUE
+    try environment.addBuiltinExportComptime(m, "DisconnectNamedPipe", stub_args1); // stub — returns 0
+    try environment.addBuiltinExportComptime(m, "WaitNamedPipeA", stub_args2); // stub — returns 0
+    try environment.addBuiltinExportComptime(m, "ConnectNamedPipe", stub_args2); // stub — returns 0
+    try environment.addBuiltinExportComptime(m, "WinExec", stub_args2); // stub — returns 0 (ERROR_NOT_ENOUGH_MEMORY)
+
+    // --- Additional Win32 stubs ---
+    try environment.addBuiltinExportComptime(m, "WriteProcessMemory", stub_args5);
+    try environment.addBuiltinExportComptime(m, "WritePrivateProfileSectionA", stub_args3);
+    try environment.addBuiltinExportComptime(m, "WaitForMultipleObjectsEx", stub_args5);
+    try environment.addBuiltinExportComptime(m, "SetVolumeLabelA", stub_args2);
+    try environment.addBuiltinExportComptime(m, "QueryDosDeviceW", stub_args3);
+    try environment.addBuiltinExportComptime(m, "OpenMutexA", stub_args3);
+    try environment.addBuiltinExportComptime(m, "GetVolumeInformationA", stub_args8);
+    try environment.addBuiltinExportComptime(m, "GetShortPathNameA", stub_args3);
+    try environment.addBuiltinExportComptime(m, "GetProfileIntA", stub_args3);
+    try environment.addBuiltinExportComptime(m, "GetPrivateProfileSectionA", kernel32_profile.GetPrivateProfileSectionA);
+    try environment.addBuiltinExportComptime(m, "FlushInstructionCache", stub_args3);
+    try environment.addBuiltinExportComptime(m, "ExpandEnvironmentStringsA", kernel32_process.ExpandEnvironmentStringsA);
+    try environment.addBuiltinExportComptime(m, "EnumSystemCodePagesA", stub_args2);
+    try environment.addBuiltinExportComptime(m, "EnumResourceNamesA", stub_args4);
+    try environment.addBuiltinExportComptime(m, "SetVolumeLabelW", stub_args2);
     try environment.addBuiltinExportComptime(m, "DuplicateHandle", kernel32_sync.DuplicateHandle);
     try environment.addBuiltinExportComptime(m, "ReadProcessMemory", stub_args5);
     try environment.addBuiltinExportComptime(m, "GenerateConsoleCtrlEvent", stub_args2);
@@ -254,7 +277,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetDateFormatW", stub_args6);
     try environment.addBuiltinExportComptime(m, "GetTimeFormatW", stub_args6);
 
-    // --- Misc (misc.zig) ---
+    // --- Misc (error, process, sysinfo, console, path) ---
     try environment.addBuiltinExportComptime(m, "RaiseException", kernel32_error.RaiseException);
     try environment.addBuiltinExportComptime(m, "SetUnhandledExceptionFilter", kernel32_error.SetUnhandledExceptionFilter);
     try environment.addBuiltinExportComptime(m, "UnhandledExceptionFilter", kernel32_process.UnhandledExceptionFilter);
@@ -291,7 +314,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "AreFileApisANSI", kernel32_console.stub_ret_true_1); // Returns TRUE
     try environment.addBuiltinExportComptime(m, "LoadLibraryExA", kernel32_process.LoadLibraryExA);
     try environment.addBuiltinExportComptime(m, "GetDriveTypeA", kernel32_path.stub_GetDriveTypeA);
-    try environment.addBuiltinExportComptime(m, "MoveFileA", stub_args2); // returns TRUE (1 -> stub_args2 returns 0, need real stub)
+    try environment.addBuiltinExportComptime(m, "MoveFileA", stub_args2); // stub: returns 0 (should return TRUE)
     try environment.addBuiltinExportComptime(m, "FindFirstFileExA", kernel32_file.FindFirstFileExA);
     try environment.addBuiltinExportComptime(m, "SleepEx", kernel32_sysinfo.SleepEx);
     try environment.addBuiltinExportComptime(m, "GlobalMemoryStatusEx", kernel32_sysinfo.GlobalMemoryStatusEx);
@@ -304,7 +327,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "LoadResource", kernel32_resource.LoadResource);
     try environment.addBuiltinExportComptime(m, "SizeofResource", kernel32_resource.stub_SizeofResource);
     try environment.addBuiltinExportComptime(m, "LockResource", kernel32_resource.LockResource);
-    try environment.addBuiltinExportComptime(m, "OpenFile", kernel32_misc.stub_OpenFile);
+    try environment.addBuiltinExportComptime(m, "OpenFile", kernel32_file.stub_OpenFile);
     try environment.addBuiltinExportComptime(m, "DeviceIoControl", kernel32_file.DeviceIoControl);
 
     // W variants needed by win2k apps
@@ -325,18 +348,18 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetCurrentDirectoryW", kernel32_path.GetCurrentDirectoryW);
     try environment.addBuiltinExportComptime(m, "GetShortPathNameW", stub_args3);
     try environment.addBuiltinExportComptime(m, "GetNumberFormatW", stub_args6);
-    try environment.addBuiltinExportComptime(m, "GetVersionExW", kernel32_time.GetVersionExA);
+    try environment.addBuiltinExportComptime(m, "GetVersionExW", kernel32_time.GetVersionExW);
     try environment.addBuiltinExportComptime(m, "GetComputerNameW", stub_args2);
     try environment.addBuiltinExportComptime(m, "GetComputerNameA", stub_args2);
-    try environment.addBuiltinExportComptime(m, "GlobalAddAtomA", stub_args1);
+    try environment.addBuiltinExportComptime(m, "GlobalAddAtomA", kernel32_process.GlobalAddAtomA);
     try environment.addBuiltinExportComptime(m, "GlobalDeleteAtom", stub_args1);
-    try environment.addBuiltinExportComptime(m, "GetEnvironmentVariableW", stub_args3);
+    try environment.addBuiltinExportComptime(m, "GetEnvironmentVariableW", kernel32_process.GetEnvironmentVariableW);
     try environment.addBuiltinExportComptime(m, "SetEnvironmentVariableW", stub_args2);
     try environment.addBuiltinExportComptime(m, "OutputDebugStringW", kernel32_error.OutputDebugStringA);
     try environment.addBuiltinExportComptime(m, "SetConsoleTitleW", stub_args1);
-    try environment.addBuiltinExportComptime(m, "GetWindowsDirectoryW", kernel32_path.GetWindowsDirectoryA);
+    try environment.addBuiltinExportComptime(m, "GetWindowsDirectoryW", kernel32_path.GetWindowsDirectoryW);
     try environment.addBuiltinExportComptime(m, "GetFullPathNameW", kernel32_path.GetFullPathNameW);
-    try environment.addBuiltinExportComptime(m, "GetSystemDirectoryW", kernel32_file.GetSystemDirectoryA);
+    try environment.addBuiltinExportComptime(m, "GetSystemDirectoryW", kernel32_file.GetSystemDirectoryW);
 
     // --- Remaining KERNEL32 stubs for 100% win2k coverage ---
     try environment.addBuiltinExportComptime(m, "GlobalCompact", stub_args1);
@@ -375,16 +398,16 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "SetProcessAffinityMask", kernel32_console.stub_ret_true_2);
     try environment.addBuiltinExportComptime(m, "GetProcessAffinityMask", kernel32_sysinfo.GetProcessAffinityMask);
     try environment.addBuiltinExportComptime(m, "VerifyVersionInfoW", stub_args4);
-    try environment.addBuiltinExportComptime(m, "GetPrivateProfileStringW", stub_args6);
+    // GetPrivateProfileStringW already registered above with kernel32_profile.GetPrivateProfileStringW
     try environment.addBuiltinExportComptime(m, "DeleteAtom", stub_args1);
     try environment.addBuiltinExportComptime(m, "GlobalAddAtomW", stub_args1);
     try environment.addBuiltinExportComptime(m, "GlobalGetAtomNameW", stub_args3);
     try environment.addBuiltinExportComptime(m, "EnumDateFormatsW", stub_args3);
     try environment.addBuiltinExportComptime(m, "EnumTimeFormatsW", stub_args3);
 
-    // --- Notepad2 KERNEL32 stubs ---
+    // --- Unicode + misc KERNEL32 stubs ---
     try environment.addBuiltinExportComptime(m, "InterlockedCompareExchange", kernel32_sync.InterlockedCompareExchange);
-    try environment.addBuiltinExportComptime(m, "FreeResource", stub_args1);
+    try environment.addBuiltinExportComptime(m, "FreeResource", kernel32_resource.FreeResource);
     try environment.addBuiltinExportComptime(m, "FindFirstChangeNotificationW", kernel32_sync.stub_FindFirstChangeNotificationW);
     try environment.addBuiltinExportComptime(m, "FindNextChangeNotification", kernel32_sync.stub_FindNextChangeNotification);
     try environment.addBuiltinExportComptime(m, "FindCloseChangeNotification", stub_args1);

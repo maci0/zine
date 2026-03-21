@@ -1,66 +1,111 @@
 //! Platform abstraction layer for native (Linux x86/x86_64) and WASM targets.
 //!
-//! This is a thin re-export of platform/interface.zig, which selects the
-//! correct backend (native or wasm) at comptime.
-//!
-//! All platform-specific code should go through this module.
+//! At comptime the correct backend (native or wasm) is chosen based on the
+//! target architecture. All platform-specific code should go through this module.
 
-const interface = @import("platform/interface.zig");
+const builtin = @import("builtin");
 
-/// Returns true if the current target is WASM.
-pub const is_wasm = interface.is_wasm;
-/// Returns true if the current target is native.
-pub const is_native = interface.is_native;
-/// Returns true if the current target is x86.
-pub const is_x86 = interface.is_x86;
-/// Returns true if the current target is x86_64.
-pub const is_x86_64 = interface.is_x86_64;
+const backend = if (builtin.target.cpu.arch == .wasm32)
+    @import("platform/wasm.zig")
+else
+    @import("platform/native.zig");
+
+// -------------------------------------------------------------------------
+// Target detection
+// -------------------------------------------------------------------------
+
+/// True if the current target is WASM.
+pub const is_wasm = backend.is_wasm;
+/// True if the current target is native.
+pub const is_native = backend.is_native;
+/// True if the current target is x86.
+pub const is_x86 = backend.is_x86;
+/// True if the current target is x86_64.
+pub const is_x86_64 = backend.is_x86_64;
+
+// -------------------------------------------------------------------------
+// Memory
+// -------------------------------------------------------------------------
 
 /// Allocates virtual memory.
-pub const mmap = interface.mmap;
+pub const mmap = backend.mmap;
 /// Frees virtual memory.
-pub const munmap = interface.munmap;
+pub const munmap = backend.munmap;
 /// Changes the protection of virtual memory.
-pub const mprotect = interface.mprotect;
+pub const mprotect = backend.mprotect;
+/// Mark a memory region as read-write-execute.
+pub const mprotectExec = backend.mprotectExec;
+
+// -------------------------------------------------------------------------
+// Threading
+// -------------------------------------------------------------------------
 
 /// Yields the current thread.
-pub const yield = interface.yield;
+pub const yield = backend.yield;
 /// Sleeps the current thread for the specified duration in nanoseconds.
-pub const sleep = interface.sleep;
+pub const sleep = backend.sleep;
 /// A mutex for thread synchronization.
-pub const Mutex = interface.Mutex;
+pub const Mutex = backend.Mutex;
 /// Spawns a new thread.
-pub const spawnThread = interface.spawnThread;
+pub const spawnThread = backend.spawnThread;
+
+// -------------------------------------------------------------------------
+// Process
+// -------------------------------------------------------------------------
 
 /// Returns the current process ID.
-pub const getProcessId = interface.getProcessId;
+pub const getProcessId = backend.getProcessId;
 /// Exits the current process with the specified status code.
-pub const exitProcess = interface.exitProcess;
-/// Returns the current timestamp in nanoseconds.
-pub const timestamp = interface.timestamp;
+pub const exitProcess = backend.exitProcess;
+/// Returns the current timestamp as a Unix epoch value (seconds).
+pub const timestamp = backend.timestamp;
+
+// -------------------------------------------------------------------------
+// Stack bounds
+// -------------------------------------------------------------------------
 
 /// Represents the bounds of a thread stack.
-pub const StackBounds = interface.StackBounds;
+pub const StackBounds = backend.StackBounds;
 /// Returns the stack bounds of the current thread.
-pub const getStackBounds = interface.getStackBounds;
+pub const getStackBounds = backend.getStackBounds;
+
+// -------------------------------------------------------------------------
+// FS segment (TEB)
+// -------------------------------------------------------------------------
 
 /// Sets up the FS segment for the current thread.
-pub const setupFS = interface.setupFS;
+pub const setupFS = backend.setupFS;
+
+// -------------------------------------------------------------------------
+// SEH
+// -------------------------------------------------------------------------
 
 /// Reads the current exception list (FS:0).
-pub const readExceptionList = interface.readExceptionList;
+pub const readExceptionList = backend.readExceptionList;
+
+// -------------------------------------------------------------------------
+// Signal handling (native only, no-ops on WASM)
+// -------------------------------------------------------------------------
 
 /// Installs a segfault handler.
-pub const installSegfaultHandler = interface.installSegfaultHandler;
+pub const installSegfaultHandler = backend.installSegfaultHandler;
 /// Maps a null page to catch null pointer dereferences.
-pub const mapNullPage = interface.mapNullPage;
+pub const mapNullPage = backend.mapNullPage;
 /// Raises the stack limit for the current process.
-pub const raiseStackLimit = interface.raiseStackLimit;
+pub const raiseStackLimit = backend.raiseStackLimit;
+
+// -------------------------------------------------------------------------
+// Pipe / Dup
+// -------------------------------------------------------------------------
 
 /// Creates a pipe.
-pub const pipe = interface.pipe;
+pub const pipe = backend.pipe;
 /// Duplicates a file descriptor.
-pub const dup = interface.dup;
+pub const dup = backend.dup;
+
+// -------------------------------------------------------------------------
+// Guest pointer helpers
+// -------------------------------------------------------------------------
 
 /// Write a guest pointer-sized value (u32) to a guest memory address.
 /// On x86 native, usize == u32 so this is a normal write.

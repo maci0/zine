@@ -1,6 +1,6 @@
-// Unified test root — imports all modules that contain embedded tests.
-// This avoids "import of file outside module path" errors that occur
-// when running zig test on individual files under subdirectories.
+//! Unified test root — imports all modules that contain embedded tests.
+//! This avoids "import of file outside module path" errors that occur
+//! when running zig test on individual files under subdirectories.
 
 comptime {
     // x86 interpreter tests
@@ -14,15 +14,18 @@ comptime {
     _ = @import("x86/thunks.zig");
 
     // JIT compiler tests
-    _ = @import("jit/emitter.zig");
     _ = @import("jit/compiler.zig");
 
     // Profiler tests
     _ = @import("profiler.zig");
 
+    // Core utility tests
+    _ = @import("path_utils.zig");
+    _ = @import("bat.zig");
+
     // Win32 stub tests
     _ = @import("win32/user32.zig");
     _ = @import("win32/ntdll/ntapi.zig");
-    _ = @import("win32/advapi32/misc.zig");
+    _ = @import("win32/advapi32/services.zig");
     _ = @import("win32/advapi32/security.zig");
 }

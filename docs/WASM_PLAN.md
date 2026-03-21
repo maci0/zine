@@ -25,13 +25,13 @@ level, which is what CheerpX does with Linux syscalls but one layer higher.
 | .rsrc write protection | ✅ Complete |
 | In-process child PE execution (`_spawnvp`) | ✅ Complete |
 | TEB/PEB initialization for WASM | ✅ Complete |
-| Win32 stub registration for WASM | ✅ Complete (31+ DLLs) |
+| Win32 stub registration for WASM | ✅ Complete (36+ DLLs) |
 | x87 FPU instructions | ⚠️ Partial |
 | SSE/SSE2 instructions | ⚠️ Partial (`src/x86/sse.zig`) |
 | x86-to-WASM JIT compiler | ⚠️ Compile-only (state-via-memory pipeline built) |
 | JIT host execution (browser/zine-host) | ⬚ Skeleton only |
 | Browser JS host frontend | ⬚ Not implemented |
-| Basic block caching | ⬚ Not implemented |
+| Basic block caching | ✅ Complete (`decode_cache.zig`: 1024-entry hash-indexed) |
 
 ### Test Results
 
@@ -40,8 +40,8 @@ Mode          Pass  Total  Notes
 ──────────────────────────────────────────────────
 native         42    42    Full MSVC 6.0 toolchain
 interpret      42    42    x86 software interpreter
-wasmtime       17    42    WASI CLI (wasmtime 29+)
-wasmer         17    42    WASI CLI (wasmer 7+)
+wasmtime       23    36    WASI CLI (wasmtime 29+)
+wasmer         23    36    WASI CLI (wasmer 7+)
 ```
 
 Passing WASM tools: LINK, CVPACK, CVTRES, BSCMAKE, MIDL, MC, PREP, PROFILE,
@@ -290,7 +290,7 @@ which requires a host providing `jit_compile`/`jit_call` imports.
 ### Phase 5: Testing and hardening ⚠️ IN PROGRESS
 
 - [x] Run MSVC CLI tools through interpreter (42/42 native, 42/42 interpret)
-- [x] Run MSVC CLI tools through WASM (17/42 wasmtime, 17/42 wasmer)
+- [x] Run MSVC CLI tools through WASM (23/36 wasmtime, 23/36 wasmer)
 - [x] Fix BSS zero-initialization for WASM
 - [x] Fix .rsrc write protection
 - [x] Implement in-process _spawnvp for child PE execution

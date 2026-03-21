@@ -32,7 +32,16 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, ord.RunFileDlg, kernel32.stub_args5);
     try environment.addBuiltinExportComptime(m, "SHGetSpecialFolderPathW", kernel32.stub_args4);
 
-    // --- Notepad2 SHELL32 stubs ---
+    // --- Unsuffixed name aliases + additional SHELL32 stubs ---
+    try environment.addBuiltinExportComptime(m, "SHGetPathFromIDList", stubs.stub_SHGetPathFromIDListA);
+    try environment.addBuiltinExportComptime(m, "SHGetSpecialFolderLocation", stubs.SHGetSpecialFolderLocation);
+    try environment.addBuiltinExportComptime(m, "SHBrowseForFolder", stubs.stub_SHBrowseForFolderA);
+    try environment.addBuiltinExportComptime(m, "ShellExecuteExA", kernel32.stub_args1);
+    try environment.addBuiltinExportComptime(m, "SHFileOperationA", kernel32.stub_args1);
+    try environment.addBuiltinExportComptime(m, "FindExecutableA", kernel32.stub_args3);
+    try environment.addBuiltinExportComptime(m, "FindExecutableW", kernel32.stub_args3);
+
+    // --- Additional SHELL32 stubs ---
     try environment.addBuiltinExportComptime(m, "SHAddToRecentDocs", kernel32.stub_args2);
     try environment.addBuiltinExportComptime(m, "SHBrowseForFolderW", kernel32.stub_args1);
     try environment.addBuiltinExportComptime(m, "SHCreateDirectoryExW", kernel32.stub_args3);

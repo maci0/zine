@@ -12,10 +12,10 @@ This document tracks unimplemented features and tasks for Zine.
 - [ ] Full 32-bit CONTEXT extraction from 64-bit ucontext
 - [ ] Performance: upgrade to direct lcall/lret trampolines (avoid signal overhead)
 
-## WASM Compatibility (17/42 tests passing)
+## WASM Compatibility (23/36 tests passing)
 - [ ] Fix child PE argv passing — DUMPBIN/LIB/EDITBIN spawn LINK.EXE but child's CRT `__getmainargs` uses stale cached argv
 - [ ] Fix CL.EXE child process execution — C1.DLL/C2.DLL spawned code hits EIP out of bounds
-- [ ] Fix NMAKE exit code (exits 0 instead of 2 when no makefile found)
+- [x] ~~Fix NMAKE exit code (exits 0 instead of 2 when no makefile found)~~
 - [ ] Fix RC.EXE — needs native DLL dispatch for RCDLL.DLL on WASM
 - [ ] Fix zine-host WASI filesystem preopening (guest can't open files via wasmer C API)
 - [ ] Implement zine-host JIT block execution end-to-end test
@@ -27,8 +27,8 @@ This document tracks unimplemented features and tasks for Zine.
 - [ ] JIT invalidation on code page writes
 
 ## x86 Interpreter
-- [ ] Basic block decoding and caching (major perf bottleneck)
-- [ ] Complete x87 FPU instruction execution (currently: decode-only for most ops)
+- [x] ~~Basic block decoding and caching~~ → `src/x86/decode_cache.zig` (1024-entry hash-indexed instruction cache)
+- [x] ~~x87 FPU instruction execution~~ → extensive support in `execute.zig` (FADD, FMUL, FSUB, FDIV, FCOM, FLD, FST, FILD, FISTP, FXCH, FCHS, FABS, FLD1, FLDZ, etc.)
 - [ ] Threaded dispatch optimization
 
 ## Win32 API Stubs

@@ -65,7 +65,12 @@ pub const LazyFlags = struct {
     size: OpSize = .dword,
 
     // When op == .none, these hold the raw EFLAGS bits
-    raw_flags: u32 = 0x202, // IF set, reserved bit 1 set
+    raw_flags: u32 = EFLAGS_DEFAULT, // IF set, reserved bit 1 set
+
+    /// Direction Flag stored separately — DF is orthogonal to ALU flag
+    /// computations and is only changed by CLD/STD. Storing it separately
+    /// avoids materializing all flags just to read DF in string operations.
+    df: bool = false,
 
     /// Return the Zero Flag (ZF).
     pub fn getZF(self: *const LazyFlags) bool {
@@ -130,6 +135,11 @@ pub const LazyFlags = struct {
         return (@popCount(low_byte) & 1) == 0;
     }
 
+    /// Return the Direction Flag (DF) — O(1), no flag materialization needed.
+    pub inline fn getDF(self: *const LazyFlags) bool {
+        return self.df;
+    }
+
     /// Return the Auxiliary Carry Flag (AF) (BCD half-carry from bit 3 to bit 4).
     pub fn getAF(self: *const LazyFlags) bool {
         if (self.op == .none) return (self.raw_flags & FLAG_AF) != 0;
@@ -166,22 +176,35 @@ pub const LazyFlags = struct {
 
     /// Materialize full EFLAGS value (for PUSHFD, LAHF, etc.).
     pub fn toEflags(self: *const LazyFlags) u32 {
-        if (self.op == .none) return self.raw_flags;
+        if (self.op == .none) {
+            // DF is stored separately — merge it into the raw flags.
+            // setFlag(FLAG_DF) only updates self.df without touching raw_flags,
+            // so we must reconcile here to avoid returning stale DF state.
+            var flags = self.raw_flags;
+            if (self.df) {
+                flags |= FLAG_DF;
+            } else {
+                flags &= ~FLAG_DF;
+            }
+            return flags;
+        }
 
-        var flags: u32 = 0x202; // Reserved bit 1 + IF always set
+        var flags: u32 = EFLAGS_DEFAULT; // Reserved bit 1 + IF always set
         if (self.getCF()) flags |= FLAG_CF;
         if (self.getPF()) flags |= FLAG_PF;
         if (self.getAF()) flags |= FLAG_AF;
         if (self.getZF()) flags |= FLAG_ZF;
         if (self.getSF()) flags |= FLAG_SF;
         if (self.getOF()) flags |= FLAG_OF;
+        if (self.df) flags |= FLAG_DF;
         return flags;
     }
 
     /// Restore flags from a raw EFLAGS value (for POPFD, SAHF, etc.).
     pub fn fromEflags(self: *LazyFlags, eflags: u32) void {
         self.op = .none;
-        self.raw_flags = eflags | 0x2; // Ensure reserved bit 1 is always set
+        self.raw_flags = eflags | FLAG_RESERVED; // Ensure reserved bit 1 is always set
+        self.df = (eflags & FLAG_DF) != 0;
     }
 
     /// Set flags after an ALU operation.
@@ -206,6 +229,11 @@ pub const LazyFlags = struct {
 
     /// Clear a single flag bit.
     pub inline fn clearFlag(self: *LazyFlags, comptime flag: u32) void {
+        // DF is stored separately — avoid full materialization for CLD.
+        if (comptime flag == FLAG_DF) {
+            self.df = false;
+            return;
+        }
         var ef = self.toEflags();
         ef &= ~flag;
         self.fromEflags(ef);
@@ -213,6 +241,11 @@ pub const LazyFlags = struct {
 
     /// Set a single flag bit.
     pub inline fn setFlag(self: *LazyFlags, comptime flag: u32) void {
+        // DF is stored separately — avoid full materialization for STD.
+        if (comptime flag == FLAG_DF) {
+            self.df = true;
+            return;
+        }
         var ef = self.toEflags();
         ef |= flag;
         self.fromEflags(ef);
@@ -220,11 +253,21 @@ pub const LazyFlags = struct {
 
     /// Toggle a single flag bit.
     pub inline fn toggleFlag(self: *LazyFlags, comptime flag: u32) void {
+        // DF is stored separately — avoid full materialization.
+        if (comptime flag == FLAG_DF) {
+            self.df = !self.df;
+            return;
+        }
         var ef = self.toEflags();
         ef ^= flag;
         self.fromEflags(ef);
     }
 };
+
+/// Reserved bit 1 (always set in EFLAGS).
+pub const FLAG_RESERVED: u32 = 1 << 1;
+/// Default EFLAGS value: reserved bit 1 + IF (interrupt enable).
+pub const EFLAGS_DEFAULT: u32 = FLAG_RESERVED | (1 << 9);
 
 /// Carry Flag (CF) bit position.
 pub const FLAG_CF: u32 = 1 << 0;
@@ -316,4 +359,152 @@ test "lazy flags: byte-size SF" {
     var f = LazyFlags{};
     f.update(.sub, .byte, 0x80, 0x00, 0x80); // result = 0x80, sign bit set for byte
     try testing.expect(f.getSF());
+}
+
+test "lazy flags: overflow on signed add" {
+    var f = LazyFlags{};
+    // 0x7FFFFFFF + 1 = 0x80000000: positive + positive = negative → OF=1
+    f.update(.add, .dword, 0x80000000, 0x7FFFFFFF, 0x00000001);
+    try testing.expect(f.getOF());
+    try testing.expect(f.getSF()); // result is negative
+    try testing.expect(!f.getZF());
+}
+
+test "lazy flags: no overflow on unsigned add" {
+    var f = LazyFlags{};
+    // 1 + 2 = 3: no sign change → OF=0
+    f.update(.add, .dword, 3, 1, 2);
+    try testing.expect(!f.getOF());
+    try testing.expect(!f.getCF());
+}
+
+test "lazy flags: overflow on signed sub" {
+    var f = LazyFlags{};
+    // 0x80000000 - 1 = 0x7FFFFFFF: negative - positive = positive → OF=1
+    f.update(.sub, .dword, 0x7FFFFFFF, 0x80000000, 0x00000001);
+    try testing.expect(f.getOF());
+    try testing.expect(!f.getSF()); // result is positive
+}
+
+test "lazy flags: word-size operations" {
+    var f = LazyFlags{};
+    // 0xFFFF + 1 = 0x10000, but word-size mask → result = 0x0000
+    f.update(.add, .word, 0x00000000, 0x0000FFFF, 0x00000001);
+    try testing.expect(f.getCF()); // carry out of 16 bits
+    try testing.expect(f.getZF()); // masked result is 0
+    try testing.expect(!f.getSF()); // bit 15 of result is 0
+}
+
+test "lazy flags: inc overflow" {
+    var f = LazyFlags{};
+    // INC 0x7FFFFFFF → 0x80000000: OF should be set
+    f.update(.inc, .dword, 0x80000000, 0x7FFFFFFF, 1);
+    try testing.expect(f.getOF());
+    try testing.expect(f.getSF());
+    try testing.expect(!f.getCF()); // INC doesn't affect CF
+}
+
+test "lazy flags: dec overflow" {
+    var f = LazyFlags{};
+    // DEC 0x80000000 → 0x7FFFFFFF: OF should be set
+    f.update(.dec, .dword, 0x7FFFFFFF, 0x80000000, 1);
+    try testing.expect(f.getOF());
+    try testing.expect(!f.getSF());
+    try testing.expect(!f.getCF()); // DEC doesn't affect CF
+}
+
+test "lazy flags: neg sets CF when result non-zero" {
+    var f = LazyFlags{};
+    // NEG 5 → 0xFFFFFFFB: CF=1 (result != 0), SF=1, ZF=0
+    f.update(.neg, .dword, 0xFFFFFFFB, 5, 5);
+    try testing.expect(f.getCF());
+    try testing.expect(f.getSF());
+    try testing.expect(!f.getZF());
+}
+
+test "lazy flags: neg zero clears CF" {
+    var f = LazyFlags{};
+    // NEG 0 → 0: CF=0
+    f.update(.neg, .dword, 0, 0, 0);
+    try testing.expect(!f.getCF());
+    try testing.expect(f.getZF());
+}
+
+test "lazy flags: AF on add with half-carry" {
+    var f = LazyFlags{};
+    // 0x0F + 0x01 = 0x10: carry from bit 3 to bit 4 → AF=1
+    f.update(.add, .byte, 0x10, 0x0F, 0x01);
+    try testing.expect(f.getAF());
+}
+
+test "lazy flags: AF clear when no half-carry" {
+    var f = LazyFlags{};
+    // 0x01 + 0x02 = 0x03: no carry from bit 3 → AF=0
+    f.update(.add, .byte, 0x03, 0x01, 0x02);
+    try testing.expect(!f.getAF());
+}
+
+test "lazy flags: DF set and clear" {
+    var f = LazyFlags{};
+    try testing.expect(!f.getDF());
+    f.setFlag(FLAG_DF);
+    try testing.expect(f.getDF());
+    f.clearFlag(FLAG_DF);
+    try testing.expect(!f.getDF());
+}
+
+test "lazy flags: shl carry flag" {
+    var f = LazyFlags{};
+    // SHL 0x80000000, 1 → 0x00000000: last bit shifted out is 1 → CF=1
+    f.update(.shl, .dword, 0x00000000, 0x80000000, 1);
+    try testing.expect(f.getCF());
+    try testing.expect(f.getZF());
+}
+
+test "lazy flags: shr carry flag" {
+    var f = LazyFlags{};
+    // SHR 0x01, 1 → 0x00: last bit shifted out is 1 → CF=1
+    f.update(.shr, .dword, 0x00000000, 0x01, 1);
+    try testing.expect(f.getCF());
+    try testing.expect(f.getZF());
+}
+
+test "lazy flags: toEflags includes DF" {
+    var f = LazyFlags{};
+    f.df = true;
+    const eflags = f.toEflags();
+    try testing.expect((eflags & FLAG_DF) != 0);
+
+    f.df = false;
+    const eflags2 = f.toEflags();
+    try testing.expect((eflags2 & FLAG_DF) == 0);
+}
+
+test "lazy flags: fromEflags restores DF" {
+    var f = LazyFlags{};
+    f.fromEflags(FLAG_DF | EFLAGS_DEFAULT);
+    try testing.expect(f.df);
+    try testing.expect(f.getDF());
+
+    f.fromEflags(EFLAGS_DEFAULT);
+    try testing.expect(!f.df);
+}
+
+test "lazy flags: toggleFlag" {
+    var f = LazyFlags{};
+    f.fromEflags(EFLAGS_DEFAULT);
+    try testing.expect(!f.getCF());
+    f.toggleFlag(FLAG_CF);
+    try testing.expect(f.getCF());
+    f.toggleFlag(FLAG_CF);
+    try testing.expect(!f.getCF());
+}
+
+test "lazy flags: toggleFlag DF" {
+    var f = LazyFlags{};
+    try testing.expect(!f.getDF());
+    f.toggleFlag(FLAG_DF);
+    try testing.expect(f.getDF());
+    f.toggleFlag(FLAG_DF);
+    try testing.expect(!f.getDF());
 }

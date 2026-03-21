@@ -52,7 +52,7 @@ fn readIniValue(lpFileName: usize, lpAppName: usize, lpKeyName: usize) ?[]const 
 }
 
 /// Retrieves a string from the specified section in an initialization file.
-/// Implementation status: Partially implemented (supports basic key-value parsing from INI files).
+/// Implementation status: Partially implemented (supports basic key-value parsing from INI files)
 pub fn GetPrivateProfileStringA(lpAppName: usize, lpKeyName: usize, lpDefault: usize, lpReturnedString: usize, nSize: u32, lpFileName: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) {
         const app = if (lpAppName != 0) trace.c_span(lpAppName) else "(null)";
@@ -83,7 +83,7 @@ pub fn GetPrivateProfileStringA(lpAppName: usize, lpKeyName: usize, lpDefault: u
 }
 
 /// Retrieves an integer associated with a key in the specified section of an initialization file.
-/// Implementation status: Partially implemented (supports basic key-value parsing from INI files).
+/// Implementation status: Partially implemented (supports basic key-value parsing from INI files)
 pub fn GetPrivateProfileIntA(lpAppName: usize, lpKeyName: usize, nDefault: i32, lpFileName: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) {
         const app = if (lpAppName != 0) trace.c_span(lpAppName) else "(null)";
@@ -98,8 +98,67 @@ pub fn GetPrivateProfileIntA(lpAppName: usize, lpKeyName: usize, nDefault: i32, 
     return @bitCast(nDefault);
 }
 
+/// Retrieves all keys and values for the specified section of an INI file.
+/// Returns key=value pairs as null-terminated strings, followed by an extra null.
+pub fn GetPrivateProfileSectionA(lpAppName: usize, lpReturnedString: usize, nSize: u32, lpFileName: usize) callconv(w32cc.WINAPI) u32 {
+    if (lpReturnedString == 0 or nSize < 2) return 0;
+
+    const buf = @as([*]u8, @ptrFromInt(lpReturnedString));
+    buf[0] = 0;
+    buf[1] = 0; // Double-null terminator for empty result
+
+    if (lpAppName == 0 or lpFileName == 0) return 0;
+
+    const section_name = trace.c_span(lpAppName);
+    const file_path_raw = trace.c_span(lpFileName);
+
+    if (trace.enable_tracing) trace.print("KERNEL32: GetPrivateProfileSectionA('{s}', buf=0x{X}, size={d}, file='{s}')\n", .{ section_name, lpReturnedString, nSize, file_path_raw });
+
+    const host_io = @import("../host_io.zig");
+    const fd = host_io.open(file_path_raw, 0, 0);
+    if (fd < 0) return 0;
+    const file = host_io.fileFromFd(@intCast(fd));
+    defer file.close();
+
+    var content_buf: [16384]u8 = undefined;
+    const bytes_read = file.readAll(&content_buf) catch return 0;
+    const content = content_buf[0..bytes_read];
+
+    var out_pos: u32 = 0;
+    const max_pos = nSize - 2; // Reserve space for double-null
+    var in_section = false;
+    var iter = std.mem.splitScalar(u8, content, '\n');
+    while (iter.next()) |raw_line| {
+        var line = std.mem.trimRight(u8, raw_line, "\r \t");
+        line = std.mem.trimLeft(u8, line, " \t");
+        if (line.len == 0) continue;
+
+        if (line[0] == '[') {
+            if (in_section) break; // End of our section
+            if (std.mem.indexOfScalar(u8, line, ']')) |end| {
+                const sec = line[1..end];
+                in_section = std.ascii.eqlIgnoreCase(sec, section_name);
+            }
+            continue;
+        }
+
+        if (in_section and line.len > 0) {
+            const needed: u32 = @intCast(line.len + 1); // line + null terminator
+            if (out_pos + needed > max_pos) break;
+            @memcpy(buf[out_pos .. out_pos + @as(u32, @intCast(line.len))], line);
+            out_pos += @intCast(line.len);
+            buf[out_pos] = 0; // null-terminate this entry
+            out_pos += 1;
+        }
+    }
+    buf[out_pos] = 0; // Final null terminator (double-null)
+
+    if (trace.enable_tracing) trace.print("  -> {d} bytes\n", .{out_pos});
+    return out_pos;
+}
+
 /// Copies a string into the specified section of an initialization file.
-/// Implementation status: No-op fallback.
+/// Implementation status: No-op fallback
 pub fn stub_WritePrivateProfileStringA(lpAppName: usize, lpKeyName: usize, lpString: usize, lpFileName: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpAppName;
     _ = lpKeyName;
@@ -109,7 +168,7 @@ pub fn stub_WritePrivateProfileStringA(lpAppName: usize, lpKeyName: usize, lpStr
 }
 
 /// Copies a string into the specified section of an initialization file (Unicode version).
-/// Implementation status: No-op fallback.
+/// Implementation status: No-op fallback
 pub fn stub_WritePrivateProfileStringW(lpAppName: usize, lpKeyName: usize, lpString: usize, lpFileName: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpAppName;
     _ = lpKeyName;
@@ -131,7 +190,7 @@ fn wideToNarrow(wide_ptr: usize, buf: []u8) []const u8 {
 }
 
 /// Retrieves a string from the specified section in an initialization file (Unicode version).
-/// Implementation status: Partially implemented (wraps the ANSI version).
+/// Implementation status: Partially implemented (wraps the ANSI version)
 pub fn GetPrivateProfileStringW(lpAppName: usize, lpKeyName: usize, lpDefault: usize, lpReturnedString: usize, nSize: u32, lpFileName: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) {
         var app_buf: [256]u8 = undefined;
@@ -183,7 +242,7 @@ pub fn GetPrivateProfileStringW(lpAppName: usize, lpKeyName: usize, lpDefault: u
 }
 
 /// Retrieves a string from the specified section in the Win.ini file.
-/// Implementation status: Stub (returns the default value).
+/// Implementation status: Stub (returns the default value)
 pub fn stub_GetProfileStringA(lpAppName: usize, lpKeyName: usize, lpDefault: usize, lpReturnedString: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
     if (lpReturnedString == 0 or nSize == 0) return 0;
     const buf = @as([*]u8, @ptrFromInt(lpReturnedString));

@@ -129,7 +129,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "_onexit", onexit);
     try environment.addBuiltinExportComptime(m, "_purecall", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "_seh_longjmp_unwind", misc.stub_ignore_i32);
-    try environment.addBuiltinExportComptime(m, "__CxxFrameHandler", @import("msvcrt_cxxeh.zig").CxxFrameHandler);
+    try environment.addBuiltinExportComptime(m, "__CxxFrameHandler", @import("msvcrt/cxxeh.zig").CxxFrameHandler);
 
     // Memory
     try environment.addBuiltinExportComptime(m, "malloc", mem.malloc);
@@ -399,7 +399,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "wcstod", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "wcscoll", string.wcscmp);
 
-    // --- Notepad2 MSVCRT stubs ---
+    // --- Additional MSVCRT stubs ---
     try environment.addBuiltinExportComptime(m, "abs", misc.abs);
     try environment.addBuiltinExportComptime(m, "clock", time_mod.clock);
     try environment.addBuiltinExportComptime(m, "_lock", misc.stub_noop1);

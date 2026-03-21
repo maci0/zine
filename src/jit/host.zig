@@ -61,7 +61,6 @@ pub const BlockId = u32;
 /// JIT host interface.
 ///
 /// Implementations:
-/// - Browser: WebAssembly.instantiate() via JS glue (host_browser.zig)
 /// - WASM guest: extern imports provided by zine-host (host_wasm.zig)
 pub const JitHost = struct {
     compile_fn: *const fn (ctx: *anyopaque, wasm_bytes: []const u8) ?BlockId,

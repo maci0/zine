@@ -11,7 +11,7 @@ const std = @import("std");
 
 /// The host-side folder that represents the C: drive root.
 pub const DRIVE_ROOT = "drive_c/";
-const drive_root_len: usize = 8; // "drive_c/".len
+const drive_root_len: usize = DRIVE_ROOT.len;
 
 /// Check if a path starts with drive_c/ or drive_c\ (either slash direction).
 fn startsWithDriveC(path: []const u8) bool {
@@ -111,22 +111,13 @@ pub fn win32ToPosix(win_path: []const u8, out: []u8) usize {
         return pos;
     }
 
-    // Truly relative path: game.ini, project/data/... → just convert slashes
-    // posix_fs.resolvePath will prepend CWD
+    // Truly relative path: game.ini, project/data/... → just convert slashes.
+    // The caller (toHostPath) resolves these against the virtual CWD.
     var pos: usize = 0;
-    // If already starts with drive_c/, don't modify
-    if (startsWithDriveC(src)) {
-        for (src) |c| {
-            if (pos >= out.len) break;
-            out[pos] = if (c == '\\') '/' else c;
-            pos += 1;
-        }
-    } else {
-        for (src) |c| {
-            if (pos >= out.len) break;
-            out[pos] = if (c == '\\') '/' else c;
-            pos += 1;
-        }
+    for (src) |c| {
+        if (pos >= out.len) break;
+        out[pos] = if (c == '\\') '/' else c;
+        pos += 1;
     }
     if (pos < out.len) out[pos] = 0;
     return pos;
@@ -228,6 +219,64 @@ pub fn ensureDriveRoot() void {
 // The result is written to `out` and the length is returned.
 // Returns 0 if the input is empty/null.
 
+/// Normalize a path in-place by resolving `.` and `..` components.
+/// Prevents directory traversal attacks (e.g. `drive_c/game/../../etc/passwd`).
+/// The `anchor` parameter specifies a prefix length that `..` cannot escape past
+/// (e.g. length of "drive_c/" to keep paths inside the virtual drive).
+fn normalizePath(buf: []u8, len: usize, anchor: usize) usize {
+    // Split into components, resolve . and .., then rejoin.
+    // We work in-place using a stack of component start offsets.
+    var comp_starts: [128]usize = undefined;
+    var comp_lens: [128]usize = undefined;
+    var n_comps: usize = 0;
+
+    var i: usize = anchor;
+    while (i < len) {
+        // Skip slashes
+        while (i < len and buf[i] == '/') i += 1;
+        if (i >= len) break;
+        const start = i;
+        while (i < len and buf[i] != '/') i += 1;
+        const comp = buf[start..i];
+        if (comp.len == 1 and comp[0] == '.') {
+            // Skip "." component
+            continue;
+        } else if (comp.len == 2 and comp[0] == '.' and comp[1] == '.') {
+            // Pop last component if we have one (but never go below anchor)
+            if (n_comps > 0) n_comps -= 1;
+        } else {
+            if (n_comps < comp_starts.len) {
+                comp_starts[n_comps] = start;
+                comp_lens[n_comps] = comp.len;
+                n_comps += 1;
+            }
+        }
+    }
+
+    // Rebuild the path: anchor prefix + normalized components
+    var pos: usize = anchor;
+    for (0..n_comps) |ci| {
+        if (ci > 0 or (pos > 0 and buf[pos - 1] != '/')) {
+            if (pos < buf.len) {
+                buf[pos] = '/';
+                pos += 1;
+            }
+        }
+        const clen = comp_lens[ci];
+        const src_start = comp_starts[ci];
+        if (pos + clen <= buf.len) {
+            // Copy component (may overlap, use manual copy)
+            var j: usize = 0;
+            while (j < clen) : (j += 1) {
+                buf[pos + j] = buf[src_start + j];
+            }
+            pos += clen;
+        }
+    }
+    if (pos < buf.len) buf[pos] = 0;
+    return pos;
+}
+
 /// Convert any Win32 path to a host-usable POSIX path, resolving CWD and
 /// case-insensitive filenames. This is the **single entry point** for path
 /// resolution — all stubs should call this instead of assembling their own
@@ -261,7 +310,8 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
             @memcpy(out[1 .. 1 + copy_len], rest[0..copy_len]);
             const total = 1 + copy_len;
             if (total < out.len) out[total] = 0;
-            return total;
+            // Normalize but anchor at "/" so .. can't escape root
+            return normalizePath(out, total, 1);
         } else {
             // C: (or other) → drive_c/
             const prefix = DRIVE_ROOT;
@@ -275,7 +325,8 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
             @memcpy(out[pos .. pos + copy_len], rest[0..copy_len]);
             pos += copy_len;
             if (pos < out.len) out[pos] = 0;
-            return pos;
+            // Normalize with anchor at drive_c/ so .. can't escape sandbox
+            return normalizePath(out, pos, drive_root_len);
         }
     }
 
@@ -292,7 +343,8 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
         const dc_len = @min(src.len, out.len - 1);
         @memcpy(out[0..dc_len], src[0..dc_len]);
         if (dc_len < out.len) out[dc_len] = 0;
-        return dc_len;
+        // Normalize with anchor at drive_c/ so .. can't escape sandbox
+        return normalizePath(out, dc_len, drive_root_len);
     }
 
     // Step 6: Relative path — resolve against virtual CWD
@@ -311,7 +363,9 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
             @memcpy(out[cwd_end + 1 .. cwd_end + 1 + src.len], src[0..src.len]);
             const total = cwd_end + 1 + src.len;
             if (total < out.len) out[total] = 0;
-            return total;
+            // Normalize: if CWD is inside drive_c, anchor there
+            const anchor = if (isInsideDriveC(out[0..total])) drive_root_len else 0;
+            return normalizePath(out, total, anchor);
         }
     }
 
@@ -339,19 +393,218 @@ pub fn fileExistsHost(win_path: []const u8) bool {
     }
 }
 
-// --- Internal helpers for toHostPath ---
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
 
-fn hostPathExists(path: []const u8) bool {
-    if (path.len == 0) return false;
-    if (std.fs.path.isAbsolute(path)) {
-        var dir = std.fs.openDirAbsolute("/", .{}) catch return false;
-        defer dir.close();
-        _ = dir.statFile(if (path[0] == '/') path[1..] else path) catch return false;
-        return true;
-    } else {
-        _ = std.fs.cwd().statFile(path) catch return false;
-        return true;
-    }
+const testing = @import("std").testing;
+
+test "posixToWin32: drive_c/ prefix → C:\\" {
+    var buf: [256]u8 = undefined;
+    const len = posixToWin32("drive_c/Desktop/file.txt", &buf);
+    try testing.expectEqualStrings("C:\\Desktop\\file.txt", buf[0..len]);
+}
+
+test "posixToWin32: absolute POSIX → Z:\\" {
+    var buf: [256]u8 = undefined;
+    const len = posixToWin32("/home/user/foo", &buf);
+    try testing.expectEqualStrings("Z:\\home\\user\\foo", buf[0..len]);
+}
+
+test "posixToWin32: relative path → C:\\" {
+    var buf: [256]u8 = undefined;
+    const len = posixToWin32("Desktop/file.txt", &buf);
+    try testing.expectEqualStrings("C:\\Desktop\\file.txt", buf[0..len]);
+}
+
+test "posixToWin32: already has drive letter" {
+    var buf: [256]u8 = undefined;
+    const len = posixToWin32("D:/games/run.exe", &buf);
+    try testing.expectEqualStrings("D:\\games\\run.exe", buf[0..len]);
+}
+
+test "posixToWin32: root path" {
+    var buf: [256]u8 = undefined;
+    const len = posixToWin32("/", &buf);
+    try testing.expectEqualStrings("Z:\\", buf[0..len]);
+}
+
+test "win32ToPosix: C:\\ → drive_c/" {
+    var buf: [256]u8 = undefined;
+    const len = win32ToPosix("C:\\Desktop\\file.txt", &buf);
+    try testing.expectEqualStrings("drive_c/Desktop/file.txt", buf[0..len]);
+}
+
+test "win32ToPosix: Z:\\ → /" {
+    var buf: [256]u8 = undefined;
+    const len = win32ToPosix("Z:\\home\\user\\foo", &buf);
+    try testing.expectEqualStrings("/home/user/foo", buf[0..len]);
+}
+
+test "win32ToPosix: lowercase drive letter" {
+    var buf: [256]u8 = undefined;
+    const len = win32ToPosix("c:\\test.txt", &buf);
+    try testing.expectEqualStrings("drive_c/test.txt", buf[0..len]);
+}
+
+test "win32ToPosix: UNC prefix stripped" {
+    var buf: [256]u8 = undefined;
+    const len = win32ToPosix("\\\\?\\C:\\Windows\\System32", &buf);
+    try testing.expectEqualStrings("drive_c/Windows/System32", buf[0..len]);
+}
+
+test "win32ToPosix: backslash-rooted path → drive_c/" {
+    var buf: [256]u8 = undefined;
+    const len = win32ToPosix("\\project\\game", &buf);
+    try testing.expectEqualStrings("drive_c/project/game", buf[0..len]);
+}
+
+test "win32ToPosix: POSIX path passed through" {
+    var buf: [256]u8 = undefined;
+    const len = win32ToPosix("/usr/lib/foo.so", &buf);
+    try testing.expectEqualStrings("/usr/lib/foo.so", buf[0..len]);
+}
+
+test "win32ToPosix: relative path" {
+    var buf: [256]u8 = undefined;
+    const len = win32ToPosix("game.ini", &buf);
+    try testing.expectEqualStrings("game.ini", buf[0..len]);
+}
+
+test "hasDriveLetter: positive cases" {
+    try testing.expect(hasDriveLetter("C:\\"));
+    try testing.expect(hasDriveLetter("D:file"));
+    try testing.expect(hasDriveLetter("z:\\path"));
+}
+
+test "hasDriveLetter: negative cases" {
+    try testing.expect(!hasDriveLetter(""));
+    try testing.expect(!hasDriveLetter("C"));
+    try testing.expect(!hasDriveLetter("/path"));
+    try testing.expect(!hasDriveLetter("1:bad"));
+}
+
+test "isInsideDriveC: positive" {
+    try testing.expect(isInsideDriveC("drive_c/file.txt"));
+    try testing.expect(isInsideDriveC("drive_c\\file.txt"));
+}
+
+test "isInsideDriveC: negative" {
+    try testing.expect(!isInsideDriveC("drive_d/file.txt"));
+    try testing.expect(!isInsideDriveC("/home/user"));
+    try testing.expect(!isInsideDriveC(""));
+    try testing.expect(!isInsideDriveC("drive_c")); // no trailing separator
+}
+
+test "win32ToPosix and posixToWin32 roundtrip" {
+    // C:\ path roundtrip
+    var buf1: [256]u8 = undefined;
+    var buf2: [256]u8 = undefined;
+    const posix_len = win32ToPosix("C:\\Program Files\\app.exe", &buf1);
+    const win_len = posixToWin32(buf1[0..posix_len], &buf2);
+    try testing.expectEqualStrings("C:\\Program Files\\app.exe", buf2[0..win_len]);
+}
+
+test "win32ToPosix: Z:\\ root only" {
+    var buf: [256]u8 = undefined;
+    const len = win32ToPosix("Z:\\", &buf);
+    try testing.expectEqualStrings("/", buf[0..len]);
+}
+
+test "win32ToPosix: drive_c/ already present in relative" {
+    var buf: [256]u8 = undefined;
+    const len = win32ToPosix("drive_c/test/file.txt", &buf);
+    try testing.expectEqualStrings("drive_c/test/file.txt", buf[0..len]);
+}
+
+test "normalizePath: removes .. components" {
+    var buf: [256]u8 = undefined;
+    const input = "drive_c/game/../../etc/passwd";
+    @memcpy(buf[0..input.len], input);
+    const len = normalizePath(&buf, input.len, drive_root_len);
+    try testing.expectEqualStrings("drive_c/etc/passwd", buf[0..len]);
+}
+
+test "normalizePath: .. cannot escape anchor" {
+    var buf: [256]u8 = undefined;
+    const input = "drive_c/../../../../etc/passwd";
+    @memcpy(buf[0..input.len], input);
+    const len = normalizePath(&buf, input.len, drive_root_len);
+    try testing.expectEqualStrings("drive_c/etc/passwd", buf[0..len]);
+}
+
+test "normalizePath: removes . components" {
+    var buf: [256]u8 = undefined;
+    const input = "drive_c/./game/./file.txt";
+    @memcpy(buf[0..input.len], input);
+    const len = normalizePath(&buf, input.len, drive_root_len);
+    try testing.expectEqualStrings("drive_c/game/file.txt", buf[0..len]);
+}
+
+test "toHostPath: C: drive traversal is blocked" {
+    var buf: [256]u8 = undefined;
+    const len = toHostPath("C:\\game\\..\\..\\..\\..\\etc\\passwd", &buf);
+    // Should stay inside drive_c/ — ".." cannot escape the sandbox
+    const result = buf[0..len];
+    try testing.expect(std.mem.startsWith(u8, result, "drive_c/"));
+}
+
+test "win32ToPosix: empty string" {
+    var buf: [256]u8 = undefined;
+    const len = win32ToPosix("", &buf);
+    try testing.expectEqual(@as(usize, 0), len);
+}
+
+test "posixToWin32: empty string becomes C:\\" {
+    var buf: [256]u8 = undefined;
+    const len = posixToWin32("", &buf);
+    // Empty relative path gets C:\ prefix (relative path handling)
+    try testing.expectEqualStrings("C:\\", buf[0..len]);
+}
+
+test "toHostPath: empty string returns 0" {
+    var buf: [256]u8 = undefined;
+    const len = toHostPath("", &buf);
+    try testing.expectEqual(@as(usize, 0), len);
+}
+
+test "toHostPath: dot-backslash prefix stripped" {
+    var buf: [256]u8 = undefined;
+    const len = toHostPath(".\\file.txt", &buf);
+    const result = buf[0..len];
+    try testing.expectEqualStrings("file.txt", result);
+}
+
+test "toHostPath: Z: drive resolves to root" {
+    var buf: [256]u8 = undefined;
+    const len = toHostPath("Z:\\usr\\lib", &buf);
+    try testing.expectEqualStrings("/usr/lib", buf[0..len]);
+}
+
+test "toHostPath: Z: drive traversal cannot escape root" {
+    var buf: [256]u8 = undefined;
+    const len = toHostPath("Z:\\..\\..\\..\\etc\\passwd", &buf);
+    try testing.expectEqualStrings("/etc/passwd", buf[0..len]);
+}
+
+test "normalizePath: only dots" {
+    var buf: [256]u8 = undefined;
+    const input = "drive_c/./././.";
+    @memcpy(buf[0..input.len], input);
+    const len = normalizePath(&buf, input.len, drive_root_len);
+    try testing.expectEqualStrings("drive_c/", buf[0..len]);
+}
+
+test "win32ToPosix: multiple trailing backslashes after drive" {
+    var buf: [256]u8 = undefined;
+    const len = win32ToPosix("C:\\\\\\file.txt", &buf);
+    try testing.expectEqualStrings("drive_c/file.txt", buf[0..len]);
+}
+
+test "hasDriveLetter: exactly two chars" {
+    try testing.expect(hasDriveLetter("C:"));
+    try testing.expect(!hasDriveLetter("C"));
+    try testing.expect(!hasDriveLetter(":C"));
 }
 
 /// Case-insensitive path resolution: scan parent directory for matching filename.

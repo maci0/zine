@@ -1,14 +1,47 @@
+# Build output
+zig-out/
+.zig-cache/
+
+# Test artifacts (not test scripts — those are tracked)
+tests/*.txt
+tests/*.obj
+tests/*.exe
+tests/*.res
+tests/*.lib
+tests/*.dll
+tests/*.coff
+tests/*.pdb
+
+# IDE / editor
+.claude/
+.playwright-mcp/
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Project-local data directories
 Desktop/
 tools/
-zig-out/
-.claude/
-tests/
-.zig-cache/
+GHISLER/
+drive_c/
+
+# Debug / trace output
 winmine_trace.txt
+*.log
+
+# Scratch / temp files
 hello.c
 NNET.DAT
+test_archive.7z
+
+# Review artifacts (generated, not source)
 cli-review.md
 code-review.md
 doc-review.md
 docs/doc-review-report.md
-test_archive.7z

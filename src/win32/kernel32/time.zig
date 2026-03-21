@@ -4,7 +4,6 @@ const platform = @import("../../platform.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
 
-/// GetTimeZoneInformation
 /// Implementation status: Partially implemented
 pub fn GetTimeZoneInformation(lpTimeZoneInformation: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetTimeZoneInformation({x})\n", .{lpTimeZoneInformation});
@@ -15,7 +14,6 @@ pub fn GetTimeZoneInformation(lpTimeZoneInformation: usize) callconv(w32cc.WINAP
     return 0; // TIME_ZONE_ID_UNKNOWN
 }
 
-/// QueryPerformanceCounter
 /// Implementation status: Partially implemented
 pub fn QueryPerformanceCounter(lpPerformanceCount: usize) callconv(w32cc.WINAPI) i32 {
     if (lpPerformanceCount != 0) {
@@ -26,7 +24,6 @@ pub fn QueryPerformanceCounter(lpPerformanceCount: usize) callconv(w32cc.WINAPI)
     return 1;
 }
 
-/// QueryPerformanceFrequency
 /// Implementation status: Partially implemented
 pub fn QueryPerformanceFrequency(lpFrequency: usize) callconv(w32cc.WINAPI) i32 {
     if (lpFrequency != 0) {
@@ -37,7 +34,6 @@ pub fn QueryPerformanceFrequency(lpFrequency: usize) callconv(w32cc.WINAPI) i32 
     return 1;
 }
 
-/// GetVersionExA
 /// Implementation status: Partially implemented
 pub fn GetVersionExA(lpVersionInfo: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetVersionExA({x})\n", .{lpVersionInfo});
@@ -52,7 +48,20 @@ pub fn GetVersionExA(lpVersionInfo: usize) callconv(w32cc.WINAPI) i32 {
     return 1;
 }
 
-/// GetLocalTime
+/// Implementation status: Partially implemented
+pub fn GetVersionExW(lpVersionInfo: usize) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("KERNEL32: GetVersionExW({x})\n", .{lpVersionInfo});
+    if (lpVersionInfo != 0) {
+        const info = @as(*w32.OSVERSIONINFOW, @ptrFromInt(lpVersionInfo));
+        info.dwMajorVersion = 5;
+        info.dwMinorVersion = 1;
+        info.dwBuildNumber = 2600;
+        info.dwPlatformId = w32.VER_PLATFORM_WIN32_NT;
+        info.szCSDVersion = [_]u8{0} ** 256;
+    }
+    return 1;
+}
+
 /// Implementation status: Partially implemented
 pub fn GetLocalTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: GetLocalTime({x})\n", .{lpSystemTime});
@@ -75,7 +84,6 @@ pub fn GetLocalTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
     st.wMilliseconds = @intCast(@mod(@as(u64, @intCast(ms)), 1000));
 }
 
-/// GetSystemTimeAsFileTime
 /// Implementation status: Partially implemented
 pub fn GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: GetSystemTimeAsFileTime({x})\n", .{lpSystemTimeAsFileTime});
@@ -88,7 +96,6 @@ pub fn GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: usize) callconv(w32cc.WIN
     ft.dwHighDateTime = @intCast(filetime >> 32);
 }
 
-/// GetSystemTimeAdjustment
 /// Implementation status: Partially implemented
 pub fn GetSystemTimeAdjustment(lpTimeAdjustment: usize, lpTimeIncrement: usize, lpTimeAdjustmentDisabled: usize) callconv(w32cc.WINAPI) i32 {
     if (lpTimeAdjustment != 0) @as(*u32, @ptrFromInt(lpTimeAdjustment)).* = 0;
@@ -97,14 +104,12 @@ pub fn GetSystemTimeAdjustment(lpTimeAdjustment: usize, lpTimeIncrement: usize, 
     return 1;
 }
 
-/// GetTickCount
 /// Implementation status: Partially implemented
 pub fn GetTickCount() callconv(w32cc.WINAPI) u32 {
     const ts = std.time.milliTimestamp();
     return @intCast(ts & 0xFFFFFFFF);
 }
 
-/// Sleep
 /// Implementation status: Partially implemented
 pub fn Sleep(dwMilliseconds: u32) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: Sleep({d})\n", .{dwMilliseconds});
@@ -115,7 +120,6 @@ pub fn Sleep(dwMilliseconds: u32) callconv(w32cc.WINAPI) void {
     }
 }
 
-/// GetVersion
 /// Implementation status: Partially implemented
 pub fn GetVersion() callconv(w32cc.WINAPI) u32 {
     // Return Windows XP SP3 (5.1) to match GetVersionExA
@@ -141,7 +145,6 @@ pub fn CompareFileTime(lpft1: usize, lpft2: usize) callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
-/// GetSystemTime
 /// Implementation status: Partially implemented
 pub fn GetSystemTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: GetSystemTime({x})\n", .{lpSystemTime});
@@ -180,7 +183,6 @@ pub fn SystemTimeToFileTime(lpSystemTime: usize, lpFileTime: usize) callconv(w32
     return 1; // TRUE
 }
 
-/// FileTimeToSystemTime
 /// Implementation status: Partially implemented
 pub fn FileTimeToSystemTime(lpFileTime: usize, lpSystemTime: usize) callconv(w32cc.WINAPI) i32 {
     if (lpFileTime == 0 or lpSystemTime == 0) return 0;
@@ -212,7 +214,6 @@ pub fn FileTimeToSystemTime(lpFileTime: usize, lpSystemTime: usize) callconv(w32
     return 1; // TRUE
 }
 
-/// FileTimeToLocalFileTime
 /// Implementation status: Partially implemented
 pub fn FileTimeToLocalFileTime(lpFileTime: usize, lpLocalFileTime: usize) callconv(w32cc.WINAPI) i32 {
     if (lpFileTime == 0 or lpLocalFileTime == 0) return 0;

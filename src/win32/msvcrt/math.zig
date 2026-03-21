@@ -69,7 +69,7 @@ pub fn floor(x: f64) callconv(.c) f64 {
 // --- Memory Management ---
 
 /// Calculates the value of base raised to the power of exp.
-/// Implementation status: Fully implemented (wraps std.math.pow).
+/// Implementation status: Fully implemented (wraps std.math.pow)
 pub fn pow(base: f64, exp: f64) callconv(.c) f64 {
     return std.math.pow(f64, base, exp);
 }

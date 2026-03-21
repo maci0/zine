@@ -57,7 +57,7 @@ pub fn DialogBoxParamA(hInstance: usize, lpTemplateName: usize, hWndParent: usiz
         }
 
         if (!pushed) {
-            renderer.showMessageBox("About", "Windows application running via Zig Winloader\n\n(DialogBoxParamA stub)");
+            renderer.showMessageBox("About", "Windows application running via Zine\n\n(DialogBoxParamA stub)");
         }
 
         // Set up modal state BEFORE calling DlgProc (EndDialog may be called from within)
@@ -334,4 +334,42 @@ pub fn MessageBoxW(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32) cal
         renderer.showMessageBox(caption_buf[0..cap_len], text_buf[0..txt_len]);
     }
     return 1; // IDOK
+}
+
+// -------------------------------------------------------------------------
+// Dialog utility stubs (moved from misc.zig)
+// -------------------------------------------------------------------------
+
+pub fn stub_IsDialogMessageA(hDlg: usize, lpMsg: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hDlg;
+    _ = lpMsg;
+    return 0;
+}
+
+pub fn stub_DefDlgProcA(hDlg: usize, Msg: u32, wParam: usize, lParam: usize) callconv(w32cc.WINAPI) usize {
+    _ = hDlg;
+    _ = Msg;
+    _ = wParam;
+    _ = lParam;
+    return 0;
+}
+
+pub fn stub_MapDialogRect(hDlg: usize, lpRect: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hDlg;
+    _ = lpRect;
+    return 1;
+}
+
+pub fn stub_MessageBoxIndirectA(lpmbp: usize) callconv(w32cc.WINAPI) i32 {
+    _ = lpmbp;
+    return 1; // IDOK
+}
+
+pub fn stub_WinHelpA(hWndMain: usize, lpszHelp: usize, uCommand: u32, dwData: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hWndMain;
+    _ = lpszHelp;
+    _ = uCommand;
+    _ = dwData;
+    if (trace.enable_tracing) trace.print("USER32: WinHelpA\n", .{});
+    return 1;
 }

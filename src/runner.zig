@@ -56,6 +56,7 @@ const stubs_mag_hook = if (embed_stubs) @import("win32/mag_hook.zig") else void;
 const stubs_shlwapi = if (embed_stubs) @import("win32/shlwapi.zig") else void;
 const stubs_msvcp60 = if (embed_stubs) @import("win32/msvcp60.zig") else void;
 const stubs_setupapi = if (embed_stubs) @import("win32/setupapi.zig") else void;
+const stubs_mpr = if (embed_stubs) @import("win32/mpr.zig") else void;
 const stubs_mspdb60 = if (embed_stubs) @import("win32/mspdb60.zig") else void;
 const stubs_rcdll = if (embed_stubs) @import("win32/rcdll.zig") else void;
 
@@ -116,6 +117,7 @@ pub fn registerAllStubs(environment: *Environment, not_implemented_addr: usize) 
     try stubs_shlwapi.register(environment);
     try stubs_msvcp60.register(environment);
     try stubs_setupapi.register(environment);
+    try stubs_mpr.register(environment);
 
     // MSPDB60 and RCDLL stubs are only needed on WASM where the real DLL code
     // cannot execute in the interpreter. On native/interpret the real DLLs work.
@@ -250,7 +252,8 @@ pub fn applyReverseRelocations(
             const entries_count = (block_size - 8) / 2;
             for (0..entries_count) |e| {
                 const entry = @as(*align(1) const u16, @ptrCast(buf[reloc_offset + 8 + e * 2 ..].ptr)).*;
-                if (entry >> 12 == 3) { // IMAGE_REL_BASED_HIGHLOW
+                const IMAGE_REL_BASED_HIGHLOW = 3;
+                    if (entry >> 12 == IMAGE_REL_BASED_HIGHLOW) {
                     const patch_addr = block_va + (entry & 0x0FFF);
                     var in_iat = false;
                     for (iat_ranges[0..iat_range_count]) |range| {
@@ -303,8 +306,7 @@ pub fn protectRsrc(
     image_size: u32,
 ) void {
     for (sections) |sec| {
-        const name = &sec.Name;
-        if (name[0] == '.' and name[1] == 'r' and name[2] == 's' and name[3] == 'r' and name[4] == 'c') {
+        if (std.mem.startsWith(u8, &sec.Name, ".rsrc")) {
             memory.pe_image_end = preferred_base +% image_size;
             const rsrc_start = preferred_base +% sec.VirtualAddress;
             const rsrc_end = rsrc_start +% sec.Misc.VirtualSize;
@@ -346,8 +348,9 @@ pub fn scanBlock(code: []const u8) usize {
 const jit_compiler = @import("jit/compiler.zig");
 const jit_emitter = @import("jit/emitter.zig");
 
-/// Compile-only JIT loop: validates the JIT compiler on real PE code.
-/// Compiled WASM blocks are discarded (not executed).
+/// JIT validation loop: compiles x86 blocks to WASM while executing via
+/// the software interpreter. Compiled blocks are validated but not executed
+/// — the interpreter handles all actual instruction execution.
 pub fn runWithJit(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
     var jit = jit_compiler.JitCompiler.init(allocator, 0);
     defer jit.deinit();
@@ -375,7 +378,11 @@ pub fn runWithJit(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
                             log.info("JIT: (suppressing further compilation logs)", .{});
                         }
                         allocator.free(wasm_bin);
-                    } else |_| {}
+                    } else |jit_err| {
+                        log.warn("JIT: failed to compile block at EIP=0x{X} ({d} bytes): {}", .{
+                            eip, block_len, jit_err,
+                        });
+                    }
                 }
             }
         }

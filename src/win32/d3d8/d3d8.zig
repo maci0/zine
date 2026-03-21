@@ -203,9 +203,9 @@ fn d3d8_GetAdapterIdentifier(this: *IDirect3D8, Adapter: u32, Flags: u32, pIdent
         // D3DADAPTER_IDENTIFIER8: Driver[512], Description[512], ...
         const buf = @as([*]u8, @ptrFromInt(pIdentifier));
         @memset(buf[0 .. 1024 + 48], 0);
-        const driver = "WinLoader Virtual GPU";
+        const driver = "Zine Virtual GPU";
         @memcpy(buf[0..driver.len], driver);
-        const desc = "WinLoader D3D8 Emulation";
+        const desc = "Zine D3D8 Emulation";
         @memcpy(buf[512 .. 512 + desc.len], desc);
     }
     return w32.D3D_OK;

@@ -51,6 +51,7 @@ WebAssembly executes on a stack machine, but standard blocks and functions decla
 | 12 | Scratch register |
 | 13 | DF (Direction Flag) |
 | 14 | PF (Parity Flag) |
+| 15 | mem_base (memory base address for guest loads/stores) |
 
 ### Control Flow
 The JIT emits `br` and `br_if` for unconditional and conditional jumps respectively, with condition code evaluation covering all 16 x86 CCs. `CALL` pushes a return address to the guest stack via `i32.store` and branches; `RET` pops via `i32.load` and returns. `CMOVcc` uses `if`/`end` blocks. Future designs will implement cross-block dispatching via trace linking.
@@ -128,6 +129,12 @@ The final phase lifts the JIT from compiling one-off instruction structures into
 - [x] **Block Caching**: Translation map hooked into the execution loop in `runner.zig` (`runWithJit`) and `wasm_main.zig` (`runWithJitHost`), using a HashMap keyed by guest EIP to avoid re-translating previously compiled blocks.
 - [ ] **Page Protection**: Implement MMU-level page protection memory interception algorithms to guarantee Cache Invalidation correctly catches SMC (Self-Modifying Code) writes instantly.
 - [ ] **Trace Linking**: Implement direct WebAssembly-to-WebAssembly block trampolines, allowing the engine to traverse "hot" code loops without costly context-switches back into the host Zig interpreter.
+
+### 5. JIT Host Interface (`host.zig` / `host_wasm.zig`)
+Manages CPU state transfer between the interpreter and JIT-compiled blocks:
+- **`JitCpuState`**: A 64-byte struct in linear memory containing all 8 GPRs, EIP, and flags — used to pass state between the host and compiled WASM modules.
+- **`host.zig`**: Defines the `JitCpuState` struct and state transfer functions (`cpuToJitState` / `jitStateToCpu`).
+- **`host_wasm.zig`**: WASM-side imports for `jit_compile` and `jit_call` that communicate with the host runtime (wasmer/wasmtime) to compile and execute JIT blocks.
 
 ## Usage
 

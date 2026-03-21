@@ -3,36 +3,36 @@
 This document tracks unimplemented UI features for the FLTK bridge, extracted from `src/gui/fltk_ui.zig`.
 
 ## Window & Icon Management
-- [ ] `Fl_Window::icon()` with `Fl_RGB_Image` (L222)
-- [ ] Custom `Fl_Window` with font selection (L329)
-- [ ] `dialog_window->hide()` (L333)
+- [ ] `Fl_Window::icon()` with `Fl_RGB_Image` (L225)
+- [ ] Custom `Fl_Window` with font selection (L336)
+- [ ] `dialog_window->hide()` (L340)
 
 ## Text Editor & Buffer
-- [ ] Create `Fl_Text_Editor` + `Fl_Text_Buffer` (L247)
-- [ ] `editor->resize(x, y, w, h)` (L251)
-- [ ] `editor->textfont()` + `textsize()` (L255)
-- [ ] `editor->buffer()->select(start, end)` (L259)
-- [ ] `buffer->replace_selection(text)` (L263)
-- [ ] `Fl_Text_Buffer::undo()` (L267)
-- [ ] `editor->show_insert_position()` (L271)
-- [ ] `buffer->text(text)` (L275)
+- [ ] Create `Fl_Text_Editor` + `Fl_Text_Buffer` (L253)
+- [ ] `editor->resize(x, y, w, h)` (L257)
+- [ ] `editor->textfont()` + `textsize()` (L261)
+- [ ] `editor->buffer()->select(start, end)` (L265)
+- [ ] `buffer->replace_selection(text)` (L269)
+- [ ] `Fl_Text_Buffer::undo()` (L273)
+- [ ] `editor->show_insert_position()` (L277)
+- [ ] `buffer->text(text)` (L281)
 
 ## Status Bar & Groups
-- [ ] Create `Fl_Group` with N `Fl_Box` children (L281)
-- [ ] `status_boxes[part]->label(text)` (L285)
+- [ ] Create `Fl_Group` with N `Fl_Box` children (L287)
+- [ ] `status_boxes[part]->label(text)` (L291)
 
 ## Clipboard & Menus
-- [ ] `Fl::copy(text, len, 1)` (L291)
-- [ ] `Fl_Menu_Button` popup at (x, y) (L297)
+- [ ] `Fl::copy(text, len, 1)` (L297)
+- [ ] `Fl_Menu_Button` popup at (x, y) (L303)
 
 ## Dialogs & JSON Parsing
-- [ ] Create `Fl_Window` with controls parsed from JSON (L309)
-- [ ] Parse JSON, create FLTK child widgets (L313)
-- [ ] Map class name → FLTK widget and create (L317)
-- [ ] Find widget by ID, set `label(text)` or `value(text)` (L321)
-- [ ] `Fl_Native_File_Chooser` (L325)
+- [ ] Create `Fl_Window` with controls parsed from JSON (L316)
+- [ ] Parse JSON, create FLTK child widgets (L320)
+- [ ] Map class name → FLTK widget and create (L324)
+- [ ] Find widget by ID, set `label(text)` or `value(text)` (L328)
+- [ ] `Fl_Native_File_Chooser` (L332)
 
 ## Audio Controls
-- [ ] Audio backend volume control (L339)
-- [ ] Configure audio backend (L343)
-- [ ] Write PCM to audio stream (L347)
+- [ ] Audio backend volume control (L346)
+- [ ] Configure audio backend (L350)
+- [ ] Write PCM to audio stream (L354)

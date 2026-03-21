@@ -64,6 +64,8 @@ pub fn MultiByteToWideChar(CodePage: u32, dwFlags: u32, lpMultiByteStr_ptr: usiz
     }
 
     if (cchWideChar == 0 or lpWideCharStr_ptr == 0) return @intCast(len);
+    // Safety: reject obviously invalid output buffer pointers
+    if (lpWideCharStr_ptr < 0x10000) return @intCast(len);
 
     const wc_str = @as([*]u16, @ptrFromInt(lpWideCharStr_ptr));
     if (cchWideChar < len) {

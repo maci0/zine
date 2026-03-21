@@ -216,3 +216,103 @@ test "guest memory: out of bounds returns zero/no-ops" {
     try testing.expectEqual(@as(u32, 0), mem.read32(100));
     mem.write32(100, 0xDEAD); // should not crash
 }
+
+test "guest memory: non-zero base_addr translation" {
+    var buf: [16]u8 = .{0} ** 16;
+    var mem = GuestMemory{ .base = &buf, .base_addr = 0x00400000 };
+    mem.write32(0x00400004, 0xCAFEBABE);
+    try testing.expectEqual(@as(u32, 0xCAFEBABE), mem.read32(0x00400004));
+    // Verify raw buffer position (offset 4 from base)
+    try testing.expectEqual(@as(u8, 0xBE), buf[4]);
+    try testing.expectEqual(@as(u8, 0xBA), buf[5]);
+}
+
+test "guest memory: read64/write64" {
+    var buf: [16]u8 = .{0} ** 16;
+    var mem = GuestMemory{ .base = &buf };
+    mem.write64(0, 0xDEADBEEFCAFEBABE);
+    try testing.expectEqual(@as(u64, 0xDEADBEEFCAFEBABE), mem.read64(0));
+    // Low 32 bits at offset 0, high 32 bits at offset 4
+    try testing.expectEqual(@as(u32, 0xCAFEBABE), mem.read32(0));
+    try testing.expectEqual(@as(u32, 0xDEADBEEF), mem.read32(4));
+}
+
+test "guest memory: readSlice returns correct view" {
+    var buf = [_]u8{ 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22 };
+    var mem = GuestMemory{ .base = &buf };
+    const slice = mem.readSlice(2, 4).?;
+    try testing.expectEqual(@as(usize, 4), slice.len);
+    try testing.expectEqual(@as(u8, 0xCC), slice[0]);
+    try testing.expectEqual(@as(u8, 0xDD), slice[1]);
+    // Out of bounds returns null
+    try testing.expect(mem.readSlice(100, 4) == null);
+}
+
+test "guest memory: guestAlloc bump allocator" {
+    var buf: [256]u8 = .{0xAA} ** 256;
+    var mem = GuestMemory{ .base = &buf, .base_addr = 0x1000, .heap_start = 64, .heap_cursor = 64 };
+    const addr1 = mem.guestAlloc(8);
+    try testing.expect(addr1 != 0);
+    try testing.expectEqual(@as(u32, 0x1000 + 64), addr1);
+    // Allocated area should be zeroed
+    try testing.expectEqual(@as(u8, 0), buf[64]);
+    // Second allocation should be after the first (16-byte aligned)
+    const addr2 = mem.guestAlloc(4);
+    try testing.expectEqual(@as(u32, 0x1000 + 80), addr2); // 8 rounded up to 16
+    // Allocation beyond buffer should return 0
+    try testing.expectEqual(@as(u32, 0), mem.guestAlloc(1024));
+}
+
+test "guest memory: guestAlloc returns 0 when heap not configured" {
+    var buf: [64]u8 = .{0} ** 64;
+    var mem = GuestMemory{ .base = &buf };
+    // heap_start == 0 means heap is not configured
+    try testing.expectEqual(@as(u32, 0), mem.guestAlloc(16));
+}
+
+test "guest memory: write protection blocks writes to PE image" {
+    var buf: [256]u8 = .{0} ** 256;
+    var mem = GuestMemory{ .base = &buf, .base_addr = 0, .pe_image_end = 128 };
+    // No writable sections registered — writes inside PE image should be blocked
+    mem.write8(64, 0xFF);
+    try testing.expectEqual(@as(u8, 0), buf[64]); // write was blocked
+
+    // Writes outside PE image (>= pe_image_end) should succeed
+    mem.write8(128, 0xAB);
+    try testing.expectEqual(@as(u8, 0xAB), buf[128]);
+}
+
+test "guest memory: writable section allows writes" {
+    var buf: [256]u8 = .{0} ** 256;
+    var mem = GuestMemory{ .base = &buf, .base_addr = 0, .pe_image_end = 128 };
+    mem.addWritableSection(32, 96); // allow writes to range [32, 96)
+
+    // Write inside writable section — should succeed
+    mem.write8(64, 0xCD);
+    try testing.expectEqual(@as(u8, 0xCD), buf[64]);
+
+    // Write outside writable section but inside PE image — blocked
+    mem.write8(16, 0xEF);
+    try testing.expectEqual(@as(u8, 0), buf[16]);
+}
+
+test "guest memory: read/write 128-bit" {
+    var buf: [32]u8 = .{0} ** 32;
+    var mem = GuestMemory{ .base = &buf };
+    const val: u128 = 0xDEADBEEFCAFEBABE_1234567890ABCDEF;
+    mem.write128(0, val);
+    try testing.expectEqual(val, mem.read128(0));
+}
+
+test "guest memory: writeSlice returns mutable view" {
+    var buf = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    var mem = GuestMemory{ .base = &buf };
+    const slice = mem.writeSlice(2, 3).?;
+    try testing.expectEqual(@as(usize, 3), slice.len);
+    slice[0] = 0xAA;
+    slice[1] = 0xBB;
+    try testing.expectEqual(@as(u8, 0xAA), buf[2]);
+    try testing.expectEqual(@as(u8, 0xBB), buf[3]);
+    // Out of bounds returns null
+    try testing.expect(mem.writeSlice(100, 4) == null);
+}

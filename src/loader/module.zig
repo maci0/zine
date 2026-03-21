@@ -9,6 +9,10 @@ const pe = @import("../pe.zig");
 const log = @import("../log.zig");
 const builtin = @import("builtin");
 
+/// PE resource directory constants.
+const RESOURCE_DATA_IS_DIRECTORY: u32 = 0x80000000;
+const RESOURCE_OFFSET_MASK: u32 = 0x7FFFFFFF;
+
 /// Open a file portably — on WASI, resolves absolute paths through preopened dirs.
 fn openFilePortable(path: []const u8) !std.fs.File {
     if (comptime builtin.os.tag == .wasi) {
@@ -163,7 +167,8 @@ pub const Module = struct {
                         const reloc_type = entry >> 12;
                         const offset = entry & 0x0FFF;
 
-                        if (reloc_type == 3) { // IMAGE_REL_BASED_HIGHLOW
+                        const IMAGE_REL_BASED_HIGHLOW = 3;
+                        if (reloc_type == IMAGE_REL_BASED_HIGHLOW) {
                             const patch_addr = block.VirtualAddress + offset;
                             const ptr = @as(*align(1) u32, @ptrCast(&mapped_slice[patch_addr]));
                             ptr.* = ptr.* +% @as(u32, @truncate(@as(usize, @bitCast(delta))));
@@ -197,9 +202,9 @@ pub const Module = struct {
         self.allocator.destroy(self);
     }
 
-    /// Resolves an exported symbol by name and returns its virtual address.
-    /// This function handles named exports but returns null for forwarded exports
-    /// (e.g. NTDLL.RtlAllocateHeap -> KERNEL32.HeapAlloc).
+    /// Resolves a named exported symbol and returns its virtual address.
+    /// Returns null for forwarded exports (e.g. NTDLL.RtlAllocateHeap →
+    /// KERNEL32.HeapAlloc) which are not yet followed.
     pub fn getExport(self: *Module, name: []const u8) ?usize {
         const opt_header = &self.parser.getNtHeaders().OptionalHeader;
         const export_dir_rva = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
@@ -259,7 +264,7 @@ pub const Module = struct {
         var type_offset: ?u32 = null;
         for (0..num_type_entries) |i| {
             if (type_entries[i].NameOrId == resource_type) {
-                type_offset = type_entries[i].OffsetToData & 0x7FFFFFFF;
+                type_offset = type_entries[i].OffsetToData & RESOURCE_OFFSET_MASK;
                 break;
             }
         }
@@ -269,13 +274,13 @@ pub const Module = struct {
         const num_name_entries = name_dir.NumberOfNamedEntries + name_dir.NumberOfIdEntries;
         if (num_name_entries == 0) return null;
         const name_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + type_offset.? + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
-        const name_offset = name_entries[0].OffsetToData & 0x7FFFFFFF;
+        const name_offset = name_entries[0].OffsetToData & RESOURCE_OFFSET_MASK;
 
         const lang_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset])));
         if (lang_dir.NumberOfIdEntries == 0 and lang_dir.NumberOfNamedEntries == 0) return null;
-        
+
         const lang_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
-        const data_offset = lang_entries[0].OffsetToData & 0x7FFFFFFF;
+        const data_offset = lang_entries[0].OffsetToData & RESOURCE_OFFSET_MASK;
 
         const data_entry = @as(*pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + data_offset])));
 
@@ -301,7 +306,7 @@ pub const Module = struct {
         var type_offset: ?u32 = null;
         for (0..num_type_entries) |i| {
             if (type_entries[i].NameOrId == resource_type) {
-                type_offset = type_entries[i].OffsetToData & 0x7FFFFFFF;
+                type_offset = type_entries[i].OffsetToData & RESOURCE_OFFSET_MASK;
                 break;
             }
         }
@@ -314,7 +319,7 @@ pub const Module = struct {
         var name_offset: ?u32 = null;
         for (0..num_name_entries) |i| {
             if (name_entries[i].NameOrId == resource_id) {
-                name_offset = name_entries[i].OffsetToData & 0x7FFFFFFF;
+                name_offset = name_entries[i].OffsetToData & RESOURCE_OFFSET_MASK;
                 break;
             }
         }
@@ -322,10 +327,77 @@ pub const Module = struct {
 
         const lang_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset.?])));
         if (lang_dir.NumberOfIdEntries == 0 and lang_dir.NumberOfNamedEntries == 0) return null;
-        
-        const lang_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset.? + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
-        const data_offset = lang_entries[0].OffsetToData & 0x7FFFFFFF;
 
+        const lang_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset.? + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
+        const data_offset = lang_entries[0].OffsetToData & RESOURCE_OFFSET_MASK;
+
+        const data_entry = @as(*pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + data_offset])));
+
+        if (data_entry.OffsetToData + data_entry.Size > self.mapped_memory.len) return null;
+        return self.mapped_memory[data_entry.OffsetToData .. data_entry.OffsetToData + data_entry.Size];
+    }
+
+    /// Look up a resource by type ID and string name (e.g., Delphi form resources).
+    /// Named resource entries have bit 31 set in NameOrId, pointing to a
+    /// UTF-16 name string in the resource directory.
+    pub fn getResourceByName(self: *Module, resource_type: u32, name: []const u8) ?[]const u8 {
+        const opt_header = &self.parser.getNtHeaders().OptionalHeader;
+        const res_dir_rva = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
+        if (res_dir_rva == 0) return null;
+
+        const pe_res = @import("../pe_resources.zig");
+        const root_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva])));
+        const num_type_entries = root_dir.NumberOfNamedEntries + root_dir.NumberOfIdEntries;
+        const type_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
+
+        // Find the type subdirectory
+        var type_offset: ?u32 = null;
+        for (0..num_type_entries) |i| {
+            if (type_entries[i].NameOrId == resource_type) {
+                type_offset = type_entries[i].OffsetToData & RESOURCE_OFFSET_MASK;
+                break;
+            }
+        }
+        if (type_offset == null) return null;
+
+        // Search name entries — named entries have bit 31 set
+        const name_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + type_offset.?])));
+        const num_name_entries = name_dir.NumberOfNamedEntries + name_dir.NumberOfIdEntries;
+        const name_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + type_offset.? + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
+
+        var name_offset: ?u32 = null;
+        for (0..num_name_entries) |i| {
+            const entry = name_entries[i];
+            if (entry.NameOrId & RESOURCE_DATA_IS_DIRECTORY != 0) {
+                // Named entry — compare with the UTF-16 name
+                const name_rva = entry.NameOrId & RESOURCE_OFFSET_MASK;
+                const str_off = res_dir_rva + name_rva;
+                if (str_off + 2 >= self.mapped_memory.len) continue;
+                const str_len = @as(*const u16, @ptrCast(@alignCast(&self.mapped_memory[str_off]))).*;
+                if (str_len != name.len) continue;
+                const str_data = @as([*]const u16, @ptrCast(@alignCast(&self.mapped_memory[str_off + 2])));
+                var matches = true;
+                for (0..name.len) |j| {
+                    const wc = str_data[j];
+                    const nc: u16 = name[j];
+                    // Case-insensitive compare
+                    const wl = if (wc >= 'A' and wc <= 'Z') wc + 32 else wc;
+                    const nl = if (nc >= 'A' and nc <= 'Z') nc + 32 else nc;
+                    if (wl != nl) { matches = false; break; }
+                }
+                if (matches) {
+                    name_offset = entry.OffsetToData & RESOURCE_OFFSET_MASK;
+                    break;
+                }
+            }
+        }
+        if (name_offset == null) return null;
+
+        // Get the language entry and data
+        const lang_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset.?])));
+        if (lang_dir.NumberOfIdEntries == 0 and lang_dir.NumberOfNamedEntries == 0) return null;
+        const lang_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset.? + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
+        const data_offset = lang_entries[0].OffsetToData & RESOURCE_OFFSET_MASK;
         const data_entry = @as(*pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + data_offset])));
 
         if (data_entry.OffsetToData + data_entry.Size > self.mapped_memory.len) return null;

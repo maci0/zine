@@ -124,14 +124,14 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
 }
 
 /// Creates an Open dialog box that lets the user specify the drive, directory, and the name of a file or set of files to be opened.
-/// Implementation status: Partially implemented (delegates to the host browser's file dialog).
+/// Implementation status: Partially implemented (delegates to the host browser's file dialog)
 pub fn GetOpenFileNameA(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("COMDLG32: GetOpenFileNameA({x})\n", .{lpofn_ptr});
     return commonFileDialogA(lpofn_ptr, false);
 }
 
 /// Creates a Save dialog box that lets the user specify the drive, directory, and name of a file to save.
-/// Implementation status: Partially implemented (delegates to the host browser's file dialog).
+/// Implementation status: Partially implemented (delegates to the host browser's file dialog)
 pub fn GetSaveFileNameA(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("COMDLG32: GetSaveFileNameA({x})\n", .{lpofn_ptr});
     return commonFileDialogA(lpofn_ptr, true);
@@ -246,21 +246,21 @@ fn commonFileDialogW(lpofn_ptr: usize, is_save: bool) i32 {
 }
 
 /// Creates an Open dialog box that lets the user specify the drive, directory, and the name of a file or set of files to be opened (Unicode version).
-/// Implementation status: Partially implemented (delegates to the host browser's file dialog).
+/// Implementation status: Partially implemented (delegates to the host browser's file dialog)
 pub fn GetOpenFileNameW(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("COMDLG32: GetOpenFileNameW({x})\n", .{lpofn_ptr});
     return commonFileDialogW(lpofn_ptr, false);
 }
 
 /// Creates a Save dialog box that lets the user specify the drive, directory, and name of a file to save (Unicode version).
-/// Implementation status: Partially implemented (delegates to the host browser's file dialog).
+/// Implementation status: Partially implemented (delegates to the host browser's file dialog)
 pub fn GetSaveFileNameW(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("COMDLG32: GetSaveFileNameW({x})\n", .{lpofn_ptr});
     return commonFileDialogW(lpofn_ptr, true);
 }
 
 /// Creates a Color dialog box that lets the user select a color.
-/// Implementation status: Stub (always returns cancelled).
+/// Implementation status: Stub (always returns cancelled)
 pub fn stub_ChooseColorA(lpcc: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpcc;
     if (trace.enable_tracing) trace.print("COMDLG32: ChooseColorA -> 0 (cancelled)\n", .{});
@@ -268,7 +268,7 @@ pub fn stub_ChooseColorA(lpcc: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 /// Creates a Font dialog box that lets the user choose attributes for a logical font.
-/// Implementation status: Stub (always returns cancelled).
+/// Implementation status: Stub (always returns cancelled)
 pub fn stub_ChooseFontA(lpcf: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpcf;
     if (trace.enable_tracing) trace.print("COMDLG32: ChooseFontA -> 0 (cancelled)\n", .{});
@@ -276,7 +276,7 @@ pub fn stub_ChooseFontA(lpcf: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 /// Displays a Print dialog box or a Print Setup dialog box.
-/// Implementation status: Stub (always returns cancelled).
+/// Implementation status: Stub (always returns cancelled)
 pub fn stub_PrintDlgA(lppd: usize) callconv(w32cc.WINAPI) i32 {
     _ = lppd;
     if (trace.enable_tracing) trace.print("COMDLG32: PrintDlgA -> 0 (cancelled)\n", .{});
@@ -375,18 +375,18 @@ fn parseFilterStringW(filter_ptr: u32) ?[]const u8 {
 }
 
 /// Stub function returning 0.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 pub fn stub_ret0_0() callconv(w32cc.WINAPI) u32 {
     return 0;
 }
 /// Stub function returning 0 with one argument.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 pub fn stub_ret0_1(a: usize) callconv(w32cc.WINAPI) usize {
     _ = a;
     return 0;
 }
 /// Stub function returning 0 with three arguments.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 pub fn stub_ret0_3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) i32 {
     _ = a;
     _ = b;

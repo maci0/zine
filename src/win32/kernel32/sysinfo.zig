@@ -3,7 +3,7 @@ const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
 
 /// Retrieves the process affinity mask for the specified process and the system affinity mask for the system.
-/// Implementation status: Partially implemented (reports 1 CPU).
+/// Implementation status: Partially implemented (reports 1 CPU)
 pub fn GetProcessAffinityMask(hProcess: usize, lpProcessAffinityMask: ?*u32, lpSystemAffinityMask: ?*u32) callconv(w32cc.WINAPI) i32 {
     _ = hProcess;
     if (lpProcessAffinityMask) |p| p.* = 1;
@@ -30,7 +30,7 @@ pub fn GetNativeSystemInfo(si: *[9]u32) callconv(w32cc.WINAPI) void {
 }
 
 /// Determines whether the specified processor feature is supported by the current computer.
-/// Implementation status: Partially implemented.
+/// Implementation status: Partially implemented
 pub fn IsProcessorFeaturePresent(ProcessorFeature: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: IsProcessorFeaturePresent({d})\n", .{ProcessorFeature});
     return switch (ProcessorFeature) {
@@ -46,41 +46,41 @@ pub fn IsProcessorFeaturePresent(ProcessorFeature: u32) callconv(w32cc.WINAPI) i
 }
 
 /// Verifies that the calling process has read access to the specified range of memory.
-/// Implementation status: Partially implemented (only checks for NULL).
+/// Implementation status: Partially implemented (only checks for NULL)
 pub fn IsBadReadPtr(lp: usize, ucb: usize) callconv(w32cc.WINAPI) i32 {
     _ = ucb;
     return if (lp == 0) 1 else 0;
 }
 
 /// Verifies that the calling process has write access to the specified range of memory.
-/// Implementation status: Partially implemented (only checks for NULL).
+/// Implementation status: Partially implemented (only checks for NULL)
 pub fn IsBadWritePtr(lp: usize, ucb: usize) callconv(w32cc.WINAPI) i32 {
     _ = ucb;
     return if (lp == 0) 1 else 0;
 }
 
 /// Determines whether the calling process has read access to the memory at the specified address.
-/// Implementation status: Partially implemented (only checks for NULL).
+/// Implementation status: Partially implemented (only checks for NULL)
 pub fn IsBadCodePtr(lpfn: usize) callconv(w32cc.WINAPI) i32 {
     return if (lpfn == 0) 1 else 0;
 }
 
 /// Verifies that the calling process has read access to a range of memory containing a string.
-/// Implementation status: Partially implemented (only checks for NULL).
+/// Implementation status: Partially implemented (only checks for NULL)
 pub fn IsBadStringPtrA(lpsz: usize, ucchMax: usize) callconv(w32cc.WINAPI) i32 {
     _ = ucchMax;
     return if (lpsz == 0) 1 else 0;
 }
 
 /// Verifies that the calling process has read access to a range of memory containing a string (Unicode version).
-/// Implementation status: Partially implemented (only checks for NULL).
+/// Implementation status: Partially implemented (only checks for NULL)
 pub fn IsBadStringPtrW(lpsz: usize, ucchMax: usize) callconv(w32cc.WINAPI) i32 {
     _ = ucchMax;
     return if (lpsz == 0) 1 else 0;
 }
 
 /// Multiplies two 32-bit values and then divides the 64-bit result by a third 32-bit value.
-/// Implementation status: Partially implemented.
+/// Implementation status: Partially implemented
 pub fn MulDiv(nNumber: i32, nNumerator: i32, nDenominator: i32) callconv(w32cc.WINAPI) i32 {
     if (nDenominator == 0) return -1;
     const result = @divTrunc(@as(i64, nNumber) * @as(i64, nNumerator), @as(i64, nDenominator));
@@ -89,7 +89,7 @@ pub fn MulDiv(nNumber: i32, nNumerator: i32, nDenominator: i32) callconv(w32cc.W
 }
 
 /// Retrieves the size of a memory block allocated from a heap.
-/// Implementation status: Partially implemented.
+/// Implementation status: Partially implemented
 pub fn HeapSize(hHeap: usize, dwFlags: u32, lpMem: usize) callconv(w32cc.WINAPI) usize {
     _ = hHeap;
     _ = dwFlags;
@@ -99,7 +99,7 @@ pub fn HeapSize(hHeap: usize, dwFlags: u32, lpMem: usize) callconv(w32cc.WINAPI)
 }
 
 /// Validates the specified heap.
-/// Implementation status: No-op fallback (returns TRUE).
+/// Implementation status: No-op fallback (returns TRUE)
 pub fn stub_HeapValidate(hHeap: usize, dwFlags: u32, lpMem: usize) callconv(w32cc.WINAPI) i32 {
     _ = hHeap;
     _ = dwFlags;
@@ -108,7 +108,7 @@ pub fn stub_HeapValidate(hHeap: usize, dwFlags: u32, lpMem: usize) callconv(w32c
 }
 
 /// Generates a simple tone on the speaker.
-/// Implementation status: No-op fallback.
+/// Implementation status: No-op fallback
 pub fn stub_Beep(dwFreq: u32, dwDuration: u32) callconv(w32cc.WINAPI) i32 {
     _ = dwFreq;
     _ = dwDuration;
@@ -116,13 +116,13 @@ pub fn stub_Beep(dwFreq: u32, dwDuration: u32) callconv(w32cc.WINAPI) i32 {
 }
 
 /// Causes the file I/O functions to use the OEM character set.
-/// Implementation status: Stub.
+/// Implementation status: Stub
 pub fn stub_SetFileApisToOEM() callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: SetFileApisToOEM()\n", .{});
 }
 
 /// Retrieves information about the system's current usage of both physical and virtual memory.
-/// Implementation status: Partially implemented (returns hardcoded values).
+/// Implementation status: Partially implemented (returns hardcoded values)
 pub fn GlobalMemoryStatusEx(buf: [*]u8) callconv(w32cc.WINAPI) i32 {
     @memset(buf[0..64], 0);
     @as(*align(1) u32, @ptrCast(buf)).* = 64;
@@ -137,14 +137,14 @@ pub fn GlobalMemoryStatusEx(buf: [*]u8) callconv(w32cc.WINAPI) i32 {
 }
 
 /// Enables features for a specified heap.
-/// Implementation status: Partially implemented (always returns TRUE).
+/// Implementation status: Partially implemented (always returns TRUE)
 pub fn HeapSetInformation(hHeap: usize, HeapInformationClass: u32, HeapInformation: usize, HeapInformationLength: usize) callconv(w32cc.WINAPI) i32 {
     _ = .{ hHeap, HeapInformationClass, HeapInformation, HeapInformationLength };
     return 1;
 }
 
 /// Suspends the current thread until the specified condition is met or the time-out interval elapses.
-/// Implementation status: Partially implemented.
+/// Implementation status: Partially implemented
 pub fn SleepEx(dwMilliseconds: u32, bAlertable: i32) callconv(w32cc.WINAPI) u32 {
     _ = bAlertable;
     if (dwMilliseconds > 0) {

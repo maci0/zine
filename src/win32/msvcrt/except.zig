@@ -7,7 +7,7 @@ const platform = @import("../../platform.zig");
 // --- setjmp / longjmp / EH_prolog ---
 
 /// Saves the current execution context for later use by longjmp.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub const setjmp3 = if (platform.is_x86) &stub_setjmp3_x86 else if (platform.is_x86_64) &stub_setjmp3_x64 else &stub_setjmp3_generic;
 
 fn stub_setjmp3_x86() callconv(.naked) i32 {
@@ -41,7 +41,7 @@ fn stub_setjmp3_generic(_: usize) callconv(.c) i32 {
 }
 
 /// Standard MSVC exception handling prolog.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub const stub_EH_prolog = if (platform.is_x86) &EH_prolog_x86 else if (platform.is_x86_64) &stub_EH_prolog_x64 else &EH_prolog_generic;
 
 fn EH_prolog_x86() callconv(.naked) void {
@@ -65,7 +65,7 @@ fn stub_EH_prolog_x64() callconv(.c) void {
 fn EH_prolog_generic() callconv(.c) void {}
 
 /// Restores the execution context saved by a previous call to setjmp.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub const longjmp = if (platform.is_x86) &stub_longjmp_x86 else if (platform.is_x86_64) &stub_longjmp_x64 else &stub_longjmp_generic;
 
 fn stub_longjmp_x86() callconv(.naked) void {
@@ -98,7 +98,7 @@ fn stub_longjmp_generic(_: usize, _: i32) callconv(.c) void {
 
 /// --- SEH Exception Handlers ---
 /// MSVC internal exception handler that walks the scope table to find an __except filter.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub fn except_handler3(
     exception_record_ptr: usize,
     establisher_frame: usize,
@@ -211,7 +211,7 @@ fn call_seh_filter_wasm(filter_addr: usize, frame_ebp: usize) i32 {
 }
 
 /// Jumps to a SEH handler function with the specified frame EBP.
-/// Implementation status: Fully implemented.
+/// Implementation status: Fully implemented
 pub const jump_to_seh_handler = if (platform.is_x86) jump_to_seh_handler_x86 else jump_to_seh_handler_x64;
 
 fn jump_to_seh_handler_x86(handler_addr: usize, frame_ebp: usize) noreturn {

@@ -307,7 +307,7 @@ Each API is categorized by its emulation fidelity:
 ## ADVAPI32.dll / MFC42.dll
 | Status | API | Comments |
 | :---: | :--- | :--- |
-| 🟡 | `ADVAPI32.dll` | `RegOpenKeyExA`, `RegQueryValueExA`, `RegCloseKey` safely return failure states ensuring logic skips registry lock lookups. |
+| 🟢 | `ADVAPI32.dll` | 85+ exports across registry (RegOpenKeyExA/W, RegCreateKeyExA/W, RegQueryValueExA/W, RegSetValueExA/W, RegDeleteKeyA/W, RegEnumKeyA/W, RegEnumValueA/W, etc. with TOML-backed configurable data via `registry_config.zig`), security (OpenProcessToken, AdjustTokenPrivileges, LookupPrivilegeValueA/W, GetFileSecurityW, IsTextUnicode, AllocateAndInitializeSid, etc.), services (OpenSCManagerA, OpenServiceA, CreateServiceA, ControlService, QueryServiceStatus, CloseServiceHandle, etc.), and user management (GetUserNameA/W). |
 | 🟡 | `MFC42.dll` | Dynamically intercepts all ordinal imports, routing them to a generic dummy pointer (`stub_mfc_dummy`), allowing complex visual executables like `MAKEHM.EXE` to print CLI usage bounds without faulting out. |
 
 ---
@@ -319,15 +319,16 @@ Each API is categorized by its emulation fidelity:
 | 🟢 | `DSOUND` | `DirectSoundCreate` (ordinal 1) | COM vtable stubs for IDirectSound and IDirectSoundBuffer. CreateSoundBuffer, SetFormat, Lock/Unlock, Play/Stop, GetStatus, SetVolume, GetCurrentPosition all stubbed. |
 | 🟡 | `DINPUT` | `DirectInputCreateA` | COM vtable stubs for IDirectInput and IDirectInputDevice. EnumDevices, CreateDevice, SetDataFormat, SetCooperativeLevel, SetProperty, Acquire, GetDeviceState all stubbed. |
 | 🟡 | `DINPUT8` | `DirectInput8Create` | Reuses DINPUT COM vtable stubs for IDirectInput and IDirectInputDevice. |
-| 🟡 | `WINMM` | `timeGetTime` / `timeBeginPeriod` / `timeEndPeriod` | Timer stubs returning reasonable values. |
+| 🟢 | `WINMM` | 60 exports: `timeGetTime`, `timeBeginPeriod`, `timeEndPeriod`, `timeSetEvent`, `timeKillEvent` (with real timer threads), `waveOutOpen/Write/Close/PrepareHeader/UnprepareHeader/SetVolume/GetVolume/Reset/GetPosition`, `midiOut*`, `mixer*`, `aux*`, `PlaySoundA`, `joyGet*`, `mciSendCommandA`, etc. | Partial implementation — timers and waveOut have real logic; other APIs are stubs. |
 
 ---
 
 ## OLEAUT32.dll
 | Status | API | Comments |
 | :---: | :--- | :--- |
-| 🟡 | `SysFreeString` | Stub (no-op). |
-| 🟡 | `SysAllocStringLen` | Stub returning null. |
+| 🟡 | `SysFreeString`, `SysAllocString`, `SysAllocStringLen`, `SysStringLen`, `SysStringByteLen` | BSTR string management stubs. |
+| 🟡 | `VariantClear`, `VariantInit`, `VariantChangeTypeEx`, `VariantCopyInd` | VARIANT handling stubs. |
+| 🟡 | Ordinal exports (2, 4, 6, 7, 8, 9, 15, 147, 161, 162, 165, 277) | Additional OLE Automation stubs. |
 
 ---
 
@@ -341,9 +342,9 @@ Each API is categorized by its emulation fidelity:
 ## SHELL32.dll / COMCTL32.dll / OLE32.dll
 | Status | DLL | API | Comments |
 | :---: | :--- | :--- | :--- |
-| 🟡 | `SHELL32` | `ShellExecuteA/W`, `SHGetSpecialFolderPathA`, `SHGetFileInfoA`, `SHBrowseForFolderA`, `DragAcceptFiles`, `Shell_NotifyIcon`, etc. (29 exports) | Mix of custom implementations and generic stubs. |
-| 🟡 | `COMCTL32` | `InitCommonControls`, `InitCommonControlsEx`, `ImageList_Create/Destroy/Add/GetImageCount`, `TrackMouseEvent`, `CreateStatusWindow`, etc. (20 exports) | Mix of custom implementations and generic stubs. |
-| 🟡 | `OLE32` | `CoInitialize`, `CoInitializeEx`, `CoCreateInstance`, `CoTaskMemAlloc/Free`, `CoUninitialize`, `DoDragDrop`, etc. (21 exports) | Mix of custom implementations and generic stubs. |
+| 🟡 | `SHELL32` | `ShellExecuteA/W`, `SHGetSpecialFolderPathA`, `SHGetFileInfoA`, `SHBrowseForFolderA`, `DragAcceptFiles`, `Shell_NotifyIcon`, etc. (37 exports) | Mix of custom implementations and generic stubs. |
+| 🟡 | `COMCTL32` | `InitCommonControls`, `InitCommonControlsEx`, `ImageList_Create/Destroy/Add/GetImageCount`, `TrackMouseEvent`, `CreateStatusWindow`, `PropertySheet`, etc. (38 exports) | Mix of custom implementations and generic stubs. |
+| 🟡 | `OLE32` | `CoInitialize`, `CoInitializeEx`, `CoCreateInstance`, `CoTaskMemAlloc/Free`, `CoUninitialize`, `DoDragDrop`, WMI stubs, etc. (30 exports) | Mix of custom implementations and generic stubs. |
 
 ---
 
@@ -357,8 +358,8 @@ Each API is categorized by its emulation fidelity:
 ## WS2_32.dll / WSOCK32.dll / ICMP.dll
 | Status | DLL | API | Comments |
 | :---: | :--- | :--- | :--- |
-| 🟡 | `WS2_32` | `WSAStartup/Cleanup`, `socket`, `bind`, `listen`, `accept`, `connect`, `send/recv`, `select`, `htonl/htons/ntohl/ntohs`, `inet_addr/ntoa`, `gethostbyname/addr`, etc. (33 exports) | Custom implementations returning failure/dummy values for network operations. |
-| 🟡 | `WSOCK32` | 40 exports (26 named + 14 ordinals) | Thin compatibility layer forwarding to WS2_32 implementations. |
+| 🟡 | `WS2_32` | `WSAStartup/Cleanup`, `socket`, `bind`, `listen`, `accept`, `connect`, `send/recv`, `select`, `htonl/htons/ntohl/ntohs`, `inet_addr/ntoa`, `gethostbyname/addr`, etc. (76 exports including ordinal duplicates) | Custom implementations returning failure/dummy values for network operations. |
+| 🟡 | `WSOCK32` | 58 exports (30 named + 28 ordinals) | Thin compatibility layer forwarding to WS2_32 implementations. |
 | 🟡 | `ICMP` | `IcmpCreateFile`, `IcmpSendEcho2`, `IcmpCloseHandle` | Generic stubs. |
 
 ---
@@ -375,19 +376,25 @@ Each API is categorized by its emulation fidelity:
 ## Other Minor DLLs
 | Status | DLL | API | Comments |
 | :---: | :--- | :--- | :--- |
-| 🟡 | `NDDEAPI` | 11 ordinal-only exports | Generic stubs for legacy DDE networking. |
+| 🟡 | `NDDEAPI` | 13 ordinal-only exports | Generic stubs for legacy DDE networking. |
 | 🟡 | `CARDS` | `cdtInit`, `cdtTerm`, `cdtDraw`, `cdtDrawExt`, `cdtAnimate` | Generic stubs for Solitaire card rendering. |
 | 🟡 | `VDMDBG` | `VDMTerminateTaskWOW`, `VDMEnumTaskWOWEx` | Generic stubs for 16-bit VDM debugging. |
 | 🟡 | `MAG_HOOK` | `_FakeCursorMove@8`, `_SetZoomRect@8`, `_InstallEventHook@4` | Generic stubs. |
+| 🟡 | `MPR` | 25 `WNet*` exports (`WNetAddConnectionA/W`, `WNetCancelConnectionA/W`, `WNetGetConnectionA/W`, etc.) | Network provider stubs. |
+| 🟡 | `SETUPAPI` | 8 exports (`SetupDiGetClassDevsA/W`, `SetupDiEnumDeviceInterfaces`, etc.) | Device information stubs. |
+| 🟡 | `SHLWAPI` | 52 exports (`Path*`, `Str*`, `Url*` functions) | Shell lightweight utility stubs. |
+| 🟡 | `MSVCP60` | ~30 exports (`std::basic_string` stubs, `_Lockit`) | C++ standard library stubs. |
+| 🟡 | `MSPDB60` | 16 `MRE*`/`PDB*` stubs | WASM-only: PDB interface stubs for CL.EXE/LINK.EXE. |
+| 🟡 | `RCDLL` | 2 exports (`RC`, `Handler`) | WASM-only: Resource compiler stubs for RC.EXE. |
 
 ---
 
 ### GUI / Web UI Architecture
-- **Backend**: WebSocket server on port 1995 (`web_ui.zig`). Pushes binary RGBA framebuffer data and JSON control messages.
+- **Backend**: WebSocket server on port 1995 (`web_ui.zig`). Pushes binary BGRA framebuffer data and JSON control messages.
 - **Frontend**: Embedded `index.html` with Win2K/2000-styled CSS. Renders application window with titlebar (gradient blue), menu bar, canvas for DirectDraw output, taskbar with Start button and clock.
-- **Dialog rendering**: Custom dialog templates parsed from PE resources (`dialog_parser.zig`) with control class identification (Button, Static, Edit, ListBox, ComboBox, GroupBox). Rendered with Win2K 3D beveled controls, proper DLU-to-pixel scaling (1.75×1.875).
-- **Icon rendering**: PE icon resources extracted, base64-encoded, displayed in titlebar, taskbar, and as favicon.
-- **Menu rendering**: PE menu resources parsed (`menu_parser.zig`), sent as JSON, rendered as Win2K-styled dropdown menus with keyboard accelerator underlines.
+- **Dialog rendering**: Custom dialog templates parsed from PE resources (`loader/dialog_parser.zig`) with control class identification (Button, Static, Edit, ListBox, ComboBox, GroupBox). Rendered with Win2K 3D beveled controls, proper DLU-to-pixel scaling (1.75×1.875).
+- **Icon rendering**: PE icon resources extracted (`loader/icon_parser.zig`), base64-encoded, displayed in titlebar, taskbar, and as favicon.
+- **Menu rendering**: PE menu resources parsed (`loader/menu_parser.zig`), sent as JSON, rendered as Win2K-styled dropdown menus with keyboard accelerator underlines.
 - **Input forwarding**: Browser keyboard events sent via WebSocket JSON, mapped to Win32 virtual key codes, delivered via PeekMessageA/GetKeyboardState.
 
 ### Environmental Progress

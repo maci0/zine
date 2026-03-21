@@ -71,11 +71,6 @@ pub fn registerThunk(entry: ThunkEntry) u32 {
 ///   CD FE     INT 0xFE
 ///   xx xx xx xx  (little-endian thunk_id)
 pub fn writeThunkCode(memory: *cpu_mod.GuestMemory, addr: u32, thunk_id: u32) u32 {
-    if (addr == 0x01005A68) {
-        if (@import("../trace.zig").enable_tracing) {
-            @import("../trace.zig").print("WATCHPOINT: writeThunkCode to {X} (thunk {d})\n", .{ addr, thunk_id });
-        }
-    }
     memory.write8(addr, 0xCD);
     memory.write8(addr +% 1, 0xFE);
     memory.write32(addr +% 2, thunk_id);
@@ -262,8 +257,8 @@ fn callNativeN(comptime n: usize, addr: usize, args: [16]u32) u32 {
 }
 
 /// Generate a function type with N params. On x86, uses u32 params with
-/// WINAPI (stdcall). On x86_64, uses usize params with .c (SysV ABI)
-/// because the Zig stubs are compiled for Linux SysV, not Windows x64.
+/// WINAPI (stdcall). On x86_64, uses usize params with WINAPI (Win64:
+/// RCX, RDX, R8, R9) to match the calling convention of the Zig stubs.
 fn FnTypeForArity(comptime n: usize) type {
     const is_64 = comptime @import("../platform.zig").is_x86_64;
     const param_type = if (is_64) usize else u32;
@@ -387,6 +382,15 @@ pub fn isNativeImport(addr: u32) bool {
 }
 
 pub const getStdcallCleanup = getParamBytes;
+
+/// Combined lookup: returns (is_cdecl, param_bytes) in a single binary search.
+/// Used by dispatchNativeCall to avoid 3 separate lookups for the same address.
+pub fn getImportInfo(addr: u32) struct { is_cdecl: bool, param_bytes: u32 } {
+    if (findImport(@as(usize, addr))) |entry| {
+        return .{ .is_cdecl = entry.is_cdecl, .param_bytes = entry.param_bytes };
+    }
+    return .{ .is_cdecl = false, .param_bytes = 0 };
+}
 
 // -----------------------------------------------------------------------
 // Unresolved Import Name Table

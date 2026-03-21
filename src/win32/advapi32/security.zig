@@ -2,7 +2,6 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
 
-/// OpenProcessToken
 /// Implementation status: Partially implemented
 pub fn OpenProcessToken(ProcessHandle: usize, DesiredAccess: u32, TokenHandle: ?*u32) callconv(w32cc.WINAPI) i32 {
     _ = ProcessHandle;
@@ -12,7 +11,6 @@ pub fn OpenProcessToken(ProcessHandle: usize, DesiredAccess: u32, TokenHandle: ?
     return 1;
 }
 
-/// AdjustTokenPrivileges
 /// Implementation status: Partially implemented
 pub fn AdjustTokenPrivileges(TokenHandle: usize, DisableAllPrivileges: i32, NewState: usize, BufferLength: u32, PreviousState: usize, ReturnLength: usize) callconv(w32cc.WINAPI) i32 {
     _ = TokenHandle;
@@ -58,7 +56,6 @@ pub fn stub_OpenThreadToken(ThreadHandle: usize, DesiredAccess: u32, OpenAsSelf:
     return 1;
 }
 
-/// GetFileSecurityW
 /// Implementation status: Partially implemented
 pub fn GetFileSecurityW(lpFileName: usize, RequestedInformation: u32, pSecurityDescriptor: usize, nLength: u32, lpnLengthNeeded: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpFileName;
@@ -209,4 +206,38 @@ pub fn stub_AllocateAndInitializeSid(
 
 test "FreeSid returns NULL" {
     try std.testing.expectEqual(@as(usize, 0), FreeSid(0x1234));
+}
+
+// -------------------------------------------------------------------------
+// Security / account lookup stubs (moved from misc.zig)
+// -------------------------------------------------------------------------
+
+/// LookupAccountNameW — stub returns FALSE (not found).
+pub fn stub_LookupAccountNameW(lpSystemName: usize, lpAccountName: usize, Sid: usize, cbSid: usize, ReferencedDomainName: usize, cchReferencedDomainName: usize, peUse: usize) callconv(w32cc.WINAPI) i32 {
+    _ = .{ lpSystemName, lpAccountName, Sid, cbSid, ReferencedDomainName, cchReferencedDomainName, peUse };
+    if (trace.enable_tracing) trace.print("ADVAPI32: LookupAccountNameW -> 0\n", .{});
+    return 0;
+}
+
+/// LookupAccountSidA — stub returns FALSE (not found).
+pub fn stub_LookupAccountSidA(lpSystemName: usize, Sid: usize, Name: usize, cchName: usize, ReferencedDomainName: usize, cchReferencedDomainName: usize, peUse: usize) callconv(w32cc.WINAPI) i32 {
+    _ = .{ lpSystemName, Sid, Name, cchName, ReferencedDomainName, cchReferencedDomainName, peUse };
+    if (trace.enable_tracing) trace.print("ADVAPI32: LookupAccountSidA -> 0\n", .{});
+    return 0;
+}
+
+/// DeleteAce — stub returns TRUE.
+pub fn stub_DeleteAce(pAcl: usize, dwAceIndex: u32) callconv(w32cc.WINAPI) i32 {
+    _ = .{ pAcl, dwAceIndex };
+    if (trace.enable_tracing) trace.print("ADVAPI32: DeleteAce -> 1\n", .{});
+    return 1;
+}
+
+/// Determines whether a security descriptor grants a specified set of access rights.
+pub fn AccessCheck(pSecurityDescriptor: usize, ClientToken: usize, DesiredAccess: u32, GenericMapping: usize, PrivilegeSet: usize, PrivilegeSetLength: usize, GrantedAccess: ?*u32, AccessStatus: ?*i32) callconv(w32cc.WINAPI) i32 {
+    _ = .{ pSecurityDescriptor, ClientToken, DesiredAccess, GenericMapping, PrivilegeSet, PrivilegeSetLength };
+    if (trace.enable_tracing) trace.print("ADVAPI32: AccessCheck -> TRUE (access granted)\n", .{});
+    if (GrantedAccess) |p| p.* = DesiredAccess;
+    if (AccessStatus) |p| p.* = 1; // TRUE = access granted
+    return 1; // TRUE
 }

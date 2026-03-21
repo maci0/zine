@@ -209,7 +209,7 @@ pub fn getDcDib(dc_handle: usize) ?*const DibInfo {
 }
 
 /// Registers GDI32.dll built-in exports in the environment.
-/// Implementation status: Partially implemented.
+/// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "GDI32.dll";
     const stub = @import("shared.zig");
@@ -309,6 +309,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "EndDoc", stub.stub_args1);
     try environment.addBuiltinExportComptime(m, "LPtoDP", stub.stub_args3);
     try environment.addBuiltinExportComptime(m, "EnumFontsW", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "GetTextFaceA", dc.GetTextFaceA);
     try environment.addBuiltinExportComptime(m, "GetTextFaceW", stub.stub_args3);
     try environment.addBuiltinExportComptime(m, "SetBrushOrgEx", stub.stub_args4);
     try environment.addBuiltinExportComptime(m, "GetPaletteEntries", stub.stub_args4);
@@ -326,7 +327,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "EnumMetaFile", stub.stub_args4);
     try environment.addBuiltinExportComptime(m, "PlayMetaFileRecord", stub.stub_args4);
     try environment.addBuiltinExportComptime(m, "PlayEnhMetaFile", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "SetViewportOrgEx", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "SetViewportOrgEx", dc.SetViewportOrgEx);
     try environment.addBuiltinExportComptime(m, "GetEnhMetaFileHeader", stub.stub_args3);
     try environment.addBuiltinExportComptime(m, "GetBitmapBits", stub.stub_args3);
     try environment.addBuiltinExportComptime(m, "GetEnhMetaFileBits", stub.stub_args3);
@@ -352,13 +353,28 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "DPtoLP", stub.stub_args3);
     try environment.addBuiltinExportComptime(m, "ScaleWindowExtEx", stub.stub_args6);
 
-    // --- Notepad2 GDI32 stubs ---
+    // --- Unicode (W) GDI32 stubs ---
     try environment.addBuiltinExportComptime(m, "GetTextExtentExPointW", dc.GetTextExtentExPointA);
     try environment.addBuiltinExportComptime(m, "CreateFontW", object.CreateFontA);
 
     // --- hgb.exe GDI32 stubs ---
     try environment.addBuiltinExportComptime(m, "GetWindowOrgEx", stub.stub_args2);
     try environment.addBuiltinExportComptime(m, "GetSystemPaletteEntries", stub.stub_args4);
-    try environment.addBuiltinExportComptime(m, "GetCurrentPositionEx", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "EnumFontsA", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "GetCurrentPositionEx", dc.GetCurrentPositionEx);
+    try environment.addBuiltinExportComptime(m, "EnumFontsA", object.EnumFontsA);
+
+    // --- Additional GDI stubs ---
+    try environment.addBuiltinExportComptime(m, "StartDocA", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "SelectClipRgn", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "PtInRegion", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "GetWinMetaFileBits", stub.stub_args5);
+    try environment.addBuiltinExportComptime(m, "GetTextAlign", dc.GetTextAlign);
+    try environment.addBuiltinExportComptime(m, "GetEnhMetaFilePaletteEntries", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "GetClipRgn", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "GetClipBox", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "GdiFlush", stub.stub_args0);
+    try environment.addBuiltinExportComptime(m, "ExtCreatePen", stub.stub_args5);
+    try environment.addBuiltinExportComptime(m, "CreateICA", dc.CreateDCA);
+    try environment.addBuiltinExportComptime(m, "CopyEnhMetaFileA", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "AbortDoc", stub.stub_args1);
 }

@@ -61,6 +61,8 @@ pub fn main() !void {
     var use_jit = false;
     var end_of_options = false;
 
+    log.initFromEnv();
+
     // Check environment variables (WASI runtimes can pass env vars via --env)
     {
         var env_map = std.process.getEnvMap(allocator) catch null;
@@ -96,28 +98,16 @@ pub fn main() !void {
             trace.enable_instructions = true;
             continue;
         }
+        if (!end_of_options and (std.mem.eql(u8, arg, "--interpret") or std.mem.eql(u8, arg, "-i"))) {
+            // WASM always uses the interpreter; accept silently
+            continue;
+        }
         if (!end_of_options and std.mem.eql(u8, arg, "--jit")) {
             use_jit = true;
             continue;
         }
         if (!end_of_options and std.mem.eql(u8, arg, "--profile")) {
             profiler.enabled = true;
-            continue;
-        }
-        if (!end_of_options and (std.mem.eql(u8, arg, "--argv0") or std.mem.startsWith(u8, arg, "--argv0="))) {
-            if (std.mem.startsWith(u8, arg, "--argv0=")) {
-                const val = arg["--argv0=".len..];
-                if (val.len == 0) {
-                    std.fs.File.stderr().writeAll("Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n") catch {};
-                    std.process.exit(2);
-                }
-                argv0_opt = val;
-            } else if (args.next()) |val| {
-                argv0_opt = val;
-            } else {
-                std.fs.File.stderr().writeAll("Error: --argv0 requires a value.\nTry 'zine --help' for more information.\n") catch {};
-                std.process.exit(2);
-            }
             continue;
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
@@ -155,6 +145,26 @@ pub fn main() !void {
         if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
             std.fs.File.stdout().writeAll("zine " ++ version.string ++ "\n") catch {};
             std.process.exit(0);
+        }
+        if (!end_of_options and (std.mem.eql(u8, arg, "--argv0") or std.mem.startsWith(u8, arg, "--argv0="))) {
+            if (std.mem.startsWith(u8, arg, "--argv0=")) {
+                const val = arg["--argv0=".len..];
+                if (val.len == 0) {
+                    std.fs.File.stderr().writeAll("Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n") catch {};
+                    std.process.exit(2);
+                }
+                argv0_opt = val;
+            } else if (args.next()) |val| {
+                if (val.len == 0) {
+                    std.fs.File.stderr().writeAll("Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n") catch {};
+                    std.process.exit(2);
+                }
+                argv0_opt = val;
+            } else {
+                std.fs.File.stderr().writeAll("Error: --argv0 requires a value.\nTry 'zine --help' for more information.\n") catch {};
+                std.process.exit(2);
+            }
+            continue;
         }
         if (!end_of_options and target_exe_opt == null and arg.len > 1 and arg[0] == '-') {
             var err_buf: [512]u8 = undefined;
@@ -343,7 +353,7 @@ pub fn main() !void {
     @memcpy(combined_buf[0..image_size], main_module.mapped_memory[0..image_size]);
 
     // On WASM, the PE was mapped at a host address that differs from the
-    // preferred ImageBase. Module.load applied relocations for that host
+    // preferred ImageBase. Module.load applied relocations for that host address.
     // Reverse relocations: undo Module.load's adjustments so absolute
     // addresses match preferred_base (= GuestMemory virtual addresses).
     runner.applyReverseRelocations(
@@ -512,6 +522,8 @@ pub fn main() !void {
         cpu.esp,
         cpu.fs_base,
     });
+
+    if (profiler.enabled) profiler.start();
 
     if (use_jit) {
         if (comptime build_options.enable_jit_host) {
@@ -709,7 +721,6 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     child_cpu.esp = child_thunk_base -% 16;
     child_cpu.ebp = child_cpu.esp;
 
-
     // Reuse parent's TEB
     child_cpu.fs_base = @truncate(teb.teb_base_addr);
 
@@ -848,4 +859,3 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
     log.info("JIT: compiled {d} blocks, executed {d} block calls", .{ blocks_compiled, blocks_executed });
 }
 
-// runWithJit and scanBlock are in runner.zig

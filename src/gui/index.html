@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Winloader Web UI</title>
+    <title>Zine</title>
     <link rel="stylesheet" href="/win2k.css">
 </head>
 <body>
@@ -13,7 +13,7 @@
     <div id="status">Connecting...</div>
 
     <!-- Main Application Window -->
-    <div id="main-window" class="win2k-window" style="top: 50%; left: 50%; transform: translate(-50%, -50%);">
+    <div id="main-window" class="win2k-window" role="application" style="top: 50%; left: 50%; transform: translate(-50%, -50%);">
         <div class="resize-handle resize-n" data-dir="n"></div>
         <div class="resize-handle resize-s" data-dir="s"></div>
         <div class="resize-handle resize-w" data-dir="w"></div>
@@ -24,32 +24,32 @@
         <div class="resize-handle resize-se" data-dir="se"></div>
         <div class="win2k-titlebar" id="main-titlebar">
             <div class="win2k-titlebar-text">
-                <img id="titlebar-icon" style="width: 16px; height: 16px; display: none;">
+                <img id="titlebar-icon" alt="" style="width: 16px; height: 16px; display: none;">
                 <span id="window-title"></span>
             </div>
             <div class="win2k-titlebar-buttons">
-                <div class="win2k-titlebar-btn" onclick="minimizeWindow()"><div class="btn-glyph btn-minimize"></div></div>
-                <div class="win2k-titlebar-btn" onclick="maximizeWindow()"><div class="btn-glyph btn-maximize"></div></div>
-                <div class="win2k-titlebar-btn" onclick="closeWindow()"><div class="btn-glyph btn-close"></div></div>
+                <button class="win2k-titlebar-btn" onclick="minimizeWindow()" aria-label="Minimize"><div class="btn-glyph btn-minimize"></div></button>
+                <button class="win2k-titlebar-btn" onclick="maximizeWindow()" aria-label="Maximize"><div class="btn-glyph btn-maximize"></div></button>
+                <button class="win2k-titlebar-btn" onclick="closeWindow()" aria-label="Close"><div class="btn-glyph btn-close"></div></button>
             </div>
         </div>
-        <div id="menu-bar"></div>
+        <div id="menu-bar" role="menubar"></div>
         <div id="game-container">
             <div class="canvas-inset">
-                <canvas id="screen"></canvas>
-                <textarea id="edit-control" style="display:none;"></textarea>
+                <canvas id="screen" aria-label="Application display"></canvas>
+                <textarea id="edit-control" aria-label="Text editor" style="display:none;"></textarea>
             </div>
         </div>
     </div>
 
     <!-- Dialog Overlay -->
-    <div id="dialog-overlay" class="win2k-window win2k-dialog">
+    <div id="dialog-overlay" class="win2k-window win2k-dialog" role="dialog" aria-labelledby="dialog-title">
         <div class="win2k-titlebar" id="dialog-titlebar">
             <div class="win2k-titlebar-text">
                 <span id="dialog-title">Dialog</span>
             </div>
             <div class="win2k-titlebar-buttons">
-                <div class="win2k-titlebar-btn" onclick="closeDialog()"><div class="btn-glyph btn-close"></div></div>
+                <button class="win2k-titlebar-btn" onclick="closeDialog()" aria-label="Close dialog"><div class="btn-glyph btn-close"></div></button>
             </div>
         </div>
         <div class="win2k-content" id="dialog-content"></div>
@@ -62,11 +62,11 @@
             <span>Start</span>
         </div>
         <div class="taskbar-window-btn active" id="taskbar-app-btn">
-            <img id="taskbar-icon" style="width: 16px; height: 16px; display: none;">
+            <img id="taskbar-icon" alt="" style="width: 16px; height: 16px; display: none;">
             <span id="taskbar-title"></span>
         </div>
         <div class="taskbar-tray">
-            <div class="tray-volume" id="tray-volume" onclick="toggleVolumePopup(event)">
+            <div class="tray-volume" id="tray-volume" role="button" tabindex="0" aria-label="Volume" onclick="toggleVolumePopup(event)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleVolumePopup(event)}">
                 <svg viewBox="0 0 16 16" width="16" height="16" class="volume-icon">
                     <polygon points="2,6 2,10 5,10 9,13 9,3 5,6" fill="currentColor"/>
                     <path id="vol-wave1" d="M10,5.5 Q12,8 10,10.5" fill="none" stroke="currentColor" stroke-width="1.2"/>
@@ -79,7 +79,7 @@
                 <div class="volume-slider-container">
                     <div class="volume-label-hi">High</div>
                     <input type="range" id="volume-slider" min="0" max="100" value="100"
-                           orient="vertical" class="volume-range"
+                           orient="vertical" class="volume-range" aria-label="Volume"
                            oninput="onVolumeSliderChange(this.value)">
                     <div class="volume-label-lo">Low</div>
                 </div>

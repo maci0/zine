@@ -150,21 +150,14 @@ pub const Environment = struct {
 
     /// Update an existing builtin export address (e.g., to relocate data into guest memory).
     pub fn updateExport(self: *Environment, dll: []const u8, name: []const u8, new_addr: usize) void {
+        // Keys are stored lowercase (from getOrCreateModule), so normalize and do direct lookup.
         var key_buf: [256]u8 = undefined;
-        var key_len: usize = 0;
-        for (dll) |c| {
-            key_buf[key_len] = std.ascii.toLower(c);
-            key_len += 1;
-        }
-        const normalized = key_buf[0..key_len];
+        const normalized = key_buf[0..dll.len];
+        _ = std.ascii.lowerString(normalized, dll);
 
-        var it = self.builtins.iterator();
-        while (it.next()) |entry| {
-            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, normalized) or std.ascii.eqlIgnoreCase(entry.key_ptr.*, dll)) {
-                if (entry.value_ptr.exports.getPtr(name)) |exp| {
-                    exp.addr = new_addr;
-                    return;
-                }
+        if (self.builtins.getPtr(normalized)) |builtin| {
+            if (builtin.exports.getPtr(name)) |exp| {
+                exp.addr = new_addr;
             }
         }
     }
@@ -293,11 +286,11 @@ pub const Environment = struct {
                             break :blk @bitCast(val);
                         },
                         .int => |int_info| blk: {
-                            // Do NOT auto-translate usize params here: the stub
-                            // functions call trace.addr() themselves (from the
-                            // trace.addr audit). Auto-translating would cause
-                            // double-translation when the host buffer address
-                            // overlaps the guest VA range.
+                            // Do NOT auto-translate usize params here: stub
+                            // functions call trace.addr() themselves, so
+                            // auto-translating would cause double-translation
+                            // when the host buffer address overlaps the guest
+                            // VA range.
                             if (int_info.signedness == .signed) {
                                 if (int_info.bits <= 32) {
                                     break :blk @truncate(@as(i32, @bitCast(val)));

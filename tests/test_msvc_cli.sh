@@ -198,7 +198,7 @@ export LIB="$VC_LIB"
 
 # Work in a temp dir so relative paths work for CL/LINK
 WORKDIR=$(mktemp -d)
-trap "rm -rf $WORKDIR" EXIT
+trap 'rm -rf "$WORKDIR"' EXIT
 cd "$WORKDIR"
 
 # Set up WINLOADER_CMD after WORKDIR is created so WASM --dir knows all paths

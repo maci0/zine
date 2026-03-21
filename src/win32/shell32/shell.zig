@@ -54,7 +54,6 @@ pub fn stub_DragQueryFileW(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) 
     return 0;
 }
 
-/// SHGetFileInfoA
 /// Implementation status: Partially implemented
 pub fn SHGetFileInfoA(pszPath: usize, dwFileAttributes: u32, psfi: usize, cbFileInfo: u32, uFlags: u32) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) {
@@ -116,12 +115,58 @@ pub fn SHGetFileInfoA(pszPath: usize, dwFileAttributes: u32, psfi: usize, cbFile
     return 1; // Success (non-zero)
 }
 
-/// stub_SHGetPathFromIDListA
-/// Implementation status: Stub
+/// SHGetSpecialFolderLocation — returns a PIDL for a special folder.
+/// We use a simple encoding: the PIDL is a small allocated buffer containing
+/// the CSIDL value so SHGetPathFromIDList can decode it.
+pub fn SHGetSpecialFolderLocation(hwndOwner: usize, nFolder: i32, ppidl: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hwndOwner;
+    if (trace.enable_tracing) trace.print("SHELL32: SHGetSpecialFolderLocation(folder={d})\n", .{nFolder});
+    if (ppidl == 0) return @bitCast(@as(u32, 0x80004003)); // E_POINTER
+
+    // Allocate a fake PIDL: [cb=6(u16)][csidl(u16)][padding(u16)][terminator cb=0(u16)]
+    const mem = @import("../kernel32/mem.zig");
+    const pidl_size: usize = 8;
+    const pidl_ptr = mem.raw_alloc(pidl_size) orelse return @bitCast(@as(u32, 0x8007000E)); // E_OUTOFMEMORY
+    const buf = @as([*]u16, @ptrCast(@alignCast(pidl_ptr)));
+    buf[0] = 6; // cb = size of this SHITEMID (6 bytes: cb + 4 data bytes)
+    buf[1] = @bitCast(@as(i16, @truncate(nFolder))); // store CSIDL
+    buf[2] = 0; // padding
+    buf[3] = 0; // terminator SHITEMID (cb=0)
+
+    @as(*u32, @ptrFromInt(ppidl)).* = @intFromPtr(pidl_ptr);
+    return 0; // S_OK
+}
+
+/// SHGetPathFromIDListA — converts a PIDL to a filesystem path.
+/// Recognizes our fake PIDLs from SHGetSpecialFolderLocation.
 pub fn stub_SHGetPathFromIDListA(pidl: usize, pszPath: usize) callconv(w32cc.WINAPI) i32 {
-    _ = pidl;
-    _ = pszPath;
-    if (trace.enable_tracing) trace.print("SHELL32: SHGetPathFromIDListA\n", .{});
+    if (trace.enable_tracing) trace.print("SHELL32: SHGetPathFromIDListA(pidl={x})\n", .{pidl});
+    if (pidl == 0 or pszPath == 0) return 0;
+
+    const buf = @as(*const [4]u16, @ptrFromInt(pidl));
+    const cb = buf[0];
+    if (cb == 6) {
+        // Our fake PIDL — decode CSIDL
+        const csidl = @as(i16, @bitCast(buf[1]));
+        const path: []const u8 = switch (csidl) {
+            0x00 => "C:\\Desktop", // CSIDL_DESKTOP
+            0x05 => "C:\\My Documents", // CSIDL_PERSONAL
+            0x14 => "C:\\WINDOWS\\Fonts", // CSIDL_FONTS
+            0x1A => "C:\\Users\\User\\AppData\\Roaming", // CSIDL_APPDATA
+            0x24 => "C:\\WINDOWS", // CSIDL_WINDOWS
+            0x25 => "C:\\WINDOWS\\SYSTEM32", // CSIDL_SYSTEM
+            0x26 => "C:\\Program Files", // CSIDL_PROGRAM_FILES
+            else => "C:\\",
+        };
+        const dst = @as([*]u8, @ptrFromInt(pszPath));
+        @memcpy(dst[0..path.len], path);
+        dst[path.len] = 0;
+        if (trace.enable_tracing) trace.print("SHELL32: SHGetPathFromIDListA -> '{s}'\n", .{path});
+        return 1; // TRUE
+    }
+
+    // Unknown PIDL format — return empty
+    @as(*u8, @ptrFromInt(pszPath)).* = 0;
     return 0;
 }
 
@@ -156,7 +201,6 @@ pub fn stub_Shell_NotifyIconA(dwMessage: u32, lpData: usize) callconv(w32cc.WINA
     return 1;
 }
 
-/// ShellAboutW
 /// Implementation status: Partially implemented
 pub fn ShellAboutW(hWnd: usize, szApp: usize, szOtherStuff: usize, hIcon: usize) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;

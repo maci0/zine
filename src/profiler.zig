@@ -10,8 +10,31 @@
 //! Reports top-N entries to stderr on dump().
 
 const std = @import("std");
+const builtin = @import("builtin");
+const log = @import("log.zig");
 
 pub var enabled: bool = false;
+
+// -----------------------------------------------------------------------
+// Wall-clock elapsed time
+// -----------------------------------------------------------------------
+
+var start_ns: ?i128 = null;
+
+/// Record the profiling start time. Called when profiling begins.
+pub fn start() void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    start_ns = std.time.nanoTimestamp();
+}
+
+fn getElapsedMs() u64 {
+    if (comptime builtin.target.cpu.arch == .wasm32) return 0;
+    const s = start_ns orelse return 0;
+    const now = std.time.nanoTimestamp();
+    const delta = now - s;
+    if (delta < 0) return 0;
+    return @intCast(@as(u128, @intCast(delta)) / 1_000_000);
+}
 
 // -----------------------------------------------------------------------
 // 1. EIP Heat Map — 4KB page granularity over the 32-bit address space
@@ -86,16 +109,23 @@ pub fn registerThunkName(thunk_id: u32, name: []const u8) void {
 
 const TOP_N = 20;
 
-/// Dump a profiling report to stderr.
+/// Dump a profiling report to stderr via the log module.
 pub fn dump() void {
     if (!enabled) return;
 
-    std.debug.print("\n" ++ "=" ** 72 ++ "\n", .{});
-    std.debug.print("=== Profiling Report ({d} total instructions) ===\n", .{total_insns});
-    std.debug.print("=" ** 72 ++ "\n\n", .{});
+    const elapsed_ms = getElapsedMs();
+    const elapsed_s = elapsed_ms / 1000;
+    const elapsed_frac = elapsed_ms % 1000;
+
+    log.info("=== Profiling Report: {d} insns in {d}.{d:0>3}s ({d} insns/ms) ===", .{
+        total_insns,
+        elapsed_s,
+        elapsed_frac,
+        if (elapsed_ms > 0) total_insns / elapsed_ms else total_insns,
+    });
 
     // — Hot pages —
-    std.debug.print("--- Top {d} Hot Pages (4KB) ---\n", .{TOP_N});
+    log.info("--- Top {d} Hot Pages (4KB) ---", .{TOP_N});
     {
         var indices: [MAX_PAGES]u32 = undefined;
         var n: usize = 0;
@@ -124,12 +154,12 @@ pub fn dump() void {
             const page = indices[i];
             const addr = @as(u32, page) << PAGE_SHIFT;
             const pct = @as(f64, @floatFromInt(eip_pages[page])) / @as(f64, @floatFromInt(@max(total_insns, 1))) * 100.0;
-            std.debug.print("  0x{X:0>8}: {d:>12} insns ({d:.1}%)\n", .{ addr, eip_pages[page], pct });
+            log.info("  0x{X:0>8}: {d:>12} insns ({d:.1}%)", .{ addr, eip_pages[page], pct });
         }
     }
 
     // — Top opcodes —
-    std.debug.print("\n--- Top {d} Opcodes ---\n", .{TOP_N});
+    log.info("--- Top {d} Opcodes ---", .{TOP_N});
     {
         var indices: [MAX_OPCODES]u16 = undefined;
         var n: usize = 0;
@@ -157,12 +187,12 @@ pub fn dump() void {
                 0x0F00 | (idx - 0x100)
             else
                 idx;
-            std.debug.print("  0x{X:0>4}: {d:>12}\n", .{ opcode, opcode_counts[idx] });
+            log.info("  0x{X:0>4}: {d:>12}", .{ opcode, opcode_counts[idx] });
         }
     }
 
     // — Top stubs —
-    std.debug.print("\n--- Top {d} Stub Calls ---\n", .{TOP_N});
+    log.info("--- Top {d} Stub Calls ---", .{TOP_N});
     {
         var indices: [MAX_THUNKS]u16 = undefined;
         var n: usize = 0;
@@ -187,11 +217,9 @@ pub fn dump() void {
         for (0..show) |i| {
             const id = indices[i];
             const name = thunk_names[id] orelse "<unknown>";
-            std.debug.print("  [{d:>3}] {s}: {d:>12}\n", .{ id, name, thunk_counts[id] });
+            log.info("  [{d:>3}] {s}: {d:>12}", .{ id, name, thunk_counts[id] });
         }
     }
-
-    std.debug.print("\n", .{});
 }
 
 /// Reset all counters (for testing).
@@ -206,6 +234,7 @@ pub fn reset() void {
     @memset(thk_bytes, 0);
     for (&thunk_names) |*name| name.* = null;
     total_insns = 0;
+    start_ns = null;
 }
 
 // -----------------------------------------------------------------------
@@ -213,33 +242,65 @@ pub fn reset() void {
 // -----------------------------------------------------------------------
 
 test "profiler: tick and dump" {
-    // The profiler uses global state, so other tests (execute.zig) may
-    // have already ticked counters.  Save baseline and check deltas.
+    // Reset global state for a clean test — avoids contamination from
+    // other tests (e.g. execute.zig) that may have ticked counters.
+    reset();
     enabled = true;
-    defer enabled = false;
+    defer {
+        enabled = false;
+        reset();
+    }
 
-    const base_insns = total_insns;
+    start();
+
     const page_idx = 0x00401000 >> PAGE_SHIFT;
-    const base_page = eip_pages[page_idx];
 
     tickEip(0x00401000);
     tickEip(0x00402000); // different page
     tickEip(0x00401000);
-    try std.testing.expectEqual(base_insns + 3, total_insns);
-    try std.testing.expectEqual(base_page + 2, eip_pages[page_idx]);
+    try std.testing.expectEqual(@as(u64, 3), total_insns);
+    try std.testing.expectEqual(@as(u64, 2), eip_pages[page_idx]);
 
-    const base_mov = opcode_counts[0x89];
-    const base_je = opcode_counts[0x100 + 0x84];
     tickOpcode(0x89); // MOV
     tickOpcode(0x89);
     tickOpcode(0x0F84); // JE near
-    try std.testing.expectEqual(base_mov + 2, opcode_counts[0x89]);
-    try std.testing.expectEqual(base_je + 1, opcode_counts[0x100 + 0x84]);
+    try std.testing.expectEqual(@as(u64, 2), opcode_counts[0x89]);
+    try std.testing.expectEqual(@as(u64, 1), opcode_counts[0x100 + 0x84]);
 
     registerThunkName(0, "GetMessage");
-    const base_thunk = thunk_counts[0];
     tickThunk(0);
     tickThunk(0);
     tickThunk(0);
-    try std.testing.expectEqual(base_thunk + 3, thunk_counts[0]);
+    try std.testing.expectEqual(@as(u64, 3), thunk_counts[0]);
+}
+
+test "profiler: disabled does not tick" {
+    reset();
+    enabled = false;
+
+    tickEip(0x00401000);
+    tickOpcode(0x89);
+    tickThunk(0);
+
+    try std.testing.expectEqual(@as(u64, 0), total_insns);
+    try std.testing.expectEqual(@as(u64, 0), opcode_counts[0x89]);
+    try std.testing.expectEqual(@as(u64, 0), thunk_counts[0]);
+}
+
+test "profiler: out of range indices are safe" {
+    reset();
+    enabled = true;
+    defer {
+        enabled = false;
+        reset();
+    }
+
+    // EIP beyond tracked range (>1GB)
+    tickEip(0x40000000);
+    try std.testing.expectEqual(@as(u64, 1), total_insns); // counted
+    // But no page entry updated beyond MAX_PAGES
+
+    // Thunk ID beyond MAX_THUNKS
+    tickThunk(MAX_THUNKS + 1);
+    try std.testing.expectEqual(@as(u64, 0), thunk_counts[0]); // not corrupted
 }

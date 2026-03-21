@@ -49,7 +49,7 @@ graph TD
 - **`renderer.zig`** owns all shared state: framebuffer, keyboard state, edit text buffer, clipboard, cached JSON for reconnection, and input callback function pointers.
 - **`web_ui.zig`** serializes everything to JSON and pushes over WebSocket.
 - **`fltk_ui.zig`** uses a thread-safe command queue to forward calls to the FLTK event loop thread.
-- **`fltk_bridge.cpp`** is a ~300-line C++ file providing C-callable wrappers around FLTK 1.3 widgets.
+- **`fltk_bridge.cpp`** is a ~440-line C++ file providing C-callable wrappers around FLTK 1.3 widgets.
 - **Backend switching** is a `switch (active_backend)` in every output function (`.web_ui`, `.fltk`, `.none`).
 - **Input callbacks** (`on_command`, `on_resize`, `on_key_event`, `on_close`, etc.) are set by Win32 stubs at init time. Backends call these when user input arrives.
 
@@ -67,7 +67,7 @@ graph TD
 
 **Decision: Hand-rolled C++ bridge** instead of zfltk.
 
-Rationale: System has FLTK 1.3.11 shared libs, but zfltk requires cfltk (targeting FLTK 1.4) built via CMake. A ~300-line `fltk_bridge.cpp` compiled directly by Zig's build system is simpler and avoids the cfltk dependency chain.
+Rationale: System has FLTK 1.3.11 shared libs, but zfltk requires cfltk (targeting FLTK 1.4) built via CMake. A ~440-line `fltk_bridge.cpp` compiled directly by Zig's build system is simpler and avoids the cfltk dependency chain.
 
 #### Files
 
@@ -80,7 +80,7 @@ Rationale: System has FLTK 1.3.11 shared libs, but zfltk requires cfltk (targeti
 #### Build system (`build.zig`)
 
 ```bash
-zig build -Darch=x86_64 -Dfltk=true
+zig build -Dfltk=true
 ```
 
 The `-Dfltk=true` option:
@@ -88,7 +88,7 @@ The `-Dfltk=true` option:
 - Links system FLTK 1.3 (`/usr/lib/fltk1.3/`) and X11 dependencies
 - Passes `build_options.use_fltk` to Zig source for conditional compilation
 
-> **Note:** Requires `-Darch=x86_64` because system FLTK is 64-bit only.
+> **Note:** FLTK is currently supported on the x86 (default) target only.
 
 #### CLI flag (`main.zig`)
 
@@ -106,7 +106,7 @@ zig-out/bin/zine --fltk -i path/to/gui_app.exe
 | `setTitle(title)` | `fltk_set_title()` → `Fl_Window::copy_label()` |
 | `setWindowPos(cx,cy,cW,cH)` | `fltk_resize_window()` → `Fl_Window::resize()` |
 | `setResolution(w,h)` | `fltk_resize_window()` |
-| `pushFrame()` | `fltk_set_framebuf()` → copy RGBA to `Fl_RGB_Image`, assign to canvas `Fl_Box` |
+| `pushFrame()` | `fltk_set_framebuf()` → copy BGRA to `Fl_RGB_Image`, assign to canvas `Fl_Box` |
 | `setMenu(json)` | `fltk_set_menu_json()` — state-machine JSON parser builds `Fl_Menu_Bar` items |
 | `enableMenuItem(id, en)` | `fltk_enable_menu_item()` → `Fl_Menu_Bar::mode()` |
 | `checkMenuItem(id, ck)` | `fltk_check_menu_item()` → `FL_MENU_TOGGLE`/`FL_MENU_VALUE` |
@@ -182,7 +182,7 @@ Uses `Fl::scheme("none")` for the classic look closest to Win2K.
 
 | Check | Result |
 |---|---|
-| `zig build -Darch=x86_64 -Dfltk=true` | ✅ Clean build |
+| `zig build -Dfltk=true` | ✅ Clean build |
 | `zig build` (default x86, no FLTK) | ✅ No regressions |
 | `zig build test` | ✅ All tests pass |
 | Manual GUI test | ⏳ Pending — needs a GUI PE binary |

@@ -14,7 +14,7 @@ pub fn initConfig(allocator: std.mem.Allocator) void {
 }
 
 /// Opens the specified registry key.
-/// Implementation status: Stub (always returns ERROR_FILE_NOT_FOUND).
+/// Implementation status: Stub (always returns ERROR_FILE_NOT_FOUND)
 /// Fake registry handle for HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0
 pub fn RegOpenKeyExA(hKey: usize, lpSubKey: usize, ulOptions: u32, samDesired: u32, phkResult: usize) callconv(w32cc.WINAPI) u32 {
     _ = ulOptions;
@@ -123,7 +123,7 @@ fn isCpuRegKey(hKey: usize, key: []const u8) bool {
 }
 
 /// Retrieves the type and data for a specified value name associated with an open registry key.
-/// Implementation status: Stub (always returns ERROR_FILE_NOT_FOUND).
+/// Implementation status: Stub (always returns ERROR_FILE_NOT_FOUND)
 pub fn RegQueryValueExA(hKey: usize, lpValueName: ?[*:0]const u8, lpReserved: usize, lpType: ?*u32, lpData: ?[*]u8, lpcbData: ?*u32) callconv(w32cc.WINAPI) u32 {
     _ = lpReserved;
     const name = if (lpValueName) |n| std.mem.span(n) else "";
@@ -189,7 +189,7 @@ fn writeRegDword(lpType: ?*u32, lpData: ?*align(1) u32, lpcbData: ?*u32, regType
 }
 
 /// Creates the specified registry key.
-/// Implementation status: Stub (always returns ERROR_SUCCESS, creates a synthetic handle).
+/// Implementation status: Stub (always returns ERROR_SUCCESS, creates a synthetic handle)
 pub fn RegCreateKeyExA(hKey: usize, lpSubKey: usize, reserved: u32, lpClass: usize, dwOptions: u32, samDesired: u32, lpSecurityAttributes: usize, phkResult: usize, lpdwDisposition: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = reserved;
@@ -212,7 +212,7 @@ pub fn RegCreateKeyExA(hKey: usize, lpSubKey: usize, reserved: u32, lpClass: usi
 }
 
 /// Sets the data and type of a specified value under a registry key.
-/// Implementation status: Stub (always returns ERROR_SUCCESS).
+/// Implementation status: Stub (always returns ERROR_SUCCESS)
 pub fn RegSetValueExA(hKey: usize, lpValueName: usize, reserved: u32, dwType: u32, lpData: usize, cbData: u32) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = reserved;
@@ -227,7 +227,7 @@ pub fn RegSetValueExA(hKey: usize, lpValueName: usize, reserved: u32, dwType: u3
 }
 
 /// Deletes a subkey and its values from the specified platform-specific view of the registry.
-/// Implementation status: Stub (always returns ERROR_SUCCESS).
+/// Implementation status: Stub (always returns ERROR_SUCCESS)
 pub fn RegDeleteKeyA(hKey: usize, lpSubKey: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = lpSubKey;
@@ -236,7 +236,7 @@ pub fn RegDeleteKeyA(hKey: usize, lpSubKey: usize) callconv(w32cc.WINAPI) u32 {
 }
 
 /// Removes a named value from the specified registry key.
-/// Implementation status: Stub (always returns ERROR_SUCCESS).
+/// Implementation status: Stub (always returns ERROR_SUCCESS)
 pub fn stub_RegDeleteValueA(hKey: usize, lpValueName: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = lpValueName;
@@ -245,7 +245,7 @@ pub fn stub_RegDeleteValueA(hKey: usize, lpValueName: usize) callconv(w32cc.WINA
 }
 
 /// Enumerates the subkeys of the specified open registry key.
-/// Implementation status: Stub (always returns ERROR_NO_MORE_ITEMS).
+/// Implementation status: Stub (always returns ERROR_NO_MORE_ITEMS)
 pub fn stub_RegEnumKeyExA(hKey: usize, dwIndex: u32, lpName: usize, lpcchName: usize, lpReserved: usize, lpClass: usize, lpcchClass: usize, lpftLastWriteTime: usize) callconv(w32cc.WINAPI) u32 {
     _ = lpReserved;
     _ = lpClass;
@@ -265,7 +265,7 @@ pub fn stub_RegEnumKeyExA(hKey: usize, dwIndex: u32, lpName: usize, lpcchName: u
 }
 
 /// Enumerates the subkeys of the specified open registry key.
-/// Implementation status: Stub (always returns ERROR_NO_MORE_ITEMS).
+/// Implementation status: Stub (always returns ERROR_NO_MORE_ITEMS)
 pub fn RegEnumKeyA(hKey: usize, dwIndex: u32, lpName: usize, cchName: u32) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
     _ = dwIndex;
@@ -275,7 +275,6 @@ pub fn RegEnumKeyA(hKey: usize, dwIndex: u32, lpName: usize, cchName: u32) callc
     return 259; // ERROR_NO_MORE_ITEMS
 }
 
-/// RegQueryInfoKeyA
 /// Implementation status: Partially implemented
 pub fn RegQueryInfoKeyA(hKey: usize, lpClass: usize, lpcchClass: usize, lpReserved: usize, lpcSubKeys: usize, lpcbMaxSubKeyLen: usize, lpcbMaxClassLen: usize, lpcValues: usize, lpcbMaxValueNameLen: usize, lpcbMaxValueLen: usize, lpcbSecurityDescriptor: usize, lpftLastWriteTime: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
@@ -315,7 +314,6 @@ pub fn stub_RegOpenKeyA(hKey: usize, lpSubKey: usize, phkResult: usize) callconv
     return 2; // ERROR_FILE_NOT_FOUND
 }
 
-/// RegQueryValueExW
 /// Implementation status: Partially implemented
 pub fn RegQueryValueExW(hKey: usize, lpValueName: usize, lpReserved: usize, lpType: usize, lpData: usize, lpcbData: usize) callconv(w32cc.WINAPI) u32 {
     _ = lpReserved;
@@ -380,7 +378,6 @@ fn writeRegStringW(lpType: usize, lpData: usize, lpcbData: usize, regType: u32, 
     return 0;
 }
 
-/// RegSetValueExW
 /// Implementation status: Partially implemented
 pub fn RegSetValueExW(hKey: usize, lpValueName: usize, reserved: u32, dwType: u32, lpData: usize, cbData: u32) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
@@ -448,7 +445,6 @@ pub fn RegOpenKeyExW(hKey: usize, lpSubKey: usize, ulOptions: u32, samDesired: u
     return 2; // ERROR_FILE_NOT_FOUND
 }
 
-/// RegCreateKeyExW
 /// Implementation status: Partially implemented
 pub fn RegCreateKeyExW(hKey: usize, lpSubKey: usize, reserved: u32, lpClass: usize, dwOptions: u32, samDesired: u32, lpSecurityAttributes: usize, phkResult: usize, lpdwDisposition: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
@@ -479,7 +475,6 @@ pub fn stub_RegOpenKeyW(hKey: usize, lpSubKey: usize, phkResult: usize) callconv
     return 2;
 }
 
-/// RegDeleteKeyW
 /// Implementation status: Partially implemented
 pub fn RegDeleteKeyW(hKey: usize, lpSubKey: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
@@ -509,7 +504,6 @@ pub fn stub_RegSetValueW(hKey: usize, lpSubKey: usize, dwType: u32, lpData: usiz
     return 0;
 }
 
-/// RegEnumKeyW
 /// Implementation status: Partially implemented
 pub fn RegEnumKeyW(hKey: usize, dwIndex: u32, lpName: usize, cchName: u32) callconv(w32cc.WINAPI) u32 {
     _ = hKey;

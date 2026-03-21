@@ -8,6 +8,7 @@
 const flags_mod = @import("flags.zig");
 const fpu_mod = @import("fpu.zig");
 const mem_mod = @import("memory.zig");
+const cache_mod = @import("decode_cache.zig");
 
 pub const LazyFlags = flags_mod.LazyFlags;
 pub const FlagOp = flags_mod.FlagOp;
@@ -85,6 +86,9 @@ pub const Cpu = struct {
     /// Guest memory reference (maps virtual guest addresses to host memory).
     memory: GuestMemory = .{ .base = &.{} },
 
+    /// Instruction decode cache — avoids re-decoding instructions in loops.
+    decode_cache: cache_mod.DecodeCache = .{},
+
     /// If true, the CPU has encountered a HLT instruction or fatal error.
     halted: bool = false,
     /// Pending interrupt number to be handled on the next step.
@@ -120,9 +124,7 @@ pub const Cpu = struct {
         }
     }
 
-    /// Get 8-bit register by index.
-    /// 0-3 = AL, CL, DL, BL (low byte)
-    /// 4-7 = AH, CH, DH, BH (high byte)
+    /// 0-3 = AL, CL, DL, BL (low byte), 4-7 = AH, CH, DH, BH (high byte).
     pub inline fn getReg8(self: *const Cpu, idx: u3) u8 {
         return switch (idx) {
             0 => @truncate(self.eax), // AL
@@ -136,7 +138,6 @@ pub const Cpu = struct {
         };
     }
 
-    /// Set 8-bit register by index.
     pub inline fn setReg8(self: *Cpu, idx: u3, val: u8) void {
         const v32: u32 = val;
         switch (idx) {
@@ -151,12 +152,11 @@ pub const Cpu = struct {
         }
     }
 
-    /// Get 16-bit register by index.
     pub inline fn getReg16(self: *const Cpu, idx: u3) u16 {
         return @truncate(self.getReg(@enumFromInt(idx)));
     }
 
-    /// Set 16-bit register by index (preserves upper 16 bits).
+    /// Preserves upper 16 bits.
     pub inline fn setReg16(self: *Cpu, idx: u3, val: u16) void {
         const ri: RegIndex = @enumFromInt(idx);
         const old = self.getReg(ri);
@@ -193,64 +193,53 @@ pub const Cpu = struct {
 
     // --- XMM register access ---
 
-    /// Get XMM register as bytes.
     pub fn getXmmBytes(self: *const Cpu, idx: u3) [16]u8 {
         return @bitCast(self.xmm[idx]);
     }
 
-    /// Set XMM register from bytes.
     pub fn setXmmBytes(self: *Cpu, idx: u3, val: [16]u8) void {
         self.xmm[idx] = @bitCast(val);
     }
 
-    /// Get XMM register as 4 x f32.
     pub fn getXmmF32(self: *const Cpu, idx: u3) [4]f32 {
         return @bitCast(self.xmm[idx]);
     }
 
-    /// Set XMM register from 4 x f32.
     pub fn setXmmF32(self: *Cpu, idx: u3, val: [4]f32) void {
         self.xmm[idx] = @bitCast(val);
     }
 
-    /// Get XMM register as 2 x f64.
     pub fn getXmmF64(self: *const Cpu, idx: u3) [2]f64 {
         return @bitCast(self.xmm[idx]);
     }
 
-    /// Set XMM register from 2 x f64.
     pub fn setXmmF64(self: *Cpu, idx: u3, val: [2]f64) void {
         self.xmm[idx] = @bitCast(val);
     }
 
-    /// Get XMM register as 4 x u32.
     pub fn getXmmU32(self: *const Cpu, idx: u3) [4]u32 {
         return @bitCast(self.xmm[idx]);
     }
 
-    /// Set XMM register from 4 x u32.
     pub fn setXmmU32(self: *Cpu, idx: u3, val: [4]u32) void {
         self.xmm[idx] = @bitCast(val);
     }
 
-    /// Get XMM register as 2 x u64.
     pub fn getXmmU64(self: *const Cpu, idx: u3) [2]u64 {
         return @bitCast(self.xmm[idx]);
     }
 
-    /// Set XMM register from 2 x u64.
     pub fn setXmmU64(self: *Cpu, idx: u3, val: [2]u64) void {
         self.xmm[idx] = @bitCast(val);
     }
 
     // --- MMX register access (aliased to x87 FPU stack physical slots) ---
 
-    /// Get MMX register as u64. MMX regs alias FPU physical registers.
+    /// MMX registers alias x87 FPU physical register slots.
     pub fn getMmx(self: *const Cpu, idx: u3) u64 {
         return @bitCast(self.fpu.stack[idx]);
     }
 
-    /// Set MMX register as u64.
     pub fn setMmx(self: *Cpu, idx: u3, val: u64) void {
         self.fpu.stack[idx] = @bitCast(val);
     }
@@ -331,4 +320,30 @@ test "cpu: segment resolution" {
     try testing.expectEqual(@as(u32, 0x7FFE0000), cpu.resolveSegmentAddress(.fs, 0));
     try testing.expectEqual(@as(u32, 0x7FFE0018), cpu.resolveSegmentAddress(.fs, 0x18));
     try testing.expectEqual(@as(u32, 0x00401000), cpu.resolveSegmentAddress(.ds, 0x00401000));
+}
+
+test "cpu: push32 and pop32" {
+    var buf: [256]u8 = .{0} ** 256;
+    var cpu = Cpu{};
+    cpu.memory = GuestMemory{ .base = &buf };
+    cpu.esp = 200;
+
+    cpu.push32(0xDEADBEEF);
+    try testing.expectEqual(@as(u32, 196), cpu.esp); // ESP decremented by 4
+    try testing.expectEqual(@as(u32, 0xDEADBEEF), cpu.memory.read32(196));
+
+    const val = cpu.pop32();
+    try testing.expectEqual(@as(u32, 0xDEADBEEF), val);
+    try testing.expectEqual(@as(u32, 200), cpu.esp); // ESP restored
+}
+
+test "cpu: sign extension edge cases" {
+    // 0x00 → 0x00000000 (positive zero)
+    try testing.expectEqual(@as(u32, 0x00000000), signExtend8to32(0x00));
+    // 0xFF → 0xFFFFFFFF (-1)
+    try testing.expectEqual(@as(u32, 0xFFFFFFFF), signExtend8to32(0xFF));
+    // 0x0000 → 0x00000000
+    try testing.expectEqual(@as(u32, 0x00000000), signExtend16to32(0x0000));
+    // 0xFFFF → 0xFFFFFFFF (-1)
+    try testing.expectEqual(@as(u32, 0xFFFFFFFF), signExtend16to32(0xFFFF));
 }

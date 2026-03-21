@@ -83,6 +83,26 @@ pub fn PeekMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFil
         }
 
         if (user32.needs_paint) {
+            if ((wRemoveMsg & w32.PM_REMOVE) != 0) {
+                if (trace.enable_tracing) trace.print("USER32: PeekMessageA -> Dispatching WM_PAINT to all windows\n", .{});
+                user32.needs_paint = false;
+
+                // Dispatch WM_PAINT to child windows (they inherit the class WndProc)
+                if (user32.global_wndproc) |wndproc| {
+                    const proc = @intFromPtr(wndproc);
+                    for (user32.window_info_table[0..user32.window_info_count]) |*info| {
+                        if (info.hwnd != 0 and info.hwnd != user32.global_hwnd) {
+                            // Use per-window WndProc if set, else class WndProc
+                            const wp = if (info.proc != 0) info.proc else proc;
+                            if (trace.enable_tracing) trace.print("USER32: WM_PAINT dispatch child hwnd={x} proc={x}\n", .{ info.hwnd, wp });
+                            var err: u32 = 0;
+                            _ = user32.callWndProcSafe(wp, info.hwnd, w32.WM_PAINT, 0, 0, &err);
+                            if (trace.enable_tracing and err != 0) trace.print("USER32: WM_PAINT dispatch child hwnd={x} FAILED (err={d})\n", .{ info.hwnd, err });
+                        }
+                    }
+                }
+            }
+            // Return WM_PAINT for the main form
             {
                 const msg = lpMsg;
                 msg.hwnd = user32.global_hwnd;
@@ -92,10 +112,6 @@ pub fn PeekMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFil
                 msg.time = 0;
                 msg.pt_x = 0;
                 msg.pt_y = 0;
-            }
-            if ((wRemoveMsg & w32.PM_REMOVE) != 0) {
-                if (trace.enable_tracing) trace.print("USER32: PeekMessageA -> Returning WM_PAINT\n", .{});
-                user32.needs_paint = false;
             }
             return 1;
         }
@@ -132,6 +148,15 @@ pub fn PeekMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFil
     // No messages — flush any pending screen updates
     const rend = @import("../../gui/renderer.zig");
     rend.flushScreenIfDirty();
+
+    // Disable AV suppression once the message loop is idle (init complete)
+    const k32_err = @import("../kernel32/error.zig");
+    if (k32_err.suppress_access_violations) {
+        k32_err.suppress_access_violations = false;
+        // Trigger a repaint now that initialization is complete
+        user32.needs_paint = true;
+    }
+
     return 0; // No messages
 }
 
@@ -144,6 +169,13 @@ pub fn DispatchMessageA(lpMsg: *user32.MSG) callconv(w32cc.WINAPI) isize {
     {
         const msg = lpMsg;
         if (trace.enable_tracing) trace.print("USER32: DispatchMessageA(Msg={x}, wParam={x})\n", .{msg.message, msg.wParam});
+
+        // Delphi CM_ACTIVATE (0xB000): skip if the main form doesn't exist yet.
+        // Dispatching CM_ACTIVATE before Application.CreateForm completes
+        // causes a nil reference crash in the WndProc that prevents form creation.
+        if (msg.message == 0xB000 and !user32.main_form_created) {
+            return 0;
+        }
 
         // Look up per-hwnd WndProc first (for dialogs), then fall back to global
         const wndproc_addr: usize = if (user32.getWndProc(msg.hwnd)) |proc_addr|
@@ -350,4 +382,63 @@ pub fn handleCommonControlMsg(Msg: u32, wParam: usize) isize {
     }
 
     return 0;
+}
+
+/// SendMessageTimeoutA — sends a message with a timeout.
+/// Delegates to SendMessageA and returns its result.
+pub fn SendMessageTimeoutA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize, fuFlags: u32, uTimeout: u32) callconv(w32cc.WINAPI) isize {
+    _ = fuFlags;
+    _ = uTimeout;
+    if (trace.enable_tracing) trace.print("USER32: SendMessageTimeoutA(hwnd={x}, Msg={x}, wParam={x})\n", .{ hWnd, Msg, wParam });
+    return SendMessageA(hWnd, Msg, wParam, lParam);
+}
+
+/// WaitMessage — blocks until a message is available in the queue.
+/// On real Windows this blocks the thread. We sleep briefly to avoid
+/// burning 100% CPU in the Delphi message loop.
+pub fn WaitMessage() callconv(w32cc.WINAPI) i32 {
+    const platform = @import("../../platform.zig");
+    platform.sleep(10 * 1000000); // 10ms
+    return 1; // TRUE = success
+}
+
+// -------------------------------------------------------------------------
+// Message / hook stubs (moved from misc.zig)
+// -------------------------------------------------------------------------
+
+pub fn GetMessageTime() callconv(w32cc.WINAPI) i32 {
+    const ts = std.time.milliTimestamp();
+    return @truncate(ts);
+}
+
+pub fn stub_MsgWaitForMultipleObjects(nCount: u32, pHandles: usize, fWaitAll: i32, dwMilliseconds: u32, dwWakeMask: u32) callconv(w32cc.WINAPI) u32 {
+    _ = .{ pHandles, fWaitAll, dwWakeMask };
+    // Sleep briefly to avoid burning CPU. Return nCount = message queue signaled.
+    if (dwMilliseconds > 0 and dwMilliseconds != 0xFFFFFFFF) {
+        const platform = @import("../../platform.zig");
+        const ms = @min(dwMilliseconds, 50);
+        platform.sleep(@as(u64, ms) * 1000000);
+    }
+    return nCount;
+}
+
+pub fn stub_CallNextHookEx(hhk: usize, nCode: i32, wParam: usize, lParam: usize) callconv(w32cc.WINAPI) usize {
+    _ = hhk;
+    _ = nCode;
+    _ = wParam;
+    _ = lParam;
+    return 0;
+}
+
+pub fn stub_SetWindowsHookExA(idHook: i32, lpfn: usize, hmod: usize, dwThreadId: u32) callconv(w32cc.WINAPI) usize {
+    _ = idHook;
+    _ = lpfn;
+    _ = hmod;
+    _ = dwThreadId;
+    return 0xBEEF0010; // Fake hook handle
+}
+
+pub fn stub_UnhookWindowsHookEx(hhk: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hhk;
+    return 1;
 }

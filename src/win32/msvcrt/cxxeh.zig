@@ -1,6 +1,6 @@
 //! MSVCRT.dll C++ exception handling registration.
 
-const trace = @import("../trace.zig");
+const trace = @import("../../trace.zig");
 
 /// MSVC C++ Exception Handler (__CxxFrameHandler)
 /// For C++ exceptions (0xE06D7363): parses the FuncInfo structure from the
@@ -64,6 +64,6 @@ pub fn CxxFrameHandler(
 
     // Jump to the catch handler
     const frame_ebp = pEstablisherFrame + 16;
-    @import("msvcrt/except.zig").jump_to_seh_handler(catch_handler, frame_ebp);
+    @import("except.zig").jump_to_seh_handler(catch_handler, frame_ebp);
     unreachable;
 }

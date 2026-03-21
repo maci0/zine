@@ -92,10 +92,18 @@ pub fn CreatePen(iStyle: i32, cWidth: i32, crColor: u32) callconv(w32cc.WINAPI) 
 }
 
 /// Create a logical font from a LOGFONT structure.
-/// Implementation status: Stub
+/// Implementation status: Partially implemented (stores face name for GetObjectA)
 pub fn CreateFontIndirectA(lplf: usize) callconv(w32cc.WINAPI) usize {
-    _ = lplf;
-    if (trace.enable_tracing) trace.print("GDI32: CreateFontIndirectA\n", .{});
+    if (trace.enable_tracing) {
+        if (lplf != 0) {
+            // LOGFONT.lfFaceName is at offset 28, 32 bytes
+            const face = @as([*]const u8, @ptrFromInt(lplf + 28));
+            const len = std.mem.indexOfScalar(u8, face[0..32], 0) orelse 32;
+            trace.print("GDI32: CreateFontIndirectA(face='{s}')\n", .{face[0..len]});
+        } else {
+            trace.print("GDI32: CreateFontIndirectA(NULL)\n", .{});
+        }
+    }
     const handle = gdi32.nextHandle();
     gdi32.registerObject(.{ .handle = handle, .obj_type = .Font, .data = .{ .none = {} } });
     return handle;
@@ -363,4 +371,15 @@ pub fn CreatePatternBrush(hBitmap: usize) callconv(w32cc.WINAPI) usize {
     gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0, .style = 3 } } }); // style 3 = pattern
     if (trace.enable_tracing) trace.print("GDI32: CreatePatternBrush -> 0x{x}\n", .{handle});
     return handle;
+}
+
+/// EnumFontsA — enumerates the fonts available on a specified device.
+/// Returns 1 (success, no fonts enumerated) without invoking the callback.
+pub fn EnumFontsA(hdc: usize, lpLogfont: usize, lpProc: usize, lParam: usize) callconv(w32cc.WINAPI) i32 {
+    _ = hdc;
+    _ = lpLogfont;
+    _ = lpProc;
+    _ = lParam;
+    if (trace.enable_tracing) trace.print("GDI32: EnumFontsA -> 1 (no fonts enumerated)\n", .{});
+    return 1;
 }

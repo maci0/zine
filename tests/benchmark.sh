@@ -11,7 +11,7 @@
 #   7. Zine WASM via wasmer
 #   8. Zine WASM via zine-host (JIT enabled)
 
-set -e
+set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BENCH_SRC="tests/cpubench_int.c"
@@ -19,6 +19,10 @@ BENCH_WIN_SRC="tests/cpubench_win32.c"
 BENCH_WIN32="drive_c/Desktop/cpubench.exe"
 BENCH_LINUX64="/tmp/cpubench_linux64"
 BENCH_LINUX32="/tmp/cpubench_linux32"
+
+# Clean up temp files on exit
+cleanup() { rm -f "$BENCH_LINUX64" "$BENCH_LINUX32"; }
+trap cleanup EXIT
 ZINE="./zig-out/bin/zine"
 ZINE_WASM="./zig-out/bin/zine.wasm"
 ZINE_HOST="./zig-out/bin/zine-host"

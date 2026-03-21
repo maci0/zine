@@ -245,7 +245,6 @@ pub fn RtlAllocateAndInitializeSid(
     return 0; // STATUS_SUCCESS
 }
 
-/// RtlEqualSid
 /// Implementation status: Partially implemented
 pub fn RtlEqualSid(sid1: usize, sid2: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("NTDLL: RtlEqualSid({x}, {x})\n", .{ sid1, sid2 });

@@ -82,7 +82,6 @@ pub fn WSAStartup(wVersionRequired: u16, lpWSAData: usize) callconv(w32cc.WINAPI
     return 0; // Success
 }
 
-/// WSACleanup
 /// Implementation status: Partially implemented
 pub fn WSACleanup() callconv(w32cc.WINAPI) i32 {
     return 0;

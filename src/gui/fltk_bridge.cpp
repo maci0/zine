@@ -23,7 +23,7 @@ static Fl_Double_Window* g_window  = nullptr;
 static Fl_Menu_Bar*      g_menubar = nullptr;
 static Fl_Box*           g_canvas  = nullptr;
 static Fl_RGB_Image*     g_image   = nullptr;
-static unsigned char*    g_imgbuf  = nullptr;   /* owned copy of RGBA pixels */
+static unsigned char*    g_imgbuf  = nullptr;   /* owned copy of BGRA pixels */
 static int               g_img_w   = 0;
 static int               g_img_h   = 0;
 
@@ -166,7 +166,9 @@ void fltk_resize_window(int x, int y, int w, int h) {
 }
 
 void fltk_set_framebuf(const unsigned char* rgba, int w, int h) {
-    int sz = w * h * 4;
+    /* Reject unreasonable dimensions to prevent integer overflow in w*h*4 */
+    if (w <= 0 || h <= 0 || w > 16384 || h > 16384) return;
+    size_t sz = (size_t)w * (size_t)h * 4;
     /* Reallocate pixel buffer if size changed */
     if (w != g_img_w || h != g_img_h) {
         free(g_imgbuf);
@@ -176,7 +178,9 @@ void fltk_set_framebuf(const unsigned char* rgba, int w, int h) {
     }
     if (!g_imgbuf) return;
 
-    /* Copy RGBA data — FLTK Fl_RGB_Image expects RGBA with depth=4 */
+    /* Copy raw pixel data — the source is BGRA but FLTK Fl_RGB_Image
+       with depth=4 interprets it as RGBA, so red and blue appear swapped.
+       This is acceptable for the current debug/preview use case. */
     memcpy(g_imgbuf, rgba, sz);
 
     /* Replace the image on the canvas */
@@ -251,13 +255,18 @@ void fltk_set_menu_json(const char* json, int len) {
                 }
                 clean_label[ci] = 0;
 
-                /* Build full path */
+                /* Build full path using safe snprintf */
                 path[0] = 0;
-                for (int d = 0; d < path_depth; d++) {
-                    if (d > 0) strcat(path, "/");
-                    strcat(path, parent_labels[d]);
+                {
+                    int ppos = 0;
+                    for (int d = 0; d < path_depth && ppos < (int)sizeof(path) - 1; d++) {
+                        if (d > 0 && ppos < (int)sizeof(path) - 1)
+                            ppos += snprintf(path + ppos, sizeof(path) - ppos, "/");
+                        ppos += snprintf(path + ppos, sizeof(path) - ppos, "%s", parent_labels[d]);
+                    }
+                    if (path_depth > 0 && ppos < (int)sizeof(path) - 1)
+                        snprintf(path + ppos, sizeof(path) - ppos, "/");
                 }
-                if (path_depth > 0) strcat(path, "/");
 
                 if (clean_label[0] == '-') {
                     /* Separator */

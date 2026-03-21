@@ -198,7 +198,7 @@ pub fn tempnam(dir_ptr: usize, prefix_ptr: usize) callconv(.c) usize {
     const count = @atomicRmw(u32, &tempnam_counter, .Add, 1, .monotonic);
 
     var name_buf: [256]u8 = undefined;
-    const name = std.fmt.bufPrint(&name_buf, "{s}_{d}.tmp\x00", .{ prefix, count }) catch "winloader_tmp.tmp\x00";
+    const name = std.fmt.bufPrint(&name_buf, "{s}_{d}.tmp\x00", .{ prefix, count }) catch "zine_tmp.tmp\x00";
 
     const alloc_ptr = std.heap.page_allocator.alloc(u8, name.len) catch return 0;
     @memcpy(alloc_ptr[0..name.len], name[0..name.len]);

@@ -99,7 +99,7 @@ The loader subsystem consists of four core modules and three resource parsers:
 |--------|---------------|
 | [module.zig](../src/loader/module.zig) | Loads a PE file from disk, maps it into memory via `platform.mmap`, copies section data, and applies base relocations if the image was loaded at a non-preferred address. |
 | [registry.zig](../src/loader/registry.zig) | Maintains a name → `Module*` mapping and search path list. Handles DLL (Dynamic Link Library) search order. |
-| [env.zig](../src/loader/env.zig) | The `Environment` struct ties together the module registry and built-in stub exports. Provides `resolveExport()` which first checks loaded PE DLLs, then falls back to built-in stubs. Also contains `addBuiltinExportComptime()`, which generates WASM thunk handlers at compile time. |
+| [env.zig](../src/loader/env.zig) | The `Environment` struct ties together the module registry and built-in stub exports. Provides `resolveExport()` which first checks built-in stubs (our verified implementations), then falls back to PE DLLs loaded from disk. Also contains `addBuiltinExportComptime()`, which generates WASM thunk handlers at compile time. |
 | [loader.zig](../src/loader/loader.zig) | Walks the PE import directory, resolves each function by name or ordinal, and patches the IAT (Import Address Table). On native targets, writes host function addresses directly. On WASM, allocates `INT 0xFE` thunk stubs in guest memory. Also calls `DllMain` (`DLL_PROCESS_ATTACH`) for loaded PE DLLs. |
 
 #### Import Resolution Flow
@@ -110,7 +110,7 @@ flowchart TD
     B --> C[Load dependency via Registry]
     C --> D{For each function}
     D --> E{Import by name or ordinal?}
-    E -->|Name| F[resolveExport: PE DLLs → Builtin stubs]
+    E -->|Name| F[resolveExport: Builtin stubs → PE DLLs]
     E -->|Ordinal| G[resolveExport with ordinal_N key]
     F --> H{Found?}
     G --> H
@@ -161,18 +161,18 @@ On WASM and x86_64, Win32 API calls can't be dispatched by jumping to native fun
 
 [`src/win32/`](../src/win32/)
 
-Zine implements 31 DLL stub modules that provide Win32 API compatibility. Each module exports a `register()` function that adds its exports to the `Environment`. Unresolved functions fall back to `not_implemented`, which prints a diagnostic and exits.
+Zine implements 37 DLL stub modules that provide Win32 API compatibility (35 always registered, plus 2 WASM-only). Each module exports a `register()` function that adds its exports to the `Environment`. Unresolved functions fall back to `not_implemented`, which prints a diagnostic and exits.
 
 | Category | Stubs |
 |----------|-------|
 | **CRT (C Runtime)** | `msvcrt.zig` (argc/argv/envp, malloc/free, stdio, string functions) |
-| **Kernel** | `kernel32.zig`, `ntdll.zig` (process, memory, file I/O, heap, threading, registry) |
+| **Kernel** | `kernel32.zig` (process, memory, file I/O, heap, threading, registry), `ntdll.zig` (NT system information queries) |
 | **User Interface** | `user32.zig`, `comctl32.zig`, `comdlg32.zig`, `shell32.zig` |
 | **Graphics** | `gdi32.zig` (GDI — Graphics Device Interface), `ddraw.zig` (DirectDraw), `d3d8.zig` (Direct3D 8) |
 | **Audio/Input** | `dsound.zig` (DirectSound), `winmm.zig` (Windows Multimedia), `dinput.zig` (DirectInput), `dinput8.zig` (DirectInput8), `mss32.zig` (Miles Sound System) |
 | **Security/RPC** | `advapi32.zig`, `rpcrt4.zig` (RPC — Remote Procedure Call), `ole32.zig` (OLE — Object Linking and Embedding), `oleaut32.zig` (OLE Automation) |
 | **Networking** | `wsock32.zig`, `ws2_32.zig`, `icmp.zig` |
-| **Other** | `imm32.zig`, `version.zig`, `winspool.zig`, `nddeapi.zig`, `imagehlp.zig`, `mfc42.zig`, `cards.zig`, `vdmdbg.zig`, `mag_hook.zig` |
+| **Other** | `imm32.zig`, `version.zig`, `winspool.zig`, `setupapi.zig`, `shlwapi.zig`, `msvcp60.zig`, `mpr.zig`, `nddeapi.zig`, `imagehlp.zig`, `mfc42.zig`, `cards.zig`, `vdmdbg.zig`, `mag_hook.zig`, `mspdb60.zig` (WASM), `rcdll.zig` (WASM) |
 
 #### Calling Convention
 
@@ -231,12 +231,15 @@ A comptime-selected backend that abstracts OS-specific functionality:
 | `yield`/`sleep`/`Mutex` | `std.Thread` primitives | No-ops / no-op mutex |
 | `readExceptionList` | Reads `FS:0` (SEH chain head) on x86 | Returns `0xFFFFFFFF` |
 | `getProcessId` | Host PID | Fixed constant |
-| `getStackBounds` | Reads `/proc/self/maps` | Conservative defaults from frame address |
+| `getStackBounds` | Reads `/proc/self/maps` | Returns zeros (not available on WASM) |
 | `installSegfaultHandler` | `sigaction(SIGSEGV, SIGFPE)` | No-op |
 | `mapNullPage` | `mmap` at address 0 | No-op |
 | `raiseStackLimit` | Sets `RLIMIT_STACK` to 64 MB | No-op |
 | `exitProcess` | `std.process.exit` | `std.process.exit` |
-| `timestamp` | `std.time.timestamp` | Returns 0 |
+| `timestamp` | `std.time.timestamp` (epoch seconds) | Returns 0 |
+| `mprotect`/`mprotectExec` | Linux `mprotect` | No-op |
+| `pipe`/`dup` | Linux `pipe2`/`dup` | Returns error |
+| `writeGuestPtr` | Inline 32-bit write (identity on x86) | — |
 
 ---
 
@@ -369,7 +372,7 @@ sequenceDiagram
 
     CLI->>Main: Parse arguments
     Main->>Env: Environment.init()
-    Main->>Stubs: Register 31 DLL stub modules
+    Main->>Stubs: Register 37 DLL stub modules
     Main->>Reg: Add search paths (cwd, exe dir)
     Main->>Reg: loadModule(target.exe)
     Reg->>Mod: Module.load() — parse PE, mmap, relocate
@@ -396,7 +399,7 @@ The build system includes a `test` step that runs embedded unit tests in the x86
 zig build test
 ```
 
-Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `decode_cache.zig`, `execute.zig`, `thunks.zig`, `jit/emitter.zig`, `jit/compiler.zig`, `profiler.zig`.
+Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `decode_cache.zig`, `execute.zig`, `thunks.zig`, `jit/compiler.zig`, `profiler.zig`, `path_utils.zig`, `bat.zig`, `win32/user32.zig`, `win32/ntdll/ntapi.zig`, `win32/advapi32/services.zig`, `win32/advapi32/security.zig`.
 
 ---
 
@@ -409,8 +412,14 @@ zine/
 ├── docs/                    # Documentation
 │   ├── ARCHITECTURE.md      # This file
 │   ├── CLI_STATUS.md        # CLI functionality status
+│   ├── cross-boundary-data-design.md # Cross-boundary data handling architecture
+│   ├── DX_VTABLES.md        # DirectX COM vtable layouts
 │   ├── FLTK_PLAN.md         # FLTK native GUI plan
 │   ├── JIT.md               # JIT compiler architecture
+│   ├── MEMORY_LAYOUT.md     # Memory layout details
+│   ├── phase0-audit-results.md # Phase 0 codebase audit findings
+│   ├── TODO.md              # Task tracking
+│   ├── TODO_UI.md           # UI task tracking
 │   ├── WASM_PLAN.md         # WASM porting plan
 │   ├── WEBGPU_TRANSLATION.md # DirectDraw/D3D → WebGPU translation guide
 │   ├── WIN32_STATUS.md      # Win32 API implementation status
@@ -420,7 +429,8 @@ zine/
 │   ├── main.zig             # Native entry point
 │   ├── wasm_main.zig        # WASM entry point
 │   ├── host_main.zig        # zine-host entry point (wasmer wrapper with JIT)
-│   ├── root.zig             # Shared module root (imported as "zine")
+│   ├── test_root.zig        # Unified test root (imports all tested modules)
+│   ├── win32_dll_api.zig    # Public API surface for standalone DLL builds
 │   ├── runner.zig           # Shared PE loading and execution pipeline
 │   ├── pe.zig               # PE format structures and parser
 │   ├── pe_resources.zig     # PE resource directory structures
@@ -432,7 +442,6 @@ zine/
 │   ├── profiler.zig         # Profiling (EIP heat map, opcodes, stubs)
 │   ├── version.zig          # Single source of truth for version string
 │   ├── platform/
-│   │   ├── interface.zig    # Comptime backend selection
 │   │   ├── native.zig       # Linux-specific implementation
 │   │   └── wasm.zig         # WASM-specific implementation
 │   ├── x86/
@@ -461,7 +470,7 @@ zine/
 │   │   ├── host.zig         # JIT-host interface and CPU state transfer
 │   │   ├── host_wasm.zig    # WASM-side JIT host imports
 │   │   └── wasm.zig         # WASM constants and opcodes
-│   ├── win32/               # Win32 API stub implementations (31+ DLLs)
+│   ├── win32/               # Win32 API stub implementations (37 DLLs)
 │   │   ├── shared.zig       # Shared utilities, allocators, generic N-arg stubs
 │   │   ├── teb.zig          # Thread Environment Block (TEB/PEB/TIB)
 │   │   ├── constants.zig    # Shared Win32 constant definitions
@@ -473,7 +482,7 @@ zine/
 │   │   ├── user32.zig, user32/       # Window mgmt, messaging, dialogs, input
 │   │   ├── gdi32.zig, gdi32/         # Graphics Device Interface (dc, object, drawing)
 │   │   ├── ntdll.zig, ntdll/         # NT system information queries
-│   │   ├── advapi32.zig, advapi32/   # Registry stubs
+│   │   ├── advapi32.zig, advapi32/   # Registry, security, services
 │   │   ├── comdlg32.zig, comdlg32/  # Common dialogs (file open)
 │   │   ├── ddraw.zig, ddraw/         # DirectDraw COM vtable emulation
 │   │   ├── dsound.zig, dsound/       # DirectSound COM vtable stubs
@@ -494,14 +503,18 @@ zine/
 │   │   ├── mspdb60.zig               # MRE/PDB stubs (WASM)
 │   │   ├── rcdll.zig                 # Resource compiler stubs (WASM)
 │   │   ├── imm32.zig, version.zig, winspool.zig, setupapi.zig
+│   │   ├── shlwapi.zig, msvcp60.zig, mpr.zig
 │   │   └── nddeapi.zig, cards.zig, icmp.zig, vdmdbg.zig, mag_hook.zig
-│   └── gui/
-│       ├── renderer.zig     # Rendering API surface & state cache
-│       ├── web_ui.zig       # WebSocket server & HTTP file serving
-│       ├── fltk_ui.zig      # FLTK native GUI backend (experimental)
-│       ├── app.js           # Frontend JavaScript
-│       ├── index.html       # Frontend HTML
-│       └── win2k.css        # Windows 2000 theme CSS
+│   ├── gui/
+│   │   ├── renderer.zig     # Rendering API surface & state cache
+│   │   ├── web_ui.zig       # WebSocket server & HTTP file serving
+│   │   ├── fltk_ui.zig      # FLTK native GUI backend (experimental)
+│   │   ├── app.js           # Frontend JavaScript
+│   │   ├── index.html       # Frontend HTML
+│   │   └── win2k.css        # Windows 2000 theme CSS
+│   └── dll/                 # Standalone DLL build sources (zig build -Ddll=true)
+│       ├── msvcrt_dll.zig, kernel32_dll.zig, user32_dll.zig, ...
+│       └── dll_common.zig   # Shared DLL build utilities
 ├── tests/                   # Test data (PE files, scripts)
 └── tools/                   # MSVC compiler test toolchain
 ```

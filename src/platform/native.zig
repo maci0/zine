@@ -1,8 +1,8 @@
-// Platform backend: Native Linux (x86 / x86_64)
-//
-// Uses POSIX syscalls (mmap, sigaction, /proc/self/maps), inline asm for
-// FS-segment setup, and std.Thread.  This file is only compiled when
-// targeting a native CPU architecture.
+//! Platform backend: Native Linux (x86 / x86_64).
+//!
+//! Uses POSIX syscalls (mmap, sigaction, /proc/self/maps), inline asm for
+//! FS-segment setup, and std.Thread.  Compiled only when targeting a native
+//! CPU architecture.  Architecture-specific code is gated on is_x86/is_x86_64.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -154,7 +154,7 @@ pub fn exitProcess(code: u8) noreturn {
     std.process.exit(code);
 }
 
-/// Returns a high-resolution timestamp in nanoseconds.
+/// Returns the current timestamp as a Unix epoch value (seconds).
 pub fn timestamp() i64 {
     return std.time.timestamp();
 }
@@ -341,6 +341,15 @@ pub fn mprotect(addr: usize, len: usize, readable: bool, writable: bool, executa
     _ = std.os.linux.mprotect(@ptrFromInt(addr), len, prot);
 }
 
+/// Mark a memory region as read-write-execute. Used when VirtualAlloc
+/// re-commits a region with PAGE_EXECUTE_* protection.
+pub fn mprotectExec(addr: *anyopaque, len: usize) !void {
+    const aligned_addr = @intFromPtr(addr) & ~@as(usize, 4095);
+    const aligned_len = ((@intFromPtr(addr) + len + 4095) & ~@as(usize, 4095)) - aligned_addr;
+    const prot: u32 = std.posix.PROT.READ | std.posix.PROT.WRITE | std.posix.PROT.EXEC;
+    _ = std.os.linux.mprotect(@ptrFromInt(aligned_addr), aligned_len, prot);
+}
+
 // -------------------------------------------------------------------------
 // Pipe / Dup
 // -------------------------------------------------------------------------
@@ -374,6 +383,13 @@ const reg_di = if (native_arch == .x86) REG.EDI else @as(usize, REG.RDI);
 const reg_bp = if (native_arch == .x86) REG.EBP else @as(usize, REG.RBP);
 const reg_fl = if (native_arch == .x86) REG.EFL else @as(usize, REG.EFL);
 
+/// Central signal handler for memory faults (SIGSEGV/SIGBUS), illegal instructions (SIGILL),
+/// and floating-point exceptions (SIGFPE) occurring during natively executed guest code.
+///
+/// This function translates Linux signals into Windows `EXCEPTION_RECORD` structures,
+/// identifies whether the fault occurred in guest 32-bit code (CS=0x23) or host 64-bit code
+/// (CS=0x33), and dispatches the exception to the guest's SEH chain (via INT 0xFE emulation)
+/// or fatally crashes if the fault occurred within the emulator's host code.
 fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const anyopaque) callconv(.c) void {
     const uctx = @as(*std.posix.ucontext_t, @ptrCast(@constCast(@alignCast(ctx_ptr.?))));
     const fault_addr = @intFromPtr(info.fields.sigfault.addr);
@@ -472,7 +488,13 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     // Handle privileged I/O port instructions (IN/OUT) — skip directly.
     // These cause #GP on Linux (SIGSEGV). cpuidsdk.dll uses VMware's backdoor
     // I/O port for detection. Skipping with EAX=0 indicates "not VMware".
-    if (sig == std.posix.SIG.SEGV and ip != 0 and ip < 0xF0000000) {
+    // Only check for I/O instructions if IP is in known mapped memory.
+    // IP might contain a corrupt value (e.g., path string "LER\") that
+    // would crash when we try to read instruction bytes from it.
+    const ip_in_known_range = (ip >= 0x400000 and ip < 0x900000) or // PE image
+        (ip >= 0x20140000 and ip < 0x20200000) or // VirtualAlloc executable (trampolines)
+        (ip >= 0x70000000 and ip < 0x80000000); // Zig binary
+    if (sig == std.posix.SIG.SEGV and ip != 0 and ip_in_known_range) {
         const code = @as([*]const u8, @ptrFromInt(ip));
         const is_io = switch (code[0]) {
             0xEC, 0xED, 0xEE, 0xEF => true,
@@ -498,6 +520,14 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     // fall through to the SEH handler dispatch below.
     const k32 = @import("../win32/kernel32.zig");
     const is_app_code = (ip >= k32.app_code_start and ip < k32.app_code_end);
+    // Detect execution in PE data/BSS sections — this means a bad jump
+    // (e.g., NULL function pointer from corrupt data). These should be
+    // treated as crashes, not valid code.
+    const is_pe_data = (ip >= k32.app_code_end and ip < k32.app_code_end + 0x200000 and ip >= 0x400000);
+    // VirtualAlloc'd code (Delphi runtime, JIT trampolines) lives in the
+    // low address space outside the main PE. Treat any mapped memory in
+    // the 0x10000–0x70000000 range as potentially valid guest code.
+    const is_guest_alloc = (ip >= 0x10000 and ip < 0x70000000 and !is_app_code and !is_pe_data);
     const is_native_dll = (ip >= 0x10000000 and ip < 0x30000000) or
         (ip >= 0xF0000000); // loaded DLLs (may be relocated)
     // Check if IP is within the zine binary's code segment. We use the address
@@ -508,35 +538,112 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     const zine_code_ref = @intFromPtr(&sigsegvHandler);
     const is_zine_code = (ip >= zine_code_ref -| (64 * 1024 * 1024)) and
         (ip < zine_code_ref + (64 * 1024 * 1024));
-    if (ip != 0 and !is_app_code and !is_native_dll and !is_zine_code and sig != std.posix.SIG.ILL) {
+    // Handle clearly invalid IPs (null pointer, corrupt addresses like 0xAAAAAAAA).
+    // Invalid IP (null, corrupt pointer, freed memory, etc.)
+    // Try to recover by scanning the stack for a valid return address.
+    // If recovery fails after a few tries, halt the thread.
+    if (!ip_in_known_range and sig == std.posix.SIG.SEGV) {
+        const InvalidIPState = struct {
+            var recover_count: u32 = 0;
+        };
+        InvalidIPState.recover_count += 1;
+
+        // Log full register state for debugging
+        if (trace.enable_tracing) {
+            const esp_dbg: usize = @bitCast(uctx.mcontext.gregs[reg_sp]);
+            trace.print("AppCompat: Invalid IP=0x{X} (attempt {d})\n", .{ ip, InvalidIPState.recover_count });
+            trace.print("  EAX=0x{X} EBX=0x{X} ECX=0x{X} EDX=0x{X}\n", .{
+                @as(usize, @bitCast(uctx.mcontext.gregs[reg_ax])),
+                @as(usize, @bitCast(uctx.mcontext.gregs[reg_bx])),
+                @as(usize, @bitCast(uctx.mcontext.gregs[reg_cx])),
+                @as(usize, @bitCast(uctx.mcontext.gregs[reg_dx])),
+            });
+            trace.print("  ESP=0x{X} EBP=0x{X} ESI=0x{X} EDI=0x{X}\n", .{
+                esp_dbg,
+                @as(usize, @bitCast(uctx.mcontext.gregs[reg_bp])),
+                @as(usize, @bitCast(uctx.mcontext.gregs[reg_si])),
+                @as(usize, @bitCast(uctx.mcontext.gregs[reg_di])),
+            });
+            // Dump top of stack
+            if (esp_dbg > 0x10000 and esp_dbg < 0xFFFFF000) {
+                var si: usize = 0;
+                while (si < 16) : (si += 1) {
+                    const sv = @as(*align(1) const u32, @ptrFromInt(esp_dbg + si * 4)).*;
+                    trace.print("  stack[{d}] = 0x{X}\n", .{ si, sv });
+                }
+            }
+        }
+
+        if (InvalidIPState.recover_count <= 3) {
+            const esp_r: usize = @bitCast(uctx.mcontext.gregs[reg_sp]);
+            if (esp_r > 0x10000 and esp_r < 0xFFFFF000) {
+                // Pop the return address (pushed by the CALL instruction)
+                const ret_addr = @as(*align(1) const u32, @ptrFromInt(esp_r)).*;
+                if (trace.enable_tracing) trace.print("  [ESP] = 0x{X}, app_code={d}\n", .{ ret_addr, @as(u8, if (ret_addr >= k32.app_code_start and ret_addr < k32.app_code_end) 1 else 0) });
+                if (ret_addr >= k32.app_code_start and ret_addr < k32.app_code_end) {
+                    uctx.mcontext.gregs[reg_sp] = @bitCast(esp_r + 4);
+                    uctx.mcontext.gregs[reg_ax] = 0;
+                    uctx.mcontext.gregs[reg_bx] = 0; // Clear corrupt EBX
+                    uctx.mcontext.gregs[reg_ip] = ret_addr;
+                    if (trace.enable_tracing) trace.print("AppCompat: Invalid IP=0x{X}, returning to caller 0x{X}\n", .{ ip, ret_addr });
+                    return;
+                }
+            }
+        }
+        // Recovery exhausted — halt the thread but keep web server alive
+        if (trace.enable_tracing) trace.print("AppCompat: Invalid IP=0x{X} — halting main thread\n", .{ip});
+        while (true) {
+            const req = std.os.linux.timespec{ .sec = 1, .nsec = 0 };
+            _ = std.os.linux.nanosleep(&req, null);
+        }
+    }
+
+    if (ip != 0 and !is_app_code and !is_guest_alloc and !is_native_dll and !is_zine_code and sig != std.posix.SIG.ILL) {
         // Bad function pointer call from game code — try to recover
-        // This handles both near-null (0x40) and garbage (0xF0EB1210) addresses
+        const BadIPState = struct {
+            var last_recover_addr: u32 = 0;
+            var recover_count: u32 = 0;
+        };
         const esp: usize = @bitCast(uctx.mcontext.gregs[reg_sp]);
         if (esp > 0x1000) {
             const stack = @as([*]const u32, @ptrFromInt(esp & ~@as(usize, 3)));
-            log.warn("AppCompat: Bad IP=0x{X} jump. Stack walk:", .{ip});
+            // Find a return address, skipping addresses we've already tried
             var found_ret: ?u32 = null;
             var found_idx: usize = 0;
             for (0..200) |si| {
                 const val = stack[si];
                 if (val >= k32.app_code_start and val < k32.app_code_end) {
+                    // Skip addresses in the same function we keep recovering to
+                    if (BadIPState.last_recover_addr != 0 and
+                        BadIPState.recover_count > 3)
+                    {
+                        // Skip addresses within ±1024 of previous recovery
+                        const last = BadIPState.last_recover_addr;
+                        if (val >= last -| 1024 and val <= last + 1024) continue;
+                    }
                     if (found_ret == null) {
                         found_ret = val;
                         found_idx = si;
                     }
-                    if (si < 10 or found_ret != null) {
-                        log.warn("  stack[{d}] = 0x{X} <app>", .{ si, val });
-                    }
-                } else if (si < 10) {
-                    log.warn("  stack[{d}] = 0x{X}", .{ si, val });
+                    break; // Use first matching
                 }
             }
             if (found_ret) |ret| {
-                log.info("AppCompat: Recovering from bad IP=0x{X} to 0x{X} (stack[{d}])", .{ ip, ret, found_idx });
-                uctx.mcontext.gregs[reg_ip] = ret;
-                uctx.mcontext.gregs[reg_sp] = @bitCast(esp + (found_idx + 1) * 4);
-                uctx.mcontext.gregs[reg_ax] = 0;
-                return;
+                if (ret == BadIPState.last_recover_addr) {
+                    BadIPState.recover_count += 1;
+                } else {
+                    BadIPState.last_recover_addr = ret;
+                    BadIPState.recover_count = 1;
+                }
+                if (BadIPState.recover_count <= 20) {
+                    if (trace.enable_tracing) trace.print("AppCompat: Bad IP=0x{X}, recovering to 0x{X} (count={d})\n", .{ ip, ret, BadIPState.recover_count });
+                    uctx.mcontext.gregs[reg_ip] = ret;
+                    uctx.mcontext.gregs[reg_sp] = @bitCast(esp + (found_idx + 1) * 4);
+                    uctx.mcontext.gregs[reg_ax] = 0;
+                    return;
+                }
+                // Too many recoveries — stop trying
+                if (trace.enable_tracing) trace.print("AppCompat: Too many recoveries, giving up\n", .{});
             }
         }
         // True emulator crash — print diagnostics and exit
@@ -600,28 +707,104 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         }
     }
 
-    // Application Compatibility Shim for NULL pointer dereferences.
-    // Track repeated faults at the same IP to detect infinite loops
-    // (e.g., code that retries a load from a null pointer in a loop).
+    // Early re-entrancy check: if we're already inside RaiseException's SEH
+    // dispatch and the handler itself faults, signal the fault and skip the
+    // instruction. Do NOT go through the NULL loop detector or AppCompat shims.
+    {
+        const k32_error_early = @import("../win32/kernel32/error.zig");
+        if (k32_error_early.raise_exception_depth > 0) {
+            k32_error_early.handler_faulted = true;
+            // Skip the faulting instruction to let the handler return
+            if (ip != 0 and ip < 0x70000000) {
+                const ptr2 = @as([*]const u8, @ptrFromInt(ip));
+                const skip2: usize = if (ptr2[0] == 0x89 or ptr2[0] == 0x8B) blk2: {
+                    const modrm2 = ptr2[1];
+                    const mod2 = (modrm2 >> 6) & 3;
+                    const rm2 = modrm2 & 7;
+                    var s: usize = 2;
+                    if (rm2 == 4 and mod2 != 3) s += 1;
+                    if (mod2 == 1) s += 1 else if (mod2 == 2 or (mod2 == 0 and rm2 == 5)) s += 4;
+                    break :blk2 s;
+                } else 2;
+                uctx.mcontext.gregs[reg_ip] += @intCast(skip2);
+                if (ptr2[0] == 0x8B) uctx.mcontext.gregs[@as(usize, (ptr2[1] >> 3) & 7)] = 0;
+            }
+            return;
+        }
+    }
+
+    // AppCompat: skip Delphi @LStrCmp reads from corrupt string pointers.
+    // When a Delphi object has an uninitialized string field pointing to
+    // unmapped memory, the string comparison crashes. Skip the length read
+    // and return 0 (empty string) so the comparison fails gracefully.
+    if (fault_addr >= 0x1000 and is_app_code and sig == std.posix.SIG.SEGV) {
+        const ptr3 = @as([*]const u8, @ptrFromInt(ip));
+        // MOV EAX, [ESI-4]  (8B 46 FC) — Delphi @LStrCmp string length
+        // MOV EDX, [EDI-4]  (8B 57 FC) — second string length
+        if (ptr3[0] == 0x8B and (ptr3[2] == 0xFC) and
+            ((ptr3[1] == 0x46) or (ptr3[1] == 0x57)))
+        {
+            const reg3 = (ptr3[1] >> 3) & 7;
+            const dest: usize = switch (reg3) {
+                0 => reg_ax, 2 => reg_dx, else => reg_ax,
+            };
+            uctx.mcontext.gregs[dest] = 0;
+            uctx.mcontext.gregs[reg_ip] += 3;
+            return;
+        }
+
+        // AppCompat: Auto-commit pages within known VirtualAlloc reservations.
+        // Only commit pages in the legitimate VirtualAlloc range (0x20000000+).
+        if (fault_addr >= 0x20000000 and fault_addr < 0x50000000) {
+            const page_addr = fault_addr & ~@as(usize, 0xFFF);
+            const result = std.posix.mmap(
+                @ptrFromInt(page_addr),
+                4096,
+                std.posix.PROT.READ | std.posix.PROT.WRITE | std.posix.PROT.EXEC,
+                .{ .TYPE = .PRIVATE, .ANONYMOUS = true, .FIXED = true },
+                -1,
+                0,
+            ) catch null;
+            if (result != null) {
+                if (trace.enable_tracing) trace.print("AppCompat: Auto-committed page at 0x{X} for fault at IP=0x{X}\n", .{ page_addr, ip });
+                return;
+            }
+        }
+
+    }
+
+
+    // Track repeated faults at the same IP to detect infinite loops.
     const S = struct {
         var last_null_ip: usize = 0;
         var null_repeat_count: u32 = 0;
     };
-    if (fault_addr < 0x1000 and ip != 0) {
-        if (ip == S.last_null_ip) {
-            S.null_repeat_count += 1;
-            if (S.null_repeat_count > 5) {
-                // Stuck in a loop — crash cleanly instead of spinning forever
-                // Use exitProcess directly — log.fatal may crash if FS=TEB (x86_64)
-                _ = std.posix.write(2, "NULL read loop, aborting.\n") catch {};
-                exitProcess(1);
+
+    const skip_appcompat_null = blk: {
+        if (fault_addr < 0x1000 and ip != 0 and is_app_code) {
+            if (ip == S.last_null_ip) {
+                S.null_repeat_count += 1;
+                if (S.null_repeat_count > 3) break :blk false;
+            } else {
+                S.last_null_ip = ip;
+                S.null_repeat_count = 1;
             }
-        } else {
-            S.last_null_ip = ip;
-            S.null_repeat_count = 1;
+            const seh_check = readExceptionList();
+            break :blk (seh_check != 0 and seh_check != 0xFFFFFFFF);
+        }
+        break :blk false;
+    };
+
+    if (!skip_appcompat_null) {
+
+    if (fault_addr < 0x1000 and ip != 0) {
+        if (S.null_repeat_count > 50) {
+            _ = std.posix.write(2, "NULL read loop, aborting.\n") catch {};
+            exitProcess(1);
         }
     }
     if (fault_addr < 0x1000 and ip != 0) {
+
         const ptr = @as([*]u8, @ptrFromInt(ip));
 
         // F2 AE = repnz scasb (strlen pattern: ecx=-1, al=0, scan es:[edi])
@@ -710,7 +893,10 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
             uctx.mcontext.gregs[reg_ip] += @intCast(skip);
             return;
         }
+
     }
+
+    } // end if (!skip_appcompat_null)
 
     const exc_code: u32 = if (sig == std.posix.SIG.ILL)
         0xC000001D // EXCEPTION_ILLEGAL_INSTRUCTION
@@ -743,7 +929,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     // Verify ESP is in a plausible mapped range before writing to avoid
     // crashing the signal handler itself.
     var esp: u32 = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_sp])));
-    if (esp < 0x10000 or esp > 0x7FFFF000) {
+    if (esp < 0x10000) {
         log.fatal("SEH dispatch: ESP=0x{X} out of range at IP=0x{X}", .{ esp, ip });
         exitProcess(1);
     }
@@ -765,7 +951,12 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         uctx.mcontext.gregs[REG.CSGSFS] = @bitCast((csgsfs & ~@as(usize, 0xFFFF)) | 0x33);
     }
 
-    if (trace.enable_tracing) trace.print("SEH: Redirecting to RaiseException(code={x}) for exception at 0x{X}\n", .{ exc_code, ip });
+    if (trace.enable_tracing) trace.print("SEH: Redirecting to RaiseException(code={x}) for exception at 0x{X}, fault_addr=0x{X}, EAX=0x{X} EBX=0x{X} ECX=0x{X}\n", .{
+        exc_code, ip, fault_addr,
+        @as(usize, @bitCast(uctx.mcontext.gregs[reg_ax])),
+        @as(usize, @bitCast(uctx.mcontext.gregs[reg_bx])),
+        @as(usize, @bitCast(uctx.mcontext.gregs[reg_cx])),
+    });
     return;
 
 }
@@ -795,7 +986,11 @@ pub fn mapNullPage() void {
         .{ .TYPE = .PRIVATE, .ANONYMOUS = true, .FIXED = true },
         -1,
         0,
-    ) catch {};
+    ) catch |e| {
+        // Non-fatal: some programs work without NULL page mapping, but
+        // Delphi apps that read NULL pointers will segfault without it.
+        log.warn("failed to map null page (mmap_min_addr?): {} — Delphi NULL reads may crash", .{e});
+    };
 }
 
 /// Increase the stack rlimit to avoid C1063.
@@ -804,7 +999,9 @@ pub fn raiseStackLimit() void {
         if (std.posix.getrlimit(.STACK)) |rlim| {
             var new_rlim = rlim;
             new_rlim.cur = rlim.max;
-            _ = std.posix.setrlimit(.STACK, new_rlim) catch {};
+            _ = std.posix.setrlimit(.STACK, new_rlim) catch |e| {
+                log.warn("failed to raise stack limit: {} — deep recursion (MSVC _chkstk) may fail", .{e});
+            };
         } else |_| {}
     }
 }

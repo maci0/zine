@@ -110,3 +110,58 @@ pub fn stub_GetQueueStatus(flags: u32) callconv(w32cc.WINAPI) u32 {
     _ = flags;
     return 0;
 }
+
+// -------------------------------------------------------------------------
+// Keyboard / cursor / input stubs (moved from misc.zig)
+// -------------------------------------------------------------------------
+
+pub fn stub_MessageBeep(uType: u32) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("USER32: MessageBeep(type=0x{X})\n", .{uType});
+    return 1;
+}
+
+pub fn stub_GetKeyboardLayout(idThread: u32) callconv(w32cc.WINAPI) usize {
+    _ = idThread;
+    return 0x04090409; // English US
+}
+
+pub fn stub_GetDoubleClickTime() callconv(w32cc.WINAPI) u32 {
+    return 500;
+}
+
+pub fn stub_GetCaretBlinkTime() callconv(w32cc.WINAPI) u32 {
+    return 530;
+}
+
+pub fn SetKeyboardState(lpKeyState: usize) callconv(w32cc.WINAPI) i32 {
+    if (lpKeyState != 0) {
+        @memcpy(&renderer.keyboard_state, @as([*]const u8, @ptrFromInt(lpKeyState))[0..256]);
+    }
+    return 1;
+}
+
+pub fn stub_ToAsciiEx(uVirtKey: u32, uScanCode: u32, lpKeyState: usize, lpChar: usize, uFlags: u32, dwhkl: usize) callconv(w32cc.WINAPI) i32 {
+    _ = uVirtKey;
+    _ = uScanCode;
+    _ = lpKeyState;
+    _ = lpChar;
+    _ = uFlags;
+    _ = dwhkl;
+    return 0;
+}
+
+pub fn stub_MapVirtualKeyA(uCode: u32, uMapType: u32) callconv(w32cc.WINAPI) u32 {
+    _ = uMapType;
+    return uCode; // Identity mapping
+}
+
+pub fn stub_VkKeyScanA(ch: u8) callconv(w32cc.WINAPI) i16 {
+    // Return the VK code for basic ASCII
+    return @as(i16, @intCast(ch));
+}
+
+pub fn stub_SetCursorPos(x: i32, y: i32) callconv(w32cc.WINAPI) i32 {
+    _ = x;
+    _ = y;
+    return 1;
+}

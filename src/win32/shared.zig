@@ -39,7 +39,9 @@ var heap_base: ?[*]u8 = null;
 var heap_pos: usize = 0;
 var heap_cap: usize = 0;
 
-var next_alloc_hint: usize = 0x60000000;
+// Guest VirtualAlloc allocations use a separate address range from the
+// zine internal heap to prevent Delphi's FastMM from confusing them.
+var next_alloc_hint: usize = 0x20000000;
 
 /// Returns a 64KB aligned memory address hint for allocations.
 ///
@@ -49,7 +51,7 @@ var next_alloc_hint: usize = 0x60000000;
 /// chunks at low addresses so guest 32-bit code can address them.
 ///
 /// Keeps a rolling hint for 64KB aligned allocations to satisfy Windows memory assumptions.
-/// Implementation status: Partially implemented.
+/// Implementation status: Partially implemented
 pub fn get_aligned_hint(size: usize) usize {
     const hint = next_alloc_hint;
     const aligned_size = (size + 0xFFFF) & ~@as(usize, 0xFFFF);
@@ -57,12 +59,17 @@ pub fn get_aligned_hint(size: usize) usize {
     return hint;
 }
 
+// Internal heap uses a separate address range (0x50000000+) to avoid
+// being adjacent to guest VirtualAlloc regions (0x61000000+).
+var internal_heap_hint: usize = 0x50000000;
+
 fn heapAlloc(size: usize) ?[*]u8 {
     const aligned = (size + 7) & ~@as(usize, 7); // 8-byte align
     if (heap_base == null or heap_pos + aligned > heap_cap) {
         const plt = @import("../platform.zig");
         const chunk_size = @max(aligned + 4096, heap_chunk_size);
-        const hint = get_aligned_hint(chunk_size);
+        const hint = internal_heap_hint;
+        internal_heap_hint += (chunk_size + 0xFFFF) & ~@as(usize, 0xFFFF);
         const mem = plt.mmap(@ptrFromInt(hint), chunk_size, false, -1, 0, false, false) catch return null;
         @memset(mem, 0);
         heap_base = mem.ptr;
@@ -80,7 +87,7 @@ fn heapAlloc(size: usize) ?[*]u8 {
 /// returns a guest virtual address. On native, it bump-allocates from a
 /// low-address heap.
 ///
-/// Implementation status: Partially implemented.
+/// Implementation status: Partially implemented
 pub fn raw_alloc(size: usize) ?*anyopaque {
     const actual_size = if (size == 0) @as(usize, 64) else size;
 
@@ -108,7 +115,7 @@ pub fn raw_alloc(size: usize) ?*anyopaque {
 ///
 /// If `old_ptr` is null, this is equivalent to `raw_alloc`.
 ///
-/// Implementation status: Partially implemented.
+/// Implementation status: Partially implemented
 pub fn raw_realloc(old_ptr: ?*anyopaque, new_size: usize) ?*anyopaque {
     if (new_size == 0) return null;
     if (old_ptr == null) return raw_alloc(new_size);
@@ -178,7 +185,7 @@ inline fn traceStub(comptime n: comptime_int) void {
                 const iat_addr = @as(*align(1) const u32, @ptrCast(call_site + 2)).*;
                 // Read the function pointer from the IAT
                 const func_ptr = @as(*align(1) const u32, @ptrFromInt(iat_addr)).*;
-                // Try to find unlresolved name from the IAT address
+                // Try to find unresolved name from the IAT address
                 if (x86_thunks.lookupUnresolvedName(iat_addr)) |name| {
                     trace.print(label ++ " [{s}] called from {x} (IAT=0x{x} -> 0x{x})\n", .{ name, ret_addr, iat_addr, func_ptr });
                 } else {

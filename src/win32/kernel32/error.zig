@@ -52,7 +52,32 @@ pub const EXCEPTION_REGISTRATION_RECORD = extern struct {
 
 /// Raises an exception in the calling thread.
 /// Implementation status: Partially implemented
+pub var raise_exception_depth: u32 = 0;
+/// Set when a nested exception occurs during handler execution.
+/// The handler dispatch loop checks this to skip the faulting handler.
+pub var handler_faulted: bool = false;
+
+/// When true, suppress ACCESS_VIOLATION exceptions during form initialization.
+/// This prevents Delphi's exception dialog loop from aborting CreateForm.
+pub var suppress_access_violations: bool = false;
+
 pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArguments: u32, lpArguments: usize) callconv(w32cc.WINAPI) void {
+    // During Delphi form creation, suppress access violations caused by
+    // uninitialized object pointers. This allows CreateForm to complete
+    // and connect event handlers, enabling painting and file listing.
+    if (suppress_access_violations and dwExceptionCode == 0xC0000005) {
+        if (trace.enable_tracing) trace.print("KERNEL32: RaiseException(AV) suppressed during form init\n", .{});
+        return;
+    }
+
+    // Guard against re-entrant exceptions (e.g., SEH handler itself faults).
+    if (raise_exception_depth >= 1) {
+        if (trace.enable_tracing) trace.print("KERNEL32: RaiseException(code={x}) — NESTED, signaling handler fault\n", .{dwExceptionCode});
+        handler_faulted = true;
+        return;
+    }
+    raise_exception_depth += 1;
+    defer raise_exception_depth -= 1;
     if (trace.enable_tracing) {
         trace.print("KERNEL32: RaiseException(code={x}, flags={x}, nArgs={d})\n", .{ dwExceptionCode, dwExceptionFlags, nNumberOfArguments });
         // For MSVC C++ exceptions (0xE06D7363), dump the exception args
@@ -168,16 +193,29 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
     else
         std.mem.zeroes(CONTEXT);
     ctx.ContextFlags = 0x10007; // CONTEXT_FULL
+    rec.ExceptionAddress = ctx.Eip; // for ContinueExecution loop detection
     saved_hw_context = null; // consume it
 
     var current_node = exception_list;
+    var seh_walk_count: u32 = 0;
     while (current_node != 0 and current_node != 0xFFFFFFFF) {
+        seh_walk_count += 1;
+        // Limit SEH walk depth for AV exceptions to prevent Delphi's
+        // exception handler from entering Format's infinite loop.
+        // The first handler (Delphi RTL filter) returns ContinueSearch.
+        // The second handler (_HandleOnException) does a longjmp to the
+        // except block which hangs in SysUtils.Format. Skip it.
+        if (dwExceptionCode == 0xC0000005 and seh_walk_count > 1) {
+            if (trace.enable_tracing) trace.print("  Skipping remaining handlers for AV (walk={d})\n", .{seh_walk_count});
+            break;
+        }
         if (trace.enable_tracing) trace.print("  SEH Node: {x}\n", .{current_node});
         const node = @as(*EXCEPTION_REGISTRATION_RECORD, @ptrFromInt(current_node));
         const handler = node.Handler;
 
         if (handler != 0) {
             if (trace.enable_tracing) trace.print("  Calling SEH Handler: {x}\n", .{handler});
+            handler_faulted = false;
             const disp = if (comptime platform.is_x86_64) blk: {
                 // On x86_64, SEH handlers are 32-bit PE code — call via compat mode
                 const compat_thunks = @import("../../x86/compat_thunks.zig");
@@ -193,15 +231,29 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
                 const func = @as(HandlerFn, @ptrFromInt(handler));
                 break :blk func(rec, current_node, ctx, 0);
             };
+            // If the handler itself faulted (nested exception), skip it
+            if (handler_faulted) {
+                handler_faulted = false;
+                if (trace.enable_tracing) trace.print("  Handler at {x} faulted, skipping to next\n", .{handler});
+                current_node = node.Next;
+                continue;
+            }
             if (trace.enable_tracing) trace.print("  Handler returned: {d}\n", .{disp});
 
             if (disp == 0) { // ExceptionContinueExecution
-                if (trace.enable_tracing) trace.print("  ExceptionContinueExecution: resuming at EIP={x}\n", .{ctx.Eip});
-                if (comptime platform.is_native) {
-                    resumeAtEip(ctx.Eip, ctx.Esp, ctx.Ebp, ctx.Eax, ctx.Ebx, ctx.Ecx, ctx.Edx, ctx.Esi, ctx.Edi);
-                    unreachable;
+                // If the handler didn't change EIP, continuing would re-fault
+                // at the same instruction. Treat as ExceptionContinueSearch
+                // to avoid infinite loops.
+                if (ctx.Eip == rec.ExceptionAddress) {
+                    if (trace.enable_tracing) trace.print("  ExceptionContinueExecution: EIP unchanged ({x}), treating as ContinueSearch\n", .{ctx.Eip});
+                } else {
+                    if (trace.enable_tracing) trace.print("  ExceptionContinueExecution: resuming at EIP={x}\n", .{ctx.Eip});
+                    if (comptime platform.is_native) {
+                        resumeAtEip(ctx.Eip, ctx.Esp, ctx.Ebp, ctx.Eax, ctx.Ebx, ctx.Ecx, ctx.Edx, ctx.Esi, ctx.Edi);
+                        unreachable;
+                    }
+                    return;
                 }
-                return;
             } else if (disp == 1) { // ExceptionContinueSearch
             } else {
                 if (trace.enable_tracing) trace.print("  Unknown disposition or unwound natively.\n", .{});
@@ -225,6 +277,14 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
     // crashing — the guest code may be able to continue.
     if (dwExceptionCode & 0x20000000 != 0) {
         if (trace.enable_tracing) trace.print("KERNEL32: RaiseException(code={x}) — software exception, returning\n", .{dwExceptionCode});
+        return;
+    }
+
+    // For access violations, return gracefully instead of terminating.
+    // The Delphi exception handler was skipped to prevent an infinite loop
+    // in SysUtils.Format. Returning lets the app continue with degraded state.
+    if (dwExceptionCode == 0xC0000005) {
+        if (trace.enable_tracing) trace.print("KERNEL32: Unhandled AV — returning gracefully\n", .{});
         return;
     }
 
