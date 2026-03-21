@@ -18,7 +18,8 @@ const Body = emitter.Buffer;
 pub const JitCompiler = struct {
     allocator: std.mem.Allocator,
     module: emitter.WasmModule,
-    block_cache: std.AutoHashMap(u32, u32),
+    block_cache_keys: [4096]u32,
+    block_cache_vals: [4096]u32,
     /// WASM linear memory address of the JitCpuState struct.
     state_addr: u32,
 
@@ -27,15 +28,27 @@ pub const JitCompiler = struct {
         return .{
             .allocator = allocator,
             .module = emitter.WasmModule.init(allocator),
-            .block_cache = std.AutoHashMap(u32, u32).init(allocator),
+            .block_cache_keys = [_]u32{0xFFFFFFFF} ** 4096,
+            .block_cache_vals = [_]u32{0} ** 4096,
             .state_addr = state_addr,
         };
     }
 
     /// Frees all resources associated with the JIT compiler.
     pub fn deinit(self: *JitCompiler) void {
-        self.block_cache.deinit();
+        // Map properties bound statically.
         self.module.deinit();
+    }
+
+    pub fn isCached(self: *JitCompiler, eip: u32) bool {
+        const idx = eip & 4095;
+        return self.block_cache_keys[idx] == eip;
+    }
+
+    pub fn markCached(self: *JitCompiler, eip: u32, func_idx: u32) void {
+        const idx = eip & 4095;
+        self.block_cache_keys[idx] = eip;
+        self.block_cache_vals[idx] = func_idx;
     }
 
     /// Compiles a basic block of x86 code starting at `guest_eip` into a WASM binary.
@@ -47,7 +60,7 @@ pub const JitCompiler = struct {
     ///   - On exit: stores CPU state back, sets EIP + status
     pub fn compile(self: *JitCompiler, guest_eip: u32, x86_code: []const u8) ![]u8 {
         var offset: usize = 0;
-        try self.block_cache.put(guest_eip, @intCast(self.module.func_section.bytes.items.len));
+        self.markCached(guest_eip, @intCast(self.module.func_section.bytes.items.len));
 
         // Type section: 1 function type (void -> void)
         try self.module.type_section.appendUleb128(1);

@@ -778,8 +778,9 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
     defer jit.deinit();
 
     // Cache: guest_eip → host block id
-    var block_ids = std.AutoHashMap(u32, jit_host_mod.BlockId).init(allocator);
-    defer block_ids.deinit();
+    // Use a fixed 4096-entry ring buffer to bound memory
+    var block_ids_keys = [_]u32{0xFFFFFFFF} ** 4096;
+    var block_ids_vals = [_]jit_host_mod.BlockId{0} ** 4096;
 
     var blocks_compiled: u32 = 0;
     var blocks_executed: u32 = 0;
@@ -791,7 +792,9 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
         // Only attempt JIT at basic block entries (discontinuous EIP changes)
         if (eip != expected_next_eip) {
             // Try to execute a cached JIT block
-            if (block_ids.get(eip)) |block_id| {
+            const cache_idx = eip & 4095;
+            if (block_ids_keys[cache_idx] == eip) {
+                const block_id = block_ids_vals[cache_idx];
                 // Transfer CPU state to the shared struct
                 jit_state.eax = cpu.eax;
                 jit_state.ecx = cpu.ecx;
@@ -826,7 +829,7 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
             }
 
             // Compile a new block if we haven't seen this EIP
-            if (!jit.block_cache.contains(eip)) {
+            if (!jit.isCached(eip)) {
                 if (cpu.memory.readSlice(eip, 256)) |code| {
                     const block_len = runner.scanBlock(code);
                     if (block_len > 0) {
@@ -836,7 +839,9 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
                         if (jit.compile(eip, code[0..block_len])) |wasm_bin| {
                             // Send to host for compilation
                             if (jit_host.compile(wasm_bin)) |block_id| {
-                                block_ids.put(eip, block_id) catch {};
+                                const new_cache_idx = eip & 4095;
+                                block_ids_keys[new_cache_idx] = eip;
+                                block_ids_vals[new_cache_idx] = block_id;
                                 blocks_compiled += 1;
                                 if (blocks_compiled <= 10) {
                                     log.info("JIT: compiled+loaded block at EIP=0x{X} ({d} x86 bytes -> {d} WASM bytes)", .{

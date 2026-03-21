@@ -28,7 +28,10 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
 pub fn c_span(ptr: usize) []const u8 {
     if (ptr < 0x10000) return ""; // NULL or near-NULL pointer guard
     const p = @as([*]const u8, @ptrFromInt(addr(ptr)));
-    const len = std.mem.indexOfScalar(u8, p[0..65536], 0) orelse 65536;
+    var len: usize = 0;
+    while (len < 65536 and p[len] != 0) {
+        len += 1;
+    }
     return p[0..len];
 }
 
@@ -36,7 +39,10 @@ pub fn c_span(ptr: usize) []const u8 {
 pub fn c_span_w(ptr: usize) []const u16 {
     if (ptr < 0x10000) return &[_]u16{};
     const p = @as([*]const u16, @ptrFromInt(addr(ptr)));
-    const len = std.mem.indexOfScalar(u16, p[0..65536], 0) orelse 65536;
+    var len: usize = 0;
+    while (len < 65536 and p[len] != 0) {
+        len += 1;
+    }
     return p[0..len];
 }
 
