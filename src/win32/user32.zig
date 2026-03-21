@@ -144,8 +144,8 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetWindowPlacement", window.GetWindowPlacement);
     try environment.addBuiltinExportComptime(m, "SetWindowPlacement", window.stub_SetWindowPlacement);
     try environment.addBuiltinExportComptime(m, "WinHelpA", dialog.stub_WinHelpA);
-    try environment.addBuiltinExportComptime(m, "DrawTextA", format.stub_DrawTextA);
-    try environment.addBuiltinExportComptime(m, "DrawTextW", format.stub_DrawTextW);
+    try environment.addBuiltinExportComptime(m, "DrawTextA", format.DrawTextA);
+    try environment.addBuiltinExportComptime(m, "DrawTextW", format.DrawTextW);
     try environment.addBuiltinExportComptime(m, "CharLowerA", char.CharLowerA);
     try environment.addBuiltinExportComptime(m, "CharUpperA", char.CharUpperA);
     try environment.addBuiltinExportComptime(m, "CharUpperW", char.CharUpperW);
@@ -481,16 +481,16 @@ pub fn register(environment: *env.Environment) !void {
 // --- Generic stubs (imported from stub_common) ---
 
 const stub_common = @import("shared.zig");
-const stub_ret0_0 = stub_common.stub_args0;
-const stub_ret0_1 = stub_common.stub_args1;
-const stub_ret0_2 = stub_common.stub_args2;
-const stub_ret0_3 = stub_common.stub_args3;
-const stub_ret0_4 = stub_common.stub_args4;
-const stub_ret0_5 = stub_common.stub_args5;
-const stub_ret0_6 = stub_common.stub_args6;
-const stub_ret0_7 = stub_common.stub_args7;
-const stub_ret0_8 = stub_common.stub_args8;
-const stub_ret0_9 = stub_common.stub_args9;
+const stub_ret0_0 = stub_common.stub_args(0);
+const stub_ret0_1 = stub_common.stub_args(1);
+const stub_ret0_2 = stub_common.stub_args(2);
+const stub_ret0_3 = stub_common.stub_args(3);
+const stub_ret0_4 = stub_common.stub_args(4);
+const stub_ret0_5 = stub_common.stub_args(5);
+const stub_ret0_6 = stub_common.stub_args(6);
+const stub_ret0_7 = stub_common.stub_args(7);
+const stub_ret0_8 = stub_common.stub_args(8);
+const stub_ret0_9 = stub_common.stub_args(9);
 // --- Shared Types ---
 
 pub const RECT = extern struct {

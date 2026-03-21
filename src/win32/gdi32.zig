@@ -324,8 +324,8 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "SetDIBitsToDevice", drawing.SetDIBitsToDevice);
     try environment.addBuiltinExportComptime(m, "GetDIBits", drawing.stub_GetDIBits);
     try environment.addBuiltinExportComptime(m, "PatBlt", drawing.PatBlt);
-    try environment.addBuiltinExportComptime(m, "ExtTextOutA", drawing.stub_ExtTextOutA);
-    try environment.addBuiltinExportComptime(m, "ExtTextOutW", drawing.stub_ExtTextOutW);
+    try environment.addBuiltinExportComptime(m, "ExtTextOutA", drawing.ExtTextOutA);
+    try environment.addBuiltinExportComptime(m, "ExtTextOutW", drawing.ExtTextOutW);
     try environment.addBuiltinExportComptime(m, "IntersectClipRect", drawing.stub_IntersectClipRect);
     try environment.addBuiltinExportComptime(m, "ExcludeClipRect", drawing.stub_ExcludeClipRect);
     try environment.addBuiltinExportComptime(m, "CombineRgn", drawing.stub_CombineRgn);

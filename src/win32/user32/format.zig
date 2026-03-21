@@ -104,20 +104,62 @@ pub fn stub_wsprintfW(lpOut: [*]u16, lpFmt: [*]const u16, a1: usize, a2: usize, 
     return 0;
 }
 
-pub fn stub_DrawTextA(hdc: usize, lpchText: usize, cchText: i32, lprc: usize, format: u32) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
-    _ = lpchText;
-    _ = cchText;
-    _ = lprc;
-    _ = format;
-    return 0;
+const dc = @import("../gdi32/dc.zig");
+const gdi32 = @import("../gdi32.zig");
+const drawing = @import("../gdi32/drawing.zig");
+
+/// DrawTextA: formats text within a rectangle, supports DT_CALCRECT and basic alignment.
+/// Implementation status: Partially implemented (calculates rect, draws placeholder)
+pub fn DrawTextA(hdc: usize, lpchText: usize, cchText: i32, lprc: usize, fmt: u32) callconv(w32cc.WINAPI) i32 {
+    // DT_CALCRECT = 0x0400 — compute rect but don't draw
+    const DT_CALCRECT: u32 = 0x0400;
+
+    // Get font metrics for height calculation
+    var fh: i32 = 13;
+    var aw: i32 = 6;
+    if (gdi32.getDc(hdc)) |dc_entry| {
+        if (dc_entry.font != 0) {
+            if (gdi32.findObject(dc_entry.font)) |obj| {
+                if (obj.obj_type == .Font) {
+                    fh = obj.data.font.tmHeight();
+                    aw = obj.data.font.aveCharWidth();
+                }
+            }
+        }
+    }
+
+    // Determine text length
+    const len: i32 = if (cchText >= 0) cchText else blk: {
+        if (lpchText == 0) break :blk 0;
+        const s = trace.c_span(lpchText);
+        break :blk @intCast(s.len);
+    };
+
+    // Calculate bounding rect
+    const text_width = len * aw;
+    const text_height = fh;
+
+    if (lprc != 0) {
+        if (fmt & DT_CALCRECT != 0) {
+            // Just update the rect with computed dimensions
+            const bottom_ptr = @as(*i32, @ptrFromInt(lprc + 12));
+            const top_val = @as(*const i32, @ptrFromInt(lprc + 4)).*;
+            bottom_ptr.* = top_val + text_height;
+            const right_ptr = @as(*i32, @ptrFromInt(lprc + 8));
+            const left_val = @as(*const i32, @ptrFromInt(lprc)).*;
+            right_ptr.* = left_val + text_width;
+        } else {
+            // Draw text at rect's top-left
+            const left = @as(*const i32, @ptrFromInt(lprc)).*;
+            const top = @as(*const i32, @ptrFromInt(lprc + 4)).*;
+            _ = drawing.TextOutA(hdc, left, top, lpchText, len);
+        }
+    }
+
+    return text_height;
 }
 
-pub fn stub_DrawTextW(hdc: usize, lpchText: usize, cchText: i32, lprc: usize, format: u32) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
-    _ = lpchText;
-    _ = cchText;
-    _ = lprc;
-    _ = format;
-    return 0;
+/// DrawTextW: Unicode variant, delegates to DrawTextA.
+pub fn DrawTextW(hdc: usize, lpchText: usize, cchText: i32, lprc: usize, fmt: u32) callconv(w32cc.WINAPI) i32 {
+    return DrawTextA(hdc, lpchText, cchText, lprc, fmt);
 }

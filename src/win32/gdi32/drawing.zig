@@ -372,15 +372,31 @@ pub fn getFramebufferForDc(hdc: usize) ?FramebufferInfo {
 
 pub fn TextOutA(hdc: usize, x: i32, y: i32, lpString: usize, c: i32) callconv(w32cc.WINAPI) i32 {
     _ = lpString;
-    // Draw placeholder box for text
     if (getFramebufferForDc(hdc)) |fb| {
-        const bg_color = if (gdi32.getDc(hdc)) |dc| dc.bk_color else 0x00FFFFFF;
-        const fg_color = if (gdi32.getDc(hdc)) |dc| dc.text_color else 0x00000000;
-        const width = c * 6; // Approx avgCharWidth
-        const height = 13;
-        
-        fb.fillRect(x, y, width, height, bg_color);
-        fb.drawLine(x, y, x + width, y + height, fg_color); // Cross through
+        const dc_entry = gdi32.getDc(hdc);
+        const bg_color = if (dc_entry) |dc| dc.bk_color else 0x00FFFFFF;
+        const fg_color = if (dc_entry) |dc| dc.text_color else 0x00000000;
+        const bk_mode = if (dc_entry) |dc| dc.bk_mode else 2;
+
+        // Get font metrics from selected font
+        var aw: i32 = 6;
+        var fh: i32 = 13;
+        if (dc_entry) |dc| {
+            if (dc.font != 0) {
+                if (gdi32.findObject(dc.font)) |obj| {
+                    if (obj.obj_type == .Font) {
+                        aw = obj.data.font.aveCharWidth();
+                        fh = obj.data.font.tmHeight();
+                    }
+                }
+            }
+        }
+
+        const width = c * aw;
+        // Draw background if OPAQUE mode
+        if (bk_mode == 2) fb.fillRect(x, y, width, fh, bg_color);
+        // Draw a cross-through to indicate text presence
+        fb.drawLine(x, y, x + width, y + fh, fg_color);
     }
     return 1;
 }
@@ -534,14 +550,28 @@ pub fn PatBlt(hdc: usize, x: i32, y: i32, w: i32, h: i32, rop: u32) callconv(w32
     return 1;
 }
 
-pub fn stub_ExtTextOutA(hdc: usize, x: i32, y: i32, options: u32, lprect: usize, lpString: usize, c: u32, lpDx: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hdc; _ = x; _ = y; _ = options; _ = lprect; _ = lpString; _ = c; _ = lpDx;
-    return 1;
+/// ExtTextOutA: extended text output with opaque rectangle and character positioning.
+/// Implementation status: Partially implemented (delegates to TextOutA after optional opaque rect)
+pub fn ExtTextOutA(hdc: usize, x: i32, y: i32, options: u32, lprect: usize, lpString: usize, c: u32, lpDx: usize) callconv(w32cc.WINAPI) i32 {
+    _ = lpDx;
+    // ETO_OPAQUE = 0x0002
+    if (options & 0x0002 != 0 and lprect != 0) {
+        // Fill opaque background rectangle
+        if (getFramebufferForDc(hdc)) |fb| {
+            const bg_color = if (gdi32.getDc(hdc)) |dc_e| dc_e.bk_color else 0x00FFFFFF;
+            const left = @as(*const i32, @ptrFromInt(lprect)).*;
+            const top = @as(*const i32, @ptrFromInt(lprect + 4)).*;
+            const right = @as(*const i32, @ptrFromInt(lprect + 8)).*;
+            const bot = @as(*const i32, @ptrFromInt(lprect + 12)).*;
+            fb.fillRect(left, top, right - left, bot - top, bg_color);
+        }
+    }
+    return TextOutA(hdc, x, y, lpString, @intCast(c));
 }
 
-pub fn stub_ExtTextOutW(hdc: usize, x: i32, y: i32, options: u32, lprect: usize, lpString: usize, c: u32, lpDx: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hdc; _ = x; _ = y; _ = options; _ = lprect; _ = lpString; _ = c; _ = lpDx;
-    return 1;
+/// ExtTextOutW: Unicode variant delegates to ExtTextOutA.
+pub fn ExtTextOutW(hdc: usize, x: i32, y: i32, options: u32, lprect: usize, lpString: usize, c: u32, lpDx: usize) callconv(w32cc.WINAPI) i32 {
+    return ExtTextOutA(hdc, x, y, options, lprect, lpString, c, lpDx);
 }
 
 pub fn stub_IntersectClipRect(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callconv(w32cc.WINAPI) i32 {
