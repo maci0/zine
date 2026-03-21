@@ -200,14 +200,17 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
     var seh_walk_count: u32 = 0;
     while (current_node != 0 and current_node != 0xFFFFFFFF) {
         seh_walk_count += 1;
-        // Limit SEH walk depth for AV exceptions to prevent Delphi's
-        // exception handler from entering Format's infinite loop.
-        // The first handler (Delphi RTL filter) returns ContinueSearch.
-        // The second handler (_HandleOnException) does a longjmp to the
-        // except block which hangs in SysUtils.Format. Skip it.
+        // Limit SEH walk depth for AV exceptions at known Delphi patterns.
+        // The Delphi RTL's exception handler enters SysUtils.Format infinite
+        // loop on NULL-page reads (0x476xxx range). For other AVs, let the
+        // full SEH chain execute so the game's own handlers can catch them.
         if (dwExceptionCode == 0xC0000005 and seh_walk_count > 1) {
-            if (trace.enable_tracing) trace.print("  Skipping remaining handlers for AV (walk={d})\n", .{seh_walk_count});
-            break;
+            const eip = ctx.Eip;
+            const is_delphi_null_av = (eip >= 0x476000 and eip < 0x477000);
+            if (is_delphi_null_av) {
+                if (trace.enable_tracing) trace.print("  Skipping remaining handlers for Delphi AV (walk={d}, eip={x})\n", .{ seh_walk_count, eip });
+                break;
+            }
         }
         if (trace.enable_tracing) trace.print("  SEH Node: {x}\n", .{current_node});
         const node = @as(*EXCEPTION_REGISTRATION_RECORD, @ptrFromInt(current_node));

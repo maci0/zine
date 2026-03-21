@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-03-21)
 
 **Core value:** Run Win98/Win2K era Windows applications and games faithfully on Linux and in the browser
-**Current focus:** Phase 12 — DirectSound Gap Closure
+**Current focus:** Phase 13 — Europa 1400 Debugging
 
 ## Current Milestone
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 | 9 | JIT Execution | ✅ Complete (gaps → Phase 14) |
 | 10 | MSVC WASM Fixes | ✅ Complete (gaps → Phase 15) |
 | 11 | Europa 1400 Integration | ✅ Complete (gaps → Phase 13) |
-| 12 | DirectSound Gap Closure | 🔲 Not started |
+| 12 | DirectSound Gap Closure | ✅ Complete (6e841a4) |
 | 13 | Europa 1400 Debugging | 🔲 Not started |
 | 14 | JIT Equivalence Tests | 🔲 Not started |
 | 15 | WASM Test Verification | 🔲 Not started |
