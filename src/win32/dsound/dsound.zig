@@ -60,28 +60,46 @@ const IDirectSound = extern struct {
     lpVtbl: u32, // guest pointer to vtable (u32 for 32-bit COM)
 };
 
-// --- Audio State ---
+// --- Audio Buffer Pool ---
 
-var audio_sample_rate: u32 = 44100;
-var audio_channels: u16 = 2;
-var audio_bits_per_sample: u16 = 16;
-var audio_block_align: u16 = 4;
-var audio_bytes_per_sec: u32 = 176400;
-var audio_buffer_size: u32 = 65536;
-var audio_playing: bool = false;
-var audio_play_start_ns: i128 = 0;
-var format_sent: bool = false;
+const MAX_SOUND_BUFFERS = 16;
 
-/// DirectSound volume: hundredths of dB, -10000 (silence) to 0 (full).
-pub var dsound_volume: i32 = 0;
+/// Per-buffer state for secondary DirectSound buffers.
+const SoundBufferState = struct {
+    com_obj: IDirectSoundBuffer = undefined,
+    data: [*]u8 = undefined,
+    size: u32 = 0,
+    volume: i32 = 0, // hundredths of dB, -10000..0
+    pan: i32 = 0, // -10000 (left) to 10000 (right)
+    playing: bool = false,
+    looping: bool = false,
+    play_start_ns: i128 = 0,
+    play_cursor: u32 = 0,
+    sample_rate: u32 = 44100,
+    channels: u16 = 2,
+    bits_per_sample: u16 = 16,
+    block_align: u16 = 4,
+    bytes_per_sec: u32 = 176400,
+    allocated: bool = false,
+};
 
-var audio_buffer: [262144]u8 = [_]u8{0} ** 262144;
-var play_cursor: u32 = 0;
+var buffer_pool: [MAX_SOUND_BUFFERS]SoundBufferState = [_]SoundBufferState{.{}} ** MAX_SOUND_BUFFERS;
+var buffer_pool_count: u32 = 0;
+
+/// Look up buffer state by `this` COM pointer.
+inline fn findBuffer(this: usize) ?*SoundBufferState {
+    for (&buffer_pool, 0..) |*buf, i| {
+        if (i >= buffer_pool_count) break;
+        if (@intFromPtr(&buf.com_obj) == this) return buf;
+    }
+    // Fall back to buffer 0 if found
+    if (buffer_pool_count > 0) return &buffer_pool[0];
+    return null;
+}
 
 // --- COM Instances ---
 
 var global_dsound: IDirectSound = undefined;
-var global_dsbuffer: IDirectSoundBuffer = undefined;
 var global_dsbuffer_primary: IDirectSoundBuffer = undefined;
 var dsound_vtbl: IDirectSoundVtbl = undefined;
 var dsbuffer_vtbl: IDirectSoundBufferVtbl = undefined;
@@ -194,28 +212,54 @@ fn dsound_CreateSoundBuffer(this: usize, pcDSBufferDesc: usize, ppDSBuffer: usiz
             return 0;
         }
 
-        // Secondary buffer: capture format and buffer size
-        if (desc.dwBufferBytes > 0) {
-            audio_buffer_size = @min(desc.dwBufferBytes, @as(u32, @intCast(audio_buffer.len)));
-            if (trace.enable_tracing) trace.print("DSOUND:   -> secondary buffer, size={d}\n", .{audio_buffer_size});
-        }
+        // Secondary buffer: allocate from pool
+        if (buffer_pool_count < MAX_SOUND_BUFFERS) {
+            const idx = buffer_pool_count;
+            var buf = &buffer_pool[idx];
+            buf.allocated = true;
+            buf.com_obj.lpVtbl = @truncate(@intFromPtr(&dsbuffer_vtbl));
 
-        if (desc.lpwfxFormat != 0) {
-            parseWaveFormat(desc.lpwfxFormat);
+            // Set buffer size
+            const buf_size = if (desc.dwBufferBytes > 0) @min(desc.dwBufferBytes, 262144) else 65536;
+            buf.size = buf_size;
+
+            // Allocate audio data
+            if (@import("../kernel32.zig").global_env) |genv| {
+                const data = genv.allocator.alloc(u8, buf_size) catch {
+                    if (ppDSBuffer != 0) @as(*align(1) u32, @ptrFromInt(ppDSBuffer)).* = @truncate(@intFromPtr(&buf.com_obj));
+                    buffer_pool_count += 1;
+                    return 0;
+                };
+                @memset(data, 0);
+                buf.data = data.ptr;
+            }
+
+            // Parse format if provided
+            if (desc.lpwfxFormat != 0) {
+                parseWaveFormatInto(buf, desc.lpwfxFormat);
+            }
+
+            buffer_pool_count += 1;
+            if (trace.enable_tracing) trace.print("DSOUND:   -> secondary buffer #{d}, size={d}\n", .{ idx, buf_size });
+
+            if (ppDSBuffer != 0) {
+                @as(*align(1) u32, @ptrFromInt(ppDSBuffer)).* = @truncate(@intFromPtr(&buf.com_obj));
+            }
+            return 0;
         }
     }
 
-    if (ppDSBuffer != 0) {
-        @as(*align(1) u32, @ptrFromInt(ppDSBuffer)).* = @truncate(@intFromPtr(&global_dsbuffer));
+    // Fallback: return first buffer
+    if (ppDSBuffer != 0 and buffer_pool_count > 0) {
+        @as(*align(1) u32, @ptrFromInt(ppDSBuffer)).* = @truncate(@intFromPtr(&buffer_pool[0].com_obj));
     }
     return 0;
 }
 
-fn parseWaveFormat(fmt_addr: u32) void {
+fn parseWaveFormatInto(buf: *SoundBufferState, fmt_addr: u32) void {
     if (fmt_addr == 0) return;
     const fmt = @as(*const w32.WAVEFORMATEX, @ptrFromInt(fmt_addr));
 
-    // Validate format before applying
     if (fmt.nChannels == 0 or fmt.nChannels > 8 or
         fmt.nSamplesPerSec == 0 or fmt.nSamplesPerSec > 200000 or
         (fmt.wBitsPerSample != 8 and fmt.wBitsPerSample != 16 and
@@ -225,135 +269,108 @@ fn parseWaveFormat(fmt_addr: u32) void {
         return;
     }
 
-    audio_channels = fmt.nChannels;
-    audio_sample_rate = fmt.nSamplesPerSec;
-    audio_bytes_per_sec = fmt.nAvgBytesPerSec;
-    audio_block_align = fmt.nBlockAlign;
-    audio_bits_per_sample = fmt.wBitsPerSample;
+    buf.channels = fmt.nChannels;
+    buf.sample_rate = fmt.nSamplesPerSec;
+    buf.bytes_per_sec = fmt.nAvgBytesPerSec;
+    buf.block_align = fmt.nBlockAlign;
+    buf.bits_per_sample = fmt.wBitsPerSample;
 
-    if (trace.enable_tracing) trace.print("DSOUND:   format: {d}Hz {d}ch {d}bit (block={d}, bps={d})\n", .{ audio_sample_rate, audio_channels, audio_bits_per_sample, audio_block_align, audio_bytes_per_sec });
+    if (trace.enable_tracing) trace.print("DSOUND:   format: {d}Hz {d}ch {d}bit\n", .{ buf.sample_rate, buf.channels, buf.bits_per_sample });
 }
+
+/// Legacy wrapper for primary buffer format parsing.
+var format_sent: bool = false;
 
 // --- IDirectSoundBuffer Implementation ---
 
+/// DirectSound volume: highest (most recent) per-buffer volume for external access.
+pub var dsound_volume: i32 = 0;
+
 fn dsbuffer_SetFormat(this: usize, pcfxFormat: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this;
     if (trace.enable_tracing) trace.print("DSOUND: IDirectSoundBuffer::SetFormat\n", .{});
     if (pcfxFormat != 0) {
-        parseWaveFormat(@intCast(pcfxFormat));
-        format_sent = false; // re-send format on next unlock
+        if (findBuffer(this)) |buf| {
+            parseWaveFormatInto(buf, @intCast(pcfxFormat));
+        }
+        format_sent = false;
     }
     return 0;
 }
 
 fn dsbuffer_GetFormat(this: usize, pwfxFormat: usize, dwSizeAllocated: u32, pdwSizeWritten: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this;
-    if (trace.enable_tracing) trace.print("DSOUND: IDirectSoundBuffer::GetFormat(buf={x}, size={d})\n", .{ pwfxFormat, dwSizeAllocated });
-
-    // WAVEFORMATEX is 18 bytes in Win32 (no padding), not @sizeOf which adds alignment
+    if (trace.enable_tracing) trace.print("DSOUND: IDirectSoundBuffer::GetFormat\n", .{});
     const wfx_size: u32 = 18;
-
-    if (pdwSizeWritten != 0) {
-        @as(*u32, @ptrFromInt(pdwSizeWritten)).* = wfx_size;
-    }
+    if (pdwSizeWritten != 0) @as(*u32, @ptrFromInt(pdwSizeWritten)).* = wfx_size;
 
     if (pwfxFormat != 0 and dwSizeAllocated >= wfx_size) {
+        const buf = findBuffer(this) orelse return 0;
         const fmt = @as(*w32.WAVEFORMATEX, @ptrFromInt(pwfxFormat));
-        fmt.wFormatTag = 1; // WAVE_FORMAT_PCM
-        fmt.nChannels = audio_channels;
-        fmt.nSamplesPerSec = audio_sample_rate;
-        fmt.nAvgBytesPerSec = audio_bytes_per_sec;
-        fmt.nBlockAlign = audio_block_align;
-        fmt.wBitsPerSample = audio_bits_per_sample;
+        fmt.wFormatTag = 1;
+        fmt.nChannels = buf.channels;
+        fmt.nSamplesPerSec = buf.sample_rate;
+        fmt.nAvgBytesPerSec = buf.bytes_per_sec;
+        fmt.nBlockAlign = buf.block_align;
+        fmt.wBitsPerSample = buf.bits_per_sample;
         fmt.cbSize = 0;
     }
-
     return 0;
 }
 
 fn dsbuffer_GetCaps(this: usize, pDSBCaps: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this;
-    if (trace.enable_tracing) trace.print("DSOUND: IDirectSoundBuffer::GetCaps(pDSBCaps={x})\n", .{pDSBCaps});
+    if (trace.enable_tracing) trace.print("DSOUND: IDirectSoundBuffer::GetCaps\n", .{});
     if (pDSBCaps != 0) {
-        // DSBCAPS structure:
-        // DWORD dwSize;       // 0
-        // DWORD dwFlags;      // 4
-        // DWORD dwBufferBytes; // 8
-        // DWORD dwUnlockTransferRate; // 12
-        // DWORD dwPlayCpuOverhead;    // 16
+        const buf = findBuffer(this) orelse return 0;
         const caps = @as([*]u8, @ptrFromInt(pDSBCaps));
         const size = @as(*u32, @ptrFromInt(pDSBCaps));
-        // Zero out the struct first
         @memset(caps[0..@min(size.*, 20)], 0);
-        // Fill key fields
-        size.* = 20; // dwSize
-        @as(*u32, @ptrFromInt(pDSBCaps + 4)).* = 0x000180E0; // dwFlags
-        @as(*u32, @ptrFromInt(pDSBCaps + 8)).* = audio_buffer_size; // dwBufferBytes
+        size.* = 20;
+        @as(*u32, @ptrFromInt(pDSBCaps + 4)).* = 0x000180E0;
+        @as(*u32, @ptrFromInt(pDSBCaps + 8)).* = buf.size;
     }
     return 0;
 }
 
 fn dsbuffer_Lock(this: usize, dwOffset: u32, dwBytes: u32, ppvAudioPtr1: usize, pdwAudioBytes1: usize, ppvAudioPtr2: usize, pdwAudioBytes2: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
-    _ = this;
-    if (trace.enable_tracing) trace.print("DSOUND: IDirectSoundBuffer::Lock(off={d}, bytes={d}, flags={x})\n", .{ dwOffset, dwBytes, dwFlags });
+    const buf = findBuffer(this) orelse return 0;
+    if (trace.enable_tracing) trace.print("DSOUND: Lock(off={d}, bytes={d}, size={d})\n", .{ dwOffset, dwBytes, buf.size });
 
     var offset = dwOffset;
     var bytes = dwBytes;
+    if (buf.size == 0) return 0;
 
-    // DSBLOCK_FROMWRITECURSOR
-    if (dwFlags & w32.DSBLOCK_FROMWRITECURSOR != 0) {
-        offset = getWriteCursor();
-    }
-    // DSBLOCK_ENTIREBUFFER
-    if (dwFlags & w32.DSBLOCK_ENTIREBUFFER != 0) {
-        offset = 0;
-        bytes = audio_buffer_size;
-    }
+    if (dwFlags & w32.DSBLOCK_FROMWRITECURSOR != 0) offset = getWriteCursorFor(buf);
+    if (dwFlags & w32.DSBLOCK_ENTIREBUFFER != 0) { offset = 0; bytes = buf.size; }
+    if (offset >= buf.size) offset = 0;
+    if (bytes > buf.size) bytes = buf.size;
 
-    // Clamp to buffer size
-    if (offset >= audio_buffer_size) offset = 0;
-    if (bytes > audio_buffer_size) bytes = audio_buffer_size;
-
-    // Write pointer and byte count to guest memory (u32 for 32-bit COM)
     const ptr1 = @as(*align(1) u32, @ptrFromInt(ppvAudioPtr1));
     const bytes1 = @as(*align(1) u32, @ptrFromInt(pdwAudioBytes1));
 
-    if (offset + bytes <= audio_buffer_size) {
-        // Single contiguous region
-        ptr1.* = @truncate(@intFromPtr(&audio_buffer) + offset);
+    if (offset + bytes <= buf.size) {
+        ptr1.* = @truncate(@intFromPtr(buf.data) + offset);
         bytes1.* = bytes;
-        if (ppvAudioPtr2 != 0) {
-            @as(*align(1) u32, @ptrFromInt(ppvAudioPtr2)).* = 0;
-        }
-        if (pdwAudioBytes2 != 0) {
-            @as(*align(1) u32, @ptrFromInt(pdwAudioBytes2)).* = 0;
-        }
+        if (ppvAudioPtr2 != 0) @as(*align(1) u32, @ptrFromInt(ppvAudioPtr2)).* = 0;
+        if (pdwAudioBytes2 != 0) @as(*align(1) u32, @ptrFromInt(pdwAudioBytes2)).* = 0;
     } else {
-        // Wraps around: two regions
-        const first_part = audio_buffer_size - offset;
-        ptr1.* = @truncate(@intFromPtr(&audio_buffer) + offset);
+        const first_part = buf.size - offset;
+        ptr1.* = @truncate(@intFromPtr(buf.data) + offset);
         bytes1.* = first_part;
-        if (ppvAudioPtr2 != 0) {
-            @as(*align(1) u32, @ptrFromInt(ppvAudioPtr2)).* = @truncate(@intFromPtr(&audio_buffer));
-        }
-        if (pdwAudioBytes2 != 0) {
-            @as(*align(1) u32, @ptrFromInt(pdwAudioBytes2)).* = bytes - first_part;
-        }
+        if (ppvAudioPtr2 != 0) @as(*align(1) u32, @ptrFromInt(ppvAudioPtr2)).* = @truncate(@intFromPtr(buf.data));
+        if (pdwAudioBytes2 != 0) @as(*align(1) u32, @ptrFromInt(pdwAudioBytes2)).* = bytes - first_part;
     }
-
     return 0;
 }
 
 fn dsbuffer_Unlock(this: usize, pvAudioPtr1: usize, dwAudioBytes1: u32, pvAudioPtr2: usize, dwAudioBytes2: u32) callconv(w32cc.WINAPI) i32 {
-    _ = this;
-    if (trace.enable_tracing) trace.print("DSOUND: IDirectSoundBuffer::Unlock(bytes1={d}, bytes2={d})\n", .{ dwAudioBytes1, dwAudioBytes2 });
+    if (trace.enable_tracing) trace.print("DSOUND: Unlock(bytes1={d}, bytes2={d})\n", .{ dwAudioBytes1, dwAudioBytes2 });
 
-    if (!format_sent) {
-        renderer.setAudioFormat(audio_sample_rate, audio_channels, audio_bits_per_sample);
-        format_sent = true;
+    if (findBuffer(this)) |buf| {
+        if (!format_sent) {
+            renderer.setAudioFormat(buf.sample_rate, buf.channels, buf.bits_per_sample);
+            format_sent = true;
+        }
     }
 
-    // Stream captured audio to renderer
     if (dwAudioBytes1 > 0 and pvAudioPtr1 != 0) {
         const data = @as([*]const u8, @ptrFromInt(pvAudioPtr1))[0..dwAudioBytes1];
         renderer.pushAudio(data);
@@ -362,101 +379,86 @@ fn dsbuffer_Unlock(this: usize, pvAudioPtr1: usize, dwAudioBytes1: u32, pvAudioP
         const data = @as([*]const u8, @ptrFromInt(pvAudioPtr2))[0..dwAudioBytes2];
         renderer.pushAudio(data);
     }
-
     return 0;
 }
 
 fn dsbuffer_Play(this: usize, dwReserved1: u32, dwPriority: u32, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
-    _ = this;
     _ = dwReserved1;
     _ = dwPriority;
-    _ = dwFlags;
-    if (trace.enable_tracing) trace.print("DSOUND: IDirectSoundBuffer::Play\n", .{});
-    audio_playing = true;
-    audio_play_start_ns = std.time.nanoTimestamp();
-
-    if (!format_sent) {
-        renderer.setAudioFormat(audio_sample_rate, audio_channels, audio_bits_per_sample);
-        format_sent = true;
+    if (trace.enable_tracing) trace.print("DSOUND: Play\n", .{});
+    if (findBuffer(this)) |buf| {
+        buf.playing = true;
+        buf.looping = (dwFlags & 1) != 0; // DSBPLAY_LOOPING
+        buf.play_start_ns = std.time.nanoTimestamp();
+        if (!format_sent) {
+            renderer.setAudioFormat(buf.sample_rate, buf.channels, buf.bits_per_sample);
+            format_sent = true;
+        }
     }
     return 0;
 }
 
 fn dsbuffer_Stop(this: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this;
-    if (trace.enable_tracing) trace.print("DSOUND: IDirectSoundBuffer::Stop\n", .{});
-    audio_playing = false;
+    if (trace.enable_tracing) trace.print("DSOUND: Stop\n", .{});
+    if (findBuffer(this)) |buf| buf.playing = false;
     return 0;
 }
 
-fn getPlayCursor() u32 {
-    if (!audio_playing or audio_bytes_per_sec == 0) return play_cursor;
+fn getPlayCursorFor(buf: *SoundBufferState) u32 {
+    if (!buf.playing or buf.bytes_per_sec == 0 or buf.size == 0) return buf.play_cursor;
     const now: i128 = std.time.nanoTimestamp();
-    const elapsed = now - audio_play_start_ns;
-    if (elapsed <= 0) return play_cursor;
+    const elapsed = now - buf.play_start_ns;
+    if (elapsed <= 0) return buf.play_cursor;
     const elapsed_u: u128 = @intCast(elapsed);
-    const bytes: u128 = (elapsed_u * audio_bytes_per_sec) / 1_000_000_000;
-    play_cursor = @intCast(bytes % audio_buffer_size);
-    return play_cursor;
+    const bytes: u128 = (elapsed_u * buf.bytes_per_sec) / 1_000_000_000;
+    buf.play_cursor = @intCast(bytes % buf.size);
+    return buf.play_cursor;
 }
 
-fn getWriteCursor() u32 {
-    const play = getPlayCursor();
-    // Write cursor leads play cursor by ~15ms worth of data
-    const lead = @as(u32, audio_block_align) * 256;
-    return (play + lead) % audio_buffer_size;
+fn getWriteCursorFor(buf: *SoundBufferState) u32 {
+    const play = getPlayCursorFor(buf);
+    const lead = @as(u32, buf.block_align) * 256;
+    return if (buf.size > 0) (play + lead) % buf.size else 0;
 }
 
 fn dsbuffer_GetCurrentPosition(this: usize, pdwCurrentPlayCursor: usize, pdwCurrentWriteCursor: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this;
-
-    const pc = getPlayCursor();
-    const wc = getWriteCursor();
-
-    if (pdwCurrentPlayCursor != 0) {
-        @as(*align(1) u32, @ptrFromInt(pdwCurrentPlayCursor)).* = pc;
-    }
-    if (pdwCurrentWriteCursor != 0) {
-        @as(*align(1) u32, @ptrFromInt(pdwCurrentWriteCursor)).* = wc;
-    }
-
+    const buf = findBuffer(this) orelse return 0;
+    if (pdwCurrentPlayCursor != 0) @as(*align(1) u32, @ptrFromInt(pdwCurrentPlayCursor)).* = getPlayCursorFor(buf);
+    if (pdwCurrentWriteCursor != 0) @as(*align(1) u32, @ptrFromInt(pdwCurrentWriteCursor)).* = getWriteCursorFor(buf);
     return 0;
 }
 
 fn dsbuffer_GetStatus(this: usize, pdwStatus: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this;
     if (pdwStatus != 0) {
-        @as(*u32, @ptrFromInt(pdwStatus)).* = if (audio_playing) w32.DSBSTATUS_PLAYING | w32.DSBSTATUS_LOOPING else 0;
+        const buf = findBuffer(this) orelse return 0;
+        @as(*u32, @ptrFromInt(pdwStatus)).* = if (buf.playing) w32.DSBSTATUS_PLAYING | w32.DSBSTATUS_LOOPING else 0;
     }
     return 0;
 }
 
 fn dsbuffer_SetCurrentPosition(this: usize, dwNewPosition: u32) callconv(w32cc.WINAPI) i32 {
-    _ = this;
-    _ = dwNewPosition;
-    if (trace.enable_tracing) trace.print("DSOUND: IDirectSoundBuffer::SetCurrentPosition\n", .{});
+    if (findBuffer(this)) |buf| {
+        buf.play_cursor = if (buf.size > 0) dwNewPosition % buf.size else 0;
+    }
     return 0;
 }
 
 fn dsbuffer_SetVolume(this: usize, lVolume: i32) callconv(w32cc.WINAPI) i32 {
-    _ = this;
-    // lVolume: hundredths of dB, DSBVOLUME_MIN (-10000) to DSBVOLUME_MAX (0)
-    dsound_volume = std.math.clamp(lVolume, w32.DSBVOLUME_MIN, w32.DSBVOLUME_MAX);
-    if (trace.enable_tracing) trace.print("DSOUND: IDirectSoundBuffer::SetVolume({d})\n", .{dsound_volume});
-
-    // Convert hundredths-of-dB to linear: 10^(vol/2000)
-    const vol_f: f64 = @floatFromInt(dsound_volume);
+    const vol = std.math.clamp(lVolume, w32.DSBVOLUME_MIN, w32.DSBVOLUME_MAX);
+    if (findBuffer(this)) |buf| buf.volume = vol;
+    dsound_volume = vol;
+    if (trace.enable_tracing) trace.print("DSOUND: SetVolume({d})\n", .{vol});
+    const vol_f: f64 = @floatFromInt(vol);
     const linear = std.math.pow(f64, 10.0, vol_f / 2000.0);
     renderer.setVolume(@floatCast(linear));
     return 0;
 }
 
 fn dsbuffer_GetVolume(this: usize, plVolume: usize) callconv(w32cc.WINAPI) i32 {
-    _ = this;
     if (plVolume != 0) {
-        @as(*align(1) i32, @ptrFromInt(plVolume)).* = dsound_volume;
+        const buf = findBuffer(this) orelse return 0;
+        @as(*align(1) i32, @ptrFromInt(plVolume)).* = buf.volume;
     }
-    if (trace.enable_tracing) trace.print("DSOUND: IDirectSoundBuffer::GetVolume() -> {d}\n", .{dsound_volume});
     return 0;
 }
 
@@ -506,7 +508,6 @@ pub fn register(environment: *env.Environment) !void {
     };
 
     global_dsound.lpVtbl = @truncate(@intFromPtr(&dsound_vtbl));
-    global_dsbuffer.lpVtbl = @truncate(@intFromPtr(&dsbuffer_vtbl));
     global_dsbuffer_primary.lpVtbl = @truncate(@intFromPtr(&dsbuffer_vtbl));
 
     const builtin_module = "DSOUND.dll";
