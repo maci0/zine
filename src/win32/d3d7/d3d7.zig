@@ -12,6 +12,7 @@ const kernel32 = @import("../kernel32.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
 const ddraw_stubs = @import("../ddraw/ddraw.zig");
+const rasterizer = @import("rasterizer.zig");
 
 // ===== IDirect3D7 =====
 
@@ -264,7 +265,7 @@ var viewport_valid: bool = false;
 // ===== Pipeline State Storage =====
 
 /// Identity 4×4 matrix (row-major, matching D3D convention).
-const identity_4x4: [16]f32 = .{
+pub const identity_4x4: [16]f32 = .{
     1, 0, 0, 0,
     0, 1, 0, 0,
     0, 0, 1, 0,
@@ -275,7 +276,7 @@ const identity_4x4: [16]f32 = .{
 /// D3DTRANSFORMSTATE_WORLD = 1, VIEW = 2, PROJECTION = 3
 /// D3D7 adds WORLD1-3 = 4-6, TEXTURE0-7 = 16-23
 const MAX_TRANSFORMS = 24;
-var transform_matrices: [MAX_TRANSFORMS][16]f32 = [_][16]f32{identity_4x4} ** MAX_TRANSFORMS;
+pub var transform_matrices: [MAX_TRANSFORMS][16]f32 = [_][16]f32{identity_4x4} ** MAX_TRANSFORMS;
 
 /// Render state table — D3DRENDERSTATETYPE values up to 255.
 /// Defaults are set at comptime matching D3D7 documentation.
@@ -877,7 +878,7 @@ fn n8(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: u
 
 /// 4×4 matrix multiply using @Vector(4, f32) SIMD intrinsics.
 /// result = a × b (row-major, matching D3D convention).
-fn mat4x4Multiply(a: [16]f32, b: [16]f32) [16]f32 {
+pub fn mat4x4Multiply(a: [16]f32, b: [16]f32) [16]f32 {
     // Extract columns of B for broadcast multiply
     const b_cols: [4]@Vector(4, f32) = .{
         .{ b[0], b[4], b[8], b[12] },
@@ -1049,8 +1050,8 @@ pub fn init() void {
         .SetTransform = comPtr(impl_SetTransform, "IDirect3DDevice3::SetTransform"), // 25
         .GetTransform = comPtr(impl_GetTransform, "IDirect3DDevice3::GetTransform"), // 26
         .MultiplyTransform = comPtr(impl_MultiplyTransform, "IDirect3DDevice3::MultiplyTransform"), // 27
-        .DrawPrimitive = comPtr(tn6("DrawPrimitive").*, "IDirect3DDevice3::DrawPrimitive"), // 28
-        .DrawIndexedPrimitive = comPtr(tn8("DrawIndexedPrimitive").*, "IDirect3DDevice3::DrawIndexedPrimitive"), // 29
+        .DrawPrimitive = comPtr(rasterizer.impl_DrawPrimitive, "IDirect3DDevice3::DrawPrimitive"), // 28
+        .DrawIndexedPrimitive = comPtr(rasterizer.impl_DrawIndexedPrimitive, "IDirect3DDevice3::DrawIndexedPrimitive"), // 29
         .SetClipStatus = comPtr(tn2("SetClipStatus").*, "IDirect3DDevice3::SetClipStatus"), // 30
         .GetClipStatus = comPtr(tn2("GetClipStatus").*, "IDirect3DDevice3::GetClipStatus"), // 31
         .DrawPrimitiveStrided = comPtr(tn6("DrawPrimitiveStrided").*, "IDirect3DDevice3::DrawPrimitiveStrided"), // 32
@@ -1092,8 +1093,8 @@ pub fn init() void {
         .BeginStateBlock = N1,
         .EndStateBlock = N2,
         .PreLoad = N2,
-        .DrawPrimitive = N6,
-        .DrawIndexedPrimitive = N8,
+        .DrawPrimitive = comPtr(rasterizer.impl_DrawPrimitive, "IDirect3DDevice7::DrawPrimitive"),
+        .DrawIndexedPrimitive = comPtr(rasterizer.impl_DrawIndexedPrimitive, "IDirect3DDevice7::DrawIndexedPrimitive"),
         .SetClipStatus = N2,
         .GetClipStatus = N2,
         .DrawPrimitiveStrided = N6,
