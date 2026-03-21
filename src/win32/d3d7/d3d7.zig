@@ -261,6 +261,47 @@ var viewport2_valid: bool = false;
 var viewport_data: [44]u8 = [_]u8{0} ** 44;
 var viewport_valid: bool = false;
 
+// ===== Pipeline State Storage =====
+
+/// Identity 4×4 matrix (row-major, matching D3D convention).
+const identity_4x4: [16]f32 = .{
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1,
+};
+
+/// D3DTRANSFORMSTATETYPE indices used by Europa / D3D3/D3D7.
+/// D3DTRANSFORMSTATE_WORLD = 1, VIEW = 2, PROJECTION = 3
+/// D3D7 adds WORLD1-3 = 4-6, TEXTURE0-7 = 16-23
+const MAX_TRANSFORMS = 24;
+var transform_matrices: [MAX_TRANSFORMS][16]f32 = [_][16]f32{identity_4x4} ** MAX_TRANSFORMS;
+
+/// Render state table — D3DRENDERSTATETYPE values up to 255.
+/// Defaults are set at comptime matching D3D7 documentation.
+const MAX_RENDER_STATES = 256;
+var render_states: [MAX_RENDER_STATES]u32 = blk: {
+    var rs = [_]u32{0} ** MAX_RENDER_STATES;
+    rs[7] = 2; // D3DRS_CULLMODE = D3DCULL_CCW
+    rs[14] = 1; // D3DRS_ZWRITEENABLE = TRUE
+    rs[19] = 1; // D3DRS_DITHERENABLE = TRUE
+    rs[24] = 1; // D3DRS_COLORVERTEX = TRUE
+    rs[25] = 8; // D3DRS_ALPHAFUNC = D3DCMP_ALWAYS
+    rs[27] = 2; // D3DRS_SRCBLEND = D3DBLEND_ONE
+    rs[28] = 1; // D3DRS_DESTBLEND = D3DBLEND_ZERO
+    rs[137] = 1; // D3DRS_LIGHTING = TRUE
+    rs[174] = 0x0F; // D3DRS_COLORWRITEENABLE = all channels
+    break :blk rs;
+};
+
+/// Texture stage state: 8 stages × 32 state types.
+const MAX_TEXTURE_STAGES = 8;
+const MAX_TSS_STATES = 32;
+var texture_stage_states: [MAX_TEXTURE_STAGES][MAX_TSS_STATES]u32 = [_][MAX_TSS_STATES]u32{[_]u32{0} ** MAX_TSS_STATES} ** MAX_TEXTURE_STAGES;
+
+/// Active texture handles per stage.
+var texture_handles: [MAX_TEXTURE_STAGES]usize = [_]usize{0} ** MAX_TEXTURE_STAGES;
+
 // ===== Viewport Implementations =====
 
 /// IDirect3DViewport3::SetViewport2(this, lpViewport2)
@@ -832,6 +873,113 @@ fn n8(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: u
     return 0;
 }
 
+/// ===== Pipeline State Implementations =====
+
+/// 4×4 matrix multiply using @Vector(4, f32) SIMD intrinsics.
+/// result = a × b (row-major, matching D3D convention).
+fn mat4x4Multiply(a: [16]f32, b: [16]f32) [16]f32 {
+    // Extract columns of B for broadcast multiply
+    const b_cols: [4]@Vector(4, f32) = .{
+        .{ b[0], b[4], b[8], b[12] },
+        .{ b[1], b[5], b[9], b[13] },
+        .{ b[2], b[6], b[10], b[14] },
+        .{ b[3], b[7], b[11], b[15] },
+    };
+    var r: [16]f32 = undefined;
+    inline for (0..4) |row| {
+        const a_row: @Vector(4, f32) = a[row * 4 ..][0..4].*;
+        // Dot product of a_row with each column of B
+        inline for (0..4) |col| {
+            r[row * 4 + col] = @reduce(.Add, a_row * b_cols[col]);
+        }
+    }
+    return r;
+}
+
+/// SetTransform — shared implementation for Device3 (this, type, matrix) and Device7.
+/// D3D3 Device3 slot 25: SetTransform(this, d3dts, lpD3DMatrix)
+fn impl_SetTransform(this: usize, d3dts: usize, lpMatrix: usize) callconv(w32cc.WINAPI) usize {
+    _ = this;
+    if (d3dts < MAX_TRANSFORMS and lpMatrix != 0) {
+        const src = @as(*const [16]f32, @ptrFromInt(lpMatrix));
+        transform_matrices[d3dts] = src.*;
+        if (trace.enable_tracing) trace.print("D3D7: SetTransform(type={d})\\n", .{d3dts});
+    }
+    return 0; // D3D_OK
+}
+
+/// GetTransform — retrieves a stored transform matrix.
+fn impl_GetTransform(this: usize, d3dts: usize, lpMatrix: usize) callconv(w32cc.WINAPI) usize {
+    _ = this;
+    if (d3dts < MAX_TRANSFORMS and lpMatrix != 0) {
+        const dst = @as(*[16]f32, @ptrFromInt(lpMatrix));
+        dst.* = transform_matrices[d3dts];
+        if (trace.enable_tracing) trace.print("D3D7: GetTransform(type={d})\\n", .{d3dts});
+    }
+    return 0;
+}
+
+/// MultiplyTransform — multiplies current matrix by new matrix: M[type] = M[type] × lpMatrix.
+fn impl_MultiplyTransform(this: usize, d3dts: usize, lpMatrix: usize) callconv(w32cc.WINAPI) usize {
+    _ = this;
+    if (d3dts < MAX_TRANSFORMS and lpMatrix != 0) {
+        const m = @as(*const [16]f32, @ptrFromInt(lpMatrix));
+        transform_matrices[d3dts] = mat4x4Multiply(transform_matrices[d3dts], m.*);
+        if (trace.enable_tracing) trace.print("D3D7: MultiplyTransform(type={d})\\n", .{d3dts});
+    }
+    return 0;
+}
+
+/// SetRenderState — stores a render state value.
+fn impl_SetRenderState(this: usize, dwState: usize, dwValue: usize) callconv(w32cc.WINAPI) usize {
+    _ = this;
+
+    if (dwState < MAX_RENDER_STATES) {
+        render_states[dwState] = @truncate(dwValue);
+        if (trace.enable_tracing) trace.print("D3D7: SetRenderState({d} = 0x{x})\\n", .{ dwState, dwValue });
+    }
+    return 0;
+}
+
+/// GetRenderState — retrieves a stored render state.
+fn impl_GetRenderState(this: usize, dwState: usize, lpdwValue: usize) callconv(w32cc.WINAPI) usize {
+    _ = this;
+
+    if (dwState < MAX_RENDER_STATES and lpdwValue != 0) {
+        @as(*u32, @ptrFromInt(lpdwValue)).* = render_states[dwState];
+    }
+    return 0;
+}
+
+/// SetTexture — binds a texture handle to a stage.
+fn impl_SetTexture(this: usize, dwStage: usize, lpTexture: usize) callconv(w32cc.WINAPI) usize {
+    _ = this;
+    if (dwStage < MAX_TEXTURE_STAGES) {
+        texture_handles[dwStage] = lpTexture;
+        if (trace.enable_tracing) trace.print("D3D7: SetTexture(stage={d}, tex=0x{x})\\n", .{ dwStage, lpTexture });
+    }
+    return 0;
+}
+
+/// SetTextureStageState — stores a texture stage state value.
+fn impl_SetTextureStageState(this: usize, dwStage: usize, dwState: usize, dwValue: usize) callconv(w32cc.WINAPI) usize {
+    _ = this;
+    if (dwStage < MAX_TEXTURE_STAGES and dwState < MAX_TSS_STATES) {
+        texture_stage_states[dwStage][dwState] = @truncate(dwValue);
+        if (trace.enable_tracing) trace.print("D3D7: SetTextureStageState(stage={d}, state={d}, val=0x{x})\\n", .{ dwStage, dwState, dwValue });
+    }
+    return 0;
+}
+
+/// GetTextureStageState — retrieves a stored texture stage state.
+fn impl_GetTextureStageState(this: usize, dwStage: usize, dwState: usize, lpdwValue: usize) callconv(w32cc.WINAPI) usize {
+    _ = this;
+    if (dwStage < MAX_TEXTURE_STAGES and dwState < MAX_TSS_STATES and lpdwValue != 0) {
+        @as(*u32, @ptrFromInt(lpdwValue)).* = texture_stage_states[dwStage][dwState];
+    }
+    return 0;
+}
+
 /// ===== Registration =====
 /// Implementation status: Partially implemented
 pub fn init() void {
@@ -894,13 +1042,13 @@ pub fn init() void {
         .Vertex = comPtr(tn2("Vertex").*, "IDirect3DDevice3::Vertex"), // 18
         .Index = comPtr(tn2("Index").*, "IDirect3DDevice3::Index"), // 19
         .End = comPtr(tn2("End").*, "IDirect3DDevice3::End"), // 20
-        .GetRenderState = comPtr(tn3("GetRenderState").*, "IDirect3DDevice3::GetRenderState"), // 21
-        .SetRenderState = comPtr(tn3("SetRenderState").*, "IDirect3DDevice3::SetRenderState"), // 22
+        .GetRenderState = comPtr(impl_GetRenderState, "IDirect3DDevice3::GetRenderState"), // 21
+        .SetRenderState = comPtr(impl_SetRenderState, "IDirect3DDevice3::SetRenderState"), // 22
         .GetLightState = comPtr(tn3("GetLightState").*, "IDirect3DDevice3::GetLightState"), // 23
         .SetLightState = comPtr(tn3("SetLightState").*, "IDirect3DDevice3::SetLightState"), // 24
-        .SetTransform = comPtr(tn3("SetTransform").*, "IDirect3DDevice3::SetTransform"), // 25
-        .GetTransform = comPtr(tn3("GetTransform").*, "IDirect3DDevice3::GetTransform"), // 26
-        .MultiplyTransform = comPtr(tn3("MultiplyTransform").*, "IDirect3DDevice3::MultiplyTransform"), // 27
+        .SetTransform = comPtr(impl_SetTransform, "IDirect3DDevice3::SetTransform"), // 25
+        .GetTransform = comPtr(impl_GetTransform, "IDirect3DDevice3::GetTransform"), // 26
+        .MultiplyTransform = comPtr(impl_MultiplyTransform, "IDirect3DDevice3::MultiplyTransform"), // 27
         .DrawPrimitive = comPtr(tn6("DrawPrimitive").*, "IDirect3DDevice3::DrawPrimitive"), // 28
         .DrawIndexedPrimitive = comPtr(tn8("DrawIndexedPrimitive").*, "IDirect3DDevice3::DrawIndexedPrimitive"), // 29
         .SetClipStatus = comPtr(tn2("SetClipStatus").*, "IDirect3DDevice3::SetClipStatus"), // 30
@@ -911,9 +1059,9 @@ pub fn init() void {
         .DrawIndexedPrimitiveVB = comPtr(tn6("DrawIndexedPrimitiveVB").*, "IDirect3DDevice3::DrawIndexedPrimitiveVB"), // 35
         .ComputeSphereVisibility = comPtr(tn6("ComputeSphereVisibility").*, "IDirect3DDevice3::ComputeSphereVisibility"), // 36
         .GetTexture = comPtr(tn3("GetTexture").*, "IDirect3DDevice3::GetTexture"), // 37
-        .SetTexture = comPtr(tn3("SetTexture").*, "IDirect3DDevice3::SetTexture"), // 38
-        .GetTextureStageState = comPtr(tn4("GetTextureStageState").*, "IDirect3DDevice3::GetTextureStageState"), // 39
-        .SetTextureStageState = comPtr(tn4("SetTextureStageState").*, "IDirect3DDevice3::SetTextureStageState"), // 40
+        .SetTexture = comPtr(impl_SetTexture, "IDirect3DDevice3::SetTexture"), // 38
+        .GetTextureStageState = comPtr(impl_GetTextureStageState, "IDirect3DDevice3::GetTextureStageState"), // 39
+        .SetTextureStageState = comPtr(impl_SetTextureStageState, "IDirect3DDevice3::SetTextureStageState"), // 40
         .ValidateDevice = comPtr(tn2("ValidateDevice").*, "IDirect3DDevice3::ValidateDevice"), // 41
     };
 
@@ -930,17 +1078,17 @@ pub fn init() void {
         .SetRenderTarget = N3,
         .GetRenderTarget = N2,
         .Clear = device7_Clear,
-        .SetTransform = N3,
-        .GetTransform = N3,
+        .SetTransform = comPtr(impl_SetTransform, "IDirect3DDevice7::SetTransform"),
+        .GetTransform = comPtr(impl_GetTransform, "IDirect3DDevice7::GetTransform"),
         .SetViewport = N2,
-        .MultiplyTransform = N3,
+        .MultiplyTransform = comPtr(impl_MultiplyTransform, "IDirect3DDevice7::MultiplyTransform"),
         .GetViewport = N2,
         .SetMaterial = N2,
         .GetMaterial = N2,
         .SetLight = N3,
         .GetLight = N3,
-        .SetRenderState = N3,
-        .GetRenderState = N3,
+        .SetRenderState = comPtr(impl_SetRenderState, "IDirect3DDevice7::SetRenderState"),
+        .GetRenderState = comPtr(impl_GetRenderState, "IDirect3DDevice7::GetRenderState"),
         .BeginStateBlock = N1,
         .EndStateBlock = N2,
         .PreLoad = N2,
@@ -954,9 +1102,9 @@ pub fn init() void {
         .DrawIndexedPrimitiveVB = N8,
         .ComputeSphereVisibility = N6,
         .GetTexture = N3,
-        .SetTexture = N3,
-        .GetTextureStageState = N4,
-        .SetTextureStageState = N4,
+        .SetTexture = comPtr(impl_SetTexture, "IDirect3DDevice7::SetTexture"),
+        .GetTextureStageState = comPtr(impl_GetTextureStageState, "IDirect3DDevice7::GetTextureStageState"),
+        .SetTextureStageState = comPtr(impl_SetTextureStageState, "IDirect3DDevice7::SetTextureStageState"),
         .ValidateDevice = N2,
         .ApplyStateBlock = N2,
         .CaptureStateBlock = N2,
