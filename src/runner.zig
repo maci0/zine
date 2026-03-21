@@ -361,7 +361,7 @@ pub fn runWithJit(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
     while (!cpu.halted) {
         const eip = cpu.eip;
 
-        if (eip != expected_next_eip and !jit.block_cache.contains(eip)) {
+        if (eip != expected_next_eip and !jit.isCached(eip)) {
             if (cpu.memory.readSlice(eip, 256)) |code| {
                 const block_len = scanBlock(code);
                 if (block_len > 0) {

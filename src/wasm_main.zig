@@ -23,6 +23,7 @@ const trace = @import("trace.zig");
 const log = @import("log.zig");
 const profiler = @import("profiler.zig");
 const version = @import("version.zig");
+const stub_common = @import("win32/shared.zig");
 
 const runner = @import("runner.zig");
 const stubs_msvcrt = @import("win32/msvcrt.zig");
@@ -345,7 +346,6 @@ pub fn main() !void {
     // Set guest_memory BEFORE resolveAllImports so that copyModuleToGuest
     // (which copies PE DLL dependencies into the interpreter's address space)
     // can allocate from the guest heap.
-    const stub_common = @import("win32/shared.zig");
     stub_common.guest_memory = &thunk_guest_mem;
 
     // Resolve imports BEFORE copying the PE into combined_buf (patches IAT in mapped_memory)
@@ -757,6 +757,18 @@ const jit_host_mod = @import("jit/host.zig");
 
 const build_options = @import("build_options");
 
+var global_jit_ptr: ?*jit_compiler.JitCompiler = null;
+var global_block_ids_keys_ptr: ?*[4096]u32 = null;
+
+fn flushJitCache() callconv(.c) void {
+    if (global_block_ids_keys_ptr) |keys| {
+        @memset(keys, 0xFFFFFFFF);
+    }
+    if (global_jit_ptr) |j| {
+        @memset(&j.block_cache_keys, 0xFFFFFFFF);
+    }
+}
+
 /// JIT-integrated execution loop with host execution support.
 /// When enable_jit_host is true (build option), compiled WASM blocks are
 /// sent to the host runtime (browser/zine-host) for actual execution.
@@ -781,6 +793,16 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
     // Use a fixed 4096-entry ring buffer to bound memory
     var block_ids_keys = [_]u32{0xFFFFFFFF} ** 4096;
     var block_ids_vals = [_]jit_host_mod.BlockId{0} ** 4096;
+
+    // Register SMC invalidation hook globally
+    global_jit_ptr = &jit;
+    global_block_ids_keys_ptr = &block_ids_keys;
+    stub_common.smc_invalidate_cache = flushJitCache;
+    defer {
+        global_jit_ptr = null;
+        global_block_ids_keys_ptr = null;
+        stub_common.smc_invalidate_cache = null;
+    }
 
     var blocks_compiled: u32 = 0;
     var blocks_executed: u32 = 0;

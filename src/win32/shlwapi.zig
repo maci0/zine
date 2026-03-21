@@ -9,12 +9,12 @@ const stub_common = @import("shared.zig");
 /// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
     const m = "SHLWAPI.dll";
-    const s0 = stub_common.stub_args0;
-    const s1 = stub_common.stub_args1;
-    const s2 = stub_common.stub_args2;
-    const s3 = stub_common.stub_args3;
-    const s4 = stub_common.stub_args4;
-    const s5 = stub_common.stub_args5;
+    const s0 = comptime stub_common.stub_args(0);
+    const s1 = comptime stub_common.stub_args(1);
+    const s2 = comptime stub_common.stub_args(2);
+    const s3 = comptime stub_common.stub_args(3);
+    const s4 = comptime stub_common.stub_args(4);
+    const s5 = comptime stub_common.stub_args(5);
 
     // Path functions
     try environment.addBuiltinExportComptime(m, "PathAppendW", s2);

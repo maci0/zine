@@ -18,20 +18,20 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "VariantInit", stubs.VariantInit);
 
     // --- hgb.exe oleaut32 stubs ---
-    try environment.addBuiltinExportComptime(m, "VariantChangeTypeEx", stub.stub_args5);
-    try environment.addBuiltinExportComptime(m, "VariantCopyInd", stub.stub_args2);
+    try environment.addBuiltinExportComptime(m, "VariantChangeTypeEx", stub.stub_args(5));
+    try environment.addBuiltinExportComptime(m, "VariantCopyInd", stub.stub_args(2));
 
     // Ordinal exports
     try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.SysAllocString, stubs.SysAllocString);
     try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.SysFreeString, stubs.SysFreeString);
-    try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.SysAllocStringByteLen, stub.stub_args1);
+    try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.SysAllocStringByteLen, stub.stub_args(1));
     try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.SysAllocStringLen, stubs.SysAllocStringLen);
     try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.SysStringLen, stubs.SysStringLen);
     try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.SysStringByteLen, stubs.SysStringByteLen);
     try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.VariantInit, stubs.VariantInit);
     try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.VariantClear, stubs.VariantClear);
-    try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.VariantChangeType, stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.VariantCopy, stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.VariantCopyInd, stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.SafeArrayGetElement, stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.VariantChangeType, stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.VariantCopy, stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.VariantCopyInd, stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, ordinals.OLEAUT32.SafeArrayGetElement, stub.stub_args(3));
 }

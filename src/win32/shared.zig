@@ -34,6 +34,10 @@ pub var child_cpu: ?*@import("../x86/cpu.zig").Cpu = null;
 /// stub_common instead of reaching into kernel32/mem.zig.
 pub var guest_memory: ?*x86_memory.GuestMemory = null;
 
+/// Shared SMC JIT Cache Invalidation Callback.
+/// Triggered during execution rights modification (e.g. VirtualProtect or FlushInstructionCache).
+pub var smc_invalidate_cache: ?*const fn () callconv(.c) void = null;
+
 const heap_chunk_size: usize = 16 * 1024 * 1024; // 16 MB per chunk
 var heap_base: ?[*]u8 = null;
 var heap_pos: usize = 0;
@@ -190,89 +194,38 @@ inline fn traceStub(comptime n: comptime_int) void {
     }
 }
 
-/// No-op stub taking 0 arguments.
-/// Implementation status: No-op fallback
-pub fn stub_args0() callconv(w32cc.WINAPI) usize {
-    traceStub(0);
-    return 0;
+fn StubType(comptime argc: usize) type {
+    return switch (argc) {
+        0 => *const fn () callconv(w32cc.WINAPI) usize,
+        1 => *const fn (usize) callconv(w32cc.WINAPI) usize,
+        2 => *const fn (usize, usize) callconv(w32cc.WINAPI) usize,
+        3 => *const fn (usize, usize, usize) callconv(w32cc.WINAPI) usize,
+        4 => *const fn (usize, usize, usize, usize) callconv(w32cc.WINAPI) usize,
+        5 => *const fn (usize, usize, usize, usize, usize) callconv(w32cc.WINAPI) usize,
+        6 => *const fn (usize, usize, usize, usize, usize, usize) callconv(w32cc.WINAPI) usize,
+        7 => *const fn (usize, usize, usize, usize, usize, usize, usize) callconv(w32cc.WINAPI) usize,
+        8 => *const fn (usize, usize, usize, usize, usize, usize, usize, usize) callconv(w32cc.WINAPI) usize,
+        9 => *const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize) callconv(w32cc.WINAPI) usize,
+        10 => *const fn (usize, usize, usize, usize, usize, usize, usize, usize, usize, usize) callconv(w32cc.WINAPI) usize,
+        else => @compileError("max stub unsupported"),
+    };
 }
 
-/// No-op stub taking 1 argument.
-/// Implementation status: No-op fallback
-pub fn stub_args1(a: usize) callconv(w32cc.WINAPI) u32 {
-    _ = a;
-    traceStub(1);
-    return 0;
+/// Generates a no-op Win32 API stub taking `argc` arguments returning 0.
+pub fn stub_args(comptime argc: usize) StubType(argc) {
+    return switch (argc) {
+        0 => struct { pub fn f() callconv(w32cc.WINAPI) usize { traceStub(0); return 0; } }.f,
+        1 => struct { pub fn f(a: usize) callconv(w32cc.WINAPI) usize { _ = a; traceStub(1); return 0; } }.f,
+        2 => struct { pub fn f(a: usize, b: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b}; traceStub(2); return 0; } }.f,
+        3 => struct { pub fn f(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c}; traceStub(3); return 0; } }.f,
+        4 => struct { pub fn f(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c, d}; traceStub(4); return 0; } }.f,
+        5 => struct { pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c, d, e}; traceStub(5); return 0; } }.f,
+        6 => struct { pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c, d, e, f_arg}; traceStub(6); return 0; } }.f,
+        7 => struct { pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize, g: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c, d, e, f_arg, g}; traceStub(7); return 0; } }.f,
+        8 => struct { pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize, g: usize, h: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c, d, e, f_arg, g, h}; traceStub(8); return 0; } }.f,
+        9 => struct { pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize, g: usize, h: usize, i: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c, d, e, f_arg, g, h, i}; traceStub(9); return 0; } }.f,
+        10 => struct { pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize, g: usize, h: usize, i: usize, j: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c, d, e, f_arg, g, h, i, j}; traceStub(10); return 0; } }.f,
+        else => @compileError("max stub unsupported"),
+    };
 }
 
-/// No-op stub taking 2 arguments.
-/// Implementation status: No-op fallback
-pub fn stub_args2(a: usize, b: usize) callconv(w32cc.WINAPI) usize {
-    _ = .{ a, b };
-    traceStub(2);
-    return 0;
-}
-
-/// No-op stub taking 3 arguments.
-/// Implementation status: No-op fallback
-pub fn stub_args3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize {
-    _ = .{ a, b, c };
-    traceStub(3);
-    return 0;
-}
-
-/// No-op stub taking 4 arguments.
-/// Implementation status: No-op fallback
-pub fn stub_args4(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize {
-    _ = .{ a, b, c, d };
-    traceStub(4);
-    return 0;
-}
-
-/// No-op stub taking 5 arguments.
-/// Implementation status: No-op fallback
-pub fn stub_args5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) usize {
-    _ = .{ a, b, c, d, e };
-    traceStub(5);
-    return 0;
-}
-
-/// No-op stub taking 6 arguments.
-/// Implementation status: No-op fallback
-pub fn stub_args6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) usize {
-    _ = .{ a, b, c, d, e, f };
-    traceStub(6);
-    return 0;
-}
-
-/// No-op stub taking 7 arguments.
-/// Implementation status: No-op fallback
-pub fn stub_args7(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize) callconv(w32cc.WINAPI) usize {
-    _ = .{ a, b, c, d, e, f, g };
-    traceStub(7);
-    return 0;
-}
-
-/// No-op stub taking 8 arguments.
-/// Implementation status: No-op fallback
-pub fn stub_args8(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize) callconv(w32cc.WINAPI) usize {
-    _ = .{ a, b, c, d, e, f, g, h };
-    traceStub(8);
-    return 0;
-}
-
-/// No-op stub taking 9 arguments.
-/// Implementation status: No-op fallback
-pub fn stub_args9(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize, i: usize) callconv(w32cc.WINAPI) usize {
-    _ = .{ a, b, c, d, e, f, g, h, i };
-    traceStub(9);
-    return 0;
-}
-
-/// No-op stub taking 10 arguments.
-/// Implementation status: No-op fallback
-pub fn stub_args10(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize, i: usize, j: usize) callconv(w32cc.WINAPI) usize {
-    _ = .{ a, b, c, d, e, f, g, h, i, j };
-    traceStub(10);
-    return 0;
-}

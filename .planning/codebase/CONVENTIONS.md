@@ -5,6 +5,11 @@
 - Standard `camelCase` for functions and variables, `PascalCase` for types
 - Win32 API functions use their original names (e.g., `CreateWindowExA`, `GetModuleHandleA`)
 
+## Naming: `stub_` Prefix
+- Unimplemented Win32 functions use a `stub_` prefix (e.g., `stub_CreateFileMapping`)
+- When a function is properly implemented, the `stub_` prefix is removed
+- Export registrations in `kernel32.zig` etc. must be updated to match
+
 ## Win32 Stub Patterns
 
 ### Registration Pattern

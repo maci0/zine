@@ -356,29 +356,125 @@ fn sscanf_impl(input: [*:0]const u8, fmt_str: [*:0]const u8, ap: usize) i32 {
     const fmt = std.mem.span(fmt_str);
     if (trace.enable_tracing) trace.print("MSVCRT: sscanf('{s}', '{s}')\n", .{ buf, fmt });
 
-    // Read output pointer addresses from va_list.
-    // NOTE: args[i] values are raw guest VAs — inner trace.addr is needed.
     const args = @as([*]const u32, @ptrFromInt(trace.addr(ap)));
-    const a1 = trace.addr(args[0]);
+    var arg_idx: usize = 0;
+    var buf_idx: usize = 0;
+    var fmt_idx: usize = 0;
+    var match_count: i32 = 0;
 
-    // Super hacky sscanf for single %d/%i/%x
-    if (std.mem.eql(u8, fmt, "%d") or std.mem.eql(u8, fmt, "%i") or std.mem.eql(u8, fmt, "%ld")) {
-        if (a1 != 0) {
-            const val = string.strtol(@intFromPtr(input), 0, 10);
-            @as(*i32, @ptrFromInt(a1)).* = val;
-            return 1;
+    while (fmt_idx < fmt.len) {
+        const fc = fmt[fmt_idx];
+        if (fc == '%') {
+            fmt_idx += 1;
+            if (fmt_idx >= fmt.len) break;
+            
+            // Skip whitespaces in buf before parsing formatted types
+            while (buf_idx < buf.len and std.ascii.isWhitespace(buf[buf_idx])) {
+                buf_idx += 1;
+            }
+            if (buf_idx >= buf.len) break; // End of input
+
+            const specifier = fmt[fmt_idx];
+            const out_addr = trace.addr(args[arg_idx]);
+            arg_idx += 1;
+
+            if (specifier == 'd' or specifier == 'i' or (specifier == 'l' and fmt_idx + 1 < fmt.len and fmt[fmt_idx + 1] == 'd')) {
+                if (specifier == 'l') fmt_idx += 1;
+                
+                var sign: i32 = 1;
+                if (buf_idx < buf.len and (buf[buf_idx] == '-' or buf[buf_idx] == '+')) {
+                    if (buf[buf_idx] == '-') sign = -1;
+                    buf_idx += 1;
+                }
+                var val: i32 = 0;
+                var parsed = false;
+                while (buf_idx < buf.len and std.ascii.isDigit(buf[buf_idx])) {
+                    val = val * 10 + @as(i32, buf[buf_idx] - '0');
+                    parsed = true;
+                    buf_idx += 1;
+                }
+                
+                if (parsed) {
+                    if (out_addr != 0) {
+                        @as(*i32, @ptrFromInt(out_addr)).* = val * sign;
+                        match_count += 1;
+                    }
+                } else {
+                    break;
+                }
+            } else if (specifier == 'x' or specifier == 'X') {
+                var parsed = false;
+                var val: u32 = 0;
+                
+                // skip optional 0x
+                if (buf_idx + 1 < buf.len and buf[buf_idx] == '0' and (buf[buf_idx+1] == 'x' or buf[buf_idx+1] == 'X')) {
+                    buf_idx += 2;
+                }
+                
+                while (buf_idx < buf.len) {
+                    const c = buf[buf_idx];
+                    var digit: u32 = 0;
+                    if (c >= '0' and c <= '9') {
+                        digit = c - '0';
+                    } else if (c >= 'a' and c <= 'f') {
+                        digit = c - 'a' + 10;
+                    } else if (c >= 'A' and c <= 'F') {
+                        digit = c - 'A' + 10;
+                    } else {
+                        break;
+                    }
+                    val = val * 16 + digit;
+                    parsed = true;
+                    buf_idx += 1;
+                }
+                
+                if (parsed) {
+                    if (out_addr != 0) {
+                        @as(*u32, @ptrFromInt(out_addr)).* = val;
+                        match_count += 1;
+                    }
+                } else {
+                    break;
+                }
+            } else if (specifier == 's') {
+                if (out_addr != 0) {
+                    var out_ptr = @as([*]u8, @ptrFromInt(out_addr));
+                    var copied: usize = 0;
+                    while (buf_idx < buf.len and !std.ascii.isWhitespace(buf[buf_idx])) {
+                        out_ptr[copied] = buf[buf_idx];
+                        copied += 1;
+                        buf_idx += 1;
+                    }
+                    if (copied > 0) {
+                        out_ptr[copied] = 0;
+                        match_count += 1;
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+                if (trace.enable_tracing) trace.print("  -> unhandled sscanf format '{c}'!\n", .{specifier});
+                break;
+            }
+            fmt_idx += 1;
+        } else if (std.ascii.isWhitespace(fc)) {
+            // Space in format matches any whitespace in input
+            while (buf_idx < buf.len and std.ascii.isWhitespace(buf[buf_idx])) {
+                buf_idx += 1;
+            }
+            fmt_idx += 1;
+        } else {
+            // Exact match
+            if (buf_idx < buf.len and buf[buf_idx] == fc) {
+                buf_idx += 1;
+                fmt_idx += 1;
+            } else {
+                break; // Mismatch
+            }
         }
-    } else if (std.mem.eql(u8, fmt, "%x") or std.mem.eql(u8, fmt, "%X")) {
-        if (a1 != 0) {
-            const val = string.strtoul(@intFromPtr(input), 0, 16);
-            @as(*u32, @ptrFromInt(a1)).* = val;
-            return 1;
-        }
-    } else {
-        if (trace.enable_tracing) trace.print("  -> unhandled format!\n", .{});
     }
 
-    return 0;
+    return match_count;
 }
 
 /// UCRT common vfprintf wrapper.

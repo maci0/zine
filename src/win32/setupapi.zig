@@ -11,12 +11,12 @@ pub fn register(environment: *env.Environment) !void {
     // Return INVALID_HANDLE_VALUE (-1) = no devices found
     try environment.addBuiltinExportComptime(m, "SetupDiGetClassDevsA", &stubInvalidHandle4);
     try environment.addBuiltinExportComptime(m, "SetupDiGetClassDevsW", &stubInvalidHandle4);
-    try environment.addBuiltinExportComptime(m, "SetupDiEnumDeviceInfo", &kernel32.stub_args3);
-    try environment.addBuiltinExportComptime(m, "SetupDiGetDeviceRegistryPropertyA", &kernel32.stub_args7);
-    try environment.addBuiltinExportComptime(m, "SetupDiGetDeviceRegistryPropertyW", &kernel32.stub_args7);
-    try environment.addBuiltinExportComptime(m, "SetupDiDestroyDeviceInfoList", &kernel32.stub_args1);
-    try environment.addBuiltinExportComptime(m, "SetupDiEnumDeviceInterfaces", &kernel32.stub_args5);
-    try environment.addBuiltinExportComptime(m, "SetupDiGetDeviceInterfaceDetailA", &kernel32.stub_args6);
+    try environment.addBuiltinExportComptime(m, "SetupDiEnumDeviceInfo", kernel32.stub_args3);
+    try environment.addBuiltinExportComptime(m, "SetupDiGetDeviceRegistryPropertyA", kernel32.stub_args7);
+    try environment.addBuiltinExportComptime(m, "SetupDiGetDeviceRegistryPropertyW", kernel32.stub_args7);
+    try environment.addBuiltinExportComptime(m, "SetupDiDestroyDeviceInfoList", kernel32.stub_args1);
+    try environment.addBuiltinExportComptime(m, "SetupDiEnumDeviceInterfaces", kernel32.stub_args5);
+    try environment.addBuiltinExportComptime(m, "SetupDiGetDeviceInterfaceDetailA", kernel32.stub_args6);
 }
 
 const w32cc = @import("calling_convention.zig");
