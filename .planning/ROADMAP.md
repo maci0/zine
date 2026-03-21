@@ -15,8 +15,12 @@
 | 9 | JIT Execution | Execute compiled WASM blocks | JIT-01, JIT-02, JIT-03 | 3 |
 | 10 | MSVC WASM Fixes | All MSVC tests passing on WASM | WASM-01, WASM-02, WASM-03 | 3 |
 | 11 | Europa 1400 Integration | Full gameplay validation | EU14-01, EU14-02, EU14-03 | 3 |
+| 12 | DirectSound Gap Closure | SetPan, multi-buffer mixing, per-buffer volume | DSND-01, DSND-02 | 3 |
+| 13 | Europa 1400 Debugging | Fix crash at 0x476970, gameplay validation | EU14-01, EU14-02, EU14-03 | 3 |
+| 14 | JIT Equivalence Tests | Automated JIT↔interpreter verification | JIT-02 | 2 |
+| 15 | WASM Test Verification | Run and verify MSVC test pass rates | WASM-01, WASM-02, WASM-03 | 3 |
 
-**11 phases** | **28 requirements mapped** | All v1 requirements covered ✓
+**15 phases** | **28 requirements mapped** | Gap closure phases: 12-15
 
 ---
 
@@ -151,3 +155,54 @@
 1. Europa 1400 Gold progresses past main menu into city gameplay
 2. In-game fonts display correctly (menus, dialogs, HUD)
 3. Game audio plays during gameplay sessions
+
+---
+
+### Phase 12: DirectSound Gap Closure
+**Goal:** Close DirectSound gaps: implement SetPan, add multi-buffer mixing, make volume per-buffer.
+**Gap Closure:** Closes gaps from audit
+
+**Requirements:** DSND-01, DSND-02
+
+**Success Criteria:**
+1. `SetPan` converts dB pan value to stereo L/R attenuation
+2. Multiple simultaneous buffers are summed before output
+3. Per-buffer volume is applied during mixing, not globally
+
+---
+
+### Phase 13: Europa 1400 Debugging
+**Goal:** Debug and fix Europa 1400 crash at 0x476970 to enable gameplay validation.
+**Gap Closure:** Closes gaps from audit
+
+**Requirements:** EU14-01, EU14-02, EU14-03
+
+**Success Criteria:**
+1. Europa 1400 Gold progresses past main menu into city gameplay
+2. In-game fonts and UI text display correctly
+3. Audio plays during gameplay sessions
+
+---
+
+### Phase 14: JIT Equivalence Tests
+**Goal:** Add automated tests verifying JIT-compiled blocks produce identical results to interpreter.
+**Gap Closure:** Closes gaps from audit
+
+**Requirements:** JIT-02
+
+**Success Criteria:**
+1. Test harness runs same x86 code blocks through interpreter and JIT
+2. CPU state (registers, flags) matches after each block
+
+---
+
+### Phase 15: WASM Test Verification
+**Goal:** Run MSVC test suite on WASM targets and verify pass rates.
+**Gap Closure:** Closes gaps from audit
+
+**Requirements:** WASM-01, WASM-02, WASM-03
+
+**Success Criteria:**
+1. `test_msvc_cli.sh --wasmtime` runs and reports pass/fail
+2. `test_msvc_cli.sh --wasmer` runs and reports pass/fail
+3. All failures triaged and fixed or documented

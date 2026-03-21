@@ -69,36 +69,37 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| THREAD-01 | Phase 1: Thread Manager Core | 🔲 |
-| THREAD-06 | Phase 1: Thread Manager Core | 🔲 |
-| THREAD-07 | Phase 1: Thread Manager Core | 🔲 |
-| THREAD-02 | Phase 2: Sync Primitives | 🔲 |
-| THREAD-03 | Phase 2: Sync Primitives | 🔲 |
-| THREAD-04 | Phase 2: Sync Primitives | 🔲 |
-| THREAD-05 | Phase 2: Sync Primitives | 🔲 |
-| FONT-01 | Phase 3: GDI Font Subsystem | 🔲 |
-| FONT-02 | Phase 3: GDI Font Subsystem | 🔲 |
-| FONT-05 | Phase 3: GDI Font Subsystem | 🔲 |
-| FONT-03 | Phase 4: GDI Text Rendering | 🔲 |
-| FONT-04 | Phase 4: GDI Text Rendering | 🔲 |
-| FONT-06 | Phase 4: GDI Text Rendering | 🔲 |
-| D3D7-01 | Phase 5: D3D7 Device & Pipeline | 🔲 |
-| D3D7-02 | Phase 5: D3D7 Device & Pipeline | 🔲 |
-| D3D7-09 | Phase 5: D3D7 Device & Pipeline | 🔲 |
-| D3D7-03 | Phase 6: D3D7 Rasterizer | 🔲 |
-| D3D7-04 | Phase 6: D3D7 Rasterizer | 🔲 |
-| D3D7-08 | Phase 6: D3D7 Rasterizer | 🔲 |
-| D3D7-05 | Phase 7: D3D7 Render States | 🔲 |
-| D3D7-06 | Phase 7: D3D7 Render States | 🔲 |
-| D3D7-07 | Phase 7: D3D7 Render States | 🔲 |
-| DSND-01 | Phase 8: DirectSound Mixing | 🔲 |
-| DSND-02 | Phase 8: DirectSound Mixing | 🔲 |
-| JIT-01 | Phase 9: JIT Execution | 🔲 |
-| JIT-02 | Phase 9: JIT Execution | 🔲 |
-| JIT-03 | Phase 9: JIT Execution | 🔲 |
-| WASM-01 | Phase 10: MSVC WASM Fixes | 🔲 |
-| WASM-02 | Phase 10: MSVC WASM Fixes | 🔲 |
-| WASM-03 | Phase 10: MSVC WASM Fixes | 🔲 |
-| EU14-01 | Phase 11: Europa 1400 Integration | 🔲 |
-| EU14-02 | Phase 11: Europa 1400 Integration | 🔲 |
-| EU14-03 | Phase 11: Europa 1400 Integration | 🔲 |
+| THREAD-01 | Phase 1: Thread Manager Core | ✅ |
+| THREAD-06 | Phase 1: Thread Manager Core | ✅ |
+| THREAD-07 | Phase 1: Thread Manager Core | ✅ |
+| THREAD-02 | Phase 2: Sync Primitives | ✅ |
+| THREAD-03 | Phase 2: Sync Primitives | ✅ |
+| THREAD-04 | Phase 2: Sync Primitives | ✅ |
+| THREAD-05 | Phase 2: Sync Primitives | ✅ |
+| FONT-01 | Phase 3: GDI Font Subsystem | ✅ |
+| FONT-02 | Phase 3: GDI Font Subsystem | ✅ |
+| FONT-05 | Phase 3: GDI Font Subsystem | ✅ |
+| FONT-03 | Phase 4: GDI Text Rendering | ✅ |
+| FONT-04 | Phase 4: GDI Text Rendering | ✅ |
+| FONT-06 | Phase 4: GDI Text Rendering | ✅ |
+| D3D7-01 | Phase 5: D3D7 Device & Pipeline | ✅ |
+| D3D7-02 | Phase 5: D3D7 Device & Pipeline | ✅ |
+| D3D7-09 | Phase 5: D3D7 Device & Pipeline | ✅ |
+| D3D7-03 | Phase 6: D3D7 Rasterizer | ✅ |
+| D3D7-04 | Phase 6: D3D7 Rasterizer | ✅ |
+| D3D7-08 | Phase 6: D3D7 Rasterizer | ✅ |
+| D3D7-05 | Phase 7: D3D7 Render States | ✅ |
+| D3D7-06 | Phase 7: D3D7 Render States | ✅ |
+| D3D7-07 | Phase 7: D3D7 Render States | ✅ |
+| D3D7-10 | Phase 13: Europa 1400 Debugging | Pending |
+| DSND-01 | Phase 12: DirectSound Gap Closure | Pending |
+| DSND-02 | Phase 12: DirectSound Gap Closure | Pending |
+| JIT-01 | Phase 9: JIT Execution | ⚠️ |
+| JIT-02 | Phase 14: JIT Equivalence Tests | Pending |
+| JIT-03 | Phase 9: JIT Execution | ✅ |
+| WASM-01 | Phase 15: WASM Test Verification | Pending |
+| WASM-02 | Phase 15: WASM Test Verification | Pending |
+| WASM-03 | Phase 15: WASM Test Verification | Pending |
+| EU14-01 | Phase 13: Europa 1400 Debugging | Pending |
+| EU14-02 | Phase 13: Europa 1400 Debugging | Pending |
+| EU14-03 | Phase 13: Europa 1400 Debugging | Pending |
