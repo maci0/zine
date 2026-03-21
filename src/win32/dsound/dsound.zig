@@ -361,23 +361,79 @@ fn dsbuffer_Lock(this: usize, dwOffset: u32, dwBytes: u32, ppvAudioPtr1: usize, 
     return 0;
 }
 
+/// Scratch buffer for applying volume/pan without modifying the original buffer data.
+var scratch_buf: [65536]u8 align(2) = undefined;
+
+/// Apply per-buffer volume and pan to 16-bit PCM data into a scratch buffer.
+/// Volume: hundredths of dB (-10000..0), Pan: hundredths of dB (-10000..10000)
+fn applyVolumeAndPan(dst: []u8, src: []const u8, volume: i32, pan: i32, channels: u16, bits: u16) void {
+    @memcpy(dst[0..src.len], src);
+    if (volume == 0 and pan == 0) return; // No attenuation needed
+
+    // Convert volume from hundredths of dB to linear: 10^(vol/2000)
+    const vol_f: f64 = @floatFromInt(volume);
+    const vol_linear: f32 = @floatCast(std.math.pow(f64, 10.0, vol_f / 2000.0));
+
+    // Convert pan to L/R multipliers
+    var left_mul: f32 = vol_linear;
+    var right_mul: f32 = vol_linear;
+    if (pan < 0) {
+        const pan_f: f64 = @floatFromInt(pan);
+        right_mul *= @floatCast(std.math.pow(f64, 10.0, pan_f / 2000.0));
+    } else if (pan > 0) {
+        const pan_f: f64 = @floatFromInt(-pan);
+        left_mul *= @floatCast(std.math.pow(f64, 10.0, pan_f / 2000.0));
+    }
+
+    if (bits == 16 and channels == 2) {
+        const aligned: []align(2) u8 = @alignCast(dst[0..src.len]);
+        const samples = std.mem.bytesAsSlice(i16, aligned);
+        var i: usize = 0;
+        while (i + 1 < samples.len) : (i += 2) {
+            samples[i] = @intFromFloat(std.math.clamp(@as(f32, @floatFromInt(samples[i])) * left_mul, -32768.0, 32767.0));
+            samples[i + 1] = @intFromFloat(std.math.clamp(@as(f32, @floatFromInt(samples[i + 1])) * right_mul, -32768.0, 32767.0));
+        }
+    } else if (bits == 16 and channels == 1) {
+        const aligned: []align(2) u8 = @alignCast(dst[0..src.len]);
+        const samples = std.mem.bytesAsSlice(i16, aligned);
+        for (samples) |*s| {
+            s.* = @intFromFloat(std.math.clamp(@as(f32, @floatFromInt(s.*)) * vol_linear, -32768.0, 32767.0));
+        }
+    }
+}
+
+fn pushAudioWithEffects(buf: *SoundBufferState, raw: []const u8) void {
+    if (raw.len == 0) return;
+    if (buf.volume == 0 and buf.pan == 0) {
+        renderer.pushAudio(raw);
+        return;
+    }
+    // Process in chunks that fit the scratch buffer
+    var offset: usize = 0;
+    while (offset < raw.len) {
+        const chunk = @min(raw.len - offset, scratch_buf.len);
+        applyVolumeAndPan(scratch_buf[0..chunk], raw[offset..][0..chunk], buf.volume, buf.pan, buf.channels, buf.bits_per_sample);
+        renderer.pushAudio(scratch_buf[0..chunk]);
+        offset += chunk;
+    }
+}
+
 fn dsbuffer_Unlock(this: usize, pvAudioPtr1: usize, dwAudioBytes1: u32, pvAudioPtr2: usize, dwAudioBytes2: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("DSOUND: Unlock(bytes1={d}, bytes2={d})\n", .{ dwAudioBytes1, dwAudioBytes2 });
 
-    if (findBuffer(this)) |buf| {
-        if (!format_sent) {
-            renderer.setAudioFormat(buf.sample_rate, buf.channels, buf.bits_per_sample);
-            format_sent = true;
-        }
+    const buf = findBuffer(this) orelse return 0;
+    if (!format_sent) {
+        renderer.setAudioFormat(buf.sample_rate, buf.channels, buf.bits_per_sample);
+        format_sent = true;
     }
 
     if (dwAudioBytes1 > 0 and pvAudioPtr1 != 0) {
         const data = @as([*]const u8, @ptrFromInt(pvAudioPtr1))[0..dwAudioBytes1];
-        renderer.pushAudio(data);
+        pushAudioWithEffects(buf, data);
     }
     if (dwAudioBytes2 > 0 and pvAudioPtr2 != 0) {
         const data = @as([*]const u8, @ptrFromInt(pvAudioPtr2))[0..dwAudioBytes2];
-        renderer.pushAudio(data);
+        pushAudioWithEffects(buf, data);
     }
     return 0;
 }
@@ -448,9 +504,21 @@ fn dsbuffer_SetVolume(this: usize, lVolume: i32) callconv(w32cc.WINAPI) i32 {
     if (findBuffer(this)) |buf| buf.volume = vol;
     dsound_volume = vol;
     if (trace.enable_tracing) trace.print("DSOUND: SetVolume({d})\n", .{vol});
-    const vol_f: f64 = @floatFromInt(vol);
-    const linear = std.math.pow(f64, 10.0, vol_f / 2000.0);
-    renderer.setVolume(@floatCast(linear));
+    return 0;
+}
+
+fn dsbuffer_SetPan(this: usize, lPan: i32) callconv(w32cc.WINAPI) i32 {
+    const pan = std.math.clamp(lPan, -10000, 10000);
+    if (findBuffer(this)) |buf| buf.pan = pan;
+    if (trace.enable_tracing) trace.print("DSOUND: SetPan({d})\n", .{pan});
+    return 0;
+}
+
+fn dsbuffer_GetPan(this: usize, plPan: usize) callconv(w32cc.WINAPI) i32 {
+    if (plPan != 0) {
+        const buf = findBuffer(this) orelse return 0;
+        @as(*align(1) i32, @ptrFromInt(plPan)).* = buf.pan;
+    }
     return 0;
 }
 
@@ -491,7 +559,7 @@ pub fn register(environment: *env.Environment) !void {
         .GetCurrentPosition = comPtr(dsbuffer_GetCurrentPosition, "IDirectSoundBuffer::GetCurrentPosition"),
         .GetFormat = comPtr(dsbuffer_GetFormat, "IDirectSoundBuffer::GetFormat"),
         .GetVolume = comPtr(dsbuffer_GetVolume, "IDirectSoundBuffer::GetVolume"),
-        .GetPan = d2,
+        .GetPan = comPtr(dsbuffer_GetPan, "IDirectSoundBuffer::GetPan"),
         .GetFrequency = d2,
         .GetStatus = comPtr(dsbuffer_GetStatus, "IDirectSoundBuffer::GetStatus"),
         .Initialize = d3,
@@ -500,7 +568,7 @@ pub fn register(environment: *env.Environment) !void {
         .SetCurrentPosition = comPtr(dsbuffer_SetCurrentPosition, "IDirectSoundBuffer::SetCurrentPosition"),
         .SetFormat = comPtr(dsbuffer_SetFormat, "IDirectSoundBuffer::SetFormat"),
         .SetVolume = comPtr(dsbuffer_SetVolume, "IDirectSoundBuffer::SetVolume"),
-        .SetPan = d2,
+        .SetPan = comPtr(dsbuffer_SetPan, "IDirectSoundBuffer::SetPan"),
         .SetFrequency = d2,
         .Stop = comPtr(dsbuffer_Stop, "IDirectSoundBuffer::Stop"),
         .Unlock = comPtr(dsbuffer_Unlock, "IDirectSoundBuffer::Unlock"),
