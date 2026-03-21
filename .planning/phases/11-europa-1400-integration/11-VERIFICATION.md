@@ -7,7 +7,8 @@
 
 ### 1. Europa 1400 Gold progresses past main menu into city gameplay
 - [ ] Requires manual testing — run `./zig-out/bin/zine.x86 drive_c/Desktop/Guild/Europa1400Gold.exe`
-- [ ] Previous session showed crash at 0x476970 (access violation) — needs debugging
+- [ ] 0x476970 NULL reads are handled by AppCompat (Delphi VCL pattern, ~60/sec, benign)
+- [ ] **Real crash**: UnhandledExceptionFilter code 0xC0000005 at **0x47D97E** — triggers on "Load Game" click (~12.8s)
 
 ### 2. In-game fonts display correctly (menus, dialogs, HUD)
 - [ ] GDI font/text subsystem implemented (Phases 3-4)
