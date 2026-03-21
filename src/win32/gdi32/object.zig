@@ -23,7 +23,7 @@ pub fn GetStockObject(fnObject: i32) callconv(w32cc.WINAPI) usize {
             6 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = 0x00FFFFFF, .width = 1, .style = 0 } } }), // WHITE_PEN
             7 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = 0x00000000, .width = 1, .style = 0 } } }), // BLACK_PEN
             8 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = 0, .width = 0, .style = 5 } } }), // NULL_PEN
-            10...17 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Font, .data = .{ .none = {} } }),
+            10...17 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Font, .data = .{ .font = gdi32.FontData{} } }),
             else => return 0,
         }
     }
@@ -92,20 +92,30 @@ pub fn CreatePen(iStyle: i32, cWidth: i32, crColor: u32) callconv(w32cc.WINAPI) 
 }
 
 /// Create a logical font from a LOGFONT structure.
-/// Implementation status: Partially implemented (stores face name for GetObjectA)
+/// Implementation status: Partially implemented (stores height, weight, face name for metrics)
 pub fn CreateFontIndirectA(lplf: usize) callconv(w32cc.WINAPI) usize {
-    if (trace.enable_tracing) {
-        if (lplf != 0) {
-            // LOGFONT.lfFaceName is at offset 28, 32 bytes
-            const face = @as([*]const u8, @ptrFromInt(lplf + 28));
-            const len = std.mem.indexOfScalar(u8, face[0..32], 0) orelse 32;
-            trace.print("GDI32: CreateFontIndirectA(face='{s}')\n", .{face[0..len]});
-        } else {
-            trace.print("GDI32: CreateFontIndirectA(NULL)\n", .{});
-        }
+    var fd = gdi32.FontData{};
+    if (lplf != 0) {
+        // LOGFONT layout: lfHeight(0), lfWidth(4), lfEscapement(8), lfOrientation(12),
+        // lfWeight(16), lfItalic(20), lfUnderline(21), lfStrikeOut(22), lfCharSet(23),
+        // ... lfFaceName(28, 32 bytes)
+        fd.height = @as(*const i32, @ptrFromInt(lplf)).*;
+        fd.width = @as(*const i32, @ptrFromInt(lplf + 4)).*;
+        fd.weight = @as(*const i32, @ptrFromInt(lplf + 16)).*;
+        fd.italic = @as(*const u8, @ptrFromInt(lplf + 20)).* != 0;
+        fd.charset = @as(*const u8, @ptrFromInt(lplf + 23)).*;
+        // Copy face name
+        const face = @as([*]const u8, @ptrFromInt(lplf + 28));
+        const len = std.mem.indexOfScalar(u8, face[0..32], 0) orelse 32;
+        const copy_len = @min(len, 31);
+        @memcpy(fd.face_name[0..copy_len], face[0..copy_len]);
+        fd.face_len = @intCast(copy_len);
+        if (trace.enable_tracing) trace.print("GDI32: CreateFontIndirectA(face='{s}', h={d})\n", .{ fd.face_name[0..fd.face_len], fd.height });
+    } else {
+        if (trace.enable_tracing) trace.print("GDI32: CreateFontIndirectA(NULL)\n", .{});
     }
     const handle = gdi32.nextHandle();
-    gdi32.registerObject(.{ .handle = handle, .obj_type = .Font, .data = .{ .none = {} } });
+    gdi32.registerObject(.{ .handle = handle, .obj_type = .Font, .data = .{ .font = fd } });
     return handle;
 }
 
@@ -325,14 +335,28 @@ pub fn CreatePenIndirect(lplgpn: usize) callconv(w32cc.WINAPI) usize {
 }
 
 /// Create a logical font with the specified characteristics.
-/// Implementation status: Stub
+/// Implementation status: Partially implemented (stores height, weight, face for metrics)
 pub fn CreateFontA(nHeight: i32, nWidth: i32, nEscapement: i32, nOrientation: i32, fnWeight: i32, fdwItalic: u32, fdwUnderline: u32, fdwStrikeOut: u32, fdwCharSet: u32, fdwOutputPrecision: u32, fdwClipPrecision: u32, fdwQuality: u32, fdwPitchAndFamily: u32, lpszFace: usize) callconv(w32cc.WINAPI) usize {
-    _ = nHeight; _ = nWidth; _ = nEscapement; _ = nOrientation; _ = fnWeight;
-    _ = fdwItalic; _ = fdwUnderline; _ = fdwStrikeOut; _ = fdwCharSet;
+    _ = nEscapement; _ = nOrientation;
+    _ = fdwUnderline; _ = fdwStrikeOut;
     _ = fdwOutputPrecision; _ = fdwClipPrecision; _ = fdwQuality;
-    _ = fdwPitchAndFamily; _ = lpszFace;
+    _ = fdwPitchAndFamily;
+    var fd = gdi32.FontData{};
+    fd.height = nHeight;
+    fd.width = nWidth;
+    fd.weight = fnWeight;
+    fd.italic = (fdwItalic != 0);
+    fd.charset = fdwCharSet;
+    if (lpszFace != 0) {
+        const face = @as([*]const u8, @ptrFromInt(lpszFace));
+        const len = std.mem.indexOfScalar(u8, face[0..32], 0) orelse 32;
+        const copy_len = @min(len, 31);
+        @memcpy(fd.face_name[0..copy_len], face[0..copy_len]);
+        fd.face_len = @intCast(copy_len);
+    }
+    if (trace.enable_tracing) trace.print("GDI32: CreateFontA(h={d}, face='{s}')\n", .{ nHeight, fd.face_name[0..fd.face_len] });
     const handle = gdi32.nextHandle();
-    gdi32.registerObject(.{ .handle = handle, .obj_type = .Font, .data = .{ .none = {} } });
+    gdi32.registerObject(.{ .handle = handle, .obj_type = .Font, .data = .{ .font = fd } });
     return handle;
 }
 

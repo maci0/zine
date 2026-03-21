@@ -177,20 +177,34 @@ pub fn SetROP2(hdc: usize, rop2: i32) callconv(w32cc.WINAPI) i32 {
     return old_rop;
 }
 
+/// Helper: get the FontData for the font currently selected into a DC.
+fn getSelectedFont(hdc: usize) gdi32.FontData {
+    if (gdi32.getDc(hdc)) |dc_entry| {
+        if (dc_entry.font != 0) {
+            if (gdi32.findObject(dc_entry.font)) |obj| {
+                if (obj.obj_type == .Font) return obj.data.font;
+            }
+        }
+    }
+    return gdi32.FontData{}; // Default: MS Sans Serif 13px
+}
+
 /// Retrieves the metrics for the currently selected font.
-/// Implementation status: Partially implemented (returns fixed metrics)
+/// Implementation status: Partially implemented (derives metrics from stored font height)
 pub fn GetTextMetricsA(hdc: usize, lptm: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
     if (lptm != 0) {
+        const fd = getSelectedFont(hdc);
+        const h = fd.tmHeight();
+        const aw = fd.aveCharWidth();
         const tm = @as(*w32.TEXTMETRICA, @ptrFromInt(lptm));
         tm.* = .{}; // zero all fields
-        tm.tmHeight = 13;
-        tm.tmAscent = 11;
-        tm.tmDescent = 2;
-        tm.tmInternalLeading = 2;
+        tm.tmHeight = h;
+        tm.tmAscent = @divTrunc(h * 85, 100); // ~85% ascent
+        tm.tmDescent = h - tm.tmAscent;
+        tm.tmInternalLeading = @max(@divTrunc(h, 6), 1);
         tm.tmExternalLeading = 0;
-        tm.tmAveCharWidth = 6;  // used for DLU: horiz DLU = tmAveCharWidth / 4
-        tm.tmMaxCharWidth = 11;
+        tm.tmAveCharWidth = aw;
+        tm.tmMaxCharWidth = aw * 2;
     }
     return 1;
 }
@@ -202,14 +216,14 @@ pub fn GetTextMetricsW(hdc: usize, lptm: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 /// Computes the width and height of the specified string of text.
-/// Implementation status: Partially implemented (uses fixed character width)
+/// Implementation status: Partially implemented (derives from selected font height)
 pub fn GetTextExtentPoint32A(hdc: usize, lpString: usize, c: i32, lpSize: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
     _ = lpString;
     if (lpSize != 0) {
+        const fd = getSelectedFont(hdc);
         const size = @as(*w32.SIZE, @ptrFromInt(lpSize));
-        size.cx = 6 * @as(i32, if (c > 0) c else 0); // avgCharWidth(6) * len
-        size.cy = 13; // tmHeight
+        size.cx = fd.aveCharWidth() * @as(i32, if (c > 0) c else 0);
+        size.cy = fd.tmHeight();
     }
     return 1;
 }
@@ -264,22 +278,23 @@ pub fn stub_UpdateColors(hdc: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 /// Retrieves the number of characters in a string that will fit within a specified space.
-/// Implementation status: Partially implemented
+/// Implementation status: Partially implemented (derives from selected font)
 pub fn GetTextExtentExPointA(hdc: usize, lpszString: usize, cchString: i32, nMaxExtent: i32, lpnFit: usize, lpnDx: usize, lpSize: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
     _ = lpszString;
     _ = nMaxExtent;
+    const fd = getSelectedFont(hdc);
+    const aw = fd.aveCharWidth();
     if (lpnFit != 0) @as(*i32, @ptrFromInt(lpnFit)).* = cchString;
     if (lpSize != 0) {
         const size = @as(*w32.SIZE, @ptrFromInt(lpSize));
-        size.cx = @as(i32, cchString) * 6;
-        size.cy = 13;
+        size.cx = @as(i32, cchString) * aw;
+        size.cy = fd.tmHeight();
     }
     if (lpnDx != 0) {
         const dx = @as([*]i32, @ptrFromInt(lpnDx));
         const count: usize = @intCast(@max(cchString, 0));
         for (0..@min(count, 1024)) |i| {
-            dx[i] = @intCast(@as(i32, @intCast(i + 1)) * 6);
+            dx[i] = @intCast(@as(i32, @intCast(i + 1)) * aw);
         }
     }
     return 1;
@@ -308,14 +323,15 @@ pub fn stub_TranslateCharsetInfo(lpSrc: usize, lpCs: usize, dwFlags: u32) callco
 }
 
 /// Retrieves the widths of consecutive characters in a specified range.
-/// Implementation status: Partially implemented (uses fixed width)
+/// Implementation status: Partially implemented (uses selected font's aveCharWidth)
 pub fn GetCharWidthA(hdc: usize, iFirst: u32, iLast: u32, lpBuffer: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
+    const fd = getSelectedFont(hdc);
+    const aw = fd.aveCharWidth();
     if (lpBuffer != 0 and iLast >= iFirst) {
         const count = iLast - iFirst + 1;
         const buf = @as([*]i32, @ptrFromInt(lpBuffer));
         for (0..@min(count, 256)) |i| {
-            buf[i] = 6; // avgCharWidth for MS Sans Serif 8pt
+            buf[i] = aw;
         }
     }
     return 1;
@@ -400,8 +416,8 @@ pub fn SetViewportOrgEx(hdc: usize, x: i32, y: i32, lppt: usize) callconv(w32cc.
 
 /// GetTextFaceA — returns the face name of the font selected into the DC.
 pub fn GetTextFaceA(hdc: usize, c: i32, lpName: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
-    const face = "MS Sans Serif";
+    const fd = getSelectedFont(hdc);
+    const face = if (fd.face_len > 0) fd.face_name[0..fd.face_len] else "MS Sans Serif";
     if (lpName != 0 and c > 0) {
         const buf = @as([*]u8, @ptrFromInt(lpName));
         const copy_len = @min(face.len, @as(usize, @intCast(c)) -| 1);

@@ -63,6 +63,38 @@ pub const PenData = struct {
     style: i32,
 };
 
+/// Data for logical fonts (from LOGFONT / CreateFont parameters).
+pub const FontData = struct {
+    /// Font height in logical units (negative = character height, positive = cell height).
+    height: i32 = 13,
+    /// Average character width (0 = system default derived from height).
+    width: i32 = 0,
+    /// Font weight (400 = FW_NORMAL, 700 = FW_BOLD).
+    weight: i32 = 400,
+    /// Character set (0 = ANSI_CHARSET).
+    charset: u32 = 0,
+    /// Italic flag.
+    italic: bool = false,
+    /// Face name (up to 31 chars + null).
+    face_name: [32]u8 = [_]u8{0} ** 32,
+    face_len: u8 = 0,
+
+    /// Derive tmHeight from the font height parameter.
+    /// Win32 convention: negative = character height, positive = cell height.
+    pub fn tmHeight(self: FontData) i32 {
+        const h = if (self.height < 0) -self.height else if (self.height > 0) self.height else 13;
+        return @max(h, 1);
+    }
+
+    /// Derive average character width proportional to height.
+    /// MS Sans Serif at 13px height has aveCharWidth=6, roughly height * 0.46.
+    pub fn aveCharWidth(self: FontData) i32 {
+        if (self.width > 0) return self.width;
+        const h = self.tmHeight();
+        return @max(@divTrunc(h * 46, 100), 1);
+    }
+};
+
 /// A generic GDI object container.
 pub const GdiObject = struct {
     /// Unique handle.
@@ -74,6 +106,7 @@ pub const GdiObject = struct {
         bitmap: DibInfo,
         brush: BrushData,
         pen: PenData,
+        font: FontData,
         none: void,
     },
 };
@@ -302,79 +335,79 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "Polyline", drawing.Polyline);
 
     // Generic stubs for unimplemented GDI32 functions
-    try environment.addBuiltinExportComptime(m, "StartDocW", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "SetAbortProc", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "StartPage", stub.stub_args1);
-    try environment.addBuiltinExportComptime(m, "EndPage", stub.stub_args1);
-    try environment.addBuiltinExportComptime(m, "EndDoc", stub.stub_args1);
-    try environment.addBuiltinExportComptime(m, "LPtoDP", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "EnumFontsW", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "StartDocW", stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, "SetAbortProc", stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, "StartPage", stub.stub_args(1));
+    try environment.addBuiltinExportComptime(m, "EndPage", stub.stub_args(1));
+    try environment.addBuiltinExportComptime(m, "EndDoc", stub.stub_args(1));
+    try environment.addBuiltinExportComptime(m, "LPtoDP", stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, "EnumFontsW", stub.stub_args(4));
     try environment.addBuiltinExportComptime(m, "GetTextFaceA", dc.GetTextFaceA);
-    try environment.addBuiltinExportComptime(m, "GetTextFaceW", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "SetBrushOrgEx", stub.stub_args4);
-    try environment.addBuiltinExportComptime(m, "GetPaletteEntries", stub.stub_args4);
-    try environment.addBuiltinExportComptime(m, "GetTextExtentPointW", stub.stub_args4);
-    try environment.addBuiltinExportComptime(m, "PtVisible", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "CreateDIBitmap", stub.stub_args6);
-    try environment.addBuiltinExportComptime(m, "PlayMetaFile", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "SetRectRgn", stub.stub_args5);
-    try environment.addBuiltinExportComptime(m, "FillRgn", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "Escape", stub.stub_args5);
-    try environment.addBuiltinExportComptime(m, "EnumFontFamiliesExW", stub.stub_args5);
-    try environment.addBuiltinExportComptime(m, "EnumFontFamiliesW", stub.stub_args4);
-    try environment.addBuiltinExportComptime(m, "SetWindowOrgEx", stub.stub_args4);
-    try environment.addBuiltinExportComptime(m, "SetEnhMetaFileBits", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "EnumMetaFile", stub.stub_args4);
-    try environment.addBuiltinExportComptime(m, "PlayMetaFileRecord", stub.stub_args4);
-    try environment.addBuiltinExportComptime(m, "PlayEnhMetaFile", stub.stub_args3);
+    try environment.addBuiltinExportComptime(m, "GetTextFaceW", stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, "SetBrushOrgEx", stub.stub_args(4));
+    try environment.addBuiltinExportComptime(m, "GetPaletteEntries", stub.stub_args(4));
+    try environment.addBuiltinExportComptime(m, "GetTextExtentPointW", stub.stub_args(4));
+    try environment.addBuiltinExportComptime(m, "PtVisible", stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, "CreateDIBitmap", stub.stub_args(6));
+    try environment.addBuiltinExportComptime(m, "PlayMetaFile", stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, "SetRectRgn", stub.stub_args(5));
+    try environment.addBuiltinExportComptime(m, "FillRgn", stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, "Escape", stub.stub_args(5));
+    try environment.addBuiltinExportComptime(m, "EnumFontFamiliesExW", stub.stub_args(5));
+    try environment.addBuiltinExportComptime(m, "EnumFontFamiliesW", stub.stub_args(4));
+    try environment.addBuiltinExportComptime(m, "SetWindowOrgEx", stub.stub_args(4));
+    try environment.addBuiltinExportComptime(m, "SetEnhMetaFileBits", stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, "EnumMetaFile", stub.stub_args(4));
+    try environment.addBuiltinExportComptime(m, "PlayMetaFileRecord", stub.stub_args(4));
+    try environment.addBuiltinExportComptime(m, "PlayEnhMetaFile", stub.stub_args(3));
     try environment.addBuiltinExportComptime(m, "SetViewportOrgEx", dc.SetViewportOrgEx);
-    try environment.addBuiltinExportComptime(m, "GetEnhMetaFileHeader", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "GetBitmapBits", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "GetEnhMetaFileBits", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "GetMetaFileBitsEx", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "DeleteEnhMetaFile", stub.stub_args1);
-    try environment.addBuiltinExportComptime(m, "GetTextExtentPointA", stub.stub_args4);
-    try environment.addBuiltinExportComptime(m, "SetMetaFileBitsEx", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "CreateBitmapIndirect", stub.stub_args1);
-    try environment.addBuiltinExportComptime(m, "SetBitmapDimensionEx", stub.stub_args4);
-    try environment.addBuiltinExportComptime(m, "CreatePolygonRgn", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "ExtFloodFill", stub.stub_args5);
-    try environment.addBuiltinExportComptime(m, "OffsetRgn", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "GetDIBColorTable", stub.stub_args4);
-    try environment.addBuiltinExportComptime(m, "SetDIBColorTable", stub.stub_args4);
-    try environment.addBuiltinExportComptime(m, "GetNearestPaletteIndex", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "ResizePalette", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "SetDIBits", stub.stub_args6);
-    try environment.addBuiltinExportComptime(m, "CreateRectRgnIndirect", stub.stub_args1);
-    try environment.addBuiltinExportComptime(m, "PolyBezier", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "LineDDA", stub.stub_args6);
-    try environment.addBuiltinExportComptime(m, "GetLayout", stub.stub_args1);
-    try environment.addBuiltinExportComptime(m, "SetLayout", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "DPtoLP", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "ScaleWindowExtEx", stub.stub_args6);
+    try environment.addBuiltinExportComptime(m, "GetEnhMetaFileHeader", stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, "GetBitmapBits", stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, "GetEnhMetaFileBits", stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, "GetMetaFileBitsEx", stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, "DeleteEnhMetaFile", stub.stub_args(1));
+    try environment.addBuiltinExportComptime(m, "GetTextExtentPointA", stub.stub_args(4));
+    try environment.addBuiltinExportComptime(m, "SetMetaFileBitsEx", stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, "CreateBitmapIndirect", stub.stub_args(1));
+    try environment.addBuiltinExportComptime(m, "SetBitmapDimensionEx", stub.stub_args(4));
+    try environment.addBuiltinExportComptime(m, "CreatePolygonRgn", stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, "ExtFloodFill", stub.stub_args(5));
+    try environment.addBuiltinExportComptime(m, "OffsetRgn", stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, "GetDIBColorTable", stub.stub_args(4));
+    try environment.addBuiltinExportComptime(m, "SetDIBColorTable", stub.stub_args(4));
+    try environment.addBuiltinExportComptime(m, "GetNearestPaletteIndex", stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, "ResizePalette", stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, "SetDIBits", stub.stub_args(6));
+    try environment.addBuiltinExportComptime(m, "CreateRectRgnIndirect", stub.stub_args(1));
+    try environment.addBuiltinExportComptime(m, "PolyBezier", stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, "LineDDA", stub.stub_args(6));
+    try environment.addBuiltinExportComptime(m, "GetLayout", stub.stub_args(1));
+    try environment.addBuiltinExportComptime(m, "SetLayout", stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, "DPtoLP", stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, "ScaleWindowExtEx", stub.stub_args(6));
 
     // --- Unicode (W) GDI32 stubs ---
     try environment.addBuiltinExportComptime(m, "GetTextExtentExPointW", dc.GetTextExtentExPointA);
     try environment.addBuiltinExportComptime(m, "CreateFontW", object.CreateFontA);
 
     // --- hgb.exe GDI32 stubs ---
-    try environment.addBuiltinExportComptime(m, "GetWindowOrgEx", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "GetSystemPaletteEntries", stub.stub_args4);
+    try environment.addBuiltinExportComptime(m, "GetWindowOrgEx", stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, "GetSystemPaletteEntries", stub.stub_args(4));
     try environment.addBuiltinExportComptime(m, "GetCurrentPositionEx", dc.GetCurrentPositionEx);
     try environment.addBuiltinExportComptime(m, "EnumFontsA", object.EnumFontsA);
 
     // --- Additional GDI stubs ---
-    try environment.addBuiltinExportComptime(m, "StartDocA", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "SelectClipRgn", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "PtInRegion", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "GetWinMetaFileBits", stub.stub_args5);
+    try environment.addBuiltinExportComptime(m, "StartDocA", stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, "SelectClipRgn", stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, "PtInRegion", stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, "GetWinMetaFileBits", stub.stub_args(5));
     try environment.addBuiltinExportComptime(m, "GetTextAlign", dc.GetTextAlign);
-    try environment.addBuiltinExportComptime(m, "GetEnhMetaFilePaletteEntries", stub.stub_args3);
-    try environment.addBuiltinExportComptime(m, "GetClipRgn", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "GetClipBox", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "GdiFlush", stub.stub_args0);
-    try environment.addBuiltinExportComptime(m, "ExtCreatePen", stub.stub_args5);
+    try environment.addBuiltinExportComptime(m, "GetEnhMetaFilePaletteEntries", stub.stub_args(3));
+    try environment.addBuiltinExportComptime(m, "GetClipRgn", stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, "GetClipBox", stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, "GdiFlush", stub.stub_args(0));
+    try environment.addBuiltinExportComptime(m, "ExtCreatePen", stub.stub_args(5));
     try environment.addBuiltinExportComptime(m, "CreateICA", dc.CreateDCA);
-    try environment.addBuiltinExportComptime(m, "CopyEnhMetaFileA", stub.stub_args2);
-    try environment.addBuiltinExportComptime(m, "AbortDoc", stub.stub_args1);
+    try environment.addBuiltinExportComptime(m, "CopyEnhMetaFileA", stub.stub_args(2));
+    try environment.addBuiltinExportComptime(m, "AbortDoc", stub.stub_args(1));
 }
