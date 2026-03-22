@@ -17,7 +17,7 @@ See [milestones/v1-ROADMAP.md](milestones/v1-ROADMAP.md) for full details.
 |---|-------|------|--------------|
 | 16 | Baseline Fix | Fix native x86 failures (RC, CVTRES, E2E) | TEST-01..04, P01 |
 | 17 | Native x86 Modes | Interpreted + JIT + external all green | P02, P03, P04 |
-| 18 | Native x86_64 Modes | Direct + interpreted + external all green | P05, P06, P07 |
+| 18 | 1/1 | Complete    | 2026-03-22 |
 | 19 | WASM32 Interpreted | wasmtime + wasmer green | P08, P09 |
 | 20 | WASM32 JIT | Add flags, wasmtime + wasmer green | P10, P11 |
 | 21 | WASM64 Interpreted | Add wasm64 build + flags, both runtimes green | P12, P13 |

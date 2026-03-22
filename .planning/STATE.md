@@ -1,3 +1,16 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-03-22T07:48:42.764Z"
+progress:
+  total_phases: 9
+  completed_phases: 1
+  total_plans: 1
+  completed_plans: 1
+---
+
 # Zine — State
 
 ## Project Status
@@ -5,11 +18,12 @@
 See: .planning/PROJECT.md (updated 2026-03-22)
 
 **Core value:** Run Win98/Win2K era Windows applications and games faithfully on Linux and in the browser
-**Current focus:** Phase 18 — Native x86_64 Modes
+**Current focus:** Phase 18 — native-x86-64-modes
 
 ## Current Milestone
 
 **v2: Full Test Coverage**
+
 - 9 phases (16-24) | 26 requirements
 - Status: In progress — 3 modes green
 
