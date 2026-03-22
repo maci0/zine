@@ -41,13 +41,14 @@ Run Win98/Win2K era Windows applications and games faithfully on Linux and in th
 - ✓ DirectSound mixing with per-buffer volume and stereo pan — **v1**
 - ✓ JIT x86→WASM block execution infrastructure — **v1**
 - ✓ Europa 1400 Gold runs past main menu (SEH crash fix) — **v1**
+- ✓ All MSVC CLI tests pass natively and interpreted on x86_64 (C1076 fixed) — **v2**
 
 ### Active
 
 <!-- v2: Full Test Coverage -->
 
 - [ ] All MSVC CLI tests pass in native x86 mode (fix RC, CVTRES, E2E)
-- [ ] All tests pass in interpreted, JIT, native64, and external-stubs modes
+- [ ] All tests pass in JIT mode
 - [ ] All tests pass on WASM32 (wasmtime + wasmer)
 - [ ] WASM64 build and test mode added, all tests pass
 - [ ] Test script enhanced with wasm64 flags and comprehensive `--all` mode
@@ -93,6 +94,8 @@ Run Win98/Win2K era Windows applications and games faithfully on Linux and in th
 ## Current State
 
 **v1 Win32 Compatibility** shipped 2026-03-22. 15 phases, 25/35 requirements satisfied, 10 as tech debt (JIT equivalence, WASM runtime tests, Europa gameplay retest). See `.planning/milestones/` for full archive.
+
+**Phase 18 complete**: Native x86_64 execution, interpretation, and external stubs modes pass 42/42 tests.
 
 ## Evolution
 
