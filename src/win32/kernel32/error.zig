@@ -1,6 +1,7 @@
 //! KERNEL32 error and exception handling functions.
 
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const platform = @import("../../platform.zig");
 const w32cc = @import("../calling_convention.zig");
@@ -222,13 +223,24 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
             const disp = if (comptime platform.is_x86_64) blk: {
                 // On x86_64, SEH handlers are 32-bit PE code — call via compat mode
                 const compat_thunks = @import("../../x86/compat_thunks.zig");
-                break :blk compat_thunks.callCompat32_4(
+                const teb = @import("../teb.zig");
+                const teb_ptr = @as(*teb.TEB, @ptrFromInt(teb.teb_base_addr));
+                const old_limit = teb_ptr.NtTib.StackLimit;
+                const old_base = teb_ptr.NtTib.StackBase;
+                teb_ptr.NtTib.StackBase = 0xFFFFFFFF;
+                teb_ptr.NtTib.StackLimit = 0;
+                
+                const disp_res = compat_thunks.callCompat32_4(
                     handler,
                     @truncate(@intFromPtr(rec)),
                     current_node,
                     @truncate(@intFromPtr(ctx)),
                     0, // dispatcherContext
                 );
+                
+                teb_ptr.NtTib.StackBase = old_base;
+                teb_ptr.NtTib.StackLimit = old_limit;
+                break :blk disp_res;
             } else blk: {
                 const HandlerFn = *const fn (record: *EXCEPTION_RECORD, establisherFrame: u32, contextRecord: *CONTEXT, dispatcherContext: u32) callconv(w32cc.WINAPI) u32;
                 const func = @as(HandlerFn, @ptrFromInt(handler));
@@ -292,12 +304,12 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
     }
 
     // Use direct fd write to avoid TLS-dependent code (FS = TEB on x86_64)
-    _ = std.posix.write(2, "Unhandled exception, terminating.\n") catch {};
+    std.debug.print("Unhandled exception, terminating.\n", .{});
     platform.exitProcess(1);
 }
 
 /// Saved signal context when dispatching SEH from a signal handler.
-pub var signal_context: ?*std.posix.ucontext_t = null;
+pub var signal_context: ?*@import("../../platform/native.zig").ucontext_t = null;
 
 /// Saved CONTEXT from signal handler for hardware exceptions (SIGILL/SIGSEGV).
 pub var saved_hw_context: ?*@import("../teb.zig").CONTEXT = null;
@@ -345,7 +357,7 @@ pub fn RtlUnwind(targetFrame: u32, targetIp: u32, pExceptionRecord: usize, retur
     // This prevents the handler from jumping out of the signal handler context.
     if (signal_context) |uctx| {
         if (targetIp != 0 and comptime platform.is_native) {
-            const REG = std.os.linux.REG;
+            const REG = @import("../../platform/native.zig").REG;
             const frame_ebp = targetFrame +% 8;
             if (comptime platform.is_x86) {
                 uctx.mcontext.gregs[REG.EIP] = targetIp;

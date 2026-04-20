@@ -64,7 +64,7 @@ pub var msvcrt_mbctype_ptr: *u8 = &msvcrt_mbctype[1];
 /// Represents an environment variable key-value pair.
 pub const EnvVar = struct { key: []const u8, val: []const u8 };
 /// List of environment variables.
-pub var msvcrt_env_vars: std.ArrayListUnmanaged(EnvVar) = .{};
+pub var msvcrt_env_vars: std.ArrayListUnmanaged(EnvVar) = .empty;
 
 const string = @import("msvcrt/string.zig");
 const process = @import("msvcrt/process.zig");
@@ -87,20 +87,29 @@ pub fn register(environment: *env.Environment) !void {
     if (msvcrt_wcmdln == 0) msvcrt_wcmdln = @intFromPtr(&wcmdln_default);
     const m = "MSVCRT.dll";
 
+    // Get or allocate guest globals block (returns 0 on native x86 32-bit)
+    const g_base = process.ensureGuestGlobals();
+    const exportAddr = struct {
+        fn f(base: u32, offset: u32, host_ptr: anytype) usize {
+            if (base != 0) return base + offset;
+            return @intFromPtr(host_ptr);
+        }
+    }.f;
+
     // Data Exports
-    try environment.addBuiltinDataExport(m, "_timezone", @intFromPtr(&msvcrt_timezone), @sizeOf(@TypeOf(msvcrt_timezone)));
-    try environment.addBuiltinDataExport(m, "_daylight", @intFromPtr(&msvcrt_daylight), @sizeOf(@TypeOf(msvcrt_daylight)));
-    try environment.addBuiltinDataExport(m, "_tzname", @intFromPtr(&msvcrt_tzname), @sizeOf(@TypeOf(msvcrt_tzname)));
+    try environment.addBuiltinDataExport(m, "_timezone", exportAddr(g_base, process.g_timezone, &msvcrt_timezone), @sizeOf(@TypeOf(msvcrt_timezone)));
+    try environment.addBuiltinDataExport(m, "_daylight", exportAddr(g_base, process.g_daylight, &msvcrt_daylight), @sizeOf(@TypeOf(msvcrt_daylight)));
+    try environment.addBuiltinDataExport(m, "_tzname", exportAddr(g_base, process.g_tzname, &msvcrt_tzname), @sizeOf(@TypeOf(msvcrt_tzname)));
     try environment.addBuiltinExportComptime(m, "__p__timezone", process.p_timezone);
     try environment.addBuiltinExportComptime(m, "__p__daylight", process.p_daylight);
     try environment.addBuiltinExportComptime(m, "__p__tzname", process.p_tzname);
-    try environment.addBuiltinDataExport(m, "_adjust_fdiv", @intFromPtr(&msvcrt_adjust_fdiv), @sizeOf(@TypeOf(msvcrt_adjust_fdiv)));
-    try environment.addBuiltinDataExport(m, "__mb_cur_max", @intFromPtr(&msvcrt_mb_cur_max), @sizeOf(@TypeOf(msvcrt_mb_cur_max)));
-    try environment.addBuiltinDataExport(m, "_iob", @intFromPtr(&io.msvcrt_iob), @sizeOf(@TypeOf(io.msvcrt_iob)));
-    try environment.addBuiltinDataExport(m, "__pioinfo", @intFromPtr(&io.pioinfo), @sizeOf(@TypeOf(io.pioinfo)));
-    try environment.addBuiltinDataExport(m, "_nhandle", @intFromPtr(&io.nhandle), @sizeOf(@TypeOf(io.nhandle)));
-    try environment.addBuiltinDataExport(m, "_acmdln", @intFromPtr(&msvcrt_acmdln), @sizeOf(@TypeOf(msvcrt_acmdln)));
-    try environment.addBuiltinDataExport(m, "_wcmdln", @intFromPtr(&msvcrt_wcmdln), @sizeOf(@TypeOf(msvcrt_wcmdln)));
+    try environment.addBuiltinDataExport(m, "_adjust_fdiv", exportAddr(g_base, process.g_adjust_fdiv, &msvcrt_adjust_fdiv), @sizeOf(@TypeOf(msvcrt_adjust_fdiv)));
+    try environment.addBuiltinDataExport(m, "__mb_cur_max", exportAddr(g_base, process.g_mb_cur_max, &msvcrt_mb_cur_max), @sizeOf(@TypeOf(msvcrt_mb_cur_max)));
+    try environment.addBuiltinDataExport(m, "_iob", io.get_iob_guest_addr(), @sizeOf(@TypeOf(io.msvcrt_iob)));
+    try environment.addBuiltinDataExport(m, "__pioinfo", io.get_pioinfo_guest_addr(), @sizeOf(@TypeOf(io.pioinfo)));
+    try environment.addBuiltinDataExport(m, "_nhandle", exportAddr(g_base, process.g_nhandle, &io.nhandle), @sizeOf(@TypeOf(io.nhandle)));
+    try environment.addBuiltinDataExport(m, "_acmdln", exportAddr(g_base, process.g_acmdln, &msvcrt_acmdln), @sizeOf(@TypeOf(msvcrt_acmdln)));
+    try environment.addBuiltinDataExport(m, "_wcmdln", exportAddr(g_base, process.g_wcmdln, &msvcrt_wcmdln), @sizeOf(@TypeOf(msvcrt_wcmdln)));
 
     // Process & Startup
     try environment.addBuiltinExportComptime(m, "__wgetmainargs", process.wgetmainargs);
@@ -274,7 +283,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "tmpfile", misc.stub_ignore_ptr);
 
     // Char Types & Locale
-    try environment.addBuiltinDataExport(m, "_pctype", @intFromPtr(&msvcrt_pctype_ptr), @sizeOf(@TypeOf(msvcrt_pctype_ptr)));
+    try environment.addBuiltinDataExport(m, "_pctype", exportAddr(g_base, process.g_pctype_ptr, &msvcrt_pctype_ptr), @sizeOf(@TypeOf(msvcrt_pctype_ptr)));
     try environment.addBuiltinExportComptime(m, "__p__pctype", string.p_pctype);
     try environment.addBuiltinExportComptime(m, "isalnum", string.isalnum);
     try environment.addBuiltinExportComptime(m, "isalpha", string.isalpha);
@@ -314,16 +323,16 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "_mbsnbcmp", string.strncmp);
     try environment.addBuiltinExportComptime(m, "_mbsnbicmp", string.strnicmp);
     try environment.addBuiltinExportComptime(m, "_mbspbrk", string.strpbrk);
-    try environment.addBuiltinExportComptime(m, "_mbstok", misc.stub_ignore_ptr);
+    try environment.addBuiltinExportComptime(m, "_mbstok", string.strtok);
     try environment.addBuiltinExportComptime(m, "_mbccpy", string.mbccpy);
     try environment.addBuiltinExportComptime(m, "_mbclen", string.mbclen);
     try environment.addBuiltinExportComptime(m, "_mbsdec", string.mbsdec);
     try environment.addBuiltinExportComptime(m, "_mbstrlen", string.strlen);
     try environment.addBuiltinExportComptime(m, "_mbctolower", string.tolower);
     try environment.addBuiltinExportComptime(m, "_mbctoupper", string.toupper);
-    try environment.addBuiltinDataExport(m, "_mbctype", @intFromPtr(&msvcrt_mbctype), @sizeOf(@TypeOf(msvcrt_mbctype)));
-    try environment.addBuiltinExportComptime(m, "_mbslwr", misc.stub_ignore_ptr);
-    try environment.addBuiltinExportComptime(m, "_mbsupr", misc.stub_ignore_ptr);
+    try environment.addBuiltinDataExport(m, "_mbctype", exportAddr(g_base, process.g_mbctype_array, &msvcrt_mbctype), @sizeOf(@TypeOf(msvcrt_mbctype)));
+    try environment.addBuiltinExportComptime(m, "_mbslwr", string.strlwr);
+    try environment.addBuiltinExportComptime(m, "_mbsupr", string.strupr);
     try environment.addBuiltinExportComptime(m, "_strupr", misc.strupr);
     try environment.addBuiltinExportComptime(m, "_setmbcp", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "_getmbcp", misc.stub_ignore_i32);

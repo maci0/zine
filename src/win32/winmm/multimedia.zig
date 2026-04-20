@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const renderer = if (@import("builtin").os.tag != .windows) @import("../../gui/renderer.zig") else struct {
     pub fn setVolume(_: anytype) void {}
@@ -15,7 +16,7 @@ pub fn timeGetTime() callconv(w32cc.WINAPI) u32 {
     // Called in tight timing loops; yield to avoid 100% CPU usage.
     platform.yield();
 
-    const ts = std.time.milliTimestamp();
+    const ts = runtime.milliTimestamp();
     return @intCast(ts & 0xFFFFFFFF);
 }
 
@@ -115,7 +116,7 @@ fn mmTimerThread(idx: usize) void {
     const builtin = @import("builtin");
 
     while (timer.active) {
-        std.Thread.sleep(delay_ns);
+        @import("../../platform.zig").sleep(delay_ns);
         if (!timer.active) break;
 
         if (timer.callback != 0) {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const kernel32_mem = @import("mem.zig");
 const w32cc = @import("../calling_convention.zig");
@@ -17,18 +18,18 @@ fn readIniValue(lpFileName: usize, lpAppName: usize, lpKeyName: usize) ?[]const 
     const fd = host_io.open(file_path_raw, 0, 0); // O_RDONLY
     if (fd < 0) return null;
     const file = @import("../host_io.zig").fileFromFd(@intCast(fd));
-    defer file.close();
+    defer file.close(runtime.io());
 
     var content_buf: [16384]u8 = undefined;
-    const bytes_read = file.readAll(&content_buf) catch return null;
+    const bytes_read = file.readPositionalAll(runtime.io(), &content_buf, 0) catch return null;
     const content = content_buf[0..bytes_read];
 
     // Parse INI: find [section] then key=value
     var in_section = false;
     var iter = std.mem.splitScalar(u8, content, '\n');
     while (iter.next()) |raw_line| {
-        var line = std.mem.trimRight(u8, raw_line, "\r \t");
-        line = std.mem.trimLeft(u8, line, " \t");
+        var line = std.mem.trimEnd(u8, raw_line, "\r \t");
+        line = std.mem.trimStart(u8, line, " \t");
         if (line.len == 0) continue;
 
         if (line[0] == '[') {
@@ -41,9 +42,9 @@ fn readIniValue(lpFileName: usize, lpAppName: usize, lpKeyName: usize) ?[]const 
 
         if (in_section) {
             if (std.mem.indexOfScalar(u8, line, '=')) |eq| {
-                const k = std.mem.trimRight(u8, line[0..eq], " \t");
+                const k = std.mem.trimEnd(u8, line[0..eq], " \t");
                 if (std.ascii.eqlIgnoreCase(k, key_name)) {
-                    return std.mem.trimLeft(u8, line[eq + 1 ..], " \t");
+                    return std.mem.trimStart(u8, line[eq + 1 ..], " \t");
                 }
             }
         }
@@ -118,10 +119,10 @@ pub fn GetPrivateProfileSectionA(lpAppName: usize, lpReturnedString: usize, nSiz
     const fd = host_io.open(file_path_raw, 0, 0);
     if (fd < 0) return 0;
     const file = host_io.fileFromFd(@intCast(fd));
-    defer file.close();
+    defer file.close(runtime.io());
 
     var content_buf: [16384]u8 = undefined;
-    const bytes_read = file.readAll(&content_buf) catch return 0;
+    const bytes_read = file.readPositionalAll(runtime.io(), &content_buf, 0) catch return 0;
     const content = content_buf[0..bytes_read];
 
     var out_pos: u32 = 0;
@@ -129,8 +130,8 @@ pub fn GetPrivateProfileSectionA(lpAppName: usize, lpReturnedString: usize, nSiz
     var in_section = false;
     var iter = std.mem.splitScalar(u8, content, '\n');
     while (iter.next()) |raw_line| {
-        var line = std.mem.trimRight(u8, raw_line, "\r \t");
-        line = std.mem.trimLeft(u8, line, " \t");
+        var line = std.mem.trimEnd(u8, raw_line, "\r \t");
+        line = std.mem.trimStart(u8, line, " \t");
         if (line.len == 0) continue;
 
         if (line[0] == '[') {

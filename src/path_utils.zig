@@ -8,10 +8,54 @@
 /// Otherwise, absolute POSIX paths map through `Z:\`.
 
 const std = @import("std");
+const runtime = @import("runtime.zig");
 
 /// The host-side folder that represents the C: drive root.
 pub const DRIVE_ROOT = "drive_c/";
 const drive_root_len: usize = DRIVE_ROOT.len;
+
+const builtin = @import("builtin");
+const is_wasi = builtin.os.tag == .wasi;
+
+/// On WASI, resolve an absolute path through preopened directories.
+/// Returns a Dir handle for the matching preopen and the relative sub-path.
+/// Caller must close the returned Dir.
+pub const ResolvedPath = struct {
+    dir: std.Io.Dir,
+    rel_path: []const u8,
+};
+
+pub fn resolveWasiPath(abs_path: []const u8) ?ResolvedPath {
+    if (comptime !is_wasi) return null;
+    var fd: std.os.wasi.fd_t = 3;
+    while (true) : (fd += 1) {
+        var prestat: std.os.wasi.prestat_t = undefined;
+        switch (std.os.wasi.fd_prestat_get(fd, &prestat)) {
+            .SUCCESS => {},
+            .OPNOTSUPP, .BADF => break,
+            else => break,
+        }
+        const name_len = prestat.u.dir.pr_name_len;
+        var name_buf: [4096]u8 = undefined;
+        if (name_len > name_buf.len) continue;
+        switch (std.os.wasi.fd_prestat_dir_name(fd, &name_buf, name_len)) {
+            .SUCCESS => {},
+            else => continue,
+        }
+        const preopen_path = name_buf[0..name_len];
+
+        if (std.mem.startsWith(u8, abs_path, preopen_path)) {
+            var rest = abs_path[preopen_path.len..];
+            if (rest.len > 0 and rest[0] == '/') rest = rest[1..];
+            if (rest.len == 0) rest = ".";
+            return .{
+                .dir = .{ .handle = fd },
+                .rel_path = rest,
+            };
+        }
+    }
+    return null;
+}
 
 /// Check if a path starts with drive_c/ or drive_c\ (either slash direction).
 fn startsWithDriveC(path: []const u8) bool {
@@ -196,7 +240,7 @@ pub fn isInsideDriveC(path: []const u8) bool {
 
 /// Ensure the drive_c directory exists, creating it if needed.
 pub fn ensureDriveRoot() void {
-    std.fs.cwd().makeDir("drive_c") catch |err| {
+    std.Io.Dir.cwd().makeDir(runtime.io(), "drive_c") catch |err| {
         switch (err) {
             error.PathAlreadyExists => {},
             else => {},
@@ -389,12 +433,12 @@ pub fn fileExistsHost(win_path: []const u8) bool {
     if (len == 0) return false;
     const p = buf[0..len];
     if (std.fs.path.isAbsolute(p)) {
-        var dir = std.fs.openDirAbsolute("/", .{}) catch return false;
-        defer dir.close();
+        var dir = std.Io.Dir.openDirAbsolute(runtime.io(), "/", .{}) catch return false;
+        defer dir.close(runtime.io());
         _ = dir.statFile(p[1..]) catch return false;
         return true;
     } else {
-        _ = std.fs.cwd().statFile(p) catch return false;
+        _ = std.Io.Dir.cwd().statFile(runtime.io(), p, .{}) catch return false;
         return true;
     }
 }
@@ -632,22 +676,39 @@ pub fn tryCaseInsensitiveResolve(path: []const u8, buf: []u8) ?[]const u8 {
     var resolved_dir: [1024]u8 = undefined;
     var resolved_dir_len: usize = 0;
 
-    const dir: std.fs.Dir = open_dir: {
+    const dir: std.Io.Dir = open_dir: {
         if (found_slash) {
             const dir_path = path[0..last_slash];
             if (dir_path.len == 0 or (dir_path.len == 1 and dir_path[0] == '/')) {
                 resolved_dir[0] = '/';
                 resolved_dir_len = 1;
-                break :open_dir std.fs.openDirAbsolute("/", .{ .iterate = true }) catch return null;
+                if (comptime !is_wasi) {
+                    break :open_dir std.Io.Dir.openDirAbsolute(runtime.io(), "/", .{ .iterate = true }) catch return null;
+                } else {
+                    if (resolveWasiPath("/")) |resolved| {
+                        break :open_dir resolved.dir.openDir(runtime.io(), resolved.rel_path, .{ .iterate = true }) catch return null;
+                    }
+                    return null;
+                }
             }
             if (std.fs.path.isAbsolute(dir_path)) {
-                if (std.fs.openDirAbsolute(dir_path, .{ .iterate = true })) |d| {
-                    @memcpy(resolved_dir[0..dir_path.len], dir_path);
-                    resolved_dir_len = dir_path.len;
-                    break :open_dir d;
-                } else |_| {}
+                if (comptime !is_wasi) {
+                    if (std.Io.Dir.openDirAbsolute(runtime.io(), dir_path, .{ .iterate = true })) |d| {
+                        @memcpy(resolved_dir[0..dir_path.len], dir_path);
+                        resolved_dir_len = dir_path.len;
+                        break :open_dir d;
+                    } else |_| {}
+                } else {
+                    if (resolveWasiPath(dir_path)) |resolved| {
+                        if (resolved.dir.openDir(runtime.io(), resolved.rel_path, .{ .iterate = true })) |d| {
+                            @memcpy(resolved_dir[0..dir_path.len], dir_path);
+                            resolved_dir_len = dir_path.len;
+                            break :open_dir d;
+                        } else |_| {}
+                    }
+                }
             } else {
-                if (std.fs.cwd().openDir(dir_path, .{ .iterate = true })) |d| {
+                if (std.Io.Dir.cwd().openDir(runtime.io(), dir_path, .{ .iterate = true })) |d| {
                     @memcpy(resolved_dir[0..dir_path.len], dir_path);
                     resolved_dir_len = dir_path.len;
                     break :open_dir d;
@@ -658,18 +719,26 @@ pub fn tryCaseInsensitiveResolve(path: []const u8, buf: []u8) ?[]const u8 {
             const resolved = tryCaseInsensitiveResolve(dir_path, &dir_buf) orelse return null;
             @memcpy(resolved_dir[0..resolved.len], resolved);
             resolved_dir_len = resolved.len;
-            if (std.fs.path.isAbsolute(resolved))
-                break :open_dir std.fs.openDirAbsolute(resolved, .{ .iterate = true }) catch return null
-            else
-                break :open_dir std.fs.cwd().openDir(resolved, .{ .iterate = true }) catch return null;
+            if (std.fs.path.isAbsolute(resolved)) {
+                if (comptime !is_wasi) {
+                    break :open_dir std.Io.Dir.openDirAbsolute(runtime.io(), resolved, .{ .iterate = true }) catch return null;
+                } else {
+                    if (resolveWasiPath(resolved)) |r| {
+                        break :open_dir r.dir.openDir(runtime.io(), r.rel_path, .{ .iterate = true }) catch return null;
+                    }
+                    return null;
+                }
+            } else {
+                break :open_dir std.Io.Dir.cwd().openDir(runtime.io(), resolved, .{ .iterate = true }) catch return null;
+            }
         } else {
-            break :open_dir std.fs.cwd().openDir(".", .{ .iterate = true }) catch return null;
+            break :open_dir std.Io.Dir.cwd().openDir(runtime.io(), ".", .{ .iterate = true }) catch return null;
         }
     };
-    defer @constCast(&dir).close();
+    defer @constCast(&dir).close(runtime.io());
 
     var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
+    while (iter.next(runtime.io()) catch null) |entry| {
         if (entry.name.len == filename.len) {
             if (std.ascii.eqlIgnoreCase(entry.name, filename)) {
                 if (found_slash) {

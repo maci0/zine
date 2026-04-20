@@ -4,6 +4,7 @@
 //! and handles case-insensitive DLL lookups across configurable search paths.
 
 const std = @import("std");
+const runtime = @import("../runtime.zig");
 const pe = @import("../pe.zig");
 const Module = @import("module.zig").Module;
 const builtin = @import("builtin");
@@ -14,7 +15,7 @@ const is_wasi = builtin.os.tag == .wasi;
 /// Returns a Dir handle for the matching preopen and the relative sub-path.
 /// Caller must close the returned Dir.
 const ResolvedPath = struct {
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
     rel_path: []const u8,
 };
 
@@ -45,7 +46,7 @@ fn resolveWasiPath(abs_path: []const u8) ?ResolvedPath {
             if (rest.len > 0 and rest[0] == '/') rest = rest[1..];
             if (rest.len == 0) rest = ".";
             return .{
-                .dir = .{ .fd = fd },
+                .dir = .{ .handle = fd },
                 .rel_path = rest,
             };
         }
@@ -60,30 +61,30 @@ fn fileExists(path: []const u8) bool {
         if (std.fs.path.isAbsolute(path)) {
             if (resolveWasiPath(path)) |resolved| {
                 // Don't close resolved.dir — it's a borrowed preopened fd
-                const file = resolved.dir.openFile(resolved.rel_path, .{}) catch return false;
-                file.close();
+                const file = resolved.dir.openFile(runtime.io(), resolved.rel_path, .{}) catch return false;
+                file.close(runtime.io());
                 return true;
             }
             return false;
         }
     }
-    const file = std.fs.cwd().openFile(path, .{}) catch return false;
-    file.close();
+    const file = std.Io.Dir.cwd().openFile(runtime.io(), path, .{}) catch return false;
+    file.close(runtime.io());
     return true;
 }
 
 /// Open a directory portably — resolves through WASI preopened dirs for absolute paths.
-fn openDirPortable(path: []const u8, args: std.fs.Dir.OpenOptions) !std.fs.Dir {
+fn openDirPortable(path: []const u8, args: std.Io.Dir.OpenOptions) !std.Io.Dir {
     if (comptime is_wasi) {
         if (std.fs.path.isAbsolute(path)) {
             if (resolveWasiPath(path)) |resolved| {
                 // Don't close resolved.dir — it's a borrowed preopened fd
-                return resolved.dir.openDir(resolved.rel_path, args);
+                return resolved.dir.openDir(runtime.io(), resolved.rel_path, args);
             }
             return error.FileNotFound;
         }
     }
-    return std.fs.cwd().openDir(path, args);
+    return std.Io.Dir.cwd().openDir(runtime.io(), path, args);
 }
 
 
@@ -101,7 +102,7 @@ pub const Registry = struct {
         return Registry{
             .allocator = allocator,
             .modules = std.StringHashMap(*Module).init(allocator),
-            .search_paths = .{},
+            .search_paths = .empty,
         };
     }
 
@@ -149,9 +150,9 @@ pub const Registry = struct {
                 if (std.fs.path.dirname(fixed_path)) |dir| {
                     const base = std.fs.path.basename(fixed_path);
                     var d = openDirPortable(dir, .{ .iterate = true }) catch return error.ModuleNotFound;
-                    defer d.close();
+                    defer d.close(runtime.io());
                     var it = d.iterate();
-                    while (it.next() catch null) |entry| {
+                    while (it.next(runtime.io()) catch null) |entry| {
                         if (std.ascii.eqlIgnoreCase(entry.name, base)) {
                             file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ dir, entry.name });
                             break;
@@ -180,11 +181,11 @@ pub const Registry = struct {
                     const parent = std.fs.path.dirname(path) orelse continue;
                     const base = std.fs.path.basename(path);
                     var parent_dir = openDirPortable(parent, .{ .iterate = true }) catch continue;
-                    defer parent_dir.close();
+                    defer parent_dir.close(runtime.io());
 
                     var found_real_base: ?[]const u8 = null;
                     var p_it = parent_dir.iterate();
-                    while (p_it.next() catch null) |entry| {
+                    while (p_it.next(runtime.io()) catch null) |entry| {
                         if (entry.kind == .directory and std.ascii.eqlIgnoreCase(entry.name, base)) {
                             found_real_base = try self.allocator.dupe(u8, entry.name);
                             break;
@@ -198,7 +199,7 @@ pub const Registry = struct {
                         var real_dir = openDirPortable(real_path, .{ .iterate = true }) catch continue;
 
                         var it = real_dir.iterate();
-                        while (it.next() catch null) |entry| {
+                        while (it.next(runtime.io()) catch null) |entry| {
                             if (std.ascii.eqlIgnoreCase(entry.name, name)) {
                                 file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
                                 break;
@@ -216,15 +217,15 @@ pub const Registry = struct {
                                 break;
                             }
                         }
-                        real_dir.close();
+                        real_dir.close(runtime.io());
                         if (file_path != null) break;
                     }
                     continue;
                 };
-                defer dir.close();
+                defer dir.close(runtime.io());
 
                 var it = dir.iterate();
-                while (it.next() catch null) |entry| {
+                while (it.next(runtime.io()) catch null) |entry| {
                     if (std.ascii.eqlIgnoreCase(entry.name, name)) {
                         file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
                         break;

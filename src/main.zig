@@ -34,6 +34,15 @@ const profiler = @import("profiler.zig");
 const version = @import("version.zig");
 const build_options = @import("build_options");
 const pe = @import("pe.zig");
+const runtime = @import("runtime.zig");
+
+fn writeStdout(bytes: []const u8) error{}!void {
+    const io = runtime.io();
+    var buf: [256]u8 = undefined;
+    var w = std.Io.File.stdout().writer(io, &buf);
+    w.interface.writeAll(bytes) catch {};
+    w.interface.flush() catch {};
+}
 
 fn buildCmdLineString(allocator: std.mem.Allocator, app_args_items: []const ?[*:0]u8) !usize {
     var cmdline_buf = try allocator.alloc(u8, 4096);
@@ -56,9 +65,13 @@ fn buildCmdLineString(allocator: std.mem.Allocator, app_args_items: []const ?[*:
 
 /// The entry point for the native Zine executable.
 /// It handles CLI argument parsing, environment setup, and starts the emulation.
-pub fn main() !void {
-    // Pre-initialize vDSO for time functions so they don't crash when FS is changed
-    _ = std.time.timestamp();
+pub fn main(init: std.process.Init) !void {
+    runtime.init(init.io, init.gpa, init.minimal.environ);
+
+    // Warm up the vDSO time path before we rewrite FS segment (TEB).
+    // Without this the first clock_gettime after setupFS() faults.
+    _ = platform.timestamp();
+    log.initFromEnv();
 
     platform.installSegfaultHandler();
     platform.mapNullPage();
@@ -66,31 +79,29 @@ pub fn main() !void {
 
     // Windows processes essentially never cleanly free all memory before ExitProcess or exit()
     // Using GPA will always report thousands of leaks because the process terminates.
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    // deliberately not deferring deinit to match OS behavior on process exit
-    const allocator = arena.allocator();
+    const allocator = init.arena.allocator();
+    const io = init.io;
 
-    var args = try std.process.argsWithAllocator(allocator);
+    var args = try init.minimal.args.iterateAllocator(allocator);
     defer args.deinit();
 
     _ = args.next();
 
     var target_exe_opt: ?[]const u8 = null;
     var argv0_opt: ?[]const u8 = null;
-    var app_args: std.ArrayListUnmanaged(?[*:0]u8) = .{};
+    var app_args: std.ArrayListUnmanaged(?[*:0]u8) = .empty;
     var use_interpreter = false;
     var use_jit = false;
     var no_gui = false;
 
-    log.initFromEnv();
 
-    if (std.process.hasEnvVarConstant("ZINE_TRACE")) {
+    if (init.minimal.environ.containsConstant("ZINE_TRACE")) {
         trace.enable_tracing = true;
     }
-    if (std.process.hasEnvVarConstant("ZINE_TRACE_INSN")) {
+    if (init.minimal.environ.containsConstant("ZINE_TRACE_INSN")) {
         trace.enable_instructions = true;
     }
-    if (std.process.hasEnvVarConstant("ZINE_PROFILE")) {
+    if (init.minimal.environ.containsConstant("ZINE_PROFILE")) {
         profiler.enabled = true;
     }
     
@@ -127,7 +138,7 @@ pub fn main() !void {
         }
         if (!end_of_options and std.mem.eql(u8, arg, "--fltk")) {
             if (!build_options.use_fltk) {
-                std.fs.File.stderr().writeAll("Error: --fltk is not available in this build.\nRebuild with: zig build -Dfltk\nTry 'zine --help' for more information.\n") catch {};
+                std.debug.print("{s}", .{"Error: --fltk is not available in this build.\nRebuild with: zig build -Dfltk\nTry 'zine --help' for more information.\n"});
                 std.process.exit(2);
             }
             renderer.active_backend = .fltk;
@@ -138,7 +149,7 @@ pub fn main() !void {
             continue;
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
-            std.fs.File.stdout().writeAll(
+            writeStdout(
                 \\Usage: zine [options] [--] <target.exe> [args...]
                 \\
                 \\Run a Win32 PE executable on Linux.
@@ -175,25 +186,25 @@ pub fn main() !void {
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
-            std.fs.File.stdout().writeAll("zine " ++ version.string ++ "\n") catch {};
+            writeStdout("zine " ++ version.string ++ "\n") catch {};
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--argv0") or std.mem.startsWith(u8, arg, "--argv0="))) {
             if (std.mem.startsWith(u8, arg, "--argv0=")) {
                 const val = arg["--argv0=".len..];
                 if (val.len == 0) {
-                    std.fs.File.stderr().writeAll("Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n") catch {};
+                    std.debug.print("{s}", .{"Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n"});
                     std.process.exit(2);
                 }
                 argv0_opt = val;
             } else if (args.next()) |val| {
                 if (val.len == 0) {
-                    std.fs.File.stderr().writeAll("Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n") catch {};
+                    std.debug.print("{s}", .{"Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n"});
                     std.process.exit(2);
                 }
                 argv0_opt = val;
             } else {
-                std.fs.File.stderr().writeAll("Error: --argv0 requires a value.\nTry 'zine --help' for more information.\n") catch {};
+                std.debug.print("{s}", .{"Error: --argv0 requires a value.\nTry 'zine --help' for more information.\n"});
                 std.process.exit(2);
             }
             continue;
@@ -201,7 +212,7 @@ pub fn main() !void {
         if (!end_of_options and target_exe_opt == null and arg.len > 1 and arg[0] == '-') {
             var err_buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&err_buf, "Error: unknown option '{s}'.\nTry 'zine --help' for more information.\n", .{arg}) catch "Error: unknown option.\n";
-            std.fs.File.stderr().writeAll(msg) catch {};
+            std.debug.print("{s}", .{msg});
             std.process.exit(2);
         }
 
@@ -240,7 +251,7 @@ pub fn main() !void {
     }
 
     if (no_gui and renderer.active_backend == .fltk) {
-        std.fs.File.stderr().writeAll("Error: --fltk and --no-gui are mutually exclusive.\nTry 'zine --help' for more information.\n") catch {};
+        std.debug.print("{s}", .{"Error: --fltk and --no-gui are mutually exclusive.\nTry 'zine --help' for more information.\n"});
         std.process.exit(2);
     }
     if (use_interpreter and use_jit) {
@@ -248,7 +259,7 @@ pub fn main() !void {
     }
 
     if (target_exe_opt == null) {
-        std.fs.File.stderr().writeAll("Error: missing required argument <target.exe>.\nTry 'zine --help' for more information.\n") catch {};
+        std.debug.print("{s}", .{"Error: missing required argument <target.exe>.\nTry 'zine --help' for more information.\n"});
         std.process.exit(2);
     }
     var target_exe = target_exe_opt.?;
@@ -261,7 +272,7 @@ pub fn main() !void {
         bat_env_opt = try BatEnv.init(allocator);
         var bat_env = &bat_env_opt.?;
 
-        var bat_args: std.ArrayListUnmanaged([]const u8) = .{};
+        var bat_args: std.ArrayListUnmanaged([]const u8) = .empty;
         for (app_args.items) |arg| {
             if (arg) |a| try bat_args.append(allocator, std.mem.span(a));
         }
@@ -277,7 +288,7 @@ pub fn main() !void {
         } else {
             var err_buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&err_buf, "Error: failed to parse '{s}' or no final command found.\n", .{target_exe}) catch "Error: failed to parse bat file or no final command found.\n";
-            std.fs.File.stderr().writeAll(msg) catch {};
+            std.debug.print("{s}", .{msg});
             std.process.exit(1);
         }
     }
@@ -295,7 +306,7 @@ pub fn main() !void {
     }
 
     // Search paths: CWD + exe dir + BAT PATH or host PATH
-    var extra_paths: std.ArrayListUnmanaged([]const u8) = .{};
+    var extra_paths: std.ArrayListUnmanaged([]const u8) = .empty;
     defer extra_paths.deinit(allocator);
     if (bat_env_opt) |*be| {
         var bat_path_opt = be.env.get("PATH");
@@ -361,7 +372,7 @@ pub fn main() !void {
 
             // Set virtual CWD to the actual host process CWD (not exe dir)
             // This ensures relative file opens (e.g. "hello.c") resolve against where the user invoked zine
-            if (std.fs.cwd().realpathAlloc(allocator, ".")) |real_cwd| {
+            if (std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator)) |real_cwd| {
                 var cwd_win_buf: [1024]u8 = undefined;
                 const cwd_win_len = try path_utils.posixToWin32(real_cwd, &cwd_win_buf);
                 const cwd_copy_len = @min(cwd_win_len, kernel32_path.current_directory.len - 1);
@@ -425,11 +436,11 @@ pub fn main() !void {
                 trace.print("  {s}\n", .{span});
 
                 if (span.len > 1 and span[0] == '@') {
-                    if (std.fs.cwd().openFile(span[1..], .{})) |f| {
+                    if (std.Io.Dir.cwd().openFile(io, span[1..], .{})) |f| {
                         var buf: [4096]u8 = undefined;
-                        const rb = f.readAll(&buf) catch 0;
+                        const rb = f.readPositionalAll(io, &buf, 0) catch 0;
                         trace.print("  [RSP FILE CONTENT]:\n{s}\n", .{buf[0..rb]});
-                        f.close();
+                        f.close(io);
                     } else |_| {}
                 }
             }
@@ -448,9 +459,7 @@ pub fn main() !void {
     if (final_envp) |envp| {
         stubs_msvcrt.global_envp = @ptrCast(envp);
     } else {
-        var env_map = try std.process.getEnvMap(allocator);
-        defer env_map.deinit();
-
+        const env_map = init.environ_map;
         const c_envp = try allocator.alloc(?[*:0]u8, env_map.count() + 1);
         var it = env_map.iterator();
         var i: usize = 0;
@@ -548,9 +557,13 @@ pub fn main() !void {
             std.process.exit(1);
         };
         const base: u32 = @truncate(main_module.image_base);
-        // Allocate a dedicated 1MB stack for the interpreter
         const stack_size = 1 * 1024 * 1024;
-        const stack_mem = try platform.mmap(null, stack_size, true, -1, 0, false, false);
+        const stack_mem = try platform.mmap(@ptrFromInt(0x05000000), stack_size, true, -1, 0, false, true);
+
+        // Set proper TEB stack bounds for MSVC compiler pass stack checks
+        // C1.DLL mathematically verifies the StackBase - StackLimit native span.
+        thread_env.NtTib.StackBase = @intCast(@intFromPtr(stack_mem.ptr) + stack_size);
+        thread_env.NtTib.StackLimit = @intCast(@intFromPtr(stack_mem.ptr));
 
         var cpu = x86_cpu.Cpu{};
         cpu.memory = x86_memory.GuestMemory{
@@ -586,9 +599,6 @@ pub fn main() !void {
         }
     }
 
-    // Call DllMain for all loaded DLL dependencies (after CRT globals are initialized)
-    loader.attachLoadedDlls(&environment);
-
     if (trace.enable_tracing) {
         if (main_module.getExport("_InvokeCompilerPass@12")) |addr| {
             trace.print("Found _InvokeCompilerPass@12 at 0x{X}\n", .{addr});
@@ -600,9 +610,16 @@ pub fn main() !void {
         trace.print("Executing MSVC Compiler Pass...\n", .{});
         if (comptime platform.is_x86_64) {
             // On x86_64, _InvokeCompilerPass is in a 32-bit PE — must use compat mode
-            const guest_stack_size = 8 * 1024 * 1024; // 8MB (MSVC needs deep stack)
-            const guest_stack_mem = try platform.mmap(null, guest_stack_size, true, -1, 0, false, false);
+            const guest_stack_size = 16 * 1024 * 1024; // 16MB
+            const guest_stack_mem = try platform.mmap(@ptrFromInt(0x05000000), guest_stack_size, true, -1, 0, false, true);
             const guest_esp_top: u32 = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size - 64);
+            
+            // Set proper TEB stack bounds for MSVC compiler pass stack checks
+            // C1.DLL mathematically verifies the StackBase - StackLimit native span.
+            // If the span exceeds ~1MB, C1.DLL natively panics resulting in C1063 during deep recursion.
+            thread_env.NtTib.StackBase = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size);
+            thread_env.NtTib.StackLimit = @intCast(@intFromPtr(guest_stack_mem.ptr));
+
             // Push arguments for _InvokeCompilerPass@12 (stdcall: 3 params)
             // Stack layout: [exit_stub] [arg1: argc] [arg2: argv] [arg3: envp]
             const stack = @as([*]u32, @ptrFromInt(@as(usize, guest_esp_top)));
@@ -624,10 +641,13 @@ pub fn main() !void {
     } else if (main_module.entry_point) |ep| {
         if (comptime platform.is_x86_64) {
             // On x86_64, PE entry point is 32-bit code — use compat mode
-            const guest_stack_size = 8 * 1024 * 1024; // 8MB
-            const guest_stack_mem = try platform.mmap(null, guest_stack_size, true, -1, 0, false, false);
+            const guest_stack_size = 16 * 1024 * 1024; // 16MB
+            const guest_stack_mem = try platform.mmap(@ptrFromInt(0x05000000), guest_stack_size, true, -1, 0, false, true);
             const guest_esp: u32 = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size - 64);
             // Update TEB stack bounds to match the guest stack
+            thread_env.NtTib.StackBase = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size);
+            thread_env.NtTib.StackLimit = @intCast(@intFromPtr(guest_stack_mem.ptr));
+
             // Push exit stub as return address
             const exit_stub = compat_thunks.makeExitStub();
             @as(*u32, @ptrFromInt(@as(usize, guest_esp))).* = exit_stub;

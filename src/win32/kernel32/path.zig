@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
 
@@ -15,6 +16,7 @@ pub fn GetCurrentDirectoryA(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.
         // Initialize from actual host CWD in Win32 format
         const host_io = @import("../host_io.zig");
         const len = host_io.getCwd(&current_directory);
+        if (trace.enable_tracing) trace.print("KERNEL32: getCwd retrieved '{s}'\n", .{current_directory[0..len]});
         current_directory_len = if (len > 0) len else blk: {
             const cwd = "C:\\";
             @memcpy(current_directory[0..cwd.len], cwd);
@@ -23,7 +25,8 @@ pub fn GetCurrentDirectoryA(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.
     }
 
     if (lpBuffer != 0 and nBufferLength > current_directory_len) {
-        const buf = @as([*]u8, @ptrFromInt(lpBuffer));
+        const host_buf = trace.addr(lpBuffer);
+        const buf = @as([*]u8, @ptrFromInt(host_buf));
         @memcpy(buf[0..current_directory_len], current_directory[0..current_directory_len]);
         buf[current_directory_len] = 0;
         return @intCast(current_directory_len);
@@ -41,7 +44,8 @@ pub fn GetCurrentDirectoryW(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.
         current_directory_len = cwd.len;
     }
     if (lpBuffer != 0 and nBufferLength > current_directory_len) {
-        const buf = @as([*]u16, @ptrFromInt(lpBuffer));
+        const host_buf = trace.addr(lpBuffer);
+        const buf = @as([*]u16, @ptrFromInt(host_buf));
         for (0..current_directory_len) |i| {
             buf[i] = current_directory[i];
         }
@@ -89,7 +93,8 @@ pub fn GetWindowsDirectoryA(lpBuffer: usize, uSize: u32) callconv(w32cc.WINAPI) 
     if (trace.enable_tracing) trace.print("KERNEL32: GetWindowsDirectoryA(buffer={x}, size={d})\n", .{ lpBuffer, uSize });
     const win_dir = "C:\\WINDOWS";
     if (lpBuffer != 0 and uSize > win_dir.len) {
-        const buf = @as([*]u8, @ptrFromInt(lpBuffer));
+        const host_buf = trace.addr(lpBuffer);
+        const buf = @as([*]u8, @ptrFromInt(host_buf));
         @memcpy(buf[0..win_dir.len], win_dir);
         buf[win_dir.len] = 0;
         return @intCast(win_dir.len);
@@ -101,7 +106,8 @@ pub fn GetWindowsDirectoryW(lpBuffer: usize, uSize: u32) callconv(w32cc.WINAPI) 
     if (trace.enable_tracing) trace.print("KERNEL32: GetWindowsDirectoryW(buffer={x}, size={d})\n", .{ lpBuffer, uSize });
     const win_dir = "C:\\WINDOWS";
     if (lpBuffer != 0 and uSize > win_dir.len) {
-        const buf = @as([*]u16, @ptrFromInt(lpBuffer));
+        const host_buf = trace.addr(lpBuffer);
+        const buf = @as([*]u16, @ptrFromInt(host_buf));
         for (0..win_dir.len) |i| buf[i] = win_dir[i];
         buf[win_dir.len] = 0;
         return @intCast(win_dir.len);
@@ -117,7 +123,8 @@ pub fn GetFullPathNameA(lpFileName: usize, nBufferLength: u32, lpBuffer: usize, 
     if (trace.enable_tracing) trace.print("KERNEL32: GetFullPathNameA('{s}')\n", .{name});
     if (lpBuffer == 0 or nBufferLength == 0) return @intCast(name.len + 1);
 
-    const buf = @as([*]u8, @ptrFromInt(lpBuffer));
+    const host_buf = trace.addr(lpBuffer);
+    const buf = @as([*]u8, @ptrFromInt(host_buf));
     const host_io = @import("../host_io.zig");
     const resolved_len = host_io.getFullPath(name, buf[0..nBufferLength]);
 
@@ -134,7 +141,8 @@ pub fn GetFullPathNameA(lpFileName: usize, nBufferLength: u32, lpBuffer: usize, 
         for (0..result_len) |i| {
             if (buf[i] == '\\' or buf[i] == '/') last_sep = i + 1;
         }
-        @as(*u32, @ptrFromInt(lpFilePart)).* = @truncate(lpBuffer + last_sep);
+        const host_fp = trace.addr(lpFilePart);
+        @as(*u32, @ptrFromInt(host_fp)).* = @truncate(lpBuffer + last_sep);
     }
     return @intCast(result_len);
 }
@@ -150,7 +158,8 @@ pub fn GetFullPathNameW(lpFileName: usize, nBufferLength: u32, lpBuffer: usize, 
     }
     if (trace.enable_tracing) trace.print("KERNEL32: GetFullPathNameW(len={d})\n", .{len});
     if (lpBuffer != 0 and nBufferLength > len) {
-        const buf = @as([*]u16, @ptrFromInt(lpBuffer));
+        const host_buf = trace.addr(lpBuffer);
+        const buf = @as([*]u16, @ptrFromInt(host_buf));
         for (0..len) |i| buf[i] = src[i];
         buf[len] = 0;
         if (lpFilePart != 0) {
@@ -158,7 +167,8 @@ pub fn GetFullPathNameW(lpFileName: usize, nBufferLength: u32, lpBuffer: usize, 
             for (0..len) |i| {
                 if (src[i] == '\\' or src[i] == '/') last_sep = @intCast(i + 1);
             }
-            @as(*align(1) u32, @ptrFromInt(lpFilePart)).* = @intCast(lpBuffer + last_sep * 2);
+            const host_fp = trace.addr(lpFilePart);
+            @as(*align(1) u32, @ptrFromInt(host_fp)).* = @intCast(lpBuffer + last_sep * 2);
         }
         return len;
     }
@@ -177,7 +187,7 @@ pub fn CreateDirectoryA(lpPathName: usize, lpSecurityAttributes: usize) callconv
     @memcpy(fixed[0..len], path[0..len]);
     std.mem.replaceScalar(u8, fixed[0..len], '\\', '/');
     fixed[len] = 0;
-    std.fs.cwd().makeDir(fixed[0..len]) catch return 0;
+    std.Io.Dir.cwd().createDirPath(runtime.io(), fixed[0..len]) catch return 0;
     return 1;
 }
 
@@ -203,7 +213,8 @@ pub fn GetLongPathNameW(lpszShortPath: usize, lpszLongPath: usize, cchBuffer: u3
     var len: usize = 0;
     while (len < 4096 and src[len] != 0) len += 1;
     if (lpszLongPath != 0 and cchBuffer > len) {
-        const dst = @as([*]u16, @ptrFromInt(lpszLongPath));
+        const host_buf = trace.addr(lpszLongPath);
+        const dst = @as([*]u16, @ptrFromInt(host_buf));
         for (0..len) |i| dst[i] = src[i];
         dst[len] = 0;
     }

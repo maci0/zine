@@ -5,6 +5,7 @@
 //! on platforms that don't support it natively (like Linux).
 
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const path_utils = @import("../../path_utils.zig");
 
 /// Read-only access.
@@ -20,62 +21,76 @@ pub const O_TRUNC: u32 = 0x200;
 /// Append data to the end of the file.
 pub const O_APPEND: u32 = 0x400;
 
-fn fsStat(path: []const u8) ?std.fs.File.Stat {
+fn fsStat(path: []const u8) ?std.Io.File.Stat {
     if (std.fs.path.isAbsolute(path)) {
-        var dir = std.fs.openDirAbsolute("/", .{}) catch return null;
-        defer dir.close();
-        const rel_path = if (path.len > 0 and path[0] == '/') path[1..] else path;
-        return dir.statFile(rel_path) catch null;
+        if (comptime @import("builtin").os.tag != .wasi) {
+            return std.Io.Dir.cwd().statFile(runtime.io(), path, .{}) catch null;
+        }
+        if (path_utils.resolveWasiPath(path)) |resolved| {
+            return resolved.dir.statFile(runtime.io(), resolved.rel_path, .{}) catch null;
+        }
+        return null;
     } else {
-        return std.fs.cwd().statFile(path) catch null;
+        return std.Io.Dir.cwd().statFile(runtime.io(), path, .{}) catch null;
     }
 }
 
 fn fsAccess(path: []const u8) bool {
+    const trace = @import("../../trace.zig");
+    if (trace.enable_tracing) trace.print("POSIX_FS ACCESS: '{s}'\n", .{path});
+    if (std.fs.path.isAbsolute(path)) {
+        if (comptime @import("builtin").os.tag != .wasi) {
+            if (std.Io.Dir.openFileAbsolute(runtime.io(), path, .{})) |file| {
+                file.close(runtime.io());
+                return true;
+            } else |_| {}
+            return false;
+        }
+        if (path_utils.resolveWasiPath(path)) |resolved| {
+            if (resolved.dir.openFile(runtime.io(), resolved.rel_path, .{})) |file| {
+                file.close(runtime.io());
+                return true;
+            } else |_| {}
+        }
+        return false;
+    }
+
     // Use openFile+close instead of access/accessAbsolute — faccessat panics on WASI.
-    // Try all preopened directories on WASI (fd 3, 4, 5...).
-    // wasmtime --dir=/ --dir=. gives fd 3=/, fd 4=.
-    if (std.fs.cwd().openFile(path, .{})) |file| {
-        file.close();
+    if (std.Io.Dir.cwd().openFile(runtime.io(), path, .{})) |file| {
+        file.close(runtime.io());
         return true;
     } else |_| {}
-    // Try the second WASI preopened fd (typically fd 4 = "." from --dir=.)
-    if (comptime @import("builtin").os.tag == .wasi) {
-        const dir = std.fs.Dir{ .fd = 4 };
-        if (dir.openFile(path, .{})) |file| {
-            file.close();
-            return true;
-        } else |_| {}
-    }
-    if (std.fs.path.isAbsolute(path)) {
-        if (std.fs.openFileAbsolute(path, .{})) |file| {
-            file.close();
-            return true;
-        } else |_| {}
-    }
     return false;
 }
 
-fn fsCreateFile(path: []const u8, flags: std.fs.File.CreateFlags) !std.fs.File {
-    return std.fs.cwd().createFile(path, flags) catch {
-        if (comptime @import("builtin").os.tag == .wasi) {
-            const cwd_dir = std.fs.Dir{ .fd = 4 }; // WASI preopen for "."
-            if (cwd_dir.createFile(path, flags)) |f| return f else |_| {}
+fn fsCreateFile(path: []const u8, flags: std.Io.File.CreateFlags) !std.Io.File {
+    if (std.fs.path.isAbsolute(path)) {
+        if (comptime @import("builtin").os.tag != .wasi) {
+            return std.Io.Dir.createFileAbsolute(runtime.io(), path, flags);
         }
-        if (std.fs.path.isAbsolute(path))
-            return std.fs.createFileAbsolute(path, flags);
+        if (path_utils.resolveWasiPath(path)) |resolved| {
+            return resolved.dir.createFile(runtime.io(), resolved.rel_path, flags);
+        }
+        return error.FileNotFound;
+    }
+
+    return std.Io.Dir.cwd().createFile(runtime.io(), path, flags) catch {
         return error.FileNotFound;
     };
 }
 
-fn fsOpenFile(path: []const u8, flags: std.fs.File.OpenFlags) !std.fs.File {
-    return std.fs.cwd().openFile(path, flags) catch {
-        if (comptime @import("builtin").os.tag == .wasi) {
-            const cwd_dir = std.fs.Dir{ .fd = 4 };
-            if (cwd_dir.openFile(path, flags)) |f| return f else |_| {}
+fn fsOpenFile(path: []const u8, flags: std.Io.File.OpenFlags) !std.Io.File {
+    if (std.fs.path.isAbsolute(path)) {
+        if (comptime @import("builtin").os.tag != .wasi) {
+            return std.Io.Dir.openFileAbsolute(runtime.io(), path, flags);
         }
-        if (std.fs.path.isAbsolute(path))
-            return std.fs.openFileAbsolute(path, flags);
+        if (path_utils.resolveWasiPath(path)) |resolved| {
+            return resolved.dir.openFile(runtime.io(), resolved.rel_path, flags);
+        }
+        return error.FileNotFound;
+    }
+
+    return std.Io.Dir.cwd().openFile(runtime.io(), path, flags) catch {
         return error.FileNotFound;
     };
 }
@@ -95,7 +110,7 @@ fn tryLower(path: []const u8, buf: []u8) ?[]const u8 {
 
 /// Get status information on a file.
 /// Implementation status: Partially implemented
-pub fn stat(path: [*:0]const u8) ?std.fs.File.Stat {
+pub fn stat(path: [*:0]const u8) ?std.Io.File.Stat {
     const span = std.mem.span(path);
     var host_buf: [1024]u8 = undefined;
     const host_len = path_utils.toHostPath(span, &host_buf);
@@ -184,7 +199,7 @@ pub fn open(path: [*:0]const u8, flags: u32, mode: u32) i32 {
                     .truncate = is_trunc,
                     .exclusive = false,
                 })) |f| {
-                    if (is_append) f.seekFromEnd(0) catch {};
+                    if (is_append) _ = @import("../../platform.zig").lseek(f.handle, 0, 2);
                     return @intCast(f.handle);
                 } else |_| {}
             } else {
@@ -192,10 +207,10 @@ pub fn open(path: [*:0]const u8, flags: u32, mode: u32) i32 {
                     .mode = if ((flags & O_RDWR) != 0) .read_write else .write_only,
                 })) |f| {
                     if (is_trunc) {
-                        f.setEndPos(0) catch {};
-                        f.seekTo(0) catch {};
+                        f.setLength(runtime.io(), 0) catch {};
+                        _ = @import("../../platform.zig").lseek(f.handle, 0, 0);
                     }
-                    if (is_append) f.seekFromEnd(0) catch {};
+                    if (is_append) _ = @import("../../platform.zig").lseek(f.handle, 0, 2);
                     return @intCast(f.handle);
                 } else |_| {}
             }

@@ -4,6 +4,7 @@
 //! and convert them to ICO format or base64-encoded strings for the UI.
 
 const std = @import("std");
+const runtime = @import("../runtime.zig");
 const Module = @import("module.zig").Module;
 const log = @import("../log.zig");
 const trace = @import("../trace.zig");
@@ -23,26 +24,26 @@ pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_gro
     if (group_data) |data| {
         if (data.len < 6) return null;
         
-        var stream = std.io.fixedBufferStream(data);
-        var reader = stream.reader();
+        var reader = std.Io.Reader.fixed(data);
         
-        const idReserved = try reader.readInt(u16, .little);
-        const idType = try reader.readInt(u16, .little);
-        const idCount = try reader.readInt(u16, .little);
+        
+        const idReserved = try reader.takeInt(u16, .little);
+        const idType = try reader.takeInt(u16, .little);
+        const idCount = try reader.takeInt(u16, .little);
         
         if (idReserved != 0 or idType != 1 or idCount == 0) return null;
         
         // Use the first icon entry from the group
         if (data.len < 6 + 14) return null;
         
-        const bWidth = try reader.readByte();
-        const bHeight = try reader.readByte();
-        const bColorCount = try reader.readByte();
-        const bReserved = try reader.readByte();
-        const wPlanes = try reader.readInt(u16, .little);
-        const wBitCount = try reader.readInt(u16, .little);
-        const dwBytesInRes = try reader.readInt(u32, .little);
-        const nId = try reader.readInt(u16, .little);
+        const bWidth = try reader.takeByte();
+        const bHeight = try reader.takeByte();
+        const bColorCount = try reader.takeByte();
+        const bReserved = try reader.takeByte();
+        const wPlanes = try reader.takeInt(u16, .little);
+        const wBitCount = try reader.takeInt(u16, .little);
+        const dwBytesInRes = try reader.takeInt(u32, .little);
+        const nId = try reader.takeInt(u16, .little);
         
         const icon_data = module.getResource(res.RT_ICON, nId) orelse return null;
         
@@ -52,14 +53,13 @@ pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_gro
         }
         
         // Build ICO buffer
-        var ico_buf: std.ArrayListUnmanaged(u8) = .{};
-        defer ico_buf.deinit(allocator);
-        
-        var writer = ico_buf.writer(allocator);
+        var ico_alloc: std.Io.Writer.Allocating = .init(allocator);
+        defer ico_alloc.deinit();
+        const writer = &ico_alloc.writer;
         try writer.writeInt(u16, 0, .little);
         try writer.writeInt(u16, 1, .little);
         try writer.writeInt(u16, 1, .little);
-        
+
         try writer.writeByte(bWidth);
         try writer.writeByte(bHeight);
         try writer.writeByte(bColorCount);
@@ -68,16 +68,18 @@ pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_gro
         try writer.writeInt(u16, wBitCount, .little);
         try writer.writeInt(u32, @intCast(icon_data.len), .little);
         try writer.writeInt(u32, 22, .little);
-        
+
         try writer.writeAll(icon_data);
-        
+
+        const ico_bytes = writer.buffer[0..writer.end];
+
         // Base64 encode
         const b64_encoder = std.base64.standard.Encoder;
-        const b64_len = b64_encoder.calcSize(ico_buf.items.len);
-        
+        const b64_len = b64_encoder.calcSize(ico_bytes.len);
+
         const b64_buf = try allocator.alloc(u8, b64_len);
         defer allocator.free(b64_buf);
-        _ = b64_encoder.encode(b64_buf, ico_buf.items);
+        _ = b64_encoder.encode(b64_buf, ico_bytes);
         
         const json_str = try std.fmt.allocPrint(allocator, "{{\"type\":\"set_icon\",\"base64\":\"{s}\"}}", .{b64_buf});
 

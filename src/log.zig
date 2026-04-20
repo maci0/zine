@@ -21,6 +21,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const trace_mod = @import("trace.zig");
+const runtime = @import("runtime.zig");
 
 /// Whether to emit ANSI color escape codes.  Lazily detected on first use.
 var use_color: ?bool = null;
@@ -34,9 +35,16 @@ fn getUseColor() bool {
 
 fn detectColorImpl() bool {
     if (builtin.target.cpu.arch.isWasm()) return false;
-    if (std.process.hasEnvVarConstant("NO_COLOR")) return false;
-    const handle = std.fs.File.stderr().handle;
-    return std.posix.isatty(handle);
+    // TODO(windows): stdlib bug — `Environ.GlobalBlock` has no `view()` on Windows,
+    // which makes `Environ.getPosix` fail to compile. Re-enable color + NO_COLOR
+    // honoring once stdlib lands the fix, and wire up SetConsoleMode for VT.
+    if (builtin.target.os.tag == .windows) return false;
+    if (runtime.environ().getPosix("NO_COLOR") != null) return false;
+    // `tcgetattr` succeeds iff `handle` is a terminal — stand-in for the
+    // `std.posix.isatty` that was dropped in Zig 0.16.
+    const handle = std.Io.File.stderr().handle;
+    _ = std.posix.tcgetattr(handle) catch return false;
+    return true;
 }
 
 // ── ANSI escape sequences ───────────────────────────────────────────
@@ -54,7 +62,8 @@ var start_ns: ?i128 = null;
 
 fn getElapsedMs() u64 {
     if (comptime builtin.target.cpu.arch.isWasm()) return 0;
-    const now = std.time.nanoTimestamp();
+    const ts = std.Io.Timestamp.now(runtime.io(), .real);
+    const now: i128 = ts.nanoseconds;
     if (start_ns == null) {
         start_ns = now;
         return 0;
@@ -99,9 +108,6 @@ pub fn emit(level: Level, comptime fmt: []const u8, args: anytype) void {
     const prefix = levelPrefix(level);
     const tag = if (getUseColor()) prefix.color else prefix.plain;
 
-    const stderr = std.fs.File.stderr();
-
-    // Format timestamp
     const elapsed_ms = getElapsedMs();
     var ts_buf: [32]u8 = undefined;
     const ts = std.fmt.bufPrint(&ts_buf, "[{d:>7}.{d:0>3}] ", .{
@@ -109,25 +115,30 @@ pub fn emit(level: Level, comptime fmt: []const u8, args: anytype) void {
         elapsed_ms % 1000,
     }) catch "";
 
-    // Thread-local stack buffer avoids global state races from the web UI thread
+    // Compose the whole record into one buffer, then emit once.
+    // `std.debug.print` acquires the stderr lock per call, so batching matters
+    // especially on traced runs where `trace.print` lands here per instruction.
     var log_buf: [16384]u8 = undefined;
 
-    // Format the message body
-    const s = std.fmt.bufPrint(&log_buf, fmt, args) catch {
-        stderr.writeAll(ts) catch {};
-        stderr.writeAll(tag) catch {};
-        stderr.writeAll("LOG BUFFER OVERFLOW\n") catch {};
+    const body = std.fmt.bufPrint(&log_buf, fmt, args) catch {
+        std.debug.print("{s}{s}LOG BUFFER OVERFLOW\n", .{ ts, tag });
         return;
     };
 
-    // Write: timestamp + prefix + message + newline (single writeAll where possible)
-    stderr.writeAll(ts) catch {};
-    stderr.writeAll(tag) catch {};
-    stderr.writeAll(s) catch {};
-
-    // Ensure trailing newline
-    if (s.len == 0 or s[s.len - 1] != '\n') {
-        stderr.writeAll("\n") catch {};
+    const needs_nl = body.len == 0 or body[body.len - 1] != '\n';
+    if (builtin.target.os.tag == .linux) {
+        // Direct write to fd 2 avoids the locked-stderr vtable in std.debug.print.
+        const iovec = [_]std.posix.iovec_const{
+            .{ .base = ts.ptr, .len = ts.len },
+            .{ .base = tag.ptr, .len = tag.len },
+            .{ .base = body.ptr, .len = body.len },
+            .{ .base = "\n", .len = @intFromBool(needs_nl) },
+        };
+        _ = std.os.linux.writev(2, &iovec, iovec.len);
+    } else if (needs_nl) {
+        std.debug.print("{s}{s}{s}\n", .{ ts, tag, body });
+    } else {
+        std.debug.print("{s}{s}{s}", .{ ts, tag, body });
     }
 }
 
@@ -163,8 +174,9 @@ pub fn trace(comptime fmt: []const u8, args: anytype) void {
 /// Call during startup, after env vars are available.
 pub fn initFromEnv() void {
     if (comptime builtin.target.cpu.arch.isWasm()) return;
-    const val = std.process.getEnvVarOwned(std.heap.page_allocator, "ZINE_LOG_LEVEL") catch return;
-    defer std.heap.page_allocator.free(val);
+    // TODO(windows): see `detectColorImpl`.
+    if (comptime builtin.target.os.tag == .windows) return;
+    const val = runtime.environ().getPosix("ZINE_LOG_LEVEL") orelse return;
     if (std.mem.eql(u8, val, "fatal")) {
         min_level = .fatal;
     } else if (std.mem.eql(u8, val, "error") or std.mem.eql(u8, val, "err")) {

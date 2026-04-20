@@ -1,5 +1,6 @@
 //! DirectInput implementation for keyboard and mouse.
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
 
@@ -176,7 +177,7 @@ pub fn pushMouseEvent(dwOfs: u32, dwData: u32) void {
 
 fn getTickCount() u32 {
     // DirectInput timestamps use milliseconds (like GetTickCount)
-    const ms = std.time.milliTimestamp();
+    const ms = runtime.milliTimestamp();
     return @truncate(@as(u64, @bitCast(@as(i64, ms))));
 }
 

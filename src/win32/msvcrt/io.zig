@@ -5,7 +5,9 @@
 //! for formatted I/O and low-level descriptor validation.
 
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
+const platform_mod = @import("../../platform.zig");
 
 fn log_call(comptime name: []const u8) void {
     trace.print("MSVCRT_IO: {s}\n", .{name});
@@ -39,6 +41,27 @@ pub var msvcrt_iob: [3]MSVCRT_FILE = [_]MSVCRT_FILE{
 
 /// On WASM, _iob is allocated in guest memory at this virtual address.
 pub var iob_guest_addr: usize = 0;
+
+pub fn get_iob_guest_addr() usize {
+    if (iob_guest_addr == 0) {
+        if (comptime platform_mod.is_native) {
+            const shared = @import("../shared.zig");
+            if (shared.raw_alloc(@sizeOf([3]MSVCRT_FILE))) |addr_ptr| {
+                const addr = @intFromPtr(addr_ptr);
+                iob_guest_addr = addr;
+                // copy static contents
+                const ptr = @as(*[3]MSVCRT_FILE, @ptrCast(@alignCast(addr_ptr)));
+                ptr.* = msvcrt_iob;
+            }
+        } else if (comptime platform_mod.is_x86_64) {
+            const compat = @import("../../x86/compat_thunks.zig");
+            if (compat.allocData(@ptrCast(&msvcrt_iob), @sizeOf([3]MSVCRT_FILE))) |addr32| {
+                iob_guest_addr = addr32;
+            }
+        }
+    }
+    return if (iob_guest_addr != 0) iob_guest_addr else @intFromPtr(&msvcrt_iob);
+}
 
 const IOINFO_SIZE = 8; // sizeof(ioinfo) on x86
 const IOINFO_TABLE_SIZE = 32; // entries per __pioinfo slot
@@ -75,6 +98,32 @@ pub var ioinfo_table0: [IOINFO_TABLE_SIZE * IOINFO_SIZE]u8 = init_ioinfo: {
 
 /// __pioinfo: array of 64 pointers to ioinfo tables.
 pub var pioinfo: [64]usize = [_]usize{0} ** 64;
+pub var pioinfo_guest_addr: usize = 0;
+
+pub fn get_pioinfo_guest_addr() usize {
+    if (pioinfo_guest_addr == 0) {
+        if (comptime platform_mod.is_native) {
+            const shared = @import("../shared.zig");
+            if (shared.raw_alloc(@sizeOf([64]usize))) |addr_ptr| {
+                const addr = @intFromPtr(addr_ptr);
+                pioinfo_guest_addr = addr;
+                // setup table0
+                if (pioinfo[0] == 0) initPioinfo();
+                // Map table0 to guest memory too!
+                if (shared.raw_alloc(@sizeOf(@TypeOf(ioinfo_table0)))) |table0_ptr| {
+                    const table0_addr = @intFromPtr(table0_ptr);
+                    const t0_ptr = @as(*@TypeOf(ioinfo_table0), @ptrCast(@alignCast(table0_ptr)));
+                    t0_ptr.* = ioinfo_table0;
+                    
+                    const ptr = @as(*[64]usize, @ptrCast(@alignCast(addr_ptr)));
+                    ptr.* = [_]usize{0} ** 64;
+                    ptr[0] = table0_addr;
+                }
+            }
+        }
+    }
+    return if (pioinfo_guest_addr != 0) pioinfo_guest_addr else @intFromPtr(&pioinfo);
+}
 
 /// Initialize __pioinfo[0] to point to ioinfo_table0.
 /// Implementation status: Partially implemented
@@ -86,48 +135,45 @@ pub fn initPioinfo() void {
 pub var nhandle: i32 = 256;
 
 const max_files = 64;
-var file_handles: [max_files]?std.fs.File = [_]?std.fs.File{null} ** max_files;
-var file_structs: [max_files]MSVCRT_FILE = [_]MSVCRT_FILE{std.mem.zeroes(MSVCRT_FILE)} ** max_files;
+var file_handles: [max_files]?std.Io.File = [_]?std.Io.File{null} ** max_files;
+var file_ptrs: [max_files]usize = [_]usize{0} ** max_files;
 
 /// Map MSVCRT_FILE pointers to Zig File handles.
 /// Implementation status: Partially implemented
-pub fn getFile(ptr: ?*anyopaque) ?std.fs.File {
+pub fn getFile(ptr: ?*anyopaque) ?std.Io.File {
     if (ptr) |p| {
+        // Since we pass guest pointers back to the caller, ptr_val is a 32-bit address.
         const ptr_val = @intFromPtr(p);
 
-        // Check standard streams: on WASM iob_guest_addr is set and we
-        // translate via trace.addr(); on native it's 0 so we use the
-        // host-address msvcrt_iob directly.  Single code path, no
-        // comptime platform branch.
+        // Check standard streams
+        if (trace.enable_tracing) trace.print("MSVCRT: getFile(ptr_val={X}, iob_guest_addr={X})\n", .{ ptr_val, iob_guest_addr });
         if (iob_guest_addr != 0) {
-            // Guest-memory _iob (WASM): translate both pointer and
-            // iob base to host addresses, then compare.
-            const translated = trace.addr(ptr_val);
-            const iob_host = trace.addr(iob_guest_addr);
-            const iob_end = iob_host + @sizeOf(@TypeOf(msvcrt_iob));
-            if (translated >= iob_host and translated < iob_end) {
-                return stdFileFromIobIndex((translated - iob_host) / @sizeOf(MSVCRT_FILE));
+            // iob_guest_addr is the start of the [3]FILE array in guest memory.
+            const iob_end = iob_guest_addr + @sizeOf([3]MSVCRT_FILE);
+            if (ptr_val >= iob_guest_addr and ptr_val < iob_end) {
+                if (trace.enable_tracing) trace.print("MSVCRT: got std idx {d}\n", .{(ptr_val - iob_guest_addr) / @sizeOf(MSVCRT_FILE)});
+                return stdFileFromIobIndex((ptr_val - iob_guest_addr) / @sizeOf(MSVCRT_FILE));
             }
         } else {
-            // Host-address _iob (native / interpret)
+            // Host-address _iob (pure native fallback)
             const iob_start = @intFromPtr(&msvcrt_iob);
             if (ptr_val >= iob_start and ptr_val < iob_start + @sizeOf(@TypeOf(msvcrt_iob))) {
                 return stdFileFromIobIndex((ptr_val - iob_start) / @sizeOf(MSVCRT_FILE));
             }
         }
 
-        // Check if it's one of our dynamically opened files
-        const files_start = @intFromPtr(&file_structs);
-        if (ptr_val >= files_start and ptr_val < files_start + @sizeOf(@TypeOf(file_structs))) {
-            const idx = (ptr_val - files_start) / @sizeOf(MSVCRT_FILE);
-            return file_handles[idx];
+        // Check dynamically opened files
+        for (0..max_files) |idx| {
+            if (file_ptrs[idx] == ptr_val and file_handles[idx] != null) {
+                return file_handles[idx];
+            }
         }
     }
     return null;
 }
 
-/// Map _iob index (0=stdin, 1=stdout, 2=stderr) to a std.fs.File.
-fn stdFileFromIobIndex(idx: usize) ?std.fs.File {
+/// Map _iob index (0=stdin, 1=stdout, 2=stderr) to a std.Io.File.
+fn stdFileFromIobIndex(idx: usize) ?std.Io.File {
     const hio = @import("../host_io.zig");
     return switch (idx) {
         0 => hio.fileFromFd(0),
@@ -248,7 +294,7 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
     fixed[name_len] = 0;
     const posix_fs = @import("posix_fs.zig");
 
-    var file: std.fs.File = undefined;
+    var file: std.Io.File = undefined;
     var w_idx: ?usize = null;
     var a_idx: ?usize = null;
     for (0..mode_slice.len) |i| {
@@ -281,8 +327,17 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
 
     if (allocateFileSlot()) |idx| {
         file_handles[idx] = file;
-        var ms_file = &file_structs[idx];
-
+        
+        const shared = @import("../shared.zig");
+        const ptr_opaque = shared.raw_alloc(@sizeOf(MSVCRT_FILE)) orelse {
+            file.close(runtime.io());
+            file_handles[idx] = null;
+            return null;
+        };
+        const ptr = @intFromPtr(ptr_opaque);
+        file_ptrs[idx] = ptr;
+        
+        var ms_file = @as(*MSVCRT_FILE, @ptrFromInt(trace.addr(ptr)));
         ms_file._ptr = 0;
         ms_file._cnt = 0;
         ms_file._base = 0;
@@ -298,9 +353,9 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
         }
 
         ms_file._file = @intCast(file.handle); // Store raw fd just in case
-        return ms_file;
+        return @ptrCast(ms_file); // Returns the guest pointer (from raw_alloc) mapped down by the thunks
     } else {
-        file.close();
+        file.close(runtime.io());
         return null;
     }
 }
@@ -311,12 +366,15 @@ pub fn fclose(f: ?*anyopaque) callconv(.c) i32 {
     trace.print("MSVCRT_IO: fclose\n", .{});
     if (getFile(f)) |file| {
         const ptr_val = @intFromPtr(f.?);
-        const files_start = @intFromPtr(&file_structs);
-        if (ptr_val >= files_start and ptr_val < files_start + @sizeOf(@TypeOf(file_structs))) {
-            const idx = (ptr_val - files_start) / @sizeOf(MSVCRT_FILE);
-            file.close();
-            file_handles[idx] = null;
-            return 0;
+        for (0..max_files) |idx| {
+            if (file_ptrs[idx] == ptr_val) {
+                file.close(runtime.io());
+                file_handles[idx] = null;
+                file_ptrs[idx] = 0;
+                // Currently we don't free raw_alloc memory, so it leaks slightly.
+                // Not an issue for short-lived compilation passes.
+                return 0;
+            }
         }
         return 0;
     }
@@ -329,7 +387,7 @@ pub fn fread(buffer: [*]u8, size: usize, count: usize, f: ?*anyopaque) callconv(
     if (getFile(f)) |file| {
         const bytes_to_read = size * count;
         if (bytes_to_read == 0) return 0;
-        const read_bytes = file.read(buffer[0..bytes_to_read]) catch return 0;
+        const read_bytes = @import("../host_io.zig").readFromFile(file, buffer[0..bytes_to_read]) catch return 0;
         const ret_count = read_bytes / size;
         if (read_bytes < bytes_to_read) {
             if (f) |ptr| {
@@ -364,7 +422,7 @@ pub fn fwrite(buffer: [*]const u8, size: usize, count: usize, f: ?*anyopaque) ca
         return 0;
     }
     if (getFile(f)) |file| {
-        file.writeAll(buffer[0..bytes_to_write]) catch return 0;
+        @import("../host_io.zig").writeAllToFile(file, buffer[0..bytes_to_write]) catch return 0;
         return count;
     }
     return 0;
@@ -374,21 +432,10 @@ pub fn fwrite(buffer: [*]const u8, size: usize, count: usize, f: ?*anyopaque) ca
 /// Implementation status: Partially implemented
 pub fn fseek(f: ?*anyopaque, offset: i32, origin: i32) callconv(.c) i32 {
     trace.print("MSVCRT_IO: fseek(offset={d}, origin={d})\n", .{ offset, origin });
+    if (origin < 0 or origin > 2) return -1;
     if (getFile(f)) |file| {
-        switch (origin) {
-            0 => file.seekTo(@intCast(offset)) catch return -1,
-            1 => {
-                const pos = file.getPos() catch return -1;
-                const new_pos = @as(i64, @intCast(pos)) + @as(i64, offset);
-                file.seekTo(@intCast(new_pos)) catch return -1;
-            },
-            2 => {
-                const end = file.getEndPos() catch return -1;
-                const new_pos = @as(i64, @intCast(end)) + @as(i64, offset);
-                file.seekTo(@intCast(new_pos)) catch return -1;
-            },
-            else => return -1,
-        }
+        const pos = @import("../../platform.zig").lseek(file.handle, offset, @intCast(origin));
+        if (pos < 0) return -1;
         return 0;
     }
     return -1;
@@ -398,7 +445,8 @@ pub fn fseek(f: ?*anyopaque, offset: i32, origin: i32) callconv(.c) i32 {
 /// Implementation status: Partially implemented
 pub fn ftell(f: ?*anyopaque) callconv(.c) i32 {
     if (getFile(f)) |file| {
-        const pos = file.getPos() catch return -1;
+        const pos = @import("../../platform.zig").lseek(file.handle, 0, 1);
+        if (pos < 0) return -1;
         trace.print("MSVCRT_IO: ftell -> {d}\n", .{pos});
         return @intCast(pos);
     }
@@ -416,7 +464,7 @@ pub fn fgets(buf_ptr: usize, max_count: i32, f: ?*anyopaque) callconv(.c) usize 
         var i: usize = 0;
         while (i < limit) {
             var char_buf: [1]u8 = undefined;
-            const read_bytes = file.read(&char_buf) catch break;
+            const read_bytes = @import("../host_io.zig").readFromFile(file, &char_buf) catch break;
             if (read_bytes == 0) break;
             if (char_buf[0] == '\r') continue; // strip carriage return for now
             buf[i] = char_buf[0];
@@ -436,7 +484,7 @@ pub fn fgets(buf_ptr: usize, max_count: i32, f: ?*anyopaque) callconv(.c) usize 
 pub fn fgetc(f: ?*anyopaque) callconv(.c) i32 {
     if (getFile(f)) |file| {
         var buf: [1]u8 = undefined;
-        const bytes_read = file.read(&buf) catch return -1;
+        const bytes_read = @import("../host_io.zig").readFromFile(file, &buf) catch return -1;
         if (bytes_read == 0) {
             if (f) |ptr| {
                 var ms_file = @as(*MSVCRT_FILE, @ptrCast(@alignCast(ptr)));
@@ -458,7 +506,7 @@ pub fn fputc(c: i32, f: ?*anyopaque) callconv(.c) i32 {
     if (getFile(f)) |file| {
         var buf: [1]u8 = undefined;
         buf[0] = @intCast(c & 0xFF);
-        file.writeAll(&buf) catch return -1;
+        @import("../host_io.zig").writeAllToFile(file, &buf) catch return -1;
         // Don't trace every single character to avoid spam, or maybe just trace it if needed
         return buf[0];
     }
@@ -471,12 +519,11 @@ pub fn putchar(c: i32) callconv(.c) i32 {
     var buf: [1]u8 = undefined;
     buf[0] = @intCast(c & 0xFF);
     const out_file = @import("../host_io.zig").fileFromFd(1);
-    out_file.writeAll(&buf) catch return -1;
+    @import("../../win32/host_io.zig").writeAllToFile(out_file, &buf) catch return -1;
     return buf[0];
 }
 
 const fmt_mod = @import("fmt.zig");
-const platform_mod = @import("../../platform.zig");
 
 /// Prints formatted data to a stream.
 /// Implementation status: Partially implemented
@@ -498,7 +545,7 @@ fn fprintf_impl(f: ?*anyopaque, format_ptr: usize, ap: usize) i32 {
             const fmt = @as([*:0]const u8, @ptrFromInt(trace.addr(format_ptr)));
             var buf: [4096]u8 = undefined;
             const len = fmt_mod.x86_vsnprintf(&buf, 4096, fmt, ap);
-            file.writeAll(buf[0..len]) catch return -1;
+            @import("../host_io.zig").writeAllToFile(file, buf[0..len]) catch return -1;
             return @intCast(len);
         }
         return -1;
@@ -519,7 +566,7 @@ pub fn fwprintf(f: ?*anyopaque, format_ptr: usize) callconv(.c) i32 {
             for (0..len) |i| {
                 buf[i] = @intCast(fmt[i] & 0xFF);
             }
-            file.writeAll(buf[0..len]) catch return -1;
+            @import("../host_io.zig").writeAllToFile(file, buf[0..len]) catch return -1;
             return @intCast(len);
         }
         return -1;

@@ -7,7 +7,7 @@ const io = @import("io.zig");
 /// Implementation status: Partially implemented
 pub fn strlen(str: [*:0]const u8) callconv(.c) usize {
     const len = std.mem.span(str).len;
-    if (trace.enable_tracing) trace.print("MSVCRT: strlen -> {d}\n", .{len});
+    if (trace.enable_tracing) trace.print("MSVCRT: _strlen('{s}') -> {d}\n", .{ std.mem.span(str), len });
     return len;
 }
 
@@ -17,6 +17,7 @@ pub fn strcpy(dest: [*]u8, src: [*:0]const u8) callconv(.c) [*]u8 {
     var i: usize = 0;
     while (src[i] != 0) : (i += 1) dest[i] = src[i];
     dest[i] = 0;
+    if (trace.enable_tracing) trace.print("MSVCRT: _strcpy('{s}', '{s}')\n", .{ std.mem.span(@as([*:0]const u8, @ptrCast(dest))), std.mem.span(src) });
     return dest;
 }
 
@@ -36,6 +37,7 @@ pub fn strcat(dest: [*]u8, src: [*:0]const u8) callconv(.c) [*]u8 {
     var i: usize = 0;
     while (src[i] != 0) : (i += 1) dest[dest_len + i] = src[i];
     dest[dest_len + i] = 0;
+    if (trace.enable_tracing) trace.print("MSVCRT: _strcat('{s}', '{s}')\n", .{ std.mem.span(@as([*:0]const u8, @ptrCast(dest))), std.mem.span(src) });
     return dest;
 }
 
@@ -49,6 +51,7 @@ pub fn strcmp(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) i32 {
 
 /// strncmp
 pub fn strncmp(s1: [*:0]const u8, s2: [*:0]const u8, count: usize) callconv(.c) i32 {
+    if (trace.enable_tracing) trace.print("MSVCRT: _strncmp('{s}', '{s}', {d})\n", .{ std.mem.span(s1), std.mem.span(s2), count });
     if (count == 0) return 0;
     var i: usize = 0;
     while (i < count and s1[i] == s2[i] and s1[i] != 0) : (i += 1) {}
@@ -239,7 +242,7 @@ pub fn atoi(str_ptr: usize) callconv(.c) i32 {
     const val = @as(i32, @bitCast(strtoul(str_ptr, 0, 10)));
     if (trace.enable_tracing) {
         if (str_ptr != 0) {
-            trace.print("MSVCRT: atoi('{s}') -> {d}\n", .{ trace.c_span(str_ptr), val });
+            trace.print("MSVCRT: atoi('{s}') -> {d} from {x}\n", .{ trace.c_span(str_ptr), val, @returnAddress() });
         }
     }
     return val;
@@ -447,6 +450,10 @@ pub fn init_pctype() void {
 /// p_pctype
 /// Implementation status: Partially implemented
 pub fn p_pctype() callconv(.c) *?*u16 {
+    const process = @import("process.zig");
+    const g = process.ensureGuestGlobals();
+    if (g != 0) return @ptrFromInt(g + process.g_pctype_ptr);
+
     const static = struct {
         var p: ?*u16 = null;
     };
@@ -612,8 +619,12 @@ pub fn ismbcspace(c: i32) callconv(.c) i32 {
 
 /// mbsinc
 /// Implementation status: Partially implemented
-pub fn mbsinc(str_ptr: usize) callconv(.c) usize {
-    return if (str_ptr == 0) 0 else str_ptr + 1;
+pub fn mbsinc(str: ?[*]const u8) callconv(.c) ?[*]const u8 {
+    if (str) |s| {
+        if (s[0] == 0) return null;
+        return s + 1;
+    }
+    return null;
 }
 
 /// mbccpy
@@ -630,10 +641,10 @@ pub fn mbclen(c_ptr: usize) callconv(.c) usize {
 
 /// mbsdec
 /// Implementation status: Partially implemented
-pub fn mbsdec(start: usize, current: usize) callconv(.c) usize {
-    if (start == 0 or current <= start) return 0;
-    if (trace.enable_tracing) trace.print("MSVCRT: _mbsdec(start={x}, current={x}) -> {x}\n", .{ start, current, current - 1 });
-    return current - 1;
+pub fn mbsdec(start: ?[*]const u8, current: ?[*]const u8) callconv(.c) ?[*]const u8 {
+    if (start == null or current == null or @intFromPtr(current.?) <= @intFromPtr(start.?)) return null;
+    if (trace.enable_tracing) trace.print("MSVCRT: _mbsdec(start={x}, current={x}) -> {x}\n", .{ @intFromPtr(start.?), @intFromPtr(current.?), @intFromPtr(current.?) - 1 });
+    return current.? - 1;
 }
 
 /// --- Setjmp / Longjmp ---
@@ -666,4 +677,62 @@ pub fn iscntrl(c: i32) callconv(.c) i32 {
 
 pub fn atof(str: [*:0]const u8) callconv(.c) f64 {
     return std.fmt.parseFloat(f64, std.mem.span(str)) catch 0.0;
+}
+
+/// _strlwr
+pub fn strlwr(str: ?[*:0]u8) callconv(.c) ?[*:0]u8 {
+    if (str) |s_ptr| {
+        const s = std.mem.span(s_ptr);
+        for (s) |*c| {
+            if (c.* >= 'A' and c.* <= 'Z') c.* += 32;
+        }
+        return s_ptr;
+    }
+    return null;
+}
+
+/// _strupr
+pub fn strupr(str: ?[*:0]u8) callconv(.c) ?[*:0]u8 {
+    if (str) |s_ptr| {
+        const s = std.mem.span(s_ptr);
+        for (s) |*c| {
+            if (c.* >= 'a' and c.* <= 'z') c.* -= 32;
+        }
+        return s_ptr;
+    }
+    return null;
+}
+
+var strtok_state: ?[*:0]u8 = null;
+
+/// _strtok
+pub fn strtok(str: ?[*:0]u8, delim: ?[*:0]const u8) callconv(.c) ?[*:0]u8 {
+    const s_ptr = str orelse strtok_state orelse return null;
+    const d_ptr = delim orelse return null;
+    if (trace.enable_tracing) trace.print("MSVCRT: _strtok('{s}', '{s}')\n", .{ std.mem.span(s_ptr), std.mem.span(d_ptr) });
+    
+    var s = std.mem.span(s_ptr);
+    const d = std.mem.span(d_ptr);
+
+    // Skip leading delimiters
+    var start: usize = 0;
+    while (start < s.len and std.mem.indexOfScalar(u8, d, s[start]) != null) : (start += 1) {}
+
+    if (start == s.len) {
+        strtok_state = null;
+        return null;
+    }
+
+    // Find next delimiter
+    var end = start;
+    while (end < s.len and std.mem.indexOfScalar(u8, d, s[end]) == null) : (end += 1) {}
+
+    if (end < s.len) {
+        s[end] = 0;
+        strtok_state = @ptrCast(s.ptr + end + 1);
+    } else {
+        strtok_state = null;
+    }
+
+    return @ptrCast(s.ptr + start);
 }

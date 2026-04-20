@@ -55,7 +55,11 @@ pub fn qsort(base: usize, num: usize, width: usize, compare_ptr: usize) callconv
         while (j < num) : (j += 1) {
             const ap = base + i * width;
             const bp = base + j * width;
-            if (compare(ap, bp) > 0) {
+            const cmp = if (comptime @import("../../platform.zig").is_x86_64)
+                @as(i32, @bitCast(@import("../../x86/compat_thunks.zig").callCompat32_4(@truncate(compare_ptr), @truncate(ap), @truncate(bp), 0, 0)))
+            else
+                compare(ap, bp);
+            if (cmp > 0) {
                 var k: usize = 0;
                 while (k < width) : (k += 1) {
                     const a = @as(*u8, @ptrFromInt(trace.addr(ap + k)));
@@ -79,7 +83,10 @@ pub fn bsearch(key: usize, base: usize, num: usize, width: usize, compare_ptr: u
     while (lo < hi) {
         const mid = lo + (hi - lo) / 2;
         const item = base + mid * width;
-        const cmp = compare(key, item);
+        const cmp = if (comptime @import("../../platform.zig").is_x86_64)
+            @as(i32, @bitCast(@import("../../x86/compat_thunks.zig").callCompat32_4(@truncate(compare_ptr), @truncate(key), @truncate(item), 0, 0)))
+        else
+            compare(key, item);
         if (cmp == 0) return item;
         if (cmp < 0) {
             hi = mid;

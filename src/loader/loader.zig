@@ -58,7 +58,7 @@ fn allocThunkCode(mem: *x86_memory.GuestMemory, thunk_id: u32) u32 {
 /// its code. Updates the module's image_base and mapped_memory to point at the
 /// guest copy. Applies relocations for the new base address.
 /// Called on WASM when resolveImports encounters a real PE dependency.
-fn copyModuleToGuest(mod: *Module) void {
+pub fn copyModuleToGuest(mod: *Module) void {
     const shared = @import("../win32/shared.zig");
     log.info("copyModuleToGuest: {s}, guest_memory={?}, heap_start={d}", .{
         mod.name,
@@ -210,7 +210,9 @@ fn patchImport(
         const compat_thunks = @import("../x86/compat_thunks.zig");
         if (exp.is_data) {
             // Data export: copy into pool so guest has a <4GB address
-            if (exp.data_size > 0) {
+            if (exp.addr <= 0xFFFFFFFF) {
+                first_thunk.* = @truncate(exp.addr);
+            } else if (exp.data_size > 0) {
                 if (compat_thunks.allocData(@ptrFromInt(exp.addr), exp.data_size)) |addr32| {
                     first_thunk.* = addr32;
                 } else {

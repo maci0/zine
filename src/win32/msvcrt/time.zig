@@ -1,6 +1,7 @@
 //! MSVCRT time functions implementation.
 
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
 
@@ -40,7 +41,7 @@ fn fillTm(tm: *Tm, ts: u64) void {
 /// Get current system time.
 /// Implementation status: Partially implemented
 pub fn time(time_out: ?*i32) callconv(.c) i32 {
-    const t = @as(i32, @intCast(std.time.timestamp()));
+    const t = @as(i32, @intCast(@divTrunc(runtime.nanoTimestamp(), std.time.ns_per_s)));
     if (time_out) |p| p.* = t;
     return t;
 }
@@ -96,7 +97,7 @@ pub fn tzset() callconv(.c) void {
 /// Get current time into a _timeb structure.
 /// Implementation status: Partially implemented
 pub fn ftime(timeb_buf: [*]u8) callconv(.c) void {
-    const ms = std.time.milliTimestamp();
+    const ms = runtime.milliTimestamp();
     const secs: i32 = @intCast(@divTrunc(ms, 1000));
     const millitm: u16 = @intCast(@mod(@as(u64, @intCast(ms)), 1000));
     @as(*align(1) i32, @ptrCast(timeb_buf[0..4])).* = secs; // time
@@ -165,7 +166,7 @@ var clock_call_count: u32 = 0;
 /// Implementation status: Partially implemented
 pub fn clock() callconv(.c) i32 {
     // CLOCKS_PER_SEC is 1000 on MSVC
-    const now = std.time.milliTimestamp();
+    const now = runtime.milliTimestamp();
     if (clock_start == null) clock_start = now;
     const elapsed = now - clock_start.?;
     clock_call_count += 1;
@@ -200,7 +201,7 @@ pub fn asctime(tm_ptr: usize) callconv(.c) [*]const u8 {
 /// 64-bit version of time().
 /// Implementation status: Partially implemented
 pub fn time64(t: ?*align(1) i64) callconv(.c) i64 {
-    const ts: i64 = @intCast(std.time.timestamp());
+    const ts: i64 = @intCast(@divTrunc(runtime.nanoTimestamp(), std.time.ns_per_s));
     if (t) |p| p.* = ts;
     return ts;
 }

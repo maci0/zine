@@ -5,6 +5,7 @@
 //! loading, mapping, and resolving exports.
 
 const std = @import("std");
+const runtime = @import("../runtime.zig");
 const pe = @import("../pe.zig");
 const log = @import("../log.zig");
 const builtin = @import("builtin");
@@ -14,7 +15,7 @@ const RESOURCE_DATA_IS_DIRECTORY: u32 = 0x80000000;
 const RESOURCE_OFFSET_MASK: u32 = 0x7FFFFFFF;
 
 /// Open a file portably — on WASI, resolves absolute paths through preopened dirs.
-fn openFilePortable(path: []const u8) !std.fs.File {
+fn openFilePortable(path: []const u8) !std.Io.File {
     if (comptime builtin.os.tag == .wasi) {
         if (std.fs.path.isAbsolute(path)) {
             // Iterate WASI preopened fds (start at fd 3, after stdin/stdout/stderr)
@@ -37,14 +38,14 @@ fn openFilePortable(path: []const u8) !std.fs.File {
                 if (std.mem.startsWith(u8, path, preopen_path)) {
                     var rest = path[preopen_path.len..];
                     if (rest.len > 0 and rest[0] == '/') rest = rest[1..];
-                    const dir = std.fs.Dir{ .fd = fd };
-                    return dir.openFile(rest, .{});
+                    const dir = std.Io.Dir{ .handle = fd };
+                    return dir.openFile(runtime.io(), rest, .{});
                 }
             }
             return error.FileNotFound;
         }
     }
-    return std.fs.cwd().openFile(path, .{});
+    return std.Io.Dir.cwd().openFile(runtime.io(), path, .{});
 }
 
 /// Represents a loaded Win32 PE module (executable or DLL) in the guest address space.
@@ -87,13 +88,13 @@ pub const Module = struct {
             log.err("Module.load: failed to open '{s}': {}", .{ path, err });
             return err;
         };
-        defer file.close();
+        defer file.close(runtime.io());
 
-        const file_size = try file.getEndPos();
+        const file_size = try file.length(runtime.io());
         const file_data = try allocator.alloc(u8, @intCast(file_size));
         errdefer allocator.free(file_data);
 
-        _ = try file.readAll(file_data);
+        _ = try file.readPositionalAll(runtime.io(), file_data, 0);
 
         var parser = try pe.PEParser.parse(allocator, file_data);
         const opt_header = &parser.getNtHeaders().OptionalHeader;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
 
@@ -13,6 +14,7 @@ pub fn GetProcessAffinityMask(hProcess: usize, lpProcessAffinityMask: ?*u32, lpS
 
 /// Retrieves information about the current system.
 pub fn GetSystemInfo(si: *[9]u32) callconv(w32cc.WINAPI) void {
+    if (trace.enable_tracing) trace.print("KERNEL32: GetSystemInfo() (caller: {X})\n", .{@returnAddress()});
     si[0] = 0; // PROCESSOR_ARCHITECTURE_INTEL
     si[1] = 4096;
     si[2] = 0x10000;
@@ -124,6 +126,7 @@ pub fn stub_SetFileApisToOEM() callconv(w32cc.WINAPI) void {
 /// Retrieves information about the system's current usage of both physical and virtual memory.
 /// Implementation status: Partially implemented (returns hardcoded values)
 pub fn GlobalMemoryStatusEx(buf: [*]u8) callconv(w32cc.WINAPI) i32 {
+    if (trace.enable_tracing) trace.print("KERNEL32: GlobalMemoryStatusEx()\n", .{});
     @memset(buf[0..64], 0);
     @as(*align(1) u32, @ptrCast(buf)).* = 64;
     @as(*align(1) u32, @ptrCast(buf + 4)).* = 50;
@@ -149,7 +152,7 @@ pub fn SleepEx(dwMilliseconds: u32, bAlertable: i32) callconv(w32cc.WINAPI) u32 
     _ = bAlertable;
     if (dwMilliseconds > 0) {
         const sleep_ns: u64 = @min(@as(u64, dwMilliseconds) * 1_000_000, 100_000_000); // Cap at 100ms
-        std.Thread.sleep(sleep_ns);
+        @import("../../platform.zig").sleep(sleep_ns);
     }
     return 0;
 }

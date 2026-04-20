@@ -1,12 +1,13 @@
 //! Web-based graphical user interface.
 
 const std = @import("std");
+const runtime = @import("../runtime.zig");
 const platform = @import("../platform.zig");
 const renderer = @import("renderer.zig");
 const log = @import("../log.zig");
 
-var clients: if (platform.is_native) std.ArrayListUnmanaged(std.net.Stream) else struct {} = if (platform.is_native) .{} else .{};
-var clients_mutex: if (platform.is_native) std.Thread.Mutex else struct {
+var clients: if (platform.is_native) std.ArrayListUnmanaged(std.Io.net.Stream) else struct {} = if (platform.is_native) .empty else .{};
+var clients_mutex: if (platform.is_native) runtime.Mutex else struct {
     pub fn lock(_: *@This()) void {}
     pub fn unlock(_: *@This()) void {}
 } = .{};
@@ -18,7 +19,7 @@ pub fn init(allocator: std.mem.Allocator) !void {
     // Use page allocator for internal web UI data to avoid alignment issues
     // with the game's custom HeapAlloc-based allocator
     g_allocator = std.heap.page_allocator;
-    clients = .{};
+    clients = .empty;
 
     // Clear buffer to black (BGRA pixel order: B=0, G=0, R=0, A=255)
     @memset(renderer.global_framebuf[0 .. 1024 * 1024 * 4], 0);
@@ -46,7 +47,7 @@ pub fn pushFrame() void {
     while (i < clients.items.len) {
         const stream = clients.items[i];
         var out_buf: [4096]u8 = undefined;
-        var w = std.net.Stream.writer(stream, &out_buf);
+        var w = std.Io.net.Stream.writer(stream, runtime.io(), &out_buf);
         var ws: std.http.Server.WebSocket = .{
             .input = undefined,
             .output = &w.interface,
@@ -74,26 +75,10 @@ pub fn pushMessage(json: []const u8) void {
     while (i < clients.items.len) {
         const stream = clients.items[i];
 
-        // Validate socket is still alive before writing (prevent INVAL panic from stdlib)
-        if (comptime platform.is_native) {
-            var sock_err: c_int = 0;
-            std.posix.getsockopt(
-                stream.handle,
-                std.posix.SOL.SOCKET,
-                std.posix.SO.ERROR,
-                std.mem.asBytes(&sock_err),
-            ) catch {
-                _ = clients.swapRemove(i);
-                continue;
-            };
-            if (sock_err != 0) {
-                _ = clients.swapRemove(i);
-                continue;
-            }
-        }
+        // TODO(zig-0.16): reinstate socket liveness check via std.Io.net. std.posix.getsockopt removed.
 
         var out_buf: [4096]u8 = undefined;
-        var w = std.net.Stream.writer(stream, &out_buf);
+        var w = std.Io.net.Stream.writer(stream, runtime.io(), &out_buf);
         var ws: std.http.Server.WebSocket = .{
             .input = undefined,
             .output = &w.interface,
@@ -120,7 +105,7 @@ pub fn pushAudio(data: []const u8) void {
     while (i < clients.items.len) {
         const stream = clients.items[i];
         var out_buf: [4096]u8 = undefined;
-        var w = std.net.Stream.writer(stream, &out_buf);
+        var w = std.Io.net.Stream.writer(stream, runtime.io(), &out_buf);
         var ws: std.http.Server.WebSocket = .{
             .input = undefined,
             .output = &w.interface,
@@ -137,30 +122,31 @@ pub fn pushAudio(data: []const u8) void {
 }
 
 fn serverLoop(allocator: std.mem.Allocator) void {
-    const address = std.net.Address.parseIp4("127.0.0.1", 1995) catch |err| {
+    const io = runtime.io();
+    const address: std.Io.net.IpAddress = std.Io.net.IpAddress.parseLiteral("127.0.0.1:1995") catch |err| {
         std.debug.print("WebUI: failed to parse address: {}\n", .{err});
         return;
     };
-    var server = address.listen(.{ .reuse_address = true }) catch |err| {
+    var server = address.listen(io, .{ .reuse_address = true }) catch |err| {
         std.debug.print("WebUI: failed to listen on port 1995: {}\n", .{err});
         return;
     };
-    defer server.deinit();
+    defer server.deinit(io);
 
     std.debug.print("\n>>> Zine Web UI running on http://127.0.0.1:1995 <<<\n\n", .{});
 
     while (true) {
-        const conn = server.accept() catch continue;
-        const thread = std.Thread.spawn(.{}, handleClient, .{ conn, allocator }) catch {
-            conn.stream.close();
+        const stream = server.accept(io) catch continue;
+        const client_thread = std.Thread.spawn(.{}, handleClient, .{ stream, allocator }) catch {
+            stream.close(io);
             continue;
         };
-        thread.detach();
+        client_thread.detach();
     }
 }
 
-fn handleClient(conn: std.net.Server.Connection, _: std.mem.Allocator) void {
-    handleClientInner(conn) catch |err| {
+fn handleClient(stream: std.Io.net.Stream, _: std.mem.Allocator) void {
+    handleClientInner(stream) catch |err| {
         std.debug.print("Error in handleClientInner: {}\n", .{err});
     };
 }
@@ -171,7 +157,7 @@ fn sendError(ws: *std.http.Server.WebSocket, msg: []const u8) void {
     _ = ws.writeMessage(json, .text) catch {};
 }
 
-fn handleClientInner(conn: std.net.Server.Connection) !void {
+fn handleClientInner(stream: std.Io.net.Stream) !void {
     // Each client handler gets its own arena to avoid thread-safety issues
     // with the shared ArenaAllocator from main.
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -180,16 +166,16 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
 
     var in_buf: [8192]u8 = undefined;
     var out_buf: [8192]u8 = undefined;
-    var r = std.net.Stream.reader(conn.stream, &in_buf);
-    var w = std.net.Stream.writer(conn.stream, &out_buf);
+    var r = std.Io.net.Stream.reader(stream, runtime.io(), &in_buf);
+    var w = std.Io.net.Stream.writer(stream, runtime.io(), &out_buf);
 
-    var server = std.http.Server.init(r.interface(), &w.interface);
+    var server = std.http.Server.init(&r.interface, &w.interface);
 
     var req = server.receiveHead() catch |err| {
         if (err != error.EndOfStream and err != error.ConnectionResetByPeer) {
             std.debug.print("HTTP receiveHead error: {}\n", .{err});
         }
-        conn.stream.close();
+        stream.close(runtime.io());
         return;
     };
 
@@ -199,14 +185,14 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
         const upgrade = req.upgradeRequested();
         if (upgrade != .websocket) {
             try req.respond("Expected websocket upgrade", .{ .status = .bad_request });
-            return conn.stream.close();
+            return stream.close(runtime.io());
         }
 
         var ws = try req.respondWebSocket(.{ .key = upgrade.websocket.? });
         ws.flush() catch {};
 
         clients_mutex.lock();
-        clients.append(g_allocator, conn.stream) catch {};
+        clients.append(g_allocator, stream) catch {};
         clients_mutex.unlock();
 
         // Push initial state to reconnecting client
@@ -427,11 +413,11 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
                 }
             }
         }
-        conn.stream.close();
+        stream.close(runtime.io());
         
         clients_mutex.lock();
-        for (clients.items, 0..) |stream, i| {
-            if (stream.handle == conn.stream.handle) {
+        for (clients.items, 0..) |client_stream, i| {
+            if (client_stream.socket.handle == stream.socket.handle) {
                 _ = clients.swapRemove(i);
                 break;
             }
@@ -454,29 +440,29 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
             std.mem.indexOfScalar(u8, req_path, 0) != null)
         {
             try req.respond("Forbidden", .{ .status = .forbidden });
-            return conn.stream.close();
+            return stream.close(runtime.io());
         }
 
         // Only allow paths starting with / and containing only safe characters
         if (req_path.len == 0 or req_path[0] != '/') {
             try req.respond("Forbidden", .{ .status = .forbidden });
-            return conn.stream.close();
+            return stream.close(runtime.io());
         }
 
         const full_path = std.fmt.bufPrint(&file_path_buf, "src/gui{s}", .{req_path}) catch {
-            return conn.stream.close();
+            return stream.close(runtime.io());
         };
 
-        var file = std.fs.cwd().openFile(full_path, .{}) catch |err| {
+        var file = std.Io.Dir.cwd().openFile(runtime.io(), full_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
                 try req.respond("Not found", .{ .status = .not_found });
             } else {
                 try req.respond("Internal server error", .{ .status = .internal_server_error });
             }
-            std.debug.print("Closing FD {} (File error: {s})\n", .{conn.stream.handle, full_path});
-            return conn.stream.close();
+            std.debug.print("Closing FD {} (File error: {s})\n", .{ stream.socket.handle, full_path });
+            return stream.close(runtime.io());
         };
-        defer file.close();
+        defer file.close(runtime.io());
 
         var content_type: []const u8 = "application/octet-stream";
         if (std.mem.endsWith(u8, req_path, ".html")) {
@@ -489,23 +475,23 @@ fn handleClientInner(conn: std.net.Server.Connection) !void {
             content_type = "image/svg+xml";
         }
 
-        const file_size = try file.getEndPos();
+        const file_size = try file.length(runtime.io());
         if (file_size > 10 * 1024 * 1024) {
              try req.respond("File too large", .{ .status = .internal_server_error });
-             return conn.stream.close();
+             return stream.close(runtime.io());
         }
         const content = allocator.alloc(u8, @intCast(file_size)) catch {
              try req.respond("Out of memory", .{ .status = .internal_server_error });
-             return conn.stream.close();
+             return stream.close(runtime.io());
         };
-        const bytes_read = try file.readAll(content);
+        const bytes_read = try file.readPositionalAll(runtime.io(), content, 0);
         try req.respond(content[0..bytes_read], .{ .extra_headers = &.{
             .{ .name = "content-type", .value = content_type },
             .{ .name = "x-content-type-options", .value = "nosniff" },
             .{ .name = "x-frame-options", .value = "DENY" },
             .{ .name = "content-security-policy", .value = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:1995" },
         } });
-        return conn.stream.close();
+        return stream.close(runtime.io());
     }
 }
 

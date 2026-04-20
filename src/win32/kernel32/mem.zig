@@ -21,7 +21,13 @@ pub const get_aligned_hint = stub_common.get_aligned_hint;
 /// Reserves, commits, or changes the state of a region of pages in the virtual address space of the calling process.
 /// Implementation status: Partially implemented (On WASM uses guest heap; on native uses mmap)
 pub fn VirtualAlloc(lpAddress: usize, dwSize: usize, flAllocationType: u32, flProtect: u32) callconv(w32cc.WINAPI) usize {
-    if (trace.enable_tracing) trace.print("KERNEL32: VirtualAlloc(addr={x}, size={x}, type={x}, prot={x})\n", .{ lpAddress, dwSize, flAllocationType, flProtect });
+    if (dwSize == 0x10000) {
+        if (trace.enable_tracing) trace.print("\n\n>>> CAUGHT 64KB VIRTUALALLOC REQUEST <<<\n", .{});
+        if (trace.enable_tracing) trace.print("Caller address: {x}\n\n", .{@returnAddress()});
+    }
+    
+    // VirtualAlloc implementation starts here...
+    if (trace.enable_tracing) trace.print("KERNEL32: VirtualAlloc(addr={x}, size={x}, type={x}, prot={x}) (caller={X})\n", .{ lpAddress, dwSize, flAllocationType, flProtect, @returnAddress() });
 
     const MEM_COMMIT = 0x1000;
     // PAGE_EXECUTE_* protections need executable memory mapping
@@ -37,6 +43,7 @@ pub fn VirtualAlloc(lpAddress: usize, dwSize: usize, flAllocationType: u32, flPr
             if (writable or needs_exec) {
                 platform.mprotect(lpAddress, dwSize, true, writable, needs_exec);
             }
+            if (trace.enable_tracing) trace.print("KERNEL32: VirtualAlloc(COMMIT) -> {x}\n", .{lpAddress});
             return lpAddress;
         }
     }
@@ -45,8 +52,16 @@ pub fn VirtualAlloc(lpAddress: usize, dwSize: usize, flAllocationType: u32, flPr
 
     // On WASM: use guest heap allocator
     if (guest_memory()) |gmem| {
+        // MSVC allocators require 64KB alignment on VirtualAlloc chunks
+        const cursor = gmem.heap_cursor;
+        const aligned_cursor = (cursor + 0xFFFF) & ~@as(u32, 0xFFFF);
+        if (aligned_cursor > cursor) {
+            gmem.heap_cursor = aligned_cursor;
+        }
+
         const alloc_size: u32 = @intCast(@min(dwSize, 0xFFFFFFFF));
-        const addr = gmem.guestAlloc(alloc_size);
+        const aligned_alloc_size = (alloc_size + 0xFFFF) & ~@as(u32, 0xFFFF);
+        const addr = gmem.guestAlloc(aligned_alloc_size);
         if (trace.enable_tracing) trace.print("KERNEL32: VirtualAlloc -> {x}\n", .{addr});
         return addr;
     }
@@ -172,6 +187,16 @@ fn win32HeapAlloc(size: usize, zero: bool) ?*anyopaque {
     const aligned = (actual + 15) & ~@as(usize, 15); // 16-byte align
     const total = aligned + 16; // 16 bytes header (size + padding)
 
+    if (guest_memory()) |_| {
+        // On WASM, default to the shared guest heap (avoids out of bounds VM escapes).
+        const ptr = raw_alloc(total) orelse return null;
+        const header = @as(*usize, @ptrCast(@alignCast(ptr)));
+        header.* = actual;
+        const result = @as([*]u8, @ptrCast(ptr)) + 16;
+        // guestAlloc automatically zeros memory
+        return @ptrCast(result);
+    }
+
     if (win32_heap_base == null or win32_heap_pos + total > win32_heap_cap) {
         // Allocate a new chunk via VirtualAlloc (MEM_COMMIT | MEM_RESERVE)
         // Uses the guest VirtualAlloc hint range so addresses are in the
@@ -267,6 +292,7 @@ pub fn LocalReAlloc(hMem: usize, uBytes: usize, uFlags: u32) callconv(w32cc.WINA
 /// Retrieves information about the system's current usage of both physical and virtual memory.
 /// Implementation status: Partially implemented (Returns hardcoded MEMORYSTATUS)
 pub fn GlobalMemoryStatus(lpBuffer: usize) callconv(w32cc.WINAPI) void {
+    if (trace.enable_tracing) trace.print("KERNEL32: GlobalMemoryStatus()\n", .{});
     if (lpBuffer != 0) {
         const status = @as(*w32.MEMORYSTATUS, @ptrFromInt(lpBuffer));
         status.* = .{

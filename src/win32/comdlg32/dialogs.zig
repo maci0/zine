@@ -42,7 +42,7 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
     renderer.on_cancel_dialog = &handleCancelDialog;
 
     while (pending_file_path == null and !dialog_cancelled) {
-        std.Thread.sleep(10 * 1000 * 1000); // 10ms
+        @import("../../platform.zig").sleep(10 * 1000 * 1000); // 10ms
     }
 
     renderer.on_file_uploaded = prev_file_cb;
@@ -158,7 +158,7 @@ fn commonFileDialogW(lpofn_ptr: usize, is_save: bool) i32 {
     renderer.on_cancel_dialog = &handleCancelDialog;
 
     while (pending_file_path == null and !dialog_cancelled) {
-        std.Thread.sleep(10 * 1000 * 1000); // 10ms
+        @import("../../platform.zig").sleep(10 * 1000 * 1000); // 10ms
     }
 
     renderer.on_file_uploaded = prev_file_cb;
@@ -287,7 +287,7 @@ pub fn stub_PrintDlgA(lppd: usize) callconv(w32cc.WINAPI) i32 {
 /// Returns a JSON array string like: ["Text Documents (*.txt)","All Files (*.*)"]
 fn parseFilterStringA(filter_ptr: u32) ?[]const u8 {
     const ptr = @as([*]const u8, @ptrFromInt(filter_ptr));
-    var result: std.ArrayListUnmanaged(u8) = .{};
+    var result: std.ArrayListUnmanaged(u8) = .empty;
     const alloc = std.heap.page_allocator;
 
     result.appendSlice(alloc, "[") catch return null;
@@ -332,7 +332,7 @@ fn parseFilterStringA(filter_ptr: u32) ?[]const u8 {
 /// Parse a Win32 Wide lpstrFilter (double-null-terminated UTF-16LE pairs)
 fn parseFilterStringW(filter_ptr: u32) ?[]const u8 {
     const ptr = @as([*]const u16, @ptrFromInt(filter_ptr));
-    var result: std.ArrayListUnmanaged(u8) = .{};
+    var result: std.ArrayListUnmanaged(u8) = .empty;
     const alloc = std.heap.page_allocator;
 
     result.appendSlice(alloc, "[") catch return null;

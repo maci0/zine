@@ -33,6 +33,46 @@ pub fn open(win32_path: []const u8, flags: u32, mode: u32) i32 {
     return posix_fs.open(ntz, flags, mode);
 }
 
+const runtime = @import("../runtime.zig");
+
+/// Raw write wrapper: std.Io.File has no writeAll in 0.16. Bypasses the
+/// streaming Writer vtable on native targets because this is hot-path for
+/// MSVCRT stdio stubs (fputc/putchar/_write).
+pub fn writeAllToFile(file: std.Io.File, bytes: []const u8) error{WriteFailed}!void {
+    if (comptime builtin.target.os.tag == .linux) {
+        var off: usize = 0;
+        while (off < bytes.len) {
+            const rc = std.os.linux.write(file.handle, bytes.ptr + off, bytes.len - off);
+            const signed: isize = @bitCast(rc);
+            if (signed <= 0) return error.WriteFailed;
+            off += rc;
+        }
+        return;
+    }
+    file.writeStreamingAll(runtime.io(), bytes) catch return error.WriteFailed;
+}
+
+/// Raw sequential read. Mirrors writeAllToFile: uses a direct syscall on
+/// Linux because MSVCRT fread/fgetc/read hit this per byte or per record.
+/// Returns bytes read (0 == EOF, < len == partial).
+pub fn readFromFile(file: std.Io.File, buf: []u8) error{ReadFailed}!usize {
+    if (comptime builtin.target.os.tag == .linux) {
+        const rc = std.os.linux.read(file.handle, buf.ptr, buf.len);
+        const signed: isize = @bitCast(rc);
+        if (signed < 0) return error.ReadFailed;
+        return rc;
+    }
+    return file.readPositionalAll(runtime.io(), buf, 0) catch error.ReadFailed;
+}
+
+pub fn closeFile(file: std.Io.File) void {
+    file.close(runtime.io());
+}
+
+pub fn statFile(file: std.Io.File) ?std.Io.File.Stat {
+    return file.stat(runtime.io()) catch null;
+}
+
 /// Check if a file exists / is accessible given a Win32 path.
 /// Returns 0 if accessible, -1 if not.
 pub fn access(win32_path: []const u8, mode: i32) i32 {
@@ -42,7 +82,7 @@ pub fn access(win32_path: []const u8, mode: i32) i32 {
 }
 
 /// Get file status given a Win32 path. Returns null if not found.
-pub fn stat(win32_path: []const u8) ?std.fs.File.Stat {
+pub fn stat(win32_path: []const u8) ?std.Io.File.Stat {
     var ntz_buf: [1025]u8 = undefined;
     const ntz = nullTerminate(win32_path, &ntz_buf) orelse return null;
     return posix_fs.stat(ntz);
@@ -53,14 +93,14 @@ pub fn deleteFile(win32_path: []const u8) bool {
     var host_buf: [1024]u8 = undefined;
     const len = path_utils.toHostPath(win32_path, &host_buf);
     if (len == 0) return false;
-    std.fs.cwd().deleteFile(host_buf[0..len]) catch return false;
+    std.Io.Dir.cwd().deleteFile(runtime.io(), host_buf[0..len]) catch return false;
     return true;
 }
 
 /// Get the current working directory in Win32 format (C:\...).
 /// Returns the number of bytes written, or 0 on failure.
 pub fn getCwd(buf: []u8) usize {
-    const cwd = std.process.getCwdAlloc(std.heap.page_allocator) catch return 0;
+    const cwd = std.process.currentPathAlloc(runtime.io(), std.heap.page_allocator) catch return 0;
     defer std.heap.page_allocator.free(cwd);
 
     var win_buf: [1024]u8 = undefined;
@@ -154,24 +194,17 @@ pub fn searchPath(filename: []const u8, search_dirs: ?[]const u8, result: []u8) 
     return 0; // Not found
 }
 
-/// Create a std.fs.File from an integer file descriptor.
+/// Create a std.Io.File from an integer file descriptor.
 /// On POSIX, fd is used directly. On Windows, fd is cast to HANDLE.
 /// This abstracts the platform difference so stubs can use integer fds everywhere.
-pub fn fileFromFd(fd: i32) std.fs.File {
+pub fn fileFromFd(fd: i32) std.Io.File {
     const builtin_os = @import("builtin").os.tag;
     if (comptime builtin_os == .windows) {
-        // On Windows, small integers 0-2 are stdin/stdout/stderr
-        // Use GetStdHandle for those, otherwise treat as raw HANDLE
-        const windows = std.os.windows;
-        const handle: windows.HANDLE = switch (fd) {
-            0 => windows.GetStdHandle(windows.STD_INPUT_HANDLE) catch windows.INVALID_HANDLE_VALUE,
-            1 => windows.GetStdHandle(windows.STD_OUTPUT_HANDLE) catch windows.INVALID_HANDLE_VALUE,
-            2 => windows.GetStdHandle(windows.STD_ERROR_HANDLE) catch windows.INVALID_HANDLE_VALUE,
-            else => @ptrFromInt(@as(usize, @intCast(fd))),
-        };
-        return std.fs.File{ .handle = handle };
+        // For DLL builds: defer handle lookup to kernel32 stubs at runtime.
+        // std.os.windows.GetStdHandle was removed in Zig 0.16.
+        return std.Io.File{ .handle = @ptrFromInt(@as(usize, @intCast(fd))), .flags = .{ .nonblocking = false } };
     } else {
-        return std.fs.File{ .handle = fd };
+        return std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
     }
 }
 

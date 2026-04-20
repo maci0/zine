@@ -1,11 +1,12 @@
 //! MSVCRT low-level file descriptor I/O.
 
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const io = @import("io.zig");
 
 const max_fds = 64;
-var fd_handles: [max_fds]?std.fs.File = [_]?std.fs.File{null} ** max_fds;
+var fd_handles: [max_fds]?std.Io.File = [_]?std.Io.File{null} ** max_fds;
 
 /// Internal helper to allocate a new file descriptor.
 /// Implementation status: Partially implemented
@@ -14,9 +15,9 @@ pub fn alloc_fd() ?i32 {
     return null;
 }
 
-/// Internal helper to get a std.fs.File from a file descriptor.
+/// Internal helper to get a std.Io.File from a file descriptor.
 /// Implementation status: Partially implemented
-pub fn get_fd_file(fd: i32) ?std.fs.File {
+pub fn get_fd_file(fd: i32) ?std.Io.File {
     if (fd == 0) return @import("../host_io.zig").fileFromFd(0);
     if (fd == 1) return @import("../host_io.zig").fileFromFd(1);
     if (fd == 2) return @import("../host_io.zig").fileFromFd(2);
@@ -81,7 +82,7 @@ pub fn read(fd: i32, buffer: [*]u8, count: u32) callconv(.c) i32 {
     if (count == 0) return 0;
     const file = @import("../host_io.zig").fileFromFd(fd);
     const buf = buffer;
-    const read_bytes = file.read(buf[0..count]) catch return -1;
+    const read_bytes = @import("../host_io.zig").readFromFile(file, buf[0..count]) catch return -1;
     if (trace.enable_tracing) {
         trace.print("  -> read {d} bytes\n", .{read_bytes});
         for (0..read_bytes) |i| {
@@ -108,8 +109,8 @@ pub fn write(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
         break :blk @as([*]const u8, @ptrFromInt(trace.addr(buffer_ptr)))[0..count];
     } else @as([*]const u8, @ptrFromInt(trace.addr(buffer_ptr)))[0..count];
     const out_file = @import("../host_io.zig").fileFromFd(fd);
-    out_file.writeAll(slice) catch |err| {
-        if (trace.enable_tracing) trace.print("  -> _write failed: {}\n", .{err});
+    @import("../host_io.zig").writeAllToFile(out_file, slice) catch {
+        if (trace.enable_tracing) trace.print("  -> _write failed\n", .{});
         return -1;
     };
     return @intCast(count);
@@ -118,28 +119,26 @@ pub fn write(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
 /// Moves the file pointer to the specified location.
 /// Implementation status: Fully implemented
 pub fn lseek(fd: i32, offset: i32, origin: i32) callconv(.c) i32 {
+    if (origin < 0 or origin > 2) return -1;
     const file = @import("../host_io.zig").fileFromFd(fd);
-    switch (origin) {
-        0 => file.seekTo(@intCast(offset)) catch return -1,
-        1 => {
-            const p = file.getPos() catch return -1;
-            file.seekTo(@intCast(@as(i64, @intCast(p)) + offset)) catch return -1;
-        },
-        2 => {
-            const e = file.getEndPos() catch return -1;
-            file.seekTo(@intCast(@as(i64, @intCast(e)) + offset)) catch return -1;
-        },
-        else => return -1,
-    }
-    return @intCast(file.getPos() catch return -1);
+    const pos = @import("../../platform.zig").lseek(file.handle, offset, @intCast(origin));
+    if (pos < 0) return -1;
+    return @intCast(pos);
 }
 
 /// Closes the specified file.
 /// Implementation status: Fully implemented
 pub fn close(fd: i32) callconv(.c) i32 {
+    if (trace.enable_tracing) trace.print("MSVCRT: _close(fd={d})\n", .{fd});
+    if (comptime @import("../../platform.zig").is_wasm) {
+        if (fd == 3) {
+            if (trace.enable_tracing) trace.print("  -> ignored (WASI root dir)\n", .{});
+            return 0;
+        }
+    }
     if (fd >= 3) {
         const file = @import("../host_io.zig").fileFromFd(fd);
-        file.close();
+        file.close(runtime.io());
         return 0;
     }
     return -1;
@@ -165,14 +164,16 @@ pub fn stub_isatty(fd: i32) callconv(.c) i32 {
 /// Implementation status: Fully implemented
 pub fn tell(fd: i32) callconv(.c) i32 {
     const file = @import("../host_io.zig").fileFromFd(fd);
-    return @intCast(file.getPos() catch return -1);
+    const pos = @import("../../platform.zig").lseek(file.handle, 0, 1);
+    if (pos < 0) return -1;
+    return @intCast(pos);
 }
 
 /// Changes the size of a file.
 /// Implementation status: Fully implemented
 pub fn chsize(fd: i32, size: i32) callconv(.c) i32 {
     const file = @import("../host_io.zig").fileFromFd(fd);
-    file.setEndPos(@intCast(size)) catch return -1;
+    file.setLength(runtime.io(), @intCast(size)) catch return -1;
     return 0;
 }
 
@@ -180,7 +181,7 @@ pub fn chsize(fd: i32, size: i32) callconv(.c) i32 {
 /// Implementation status: Fully implemented
 pub fn filelength(fd: i32) callconv(.c) i32 {
     const file = @import("../host_io.zig").fileFromFd(fd);
-    if (file.getEndPos()) |pos| {
+    if (file.length(runtime.io())) |pos| {
         if (trace.enable_tracing) trace.print("MSVCRT: _filelength(fd={d}) -> {d}\n", .{ fd, pos });
         return @intCast(pos);
     } else |_| {
@@ -217,7 +218,7 @@ pub fn stat(path_str: [*:0]const u8, stat_out: [*]u8) callconv(.c) i32 {
 pub fn fstat(fd: i32, stat_out: [*]u8) callconv(.c) i32 {
     {
         const file = @import("../host_io.zig").fileFromFd(fd);
-        if (file.stat() catch null) |st| {
+        if (file.stat(runtime.io()) catch null) |st| {
             const stat_buf = stat_out;
             @memset(stat_buf[0..36], 0);
             stat_buf[4] = 0x00;

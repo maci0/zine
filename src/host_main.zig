@@ -12,6 +12,7 @@
 //! Usage:  zine-host [options] <zine.wasm> [-- args...]
 
 const std = @import("std");
+const runtime = @import("runtime.zig");
 const version = @import("version.zig");
 const c = @cImport({
     @cInclude("wasmer.h");
@@ -129,7 +130,7 @@ fn jitCall(args: [*c]const c.wasm_val_vec_t, results: [*c]c.wasm_val_vec_t) call
 // ---------------------------------------------------------------------------
 
 fn writeErr(msg: []const u8) void {
-    std.fs.File.stderr().writeAll(msg) catch {};
+    std.debug.print("{s}", .{msg});
 }
 
 fn printWasmerError() void {
@@ -145,24 +146,23 @@ fn printWasmerError() void {
     }
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    runtime.init(init.io, init.gpa, init.minimal.environ);
+    const allocator = init.arena.allocator();
 
     // Parse args
-    var sys_args = try std.process.argsWithAllocator(allocator);
+    var sys_args = try init.minimal.args.iterateAllocator(allocator);
     defer sys_args.deinit();
     _ = sys_args.next(); // skip argv[0]
 
     var wasm_path: ?[]const u8 = null;
-    var guest_args: std.ArrayListUnmanaged([]const u8) = .{};
+    var guest_args: std.ArrayListUnmanaged([]const u8) = .empty;
     defer guest_args.deinit(allocator);
     var past_separator = false;
 
     while (sys_args.next()) |arg| {
         if (!past_separator and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
-            std.fs.File.stdout().writeAll(
+            std.debug.print("{s}", .{
                 \\Usage: zine-host [options] <zine.wasm> [-- args...]
                 \\
                 \\Run zine.wasm with a native WASM runtime and JIT support.
@@ -176,11 +176,11 @@ pub fn main() !void {
                 \\  zine-host zine.wasm -- myapp.exe
                 \\  zine-host zine.wasm -- --trace myapp.exe
                 \\
-            ) catch {};
+            });
             std.process.exit(0);
         }
         if (!past_separator and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
-            std.fs.File.stdout().writeAll("zine-host " ++ version.string ++ "\n") catch {};
+            std.debug.print("{s}", .{"zine-host " ++ version.string ++ "\n"});
             std.process.exit(0);
         }
         if (!past_separator and std.mem.eql(u8, arg, "--")) {
@@ -190,7 +190,7 @@ pub fn main() !void {
         if (wasm_path == null and !past_separator and arg.len > 1 and arg[0] == '-') {
             var err_buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&err_buf, "Error: unknown option '{s}'.\nTry 'zine-host --help' for more information.\n", .{arg}) catch "Error: unknown option.\n";
-            std.fs.File.stderr().writeAll(msg) catch {};
+            std.debug.print("{s}", .{msg});
             std.process.exit(2);
         }
         if (wasm_path == null) {
@@ -201,19 +201,21 @@ pub fn main() !void {
     }
 
     if (wasm_path == null) {
-        std.fs.File.stderr().writeAll("Error: missing required argument <zine.wasm>.\nTry 'zine-host --help' for more information.\n") catch {};
+        std.debug.print("{s}", .{"Error: missing required argument <zine.wasm>.\nTry 'zine-host --help' for more information.\n"});
         std.process.exit(2);
     }
 
     // Read WASM file
-    const wasm_file = std.fs.cwd().openFile(wasm_path.?, .{}) catch {
+    const wasm_file = std.Io.Dir.cwd().openFile(runtime.io(), wasm_path.?, .{}) catch {
         writeErr("Error: cannot open '");
         writeErr(wasm_path.?);
         writeErr("'.\n");
         std.process.exit(1);
     };
-    defer wasm_file.close();
-    const wasm_data = wasm_file.readToEndAlloc(allocator, 256 * 1024 * 1024) catch { // 256MB max
+    defer wasm_file.close(runtime.io());
+    var file_reader_buf: [4096]u8 = undefined;
+    var file_reader = wasm_file.reader(runtime.io(), &file_reader_buf);
+    const wasm_data = file_reader.interface.allocRemaining(allocator, .limited(256 * 1024 * 1024)) catch {
         writeErr("Error: cannot read '");
         writeErr(wasm_path.?);
         writeErr("'.\n");
@@ -267,18 +269,15 @@ pub fn main() !void {
     // We need "." for relative paths and "/" for absolute paths.
     {
         var cwd_buf: [4096]u8 = undefined;
-        const cwd = std.process.getCwd(&cwd_buf) catch ".";
+        const cwd_len = std.process.currentPath(runtime.io(), &cwd_buf) catch 0;
+        const cwd = if (cwd_len > 0) cwd_buf[0..cwd_len] else ".";
         const cwd_z = std.heap.page_allocator.dupeZ(u8, cwd) catch ".";
         _ = c.wasi_config_preopen_dir(wasi_config, cwd_z);
         _ = c.wasi_config_preopen_dir(wasi_config, "/");
     }
 
     // Inherit environment
-    var env_iter = std.process.getEnvMap(allocator) catch {
-        writeErr("Error: failed to get environment.\n");
-        std.process.exit(1);
-    };
-    defer env_iter.deinit();
+    const env_iter = init.environ_map;
     var env_it = env_iter.iterator();
     while (env_it.next()) |entry| {
         c.wasi_config_env(wasi_config, entry.key_ptr.*.ptr, entry.value_ptr.*.ptr);

@@ -8,13 +8,13 @@ const stub_common = @import("../shared.zig");
 /// malloc
 /// Implementation status: Partially implemented
 pub fn malloc(size: usize) callconv(.c) ?*anyopaque {
-    if (size == 0) return null;
-    if (size > 0x0FFFFFFF) {
-        if (trace.enable_tracing) trace.print("MSVCRT: malloc({x}) -> failed (too large) from {x}\n", .{ size, @returnAddress() });
+    const alloc_size = if (size == 0) 1 else size;
+    if (alloc_size > 0x0FFFFFFF) {
+        if (trace.enable_tracing) trace.print("MSVCRT: malloc({x}) -> failed (too large) from {x}\n", .{ alloc_size, @returnAddress() });
         return null;
     }
-    const ptr = stub_common.raw_alloc(size) orelse {
-        if (trace.enable_tracing) trace.print("MSVCRT: malloc({x}) -> failed (out of memory) from {x}\n", .{ size, @returnAddress() });
+    const ptr = stub_common.raw_alloc(alloc_size) orelse {
+        if (trace.enable_tracing) trace.print("MSVCRT: malloc({x}) -> failed (out of memory) from {x}\n", .{ alloc_size, @returnAddress() });
         return null;
     };
     if (trace.enable_tracing) trace.print("MSVCRT: malloc({x}) -> {x} from {x}\n", .{ size, @intFromPtr(ptr), @returnAddress() });

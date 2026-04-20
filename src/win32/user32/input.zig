@@ -49,6 +49,7 @@ pub fn ReleaseCapture() callconv(w32cc.WINAPI) i32 {
 }
 
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 
 pub const TimerEntry = struct {
     hwnd: usize,
@@ -88,7 +89,7 @@ pub fn SetTimer(hWnd: usize, nIDEvent: usize, uElapse: u32, lpTimerFunc: usize) 
             .id = nIDEvent,
             .elapse_ms = if (uElapse < 10) 10 else uElapse, // Win32 minimum is 10ms
             .callback = 0,
-            .last_fire = std.time.milliTimestamp(),
+            .last_fire = runtime.milliTimestamp(),
             .active = true,
         };
     }

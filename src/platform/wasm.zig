@@ -4,6 +4,7 @@
 //! including memory management, threading (stubbed), and system information.
 
 const std = @import("std");
+const runtime = @import("../runtime.zig");
 
 pub const is_wasm = true;
 pub const is_native = false;
@@ -74,9 +75,8 @@ pub fn mmap(
     // When a file descriptor is provided, read file content into the mapping
     // (e.g. CreateFileMappingA + MapViewOfFileEx used by LINK.EXE).
     if (file_fd >= 0) {
-        const file = std.fs.File{ .handle = file_fd };
-        file.seekTo(file_offset) catch {};
-        const bytes_read = file.readAll(slice) catch 0;
+        const file = std.Io.File{ .handle = file_fd, .flags = .{ .nonblocking = false } };
+        const bytes_read = file.readPositionalAll(runtime.io(), slice, file_offset) catch 0;
         if (bytes_read < slice.len) @memset(slice[bytes_read..], 0);
     }
     return slice;
@@ -101,6 +101,18 @@ pub fn exitProcess(code: u8) noreturn {
 /// Returns the current timestamp as a Unix epoch value (seconds).
 /// Stubbed to 0 on WASM — not needed for current use cases.
 pub fn timestamp() i64 {
+    return 0;
+}
+
+/// Returns the current timestamp in milliseconds since Unix epoch.
+/// Stubbed to 0 on WASM.
+pub fn milliTimestamp() i64 {
+    return 0;
+}
+
+/// Returns the current timestamp in nanoseconds since Unix epoch.
+/// Stubbed to 0 on WASM.
+pub fn nanoTimestamp() i128 {
     return 0;
 }
 
@@ -156,4 +168,10 @@ pub fn pipe() ![2]i32 {
 pub fn dup(fd: i32) !i32 {
     _ = fd;
     return error.SystemResources;
+}
+
+/// Stubbed lseek for WASM; file seeking goes through std.Io.File APIs there.
+pub fn lseek(fd: i32, offset: i64, whence: u32) i64 {
+    _ = .{ fd, offset, whence };
+    return -1;
 }

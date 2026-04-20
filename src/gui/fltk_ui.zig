@@ -10,6 +10,7 @@
 //! enqueues commands into a lock-free ring buffer and calls fltk_awake().
 
 const std = @import("std");
+const runtime = @import("../runtime.zig");
 const renderer = @import("renderer.zig");
 const build_options = @import("build_options");
 
@@ -36,7 +37,7 @@ const QUEUE_SIZE = 256;
 var cmd_queue: [QUEUE_SIZE]Command = undefined;
 var cmd_write: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
 var cmd_read: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
-var queue_mutex: std.Thread.Mutex = .{};
+var queue_mutex: runtime.Mutex = .{};
 
 fn enqueue(cmd: Command) void {
     queue_mutex.lock();
@@ -166,7 +167,7 @@ fn fltkEventLoop() void {
         drainQueue();
 
         // Brief sleep to avoid burning CPU (FLTK check() returns immediately)
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        @import("../platform.zig").sleep(1 * std.time.ns_per_ms);
     }
 }
 

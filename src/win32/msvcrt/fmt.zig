@@ -183,7 +183,7 @@ fn printf_impl(fmt: [*:0]const u8, ap: usize) i32 {
     const len = x86_vsnprintf(&buf, 4096, fmt, ap);
     if (trace.enable_tracing) trace.print("MSVCRT: printf '{s}'\n", .{buf[0..len]});
     const out_file = @import("../host_io.zig").fileFromFd(1); // stdout
-    out_file.writeAll(buf[0..len]) catch return -1;
+    @import("../../win32/host_io.zig").writeAllToFile(out_file, buf[0..len]) catch return -1;
     return @intCast(len);
 }
 
@@ -194,7 +194,7 @@ pub fn vprintf(fmt: [*:0]const u8, ap: [*]const u32) callconv(.c) i32 {
     const len = x86_vsnprintf(&buf, 4096, fmt, @intFromPtr(ap));
     if (trace.enable_tracing) trace.print("MSVCRT: vprintf '{s}'\n", .{buf[0..len]});
     const out_file = @import("../host_io.zig").fileFromFd(1);
-    out_file.writeAll(buf[0..len]) catch return -1;
+    @import("../../win32/host_io.zig").writeAllToFile(out_file, buf[0..len]) catch return -1;
     return @intCast(len);
 }
 
@@ -215,7 +215,7 @@ pub fn vfprintf(stream: ?*anyopaque, fmt: [*:0]const u8, ap: [*]const u32) callc
         io.getFile(stream) orelse @import("../host_io.zig").fileFromFd(1)
     else
         @import("../host_io.zig").fileFromFd(1);
-    out_file.writeAll(buf[0..len]) catch return -1;
+    @import("../../win32/host_io.zig").writeAllToFile(out_file, buf[0..len]) catch return -1;
     return @intCast(len);
 }
 
@@ -321,8 +321,8 @@ fn sprintf_impl(out: [*]u8, fmt: [*:0]const u8, ap: usize) i32 {
 pub fn puts(str: [*:0]const u8) callconv(.c) i32 {
     const s = std.mem.span(str);
     const f = @import("../host_io.zig").fileFromFd(1);
-    _ = f.writeAll(s) catch {};
-    _ = f.writeAll("\n") catch {};
+    _ = @import("../host_io.zig").writeAllToFile(f, s) catch {};
+    _ = @import("../host_io.zig").writeAllToFile(f, "\n") catch {};
     return 0;
 }
 
@@ -331,7 +331,7 @@ pub fn fputs(str: [*:0]const u8, file_ptr: ?*anyopaque) callconv(.c) i32 {
     const s = std.mem.span(str);
     if (trace.enable_tracing) trace.print("MSVCRT: fputs '{s}'\n", .{s});
     if (io.getFile(file_ptr)) |file| {
-        file.writeAll(s) catch return -1;
+        @import("../host_io.zig").writeAllToFile(file, s) catch return -1;
         return 0;
     }
     return -1;

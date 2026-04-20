@@ -4,7 +4,10 @@
 //! FS-segment setup, and std.Thread.  Compiled only when targeting a native
 //! CPU architecture.  Architecture-specific code is gated on is_x86/is_x86_64.
 
+const linux = std.os.linux;
+
 const std = @import("std");
+const runtime = @import("../runtime.zig");
 const builtin = @import("builtin");
 const log = @import("../log.zig");
 const teb = @import("../win32/teb.zig");
@@ -31,10 +34,14 @@ pub fn yield() void {
 
 /// Suspends execution for the specified number of nanoseconds.
 pub fn sleep(ns: u64) void {
-    std.Thread.sleep(ns);
+    const req = linux.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    _ = linux.nanosleep(&req, null);
 }
 
-pub const Mutex = std.Thread.Mutex;
+pub const Mutex = runtime.Mutex;
 
 /// Spawns a new thread. Returns true on success.
 pub fn spawnThread(func: anytype, args: anytype) bool {
@@ -67,15 +74,13 @@ pub fn mmap(
     fixed: bool,
 ) ![]align(4096) u8 {
     if (comptime builtin.os.tag == .windows) {
-        const os = std.os.windows;
-        var prot: u32 = os.PAGE_READWRITE;
-        if (executable) prot = os.PAGE_EXECUTE_READWRITE;
-        const flags: u32 = os.MEM_COMMIT | os.MEM_RESERVE;
-        const ptr = os.VirtualAlloc(hint, size, flags, prot) catch return error.OutOfMemory;
-        return @as([*]align(4096) u8, @ptrCast(@alignCast(ptr)))[0..size];
+        // Windows path currently unused — host is Linux-only. Zig 0.16 removed
+        // std.os.windows.VirtualAlloc; reintroduce via kernel32 FFI if needed.
+        _ = .{ hint, size, executable, file_fd, file_offset, shared, fixed };
+        return error.OutOfMemory;
     } else {
-        var prot: u32 = std.posix.PROT.READ | std.posix.PROT.WRITE;
-        if (executable) prot |= std.posix.PROT.EXEC;
+        var prot: std.posix.PROT = .{ .READ = true, .WRITE = true };
+        if (executable) prot.EXEC = true;
 
         var flags: std.posix.MAP = if (shared) .{ .TYPE = .SHARED } else .{ .TYPE = .PRIVATE };
         if (comptime is_x86_64 and builtin.os.tag == .linux) {
@@ -154,9 +159,27 @@ pub fn exitProcess(code: u8) noreturn {
     std.process.exit(code);
 }
 
+fn readClock(clock_id: linux.clockid_t) linux.timespec {
+    var ts: linux.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = linux.clock_gettime(clock_id, &ts);
+    return ts;
+}
+
 /// Returns the current timestamp as a Unix epoch value (seconds).
 pub fn timestamp() i64 {
-    return std.time.timestamp();
+    return readClock(.REALTIME).sec;
+}
+
+/// Returns the current timestamp in milliseconds since Unix epoch.
+pub fn milliTimestamp() i64 {
+    const ts = readClock(.REALTIME);
+    return @as(i64, ts.sec) * std.time.ms_per_s + @divTrunc(ts.nsec, std.time.ns_per_ms);
+}
+
+/// Returns the current timestamp in nanoseconds since Unix epoch.
+pub fn nanoTimestamp() i128 {
+    const ts = readClock(.REALTIME);
+    return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
 }
 
 // -------------------------------------------------------------------------
@@ -176,10 +199,10 @@ pub fn getStackBounds(frame_addr: usize) StackBounds {
         .stack_limit = @truncate((frame_addr -% 0x700000) & 0xFFFFF000),
     };
 
-    if (std.fs.openFileAbsolute("/proc/self/maps", .{})) |file| {
-        defer file.close();
+    if (std.Io.Dir.openFileAbsolute(runtime.io(), "/proc/self/maps", .{})) |file| {
+        defer file.close(runtime.io());
         var maps_buf: [8192]u8 = undefined;
-        const bytes_read = file.readAll(&maps_buf) catch 0;
+        const bytes_read = file.readPositionalAll(runtime.io(), &maps_buf, 0) catch 0;
         const content = maps_buf[0..bytes_read];
 
         var lines = std.mem.splitScalar(u8, content, '\n');
@@ -334,10 +357,10 @@ pub fn setupFS(teb_ptr: *anyopaque) !void {
 
 /// Changes the protection of a memory region.
 pub fn mprotect(addr: usize, len: usize, readable: bool, writable: bool, executable: bool) void {
-    var prot: u32 = 0;
-    if (readable) prot |= std.posix.PROT.READ;
-    if (writable) prot |= std.posix.PROT.WRITE;
-    if (executable) prot |= std.posix.PROT.EXEC;
+    var prot: std.posix.PROT = .{};
+    if (readable) prot.READ = true;
+    if (writable) prot.WRITE = true;
+    if (executable) prot.EXEC = true;
     _ = std.os.linux.mprotect(@ptrFromInt(addr), len, prot);
 }
 
@@ -346,7 +369,7 @@ pub fn mprotect(addr: usize, len: usize, readable: bool, writable: bool, executa
 pub fn mprotectExec(addr: *anyopaque, len: usize) !void {
     const aligned_addr = @intFromPtr(addr) & ~@as(usize, 4095);
     const aligned_len = ((@intFromPtr(addr) + len + 4095) & ~@as(usize, 4095)) - aligned_addr;
-    const prot: u32 = std.posix.PROT.READ | std.posix.PROT.WRITE | std.posix.PROT.EXEC;
+    const prot: std.posix.PROT = .{ .READ = true, .WRITE = true, .EXEC = true };
     _ = std.os.linux.mprotect(@ptrFromInt(aligned_addr), aligned_len, prot);
 }
 
@@ -354,14 +377,35 @@ pub fn mprotectExec(addr: *anyopaque, len: usize) !void {
 // Pipe / Dup
 // -------------------------------------------------------------------------
 
+/// 32/64-bit lseek wrapper. Returns the new file position, or -1 on error.
+pub fn lseek(fd: i32, offset: i64, whence: u32) i64 {
+    if (comptime builtin.target.cpu.arch.isWasm()) return -1;
+    if (@sizeOf(usize) == 8) {
+        const rc = std.os.linux.lseek(fd, offset, whence);
+        return @bitCast(rc);
+    } else {
+        var result: u64 = 0;
+        const rc = std.os.linux.llseek(fd, @bitCast(offset), &result, whence);
+        const signed: isize = @bitCast(rc);
+        if (signed < 0) return -1;
+        return @bitCast(result);
+    }
+}
+
 /// Creates a unidirectional data channel.
 pub fn pipe() ![2]std.posix.fd_t {
-    return std.posix.pipe();
+    var fds: [2]i32 = undefined;
+    const rc = std.os.linux.pipe(&fds);
+    if (rc != 0) return error.PipeFailed;
+    return fds;
 }
 
 /// Duplicates a file descriptor.
 pub fn dup(fd: std.posix.fd_t) !std.posix.fd_t {
-    return std.posix.dup(fd);
+    const rc = std.os.linux.dup(fd);
+    const signed: isize = @bitCast(rc);
+    if (signed < 0) return error.DupFailed;
+    return @intCast(rc);
 }
 
 // -------------------------------------------------------------------------
@@ -370,8 +414,105 @@ pub fn dup(fd: std.posix.fd_t) !std.posix.fd_t {
 
 const native_arch = builtin.target.cpu.arch;
 
-// Architecture-dependent register access helpers
-const REG = std.os.linux.REG;
+// glibc-compatible REG indices into mcontext_t.gregs (see sys/ucontext.h).
+// Kept in-tree because std.os.linux dropped these constants in 0.16.
+pub const REG = if (native_arch == .x86) struct {
+    pub const GS = 0;
+    pub const FS = 1;
+    pub const ES = 2;
+    pub const DS = 3;
+    pub const EDI = 4;
+    pub const ESI = 5;
+    pub const EBP = 6;
+    pub const ESP = 7;
+    pub const EBX = 8;
+    pub const EDX = 9;
+    pub const ECX = 10;
+    pub const EAX = 11;
+    pub const TRAPNO = 12;
+    pub const ERR = 13;
+    pub const EIP = 14;
+    pub const CS = 15;
+    pub const EFL = 16;
+    pub const UESP = 17;
+    pub const SS = 18;
+} else struct {
+    pub const R8 = 0;
+    pub const R9 = 1;
+    pub const R10 = 2;
+    pub const R11 = 3;
+    pub const R12 = 4;
+    pub const R13 = 5;
+    pub const R14 = 6;
+    pub const R15 = 7;
+    pub const RDI = 8;
+    pub const RSI = 9;
+    pub const RBP = 10;
+    pub const RBX = 11;
+    pub const RDX = 12;
+    pub const RAX = 13;
+    pub const RCX = 14;
+    pub const RSP = 15;
+    pub const RIP = 16;
+    pub const EFL = 17;
+    pub const CSGSFS = 18;
+    pub const ERR = 19;
+    pub const TRAPNO = 20;
+    pub const OLDMASK = 21;
+    pub const CR2 = 22;
+};
+
+// glibc-compatible ucontext_t as delivered by the kernel to signal handlers
+// with SA_SIGINFO. Std removed the built-in wrapper in 0.16.
+const greg_t = if (native_arch == .x86) u32 else usize;
+const gregset_t = if (native_arch == .x86) [19]greg_t else [23]greg_t;
+
+const fpregset_t_x86 = extern struct {
+    cw: u32,
+    sw: u32,
+    tag: u32,
+    ipoff: u32,
+    cssel: u32,
+    dataoff: u32,
+    datasel: u32,
+    st: [8]extern struct { significand: [4]u16, exponent: u16 },
+    status: u32,
+};
+
+const fpregset_t_x86_64 = extern struct {
+    cwd: u16,
+    swd: u16,
+    ftw: u16,
+    fop: u16,
+    rip: u64,
+    rdp: u64,
+    mxcsr: u32,
+    mxcr_mask: u32,
+    st: [8]extern struct { significand: [4]u16, exponent: u16, padding: [3]u16 },
+    xmm: [16]extern struct { element: [4]u32 },
+    padding: [24]u32,
+};
+
+pub const mcontext_t = if (native_arch == .x86) extern struct {
+    gregs: gregset_t,
+    fpregs: *fpregset_t_x86,
+    oldmask: u32,
+    cr2: u32,
+} else extern struct {
+    gregs: gregset_t,
+    fpregs: *fpregset_t_x86_64,
+    __reserved1: [8]u64,
+};
+
+pub const ucontext_t = extern struct {
+    flags: usize,
+    link: ?*ucontext_t,
+    stack: std.posix.stack_t,
+    mcontext: mcontext_t,
+    sigmask: std.posix.sigset_t,
+    fpregs_mem: if (native_arch == .x86) fpregset_t_x86 else fpregset_t_x86_64,
+};
+
 const reg_ip = if (native_arch == .x86) REG.EIP else @as(usize, REG.RIP);
 const reg_sp = if (native_arch == .x86) REG.ESP else @as(usize, REG.RSP);
 const reg_ax = if (native_arch == .x86) REG.EAX else @as(usize, REG.RAX);
@@ -390,8 +531,8 @@ const reg_fl = if (native_arch == .x86) REG.EFL else @as(usize, REG.EFL);
 /// identifies whether the fault occurred in guest 32-bit code (CS=0x23) or host 64-bit code
 /// (CS=0x33), and dispatches the exception to the guest's SEH chain (via INT 0xFE emulation)
 /// or fatally crashes if the fault occurred within the emulator's host code.
-fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const anyopaque) callconv(.c) void {
-    const uctx = @as(*std.posix.ucontext_t, @ptrCast(@constCast(@alignCast(ctx_ptr.?))));
+fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr: ?*anyopaque) callconv(.c) void {
+    const uctx = @as(*ucontext_t, @ptrCast(@alignCast(ctx_ptr.?)));
     const fault_addr = @intFromPtr(info.fields.sigfault.addr);
     const ip: usize = @bitCast(uctx.mcontext.gregs[reg_ip]);
 
@@ -401,7 +542,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     if (comptime is_x86_64) {
         const cs = @as(usize, @bitCast(uctx.mcontext.gregs[REG.CSGSFS])) & 0xFFFF;
 
-        // INT 0xFE thunk detection — works in both compat and 64-bit mode
+        // INT 0xFE thunk detection or CPUID trap — works in both compat and 64-bit mode
         if (sig == std.posix.SIG.SEGV and ip != 0) {
             // Only read instruction bytes if IP is in a mapped code range
             const in_pool = if (@import("../x86/compat_thunks.zig").getPoolRange()) |r|
@@ -414,6 +555,35 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
                     const thunk_id = @as(*align(1) const u32, @ptrCast(code + 2)).*;
                     const compat_thunks = @import("../x86/compat_thunks.zig");
                     compat_thunks.dispatchFromSignal(uctx, thunk_id);
+                    return;
+                } else if (code[0] == 0x0F and code[1] == 0xA2) {
+                    if (trace.enable_tracing) trace.print("CPUID TRAPPED!\n", .{});
+                    // CPUID trapped! Emulate a basic Pentium Pro to appease MSVC6 heuristics
+                    const leaf = @as(u32, @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_ax]))));
+                    var eax: u32 = 0;
+                    var ebx: u32 = 0;
+                    var ecx: u32 = 0;
+                    var edx: u32 = 0;
+                    switch (leaf) {
+                        0 => {
+                            eax = 2;
+                            ebx = 0x756E6547;
+                            edx = 0x49656E69;
+                            ecx = 0x6C65746E;
+                        },
+                        1 => {
+                            eax = 0x00000633;
+                            ebx = 0x00010800;
+                            ecx = 0;
+                            edx = (1 << 0) | (1 << 4) | (1 << 5) | (1 << 8) | (1 << 11) | (1 << 15) | (1 << 23) | (1 << 24) | (1 << 25) | (1 << 26);
+                        },
+                        else => {},
+                    }
+                    uctx.mcontext.gregs[reg_ax] = @bitCast(@as(usize, eax));
+                    uctx.mcontext.gregs[reg_bx] = @bitCast(@as(usize, ebx));
+                    uctx.mcontext.gregs[reg_cx] = @bitCast(@as(usize, ecx));
+                    uctx.mcontext.gregs[reg_dx] = @bitCast(@as(usize, edx));
+                    uctx.mcontext.gregs[reg_ip] = @bitCast(ip + 2);
                     return;
                 }
             }
@@ -485,6 +655,19 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         return;
     }
 
+    const k32 = @import("../win32/kernel32.zig");
+    const is_app_code = (ip >= k32.app_code_start and ip < k32.app_code_end);
+    // Detect execution in PE data/BSS sections — this means a bad jump
+    // (e.g., NULL function pointer from corrupt data). These should be
+    // treated as crashes, not valid code.
+    const is_pe_data = (ip >= k32.app_code_end and ip < k32.app_code_end + 0x200000 and ip >= 0x400000);
+    // VirtualAlloc'd code (Delphi runtime, JIT trampolines) lives in the
+    // low address space outside the main PE. Treat any mapped memory in
+    // the 0x10000–0x70000000 range as potentially valid guest code.
+    const is_guest_alloc = (ip >= 0x10000 and ip < 0x70000000 and !is_app_code and !is_pe_data);
+    const is_native_dll = (ip >= 0x10000000 and ip < 0x30000000) or
+        (ip >= 0xF0000000); // loaded DLLs (may be relocated)
+
     // Handle privileged I/O port instructions (IN/OUT) — skip directly.
     // These cause #GP on Linux (SIGSEGV). cpuidsdk.dll uses VMware's backdoor
     // I/O port for detection. Skipping with EAX=0 indicates "not VMware".
@@ -493,7 +676,8 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
     // would crash when we try to read instruction bytes from it.
     const ip_in_known_range = (ip >= 0x400000 and ip < 0x900000) or // PE image
         (ip >= 0x20140000 and ip < 0x20200000) or // VirtualAlloc executable (trampolines)
-        (ip >= 0x70000000 and ip < 0x80000000); // Zig binary
+        (ip >= 0x70000000 and ip < 0x80000000) or // Zig binary
+        is_native_dll; // Loaded DLLs (e.g. at 0x10000000)
     if (sig == std.posix.SIG.SEGV and ip != 0 and ip_in_known_range) {
         const code = @as([*]const u8, @ptrFromInt(ip));
         const is_io = switch (code[0]) {
@@ -513,23 +697,6 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
         }
     }
     const is_priv_instruction = false;
-
-    // Guard: If IP is outside game code range AND outside loaded native DLL ranges,
-    // check if it's a near-null jump (bad function pointer call from game code).
-    // Native DLLs like MSS32 may legally crash (e.g., null pointer deref) and should
-    // fall through to the SEH handler dispatch below.
-    const k32 = @import("../win32/kernel32.zig");
-    const is_app_code = (ip >= k32.app_code_start and ip < k32.app_code_end);
-    // Detect execution in PE data/BSS sections — this means a bad jump
-    // (e.g., NULL function pointer from corrupt data). These should be
-    // treated as crashes, not valid code.
-    const is_pe_data = (ip >= k32.app_code_end and ip < k32.app_code_end + 0x200000 and ip >= 0x400000);
-    // VirtualAlloc'd code (Delphi runtime, JIT trampolines) lives in the
-    // low address space outside the main PE. Treat any mapped memory in
-    // the 0x10000–0x70000000 range as potentially valid guest code.
-    const is_guest_alloc = (ip >= 0x10000 and ip < 0x70000000 and !is_app_code and !is_pe_data);
-    const is_native_dll = (ip >= 0x10000000 and ip < 0x30000000) or
-        (ip >= 0xF0000000); // loaded DLLs (may be relocated)
     // Check if IP is within the zine binary's code segment. We use the address
     // of this handler function as a reference point — all Zig-compiled stubs
     // (COM vtable methods, Win32 API stubs) are in the same binary and within
@@ -760,7 +927,7 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
             const result = std.posix.mmap(
                 @ptrFromInt(page_addr),
                 4096,
-                std.posix.PROT.READ | std.posix.PROT.WRITE | std.posix.PROT.EXEC,
+                .{ .READ = true, .WRITE = true, .EXEC = true },
                 .{ .TYPE = .PRIVATE, .ANONYMOUS = true, .FIXED = true },
                 -1,
                 0,
@@ -804,7 +971,8 @@ fn sigsegvHandler(sig: i32, info: *const std.posix.siginfo_t, ctx_ptr: ?*const a
 
     if (fault_addr < 0x1000 and ip != 0) {
         if (S.null_repeat_count > 50) {
-            _ = std.posix.write(2, "NULL read loop, aborting.\n") catch {};
+            const msg = "NULL read loop, aborting.\n";
+            _ = std.os.linux.write(2, msg.ptr, msg.len);
             exitProcess(1);
         }
     }
@@ -985,6 +1153,11 @@ pub fn installSegfaultHandler() void {
     std.posix.sigaction(std.posix.SIG.SEGV, &act, null);
     std.posix.sigaction(std.posix.SIG.FPE, &act, null);
     std.posix.sigaction(std.posix.SIG.ILL, &act, null);
+
+    if (comptime is_x86_64 and builtin.os.tag == .linux) {
+        _ = std.os.linux.prctl(38, 1, 0, 0, 0); // PR_SET_NO_NEW_PRIVS
+        _ = std.os.linux.syscall2(std.os.linux.SYS.arch_prctl, 0x1012, 0); // ARCH_SET_CPUID
+    }
 }
 
 /// Map the null page for compatibility (may fail due to mmap_min_addr).
@@ -992,7 +1165,7 @@ pub fn mapNullPage() void {
     _ = std.posix.mmap(
         @ptrFromInt(0),
         4096,
-        std.posix.PROT.READ | std.posix.PROT.WRITE | std.posix.PROT.EXEC,
+        .{ .READ = true, .WRITE = true, .EXEC = true },
         .{ .TYPE = .PRIVATE, .ANONYMOUS = true, .FIXED = true },
         -1,
         0,

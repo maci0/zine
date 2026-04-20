@@ -155,7 +155,7 @@ fn modalMessageLoop(dlgproc: usize) void {
 
         if (!got_message) {
             // Sleep briefly to avoid busy-waiting
-            std.Thread.sleep(1 * std.time.ns_per_ms);
+            @import("../../platform.zig").sleep(1 * std.time.ns_per_ms);
         }
     }
 }

@@ -5,6 +5,7 @@
 //! import resolution, relocation, BSS zeroing, .rsrc protection, and JIT.
 
 const std = @import("std");
+const runtime = @import("runtime.zig");
 const pe = @import("pe.zig");
 const loader = @import("loader/loader.zig");
 const x86_cpu = @import("x86/cpu.zig");
@@ -74,7 +75,8 @@ pub fn registerAllStubs(environment: *Environment, not_implemented_addr: usize) 
     if (comptime !embed_stubs) {
         // External mode: stubs will be loaded as PE DLLs from the search path.
         // Add the default DLL directory next to the zine binary.
-        if (std.fs.selfExeDirPath(&dll_path_buf)) |self_dir| {
+        if (std.process.executableDirPath(runtime.io(), &dll_path_buf)) |self_dir_len| {
+            const self_dir = dll_path_buf[0..self_dir_len];
             var buf: [std.fs.max_path_bytes]u8 = undefined;
             const dll_dir = std.fmt.bufPrint(&buf, "{s}/dll", .{self_dir}) catch self_dir;
             environment.registry.addSearchPath(dll_dir) catch {};
@@ -156,14 +158,44 @@ pub fn setupSearchPaths(
 
 /// Build a list of search paths from the host PATH environment variable.
 pub fn getHostPathDirs(allocator: std.mem.Allocator) !std.ArrayListUnmanaged([]const u8) {
-    var dirs: std.ArrayListUnmanaged([]const u8) = .{};
-    if (std.process.getEnvVarOwned(allocator, "PATH")) |host_path| {
+    const path_utils = @import("path_utils.zig");
+    var dirs: std.ArrayListUnmanaged([]const u8) = .empty;
+    if (runtime.environ().getAlloc(allocator, "PATH")) |host_path| {
         defer allocator.free(host_path);
-        var it = std.mem.tokenizeScalar(u8, host_path, ':');
-        while (it.next()) |p| {
-            if (p.len > 0) {
-                try dirs.append(allocator, try allocator.dupe(u8, p));
+        var i: usize = 0;
+        var start: usize = 0;
+        while (i <= host_path.len) {
+            const is_end = (i == host_path.len);
+            var is_delim = false;
+            if (!is_end) {
+                const c = host_path[i];
+                if (c == ';') {
+                    is_delim = true;
+                } else if (c == ':') {
+                    // Check if it's a drive letter like C:
+                    if (i > 0 and i == start + 1 and std.ascii.isAlphabetic(host_path[i - 1])) {
+                        is_delim = false;
+                    } else {
+                        is_delim = true;
+                    }
+                }
             }
+            if (is_delim or is_end) {
+                if (i > start) {
+                    var p = host_path[start..i];
+                    if (p.len >= 2 and p[0] == '"' and p[p.len - 1] == '"') {
+                        p = p[1 .. p.len - 1];
+                    }
+                    var posix_buf: [1024]u8 = undefined;
+                    if (path_utils.win32ToPosix(p, &posix_buf)) |posix_len| {
+                        try dirs.append(allocator, try allocator.dupe(u8, posix_buf[0..posix_len]));
+                    } else |_| {
+                        try dirs.append(allocator, try allocator.dupe(u8, p));
+                    }
+                }
+                start = i + 1;
+            }
+            i += 1;
         }
     } else |_| {}
     return dirs;
@@ -177,7 +209,7 @@ pub fn getHostPathDirs(allocator: std.mem.Allocator) !std.ArrayListUnmanaged([]c
 pub fn resolveAllImports(environment: *Environment, allocator: std.mem.Allocator) !void {
     var resolved_count: usize = 0;
     while (true) {
-        var to_resolve: std.ArrayListUnmanaged(*Module) = .{};
+        var to_resolve: std.ArrayListUnmanaged(*Module) = .empty;
         defer to_resolve.deinit(allocator);
 
         var it = environment.registry.modules.iterator();

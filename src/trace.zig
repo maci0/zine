@@ -15,10 +15,10 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
     // Format into a local buffer to strip trailing newlines before
     // emitting through log (which appends its own).
     const s = std.fmt.bufPrint(&trace_buf, fmt, args) catch {
-        std.fs.File.stderr().writeAll("TRACE BUFFER TOO SMALL OR ERROR\n") catch {};
+        std.debug.print("TRACE BUFFER TOO SMALL OR ERROR\n", .{});
         return;
     };
-    const trimmed = std.mem.trimRight(u8, s, "\n");
+    const trimmed = std.mem.trimEnd(u8, s, "\n");
     log.emit(.trace, "{s}", .{trimmed});
 }
 

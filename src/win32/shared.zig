@@ -45,7 +45,7 @@ var heap_cap: usize = 0;
 
 // Guest VirtualAlloc allocations use a separate address range from the
 // zine internal heap to prevent Delphi's FastMM from confusing them.
-var next_alloc_hint: usize = 0x20000000;
+var next_alloc_hint: usize = 0x02000000;
 
 /// Returns a 64KB aligned memory address hint for allocations.
 ///
@@ -66,7 +66,9 @@ pub fn get_aligned_hint(size: usize) usize {
 // Internal heap uses a separate address range from guest VirtualAlloc regions.
 // NOTE: Guest args (ensureGuestArgs) maps 256KB at 0x50000000, so we must
 // start AFTER that range to avoid heapAlloc overwriting argv/envp arrays.
-var internal_heap_hint: usize = 0x54000000;
+// BUT MSVC (c1.dll) statically subtracts memory bounds, so we MUST place
+// this close to VirtualAlloc (0x02000000) or it will mistakenly trigger C1076.
+var internal_heap_hint: usize = 0x03000000;
 
 fn heapAlloc(size: usize) ?[*]u8 {
     const aligned = (size + 7) & ~@as(usize, 7); // 8-byte align
@@ -105,12 +107,18 @@ pub fn raw_alloc(size: usize) ?*anyopaque {
         if (addr == 0) return null;
         gmem.write32(addr, @intCast(actual_size));
         gmem.write32(addr +% 4, 0);
-        return @ptrFromInt(addr +% 8);
+        // Translate the guest virtual address into a Host pointer so native @memcpy works.
+        // It will automatically be translated back to a Guest address when returning via env.zig toU32.
+        const host_addr = @intFromPtr(gmem.base.ptr) + (addr - gmem.base_addr) + 8;
+        return @ptrFromInt(host_addr);
     }
 
     // Native: bump-allocate from low-address heap
     const total = actual_size + 8;
-    const ptr = heapAlloc(total) orelse return null;
+    const ptr = heapAlloc(total) orelse {
+        trace.print("[CRITICAL] raw_alloc({d}) -> heapAlloc failed!\n", .{actual_size});
+        return null;
+    };
     const header = @as(*usize, @ptrCast(@alignCast(ptr)));
     header.* = actual_size;
     return @ptrCast(ptr + 8);
@@ -128,11 +136,13 @@ pub fn raw_realloc(old_ptr: ?*anyopaque, new_size: usize) ?*anyopaque {
     // On WASM with guest heap: alloc + copy via guest memory (we don't free).
     // Pointers are guest virtual addresses, not host pointers.
     if (guest_memory) |gmem| {
-        const old_guest_va = @as(u32, @truncate(@intFromPtr(old_ptr.?)));
+        const old_host = @intFromPtr(old_ptr.?);
+        const old_guest_va = @as(u32, @truncate(old_host - @intFromPtr(gmem.base.ptr))) + gmem.base_addr;
         const old_size = gmem.read32(old_guest_va -% 8);
 
         const new_mem = raw_alloc(new_size) orelse return null;
-        const new_guest_va = @as(u32, @truncate(@intFromPtr(new_mem)));
+        const new_host = @intFromPtr(new_mem);
+        const new_guest_va = @as(u32, @truncate(new_host - @intFromPtr(gmem.base.ptr))) + gmem.base_addr;
         const copy_len = @min(old_size, @as(u32, @intCast(@min(new_size, 0xFFFFFFFF))));
 
         // Copy data through guest memory translation

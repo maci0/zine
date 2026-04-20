@@ -111,6 +111,11 @@ pub fn dispatch(cpu: *Cpu) void {
 
     if (thunk_entries[thunk_id]) |entry| {
         profiler.tickThunk(thunk_id);
+        
+        if (@import("../trace.zig").enable_tracing) {
+            @import("../trace.zig").print("THUNK EXEC: {s}\n", .{entry.name});
+        }
+        
         entry.handler(cpu);
 
         // For stdcall: callee pops parameters
@@ -196,10 +201,30 @@ fn dispatchNativeThunk(cpu: *Cpu) void {
 
     const platform = @import("../platform.zig");
     if (comptime platform.is_native) {
+        // Special case: _ftol reads from x87 FPU stack (ST0), but in interpreter
+        // mode the FPU state is emulated — the real x87 stack is empty.
+        const msvcrt_math = @import("../win32/msvcrt/math.zig");
+        if (target_addr == @intFromPtr(msvcrt_math.ftol)) {
+            const fval = cpu.fpu.pop();
+            const ival = @import("execute.zig").safeFloatToInt(i64, fval);
+            const uval = @as(u64, @bitCast(ival));
+            cpu.eax = @truncate(uval);
+            cpu.edx = @truncate(uval >> 32);
+            cpu.eip = ret_addr;
+            log.info("x86_thunks: _ftol(ST0={d}) -> EDX:EAX={X}:{X}", .{ fval, cpu.edx, cpu.eax });
+            // _ftol is cdecl (no cleanup needed)
+            return;
+        }
+
         // Read up to 16 dword arguments from guest stack
         var args: [16]u32 = undefined;
         for (0..16) |i| {
             args[i] = cpu.memory.read32(cpu.esp +% @as(u32, @intCast(i * 4)));
+        }
+
+        if (entry.native_va_fixed > 0) {
+            const va_idx = entry.native_va_fixed;
+            args[va_idx] = cpu.esp +% @as(u32, va_idx * 4);
         }
 
         cpu.eax = if (entry.native_is_cdecl)
@@ -279,21 +304,14 @@ fn FnTypeForArity(comptime n: usize) type {
     const is_64 = comptime @import("../platform.zig").is_x86_64;
     const param_type = if (is_64) usize else u32;
     const ret_type = if (is_64) usize else u32;
-    // Must match the calling convention used by the actual stubs.
-    // On x86: .winapi = stdcall. On x86_64-linux: .winapi = Win64 (RCX, RDX, R8, R9).
-    // The Zig stubs are declared with callconv(WINAPI), so we must match.
     const cc = @import("../win32/calling_convention.zig").WINAPI;
-    comptime var params: [n]std.builtin.Type.Fn.Param = undefined;
+    comptime var param_types: [n]type = undefined;
+    comptime var param_attrs: [n]std.builtin.Type.Fn.Param.Attributes = undefined;
     inline for (0..n) |i| {
-        params[i] = .{ .is_generic = false, .is_noalias = false, .type = param_type };
+        param_types[i] = param_type;
+        param_attrs[i] = .{};
     }
-    return @Type(.{ .@"fn" = .{
-        .calling_convention = cc,
-        .is_generic = false,
-        .is_var_args = false,
-        .return_type = ret_type,
-        .params = &params,
-    } });
+    return @Fn(&param_types, &param_attrs, ret_type, .{ .@"callconv" = cc });
 }
 
 // -----------------------------------------------------------------------

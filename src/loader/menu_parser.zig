@@ -27,7 +27,7 @@ pub fn parseMenuResource(allocator: std.mem.Allocator, data: []const u8) ![]cons
     _ = std.mem.readInt(u16, data[offset+2..][0..2], .little); // cbHeader
     offset += 4;
     
-    var root_items: std.ArrayListUnmanaged(MenuItem) = .{};
+    var root_items: std.ArrayListUnmanaged(MenuItem) = .empty;
     defer {
         for (root_items.items) |*item| freeMenuItem(allocator, item);
         root_items.deinit(allocator);
@@ -41,18 +41,18 @@ pub fn parseMenuResource(allocator: std.mem.Allocator, data: []const u8) ![]cons
         }
     }
     
-    var json_str: std.ArrayListUnmanaged(u8) = .{};
-    errdefer json_str.deinit(allocator);
-    
-    const writer = json_str.writer(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
+    const writer = &aw.writer;
     try writer.writeAll("{\"type\":\"menu\",\"menu\":[");
     for (root_items.items, 0..) |item, i| {
         if (i > 0) try writer.writeAll(",");
         try writeMenuItemJson(writer, item);
     }
     try writer.writeAll("]}");
-    
-    return json_str.toOwnedSlice(allocator);
+
+    var list = aw.toArrayList();
+    return list.toOwnedSlice(allocator);
 }
 
 fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize) !MenuItem {
@@ -70,7 +70,7 @@ fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize) !Me
     }
     
     // Read null-terminated UTF-16 string
-    var name_bytes: std.ArrayListUnmanaged(u8) = .{};
+    var name_bytes: std.ArrayListUnmanaged(u8) = .empty;
     errdefer name_bytes.deinit(allocator);
     
     while (offset.* + 2 <= data.len) {
@@ -87,7 +87,7 @@ fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize) !Me
     }
     
     // Simplify tabs (like "\t" to "   ")
-    var clean_name: std.ArrayListUnmanaged(u8) = .{};
+    var clean_name: std.ArrayListUnmanaged(u8) = .empty;
     for (name_bytes.items) |c| {
         if (c == '\t') {
             try clean_name.appendSlice(allocator, "   ");
@@ -105,7 +105,7 @@ fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize) !Me
     };
     
     if (is_popup) {
-        var children: std.ArrayListUnmanaged(MenuItem) = .{};
+        var children: std.ArrayListUnmanaged(MenuItem) = .empty;
         errdefer {
             for (children.items) |*child| freeMenuItem(allocator, child);
             children.deinit(allocator);

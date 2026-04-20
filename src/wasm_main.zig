@@ -47,18 +47,20 @@ fn not_implemented() callconv(.c) void {
     @trap();
 }
 
+const runtime = @import("runtime.zig");
+
 /// The entry point for the WASM build of Zine.
 /// It sets up guest memory, loads the PE, and starts the x86 interpreter.
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena.allocator();
+pub fn main(init: std.process.Init) !void {
+    runtime.init(init.io, init.gpa, init.minimal.environ);
+    const allocator = init.arena.allocator();
 
-    var args = try std.process.argsWithAllocator(allocator);
+    var args = try init.minimal.args.iterateAllocator(allocator);
     _ = args.next();
 
     var target_exe_opt: ?[]const u8 = null;
     var argv0_opt: ?[]const u8 = null;
-    var app_args: std.ArrayListUnmanaged(?[*:0]u8) = .{};
+    var app_args: std.ArrayListUnmanaged(?[*:0]u8) = .empty;
     var use_jit = false;
     var end_of_options = false;
 
@@ -66,18 +68,15 @@ pub fn main() !void {
 
     // Check environment variables (WASI runtimes can pass env vars via --env)
     {
-        var env_map = std.process.getEnvMap(allocator) catch null;
-        if (env_map) |*em| {
-            if (em.get("ZINE_TRACE") != null) {
-                trace.enable_tracing = true;
-            }
-            if (em.get("ZINE_TRACE_INSN") != null) {
-                trace.enable_instructions = true;
-            }
-            if (em.get("ZINE_PROFILE") != null) {
-                profiler.enabled = true;
-            }
-            em.deinit();
+        const env_map = init.environ_map;
+        if (env_map.get("ZINE_TRACE") != null) {
+            trace.enable_tracing = true;
+        }
+        if (env_map.get("ZINE_TRACE_INSN") != null) {
+            trace.enable_instructions = true;
+        }
+        if (env_map.get("ZINE_PROFILE") != null) {
+            profiler.enabled = true;
         }
     }
 
@@ -112,7 +111,7 @@ pub fn main() !void {
             continue;
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
-            std.fs.File.stdout().writeAll(
+            std.debug.print("{s}", .{
                 \\Usage: zine [options] [--] <target.exe> [args...]
                 \\
                 \\Run a Win32 PE executable in a WebAssembly environment.
@@ -141,29 +140,29 @@ pub fn main() !void {
                 \\  wasmtime --dir=. zine.wasm -- --trace myapp.exe
                 \\  wasmtime --dir=. zine.wasm -- --argv0 editor notepad.exe
                 \\
-            ) catch {};
+            });
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
-            std.fs.File.stdout().writeAll("zine " ++ version.string ++ "\n") catch {};
+            std.debug.print("{s}", .{"zine " ++ version.string ++ "\n"});
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--argv0") or std.mem.startsWith(u8, arg, "--argv0="))) {
             if (std.mem.startsWith(u8, arg, "--argv0=")) {
                 const val = arg["--argv0=".len..];
                 if (val.len == 0) {
-                    std.fs.File.stderr().writeAll("Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n") catch {};
+                    std.debug.print("{s}", .{"Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n"});
                     std.process.exit(2);
                 }
                 argv0_opt = val;
             } else if (args.next()) |val| {
                 if (val.len == 0) {
-                    std.fs.File.stderr().writeAll("Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n") catch {};
+                    std.debug.print("{s}", .{"Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n"});
                     std.process.exit(2);
                 }
                 argv0_opt = val;
             } else {
-                std.fs.File.stderr().writeAll("Error: --argv0 requires a value.\nTry 'zine --help' for more information.\n") catch {};
+                std.debug.print("{s}", .{"Error: --argv0 requires a value.\nTry 'zine --help' for more information.\n"});
                 std.process.exit(2);
             }
             continue;
@@ -171,7 +170,7 @@ pub fn main() !void {
         if (!end_of_options and target_exe_opt == null and arg.len > 1 and arg[0] == '-') {
             var err_buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&err_buf, "Error: unknown option '{s}'.\nTry 'zine --help' for more information.\n", .{arg}) catch "Error: unknown option.\n";
-            std.fs.File.stderr().writeAll(msg) catch {};
+            std.debug.print("{s}", .{msg});
             std.process.exit(2);
         }
 
@@ -215,7 +214,7 @@ pub fn main() !void {
     }
 
     if (target_exe_opt == null) {
-        std.fs.File.stderr().writeAll("Error: missing required argument <target.exe>.\nTry 'zine --help' for more information.\n") catch {};
+        std.debug.print("{s}", .{"Error: missing required argument <target.exe>.\nTry 'zine --help' for more information.\n"});
         std.process.exit(2);
     }
     const target_exe = target_exe_opt.?;
@@ -416,9 +415,9 @@ pub fn main() !void {
     // Pass through host environment variables to the guest.
     // Convert path-valued env vars (INCLUDE, LIB, PATH, TMP, TEMP) to Win32 style.
     {
-        var env_list: std.ArrayListUnmanaged(?[*:0]u8) = .{};
-        var env_iter = std.process.getEnvMap(allocator) catch null;
-        if (env_iter) |*env_map| {
+        var env_list: std.ArrayListUnmanaged(?[*:0]u8) = .empty;
+        const env_map_ptr: ?*std.process.Environ.Map = init.environ_map;
+        if (env_map_ptr) |env_map| {
             var it = env_map.iterator();
             while (it.next()) |entry| {
                 const key = entry.key_ptr.*;
@@ -564,19 +563,31 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     // CL.EXE passes empty cmdname when it can't construct the C1.DLL path,
     // but argv[0] still contains the bare name (e.g. "c1").
     var argv_name_buf: [256]u8 = undefined;
+    log.info("wasmSpawnHandler: initial exe_path '{s}', argv_ptr=0x{X}", .{exe_path, argv_ptr});
     if (exe_path.len == 0 and argv_ptr != 0) {
-        const host_argv = trace.addr(argv_ptr);
-        if (host_argv >= 0x10000) {
-            const argv0_va = @as(*const u32, @ptrFromInt(host_argv)).*;
-            if (argv0_va != 0) {
-                const argv0 = trace.c_span(argv0_va);
-                if (argv0.len > 0 and argv0.len < argv_name_buf.len) {
-                    @memcpy(argv_name_buf[0..argv0.len], argv0);
-                    exe_path = argv_name_buf[0..argv0.len];
+        if (argv_ptr >= 0x10000) {
+            const host_argv = trace.addr(argv_ptr);
+            var i: usize = 0;
+            while (true) {
+                const arg_va = @as(*const u32, @ptrFromInt(host_argv + i * 4)).*;
+                if (arg_va == 0) break;
+                const arg_str = trace.c_span(arg_va);
+                log.info("wasmSpawnHandler: argv[{d}] = '{s}'", .{i, arg_str});
+                if (exe_path.len == 0 and arg_str.len > 0) {
+                    if (arg_str.len < argv_name_buf.len) {
+                        @memcpy(argv_name_buf[0..arg_str.len], arg_str);
+                        exe_path = argv_name_buf[0..arg_str.len];
+                        log.info("wasmSpawnHandler: extracted exe_path from argv[{d}]: '{s}'", .{i, exe_path});
+                    }
                 }
+                i += 1;
             }
+        } else {
+            log.info("wasmSpawnHandler: argv_ptr 0x{X} is < 0x10000! Why?", .{argv_ptr});
         }
     }
+
+    var resolved_buf: [1024]u8 = undefined;
 
     // If cmdname is a bare name without path separators, try to
     // find it in the main PE's directory (e.g. CL.EXE spawning "c1").
@@ -585,7 +596,6 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     {
         if (stubs_kernel32.main_exe_dir_len > 0) {
             const dir = stubs_kernel32.main_exe_dir[0..stubs_kernel32.main_exe_dir_len];
-            var resolved_buf: [1024]u8 = undefined;
             const dir_posix_len = path_utils.win32ToPosix(dir, &resolved_buf) catch 0;
             if (dir_posix_len > 0) {
                 @memcpy(resolved_buf[dir_posix_len..][0..exe_path.len], exe_path);
@@ -599,10 +609,10 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     // Collect argv strings from parent's guest memory (translate guest VAs).
     // argv_ptr is a guest VA pointing to a null-terminated array of guest VA
     // string pointers. Each must be translated through the parent's GuestMemory.
-    var arg_strings: std.ArrayListUnmanaged([]const u8) = .{};
+    var arg_strings: std.ArrayListUnmanaged([]const u8) = .empty;
     if (argv_ptr != 0) {
-        const host_argv_addr = trace.addr(argv_ptr);
-        if (host_argv_addr >= 0x10000) {
+        if (argv_ptr >= 0x10000) {
+            const host_argv_addr = trace.addr(argv_ptr);
             const argv = @as([*]const u32, @ptrFromInt(host_argv_addr));
             var i: usize = 0;
             while (argv[i] != 0) : (i += 1) {
@@ -697,11 +707,11 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     // Build argv as host-allocated null-terminated strings.
     // ensureGuestArgs() reads these via std.mem.span() and copies them
     // into the child's guest memory for the interpreter.
-    var child_argv_ptrs: std.ArrayListUnmanaged(?[*:0]u8) = .{};
+    var child_argv_ptrs: std.ArrayListUnmanaged(?[*:0]u8) = .empty;
     for (arg_strings.items) |s| {
-        child_argv_ptrs.append(std.heap.page_allocator, std.heap.page_allocator.dupeZ(u8, s) catch null) catch {};
+        child_argv_ptrs.append(std.heap.page_allocator, std.heap.page_allocator.dupeZ(u8, s) catch null) catch return -1;
     }
-    child_argv_ptrs.append(std.heap.page_allocator, null) catch {};
+    child_argv_ptrs.append(std.heap.page_allocator, null) catch return -1;
 
     stubs_msvcrt.global_argc = @intCast(arg_strings.items.len);
     stubs_msvcrt.global_argv = child_argv_ptrs.items.ptr;

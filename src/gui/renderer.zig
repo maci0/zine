@@ -5,6 +5,7 @@
 //! input state, and UI component synchronization.
 
 const std = @import("std");
+const runtime = @import("../runtime.zig");
 const web_ui = @import("web_ui.zig");
 const fltk_ui = @import("fltk_ui.zig");
 
@@ -130,7 +131,7 @@ pub var last_audio_format_json: ?[]const u8 = null;
 /// Cached JSON representation of the last controls state.
 pub var last_controls_json: ?[]const u8 = null;
 /// List of cached control text updates for replay.
-pub var cached_control_text_updates: std.ArrayListUnmanaged([]const u8) = .{};
+pub var cached_control_text_updates: std.ArrayListUnmanaged([]const u8) = .empty;
 
 var g_allocator: std.mem.Allocator = undefined;
 var last_frame_time: ?i64 = null;
@@ -293,14 +294,14 @@ pub fn pushFrame() void {
     // Don't push frames before the app has set real window dimensions
     if (!resolution_set) return;
 
-    const current_time = std.time.milliTimestamp();
+    const current_time = runtime.milliTimestamp();
     if (last_frame_time) |last_time| {
         const diff = current_time - last_time;
         if (diff < 16) {
-            std.Thread.sleep(@as(u64, @intCast(16 - diff)) * 1000 * 1000);
+            @import("../platform.zig").sleep(@as(u64, @intCast(16 - diff)) * 1000 * 1000);
         }
     }
-    last_frame_time = std.time.milliTimestamp();
+    last_frame_time = runtime.milliTimestamp();
 
     switch (active_backend) {
         .web_ui => web_ui.pushFrame(),
@@ -638,7 +639,7 @@ pub fn showDialog(json: []const u8) void {
 /// The JSON is a custom_dialog-format object but sent with type "show_controls".
 pub fn showControls(json: []const u8) void {
     // Rewrite the type field from "custom_dialog" to "show_controls"
-    var buf: std.ArrayListUnmanaged(u8) = .{};
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
     buf.appendSlice(g_allocator, "{\"type\":\"show_controls\",") catch return;
     // Skip past the original type field: {"type": "custom_dialog",
     if (std.mem.indexOf(u8, json, ",")) |comma_pos| {
@@ -700,7 +701,7 @@ pub fn updateControlText(nIDDlgItem: i32, text: []const u8) void {
 pub fn openFileDialog(filters: ?[]const u8, is_save: bool) void {
     switch (active_backend) {
         .web_ui => {
-            var files_json: std.ArrayListUnmanaged(u8) = .{};
+            var files_json: std.ArrayListUnmanaged(u8) = .empty;
             defer files_json.deinit(g_allocator);
 
             files_json.appendSlice(g_allocator, "{\"type\":\"open_file_dialog\"") catch {};
@@ -733,7 +734,7 @@ pub fn openFileDialog(filters: ?[]const u8, is_save: bool) void {
 pub fn listDirectory(path: []const u8) void {
     switch (active_backend) {
         .web_ui => {
-            var json: std.ArrayListUnmanaged(u8) = .{};
+            var json: std.ArrayListUnmanaged(u8) = .empty;
             defer json.deinit(g_allocator);
 
             json.appendSlice(g_allocator, "{\"type\":\"directory_listing\"") catch {};
@@ -761,9 +762,9 @@ fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) v
     var host_path_buf: [512]u8 = undefined;
     const host_path = std.fmt.bufPrint(&host_path_buf, "drive_c/{s}", .{path}) catch path;
 
-    var dir = std.fs.cwd().openDir(host_path, .{ .iterate = true }) catch blk: {
+    var dir = std.Io.Dir.cwd().openDir(runtime.io(), host_path, .{ .iterate = true }) catch blk: {
         // Fallback: try the path as-is (in case cwd is already inside drive_c)
-        break :blk std.fs.cwd().openDir(path, .{ .iterate = true }) catch null;
+        break :blk std.Io.Dir.cwd().openDir(runtime.io(), path, .{ .iterate = true }) catch null;
     };
 
     // Folders
@@ -771,7 +772,7 @@ fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) v
     var first_folder = true;
     if (dir) |*d| {
         var it = d.iterate();
-        while (it.next() catch null) |entry| {
+        while (it.next(runtime.io()) catch null) |entry| {
             if (entry.kind == .directory) {
                 if (!first_folder) json.appendSlice(g_allocator, ",") catch {};
                 first_folder = false;
@@ -780,22 +781,22 @@ fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) v
                 json.appendSlice(g_allocator, "\"") catch {};
             }
         }
-        d.close();
+        d.close(runtime.io());
     }
     json.appendSlice(g_allocator, "]") catch {};
 
     // Re-open for files (iterator is consumed)
-    var dir2 = std.fs.cwd().openDir(host_path, .{ .iterate = true }) catch blk: {
-        break :blk std.fs.cwd().openDir(path, .{ .iterate = true }) catch null;
+    var dir2 = std.Io.Dir.cwd().openDir(runtime.io(), host_path, .{ .iterate = true }) catch blk: {
+        break :blk std.Io.Dir.cwd().openDir(runtime.io(), path, .{ .iterate = true }) catch null;
     };
 
     // Files
     json.appendSlice(g_allocator, ",\"files\":[") catch {};
     var first_file = true;
     if (dir2) |*d2| {
-        defer d2.close();
+        defer d2.close(runtime.io());
         var it2 = d2.iterate();
-        while (it2.next() catch null) |entry| {
+        while (it2.next(runtime.io()) catch null) |entry| {
             if (entry.kind == .file) {
                 if (!first_file) json.appendSlice(g_allocator, ",") catch {};
                 first_file = false;
@@ -918,15 +919,15 @@ pub var desktop_icons_json: ?[]const u8 = null;
 pub fn sendDesktopIcons() void {
     if (active_backend != .web_ui) return;
 
-    var json: std.ArrayListUnmanaged(u8) = .{};
+    var json: std.ArrayListUnmanaged(u8) = .empty;
     json.appendSlice(g_allocator, "{\"type\":\"desktop_icons\",\"items\":[") catch return;
 
-    var dir = std.fs.cwd().openDir("drive_c/Desktop", .{ .iterate = true }) catch return;
-    defer dir.close();
+    var dir = std.Io.Dir.cwd().openDir(runtime.io(), "drive_c/Desktop", .{ .iterate = true }) catch return;
+    defer dir.close(runtime.io());
 
     var first = true;
     var it = dir.iterate();
-    while (it.next() catch null) |entry| {
+    while (it.next(runtime.io()) catch null) |entry| {
         // Skip hidden files
         if (entry.name.len > 0 and entry.name[0] == '.') continue;
 
@@ -985,15 +986,15 @@ fn extractExeIconBase64(filename: []const u8) ?[]const u8 {
     const path = std.fmt.bufPrint(&path_buf, "drive_c/Desktop/{s}", .{filename}) catch return null;
 
     // Read the file into memory
-    const file = std.fs.cwd().openFile(path, .{}) catch return null;
-    defer file.close();
+    const file = std.Io.Dir.cwd().openFile(runtime.io(), path, .{}) catch return null;
+    defer file.close(runtime.io());
 
-    const file_size = file.getEndPos() catch return null;
+    const file_size = file.length(runtime.io()) catch return null;
     if (file_size < 64 or file_size > 50 * 1024 * 1024) return null; // sanity check
 
     const file_data = g_allocator.alloc(u8, @intCast(file_size)) catch return null;
     defer g_allocator.free(file_data);
-    const bytes_read = file.readAll(file_data) catch return null;
+    const bytes_read = file.readPositionalAll(runtime.io(), file_data, 0) catch return null;
     if (bytes_read < 64) return null;
 
     // Parse PE to find icon resources
@@ -1107,8 +1108,9 @@ fn parseResourceDirForIcon(data: []const u8, rsrc_offset: u32, rsrc_rva: u32) ?[
     _ = dwBytesInRes;
 
     // Build ICO file
-    var ico_buf: std.ArrayListUnmanaged(u8) = .{};
-    var writer = ico_buf.writer(g_allocator);
+    var aw: std.Io.Writer.Allocating = .init(g_allocator);
+    defer aw.deinit();
+    const writer = &aw.writer;
     writer.writeInt(u16, 0, .little) catch return null;
     writer.writeInt(u16, 1, .little) catch return null;
     writer.writeInt(u16, 1, .little) catch return null;
@@ -1122,12 +1124,13 @@ fn parseResourceDirForIcon(data: []const u8, rsrc_offset: u32, rsrc_rva: u32) ?[
     writer.writeInt(u32, 22, .little) catch return null; // data offset
     writer.writeAll(icon_data) catch return null;
 
+    const ico_bytes = writer.buffer[0..writer.end];
+
     // Base64 encode
     const b64_encoder = std.base64.standard.Encoder;
-    const b64_len = b64_encoder.calcSize(ico_buf.items.len);
-    const b64_buf = g_allocator.alloc(u8, b64_len) catch { ico_buf.deinit(g_allocator); return null; };
-    _ = b64_encoder.encode(b64_buf, ico_buf.items);
-    ico_buf.deinit(g_allocator);
+    const b64_len = b64_encoder.calcSize(ico_bytes.len);
+    const b64_buf = g_allocator.alloc(u8, b64_len) catch return null;
+    _ = b64_encoder.encode(b64_buf, ico_bytes);
     return b64_buf;
 }
 

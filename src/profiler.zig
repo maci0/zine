@@ -10,6 +10,7 @@
 //! Reports top-N entries to stderr on dump().
 
 const std = @import("std");
+const runtime = @import("runtime.zig");
 const builtin = @import("builtin");
 const log = @import("log.zig");
 
@@ -24,13 +25,13 @@ var start_ns: ?i128 = null;
 /// Record the profiling start time. Called when profiling begins.
 pub fn start() void {
     if (comptime builtin.target.cpu.arch.isWasm()) return;
-    start_ns = std.time.nanoTimestamp();
+    start_ns = runtime.nanoTimestamp();
 }
 
 fn getElapsedMs() u64 {
     if (comptime builtin.target.cpu.arch.isWasm()) return 0;
     const s = start_ns orelse return 0;
-    const now = std.time.nanoTimestamp();
+    const now = runtime.nanoTimestamp();
     const delta = now - s;
     if (delta < 0) return 0;
     return @intCast(@as(u128, @intCast(delta)) / 1_000_000);

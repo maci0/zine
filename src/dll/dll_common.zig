@@ -10,5 +10,5 @@ pub export fn DllMain(hinstDLL: HINSTANCE, fdwReason: u32, lpvReserved: ?*anyopa
         // Initialize character classification tables
         @import("win32").msvcrt.string.init_pctype();
     }
-    return 1; // TRUE
+    return .TRUE;
 }

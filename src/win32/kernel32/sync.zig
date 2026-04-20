@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
 const platform = @import("../../platform.zig");
@@ -22,7 +23,7 @@ pub fn InterlockedDecrement(lpAddend: *i32) callconv(w32cc.WINAPI) i32 {
 const MAX_CRITICAL_SECTIONS = 256;
 
 const CriticalSection = struct {
-    mutex: std.Thread.Mutex = .{},
+    mutex: runtime.Mutex = .{},
     owner: std.Thread.Id = 0,
     recursion: u32 = 0,
     addr: usize = 0,
@@ -106,14 +107,14 @@ const KernelObjectType = enum { event, mutex, semaphore };
 const EventData = struct {
     manual_reset: bool = false,
     signaled: bool = false,
-    mutex: std.Thread.Mutex = .{},
-    cond: std.Thread.Condition = .{},
+    mutex: runtime.Mutex = .{},
+    cond: runtime.Condition = .{},
     name: [128]u8 = [_]u8{0} ** 128,
     name_len: u8 = 0,
 };
 
 const MutexData = struct {
-    inner: std.Thread.Mutex = .{},
+    inner: runtime.Mutex = .{},
     owner: std.Thread.Id = 0,
     recursion: u32 = 0,
     name: [128]u8 = [_]u8{0} ** 128,
@@ -121,8 +122,8 @@ const MutexData = struct {
 };
 
 const SemaphoreData = struct {
-    mutex: std.Thread.Mutex = .{},
-    cond: std.Thread.Condition = .{},
+    mutex: runtime.Mutex = .{},
+    cond: runtime.Condition = .{},
     count: i32 = 0,
     max_count: i32 = 1,
     name: [128]u8 = [_]u8{0} ** 128,
@@ -266,12 +267,12 @@ pub fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.W
             if (cp.child) |*child| {
                 if (cp.exit_code == null) {
                     // Actually wait for the child process
-                    const result = child.wait() catch {
+                    const result = child.wait(runtime.io()) catch {
                         cp.exit_code = 1;
                         return 0; // WAIT_OBJECT_0
                     };
                     cp.exit_code = switch (result) {
-                        .Exited => |code| @as(u32, code),
+                        .exited => |code| @as(u32, code),
                         else => 1,
                     };
                 }
@@ -302,7 +303,7 @@ pub fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.W
     // Fallback: unknown handle — yield
     if (dwMilliseconds > 0) {
         const sleep_ns: u64 = @min(@as(u64, dwMilliseconds) * 1_000_000, 10_000_000); // Cap at 10ms
-        std.Thread.sleep(sleep_ns);
+        @import("../../platform.zig").sleep(sleep_ns);
     }
     return 0; // WAIT_OBJECT_0
 }
@@ -324,7 +325,7 @@ fn waitOnKernelObject(ko: *KernelObject, dwMilliseconds: u32) u32 {
                     } else {
                         // Timed wait — use polling with sleep
                         ko.event.mutex.unlock();
-                        std.Thread.sleep(1_000_000); // 1ms
+                        @import("../../platform.zig").sleep(1_000_000); // 1ms
                         ko.event.mutex.lock();
                         // For simplicity, just check again — real timeout tracking TBD
                     }
@@ -365,7 +366,7 @@ fn waitOnKernelObject(ko: *KernelObject, dwMilliseconds: u32) u32 {
                         ko.semaphore.cond.wait(&ko.semaphore.mutex);
                     } else {
                         ko.semaphore.mutex.unlock();
-                        std.Thread.sleep(1_000_000);
+                        @import("../../platform.zig").sleep(1_000_000);
                         ko.semaphore.mutex.lock();
                     }
                 }
@@ -453,7 +454,7 @@ pub fn WaitForMultipleObjects(nCount: u32, lpHandles: usize, bWaitAll: i32, dwMi
             if (dwMilliseconds == 0) return 258; // WAIT_TIMEOUT
             iterations += 1;
             if (dwMilliseconds != 0xFFFFFFFF and iterations >= dwMilliseconds) return 258;
-            std.Thread.sleep(1_000_000); // 1ms between polls
+            @import("../../platform.zig").sleep(1_000_000); // 1ms between polls
         }
     } else {
         // Wait for ALL
@@ -474,7 +475,7 @@ pub fn WaitForMultipleObjects(nCount: u32, lpHandles: usize, bWaitAll: i32, dwMi
             if (dwMilliseconds == 0) return 258;
             iterations += 1;
             if (dwMilliseconds != 0xFFFFFFFF and iterations >= dwMilliseconds) return 258;
-            std.Thread.sleep(1_000_000);
+            @import("../../platform.zig").sleep(1_000_000);
         }
     }
 }

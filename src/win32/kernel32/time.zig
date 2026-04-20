@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const platform = @import("../../platform.zig");
 const w32 = @import("../constants.zig");
@@ -18,7 +19,7 @@ pub fn GetTimeZoneInformation(lpTimeZoneInformation: usize) callconv(w32cc.WINAP
 pub fn QueryPerformanceCounter(lpPerformanceCount: usize) callconv(w32cc.WINAPI) i32 {
     if (lpPerformanceCount != 0) {
         const ptr = @as(*u64, @ptrFromInt(lpPerformanceCount));
-        ptr.* = @intCast(@as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))));
+        ptr.* = @intCast(@as(u64, @truncate(@as(u128, @bitCast(runtime.nanoTimestamp())))));
     }
     if (trace.enable_tracing) trace.print("KERNEL32: QueryPerformanceCounter({x})\n", .{lpPerformanceCount});
     return 1;
@@ -67,7 +68,7 @@ pub fn GetLocalTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: GetLocalTime({x})\n", .{lpSystemTime});
     if (lpSystemTime == 0) return;
     const st = @as(*w32.SYSTEMTIME, @ptrFromInt(lpSystemTime));
-    const ms = std.time.milliTimestamp();
+    const ms = runtime.milliTimestamp();
     const ts: u64 = @intCast(@divTrunc(ms, 1000));
     const epoch_secs = std.time.epoch.EpochSeconds{ .secs = ts };
     const epoch_day = epoch_secs.getEpochDay();
@@ -88,7 +89,7 @@ pub fn GetLocalTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
 pub fn GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: GetSystemTimeAsFileTime({x})\n", .{lpSystemTimeAsFileTime});
     if (lpSystemTimeAsFileTime == 0) return;
-    const unix_ns: u128 = @bitCast(std.time.nanoTimestamp());
+    const unix_ns: u128 = @bitCast(runtime.nanoTimestamp());
     const win_offset: u128 = 11644473600 * 10_000_000;
     const filetime: u64 = @intCast(unix_ns / 100 + win_offset);
     const ft = @as(*w32.FILETIME, @ptrFromInt(lpSystemTimeAsFileTime));
@@ -106,7 +107,7 @@ pub fn GetSystemTimeAdjustment(lpTimeAdjustment: usize, lpTimeIncrement: usize, 
 
 /// Implementation status: Partially implemented
 pub fn GetTickCount() callconv(w32cc.WINAPI) u32 {
-    const ts = std.time.milliTimestamp();
+    const ts = runtime.milliTimestamp();
     return @intCast(ts & 0xFFFFFFFF);
 }
 
@@ -114,7 +115,7 @@ pub fn GetTickCount() callconv(w32cc.WINAPI) u32 {
 pub fn Sleep(dwMilliseconds: u32) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: Sleep({d})\n", .{dwMilliseconds});
     if (dwMilliseconds > 0) {
-        std.Thread.sleep(@as(u64, dwMilliseconds) * std.time.ns_per_ms);
+        @import("../../platform.zig").sleep(@as(u64, dwMilliseconds) * std.time.ns_per_ms);
     } else {
         platform.yield();
     }

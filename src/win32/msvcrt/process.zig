@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
 
@@ -9,23 +10,36 @@ const platform = @import("../../platform.zig");
 // On WASM, the x86 interpreter can only read guest memory. The `__p_xxx`
 // stubs return pointers to globals, which must be guest virtual addresses.
 // We allocate a small block in guest memory and mirror the globals there.
-const guest_globals_size: u32 = 256;
+const guest_globals_size: u32 = 2048;
 
 // Offsets within the guest globals block
-const g_argc: u32 = 0; // i32
-const g_argv: u32 = 4; // u32 (pointer to argv array)
-const g_envp: u32 = 8; // u32 (pointer to envp array)
-const g_fmode: u32 = 12; // u32
-const g_commode: u32 = 16; // u16 padded to u32
-const g_initenv: u32 = 20; // u32
-const g_pgmptr: u32 = 24; // u32
-const g_acmdln: u32 = 28; // u32 (pointer to acmdln string)
+pub const g_argc: u32 = 0; // i32
+pub const g_argv: u32 = 4; // u32 (pointer to argv array)
+pub const g_envp: u32 = 8; // u32 (pointer to envp array)
+pub const g_fmode: u32 = 12; // u32
+pub const g_commode: u32 = 16; // u16 padded to u32
+pub const g_initenv: u32 = 20; // u32
+pub const g_pgmptr: u32 = 24; // u32
+pub const g_acmdln: u32 = 28; // u32 (pointer to acmdln string)
 // Phase 3 additions: static return values that x86 code dereferences
 pub const g_errno: u32 = 32; // i32
 pub const g_doserrno: u32 = 36; // u32
 pub const g_setlocale: u32 = 40; // 2 bytes ("C\0") padded
+// Phase 18 additions:
+pub const g_timezone: u32 = 44; // i32
+pub const g_daylight: u32 = 48; // i32
+pub const g_tzname: u32 = 52; // [2]u32
+pub const g_adjust_fdiv: u32 = 60; // i32
+pub const g_mb_cur_max: u32 = 64; // i32
+pub const g_nhandle: u32 = 68; // i32
+pub const g_pctype_ptr: u32 = 72; // u32
+pub const g_mbctype_ptr: u32 = 76; // u32
+pub const g_wcmdln: u32 = 80; // u32 (pointer to wcmdln string)
 
-var guest_globals_addr: u32 = 0; // guest virtual address of globals block
+pub const g_pctype_array: u32 = 84; // 257 * 2 = 514 bytes
+pub const g_mbctype_array: u32 = 600; // 257 bytes
+
+pub var guest_globals_addr: u32 = 0; // guest virtual address of globals block
 
 pub fn ensureGuestGlobals() u32 {
     if (guest_globals_addr != 0) return guest_globals_addr;
@@ -50,6 +64,24 @@ pub fn ensureGuestGlobals() u32 {
         gmem.write32(addr + g_doserrno, 0); // doserrno = 0
         gmem.base[addr - gmem.base_addr + g_setlocale] = 'C';
         gmem.base[addr - gmem.base_addr + g_setlocale + 1] = 0;
+        
+        gmem.write32(addr + g_timezone, @bitCast(msvcrt.msvcrt_timezone));
+        gmem.write32(addr + g_daylight, @bitCast(msvcrt.msvcrt_daylight));
+        gmem.write32(addr + g_tzname, 0); // null ptrs for now
+        gmem.write32(addr + g_tzname + 4, 0);
+        
+        gmem.write32(addr + g_adjust_fdiv, @bitCast(msvcrt.msvcrt_adjust_fdiv));
+        gmem.write32(addr + g_mb_cur_max, @bitCast(msvcrt.msvcrt_mb_cur_max));
+        gmem.write32(addr + g_nhandle, @bitCast(io.nhandle));
+        gmem.write32(addr + g_pctype_ptr, addr + g_pctype_array + 2); // points to [1]
+        gmem.write32(addr + g_mbctype_ptr, addr + g_mbctype_array + 1); // points to [1]
+        
+        // arrays
+        const pct = gmem.base[addr - gmem.base_addr + g_pctype_array .. addr - gmem.base_addr + g_pctype_array + 514];
+        @memcpy(pct, std.mem.sliceAsBytes(&msvcrt.msvcrt_pctype));
+        const mbc = gmem.base[addr - gmem.base_addr + g_mbctype_array .. addr - gmem.base_addr + g_mbctype_array + 257];
+        @memcpy(mbc, &msvcrt.msvcrt_mbctype);
+
         return addr;
     }
     // On x86_64 compat mode, __p_xxx stubs return pointers that 32-bit guest
@@ -103,10 +135,31 @@ pub fn ensureGuestGlobals() u32 {
         // pgmptr: pointer TO the string, stored as addr + pgmptr_off
         writeU32(ptr, g_pgmptr, if (pgmptr_off != 0) addr + pgmptr_off else 0);
         writeU32(ptr, g_acmdln, if (acmdln_off != 0) addr + acmdln_off else 0);
+        writeU32(ptr, g_wcmdln, 0); // wcmdln uninitialized strings not handled natively yet
+        
         writeU32(ptr, g_errno, 0);
         writeU32(ptr, g_doserrno, 0);
         ptr[g_setlocale] = 'C';
         ptr[g_setlocale + 1] = 0;
+        
+        writeU32(ptr, g_timezone, @bitCast(msvcrt.msvcrt_timezone));
+        writeU32(ptr, g_daylight, @bitCast(msvcrt.msvcrt_daylight));
+        // The strings PST and PDT could be copied, but for now just zeros.
+        writeU32(ptr, g_tzname, 0);
+        writeU32(ptr, g_tzname + 4, 0);
+        
+        writeU32(ptr, g_adjust_fdiv, @bitCast(msvcrt.msvcrt_adjust_fdiv));
+        writeU32(ptr, g_mb_cur_max, @bitCast(msvcrt.msvcrt_mb_cur_max));
+        writeU32(ptr, g_nhandle, @bitCast(io.nhandle));
+        writeU32(ptr, g_pctype_ptr, addr + g_pctype_array + 2); // pointer to index 1
+        writeU32(ptr, g_mbctype_ptr, addr + g_mbctype_array + 1); // pointer to index 1
+        
+        const pct = ptr[g_pctype_array .. g_pctype_array + 514];
+        @memcpy(pct, std.mem.sliceAsBytes(&msvcrt.msvcrt_pctype));
+        
+        const mbc = ptr[g_mbctype_array .. g_mbctype_array + 257];
+        @memcpy(mbc, &msvcrt.msvcrt_mbctype);
+
         return addr;
     }
     return 0;
@@ -125,6 +178,13 @@ pub fn updateGuestGlobals() void {
         gmem.write32(guest_globals_addr + g_argc, @bitCast(msvcrt.global_argc));
         gmem.write32(guest_globals_addr + g_argv, guest_argv_addr);
         gmem.write32(guest_globals_addr + g_envp, guest_envp_addr);
+        gmem.write32(guest_globals_addr + g_pgmptr, guest_pgmptr_addr);
+    } else if (comptime platform.is_x86_64) {
+        const ptr = @as([*]u8, @ptrFromInt(guest_globals_addr));
+        writeU32(ptr, g_argc, @bitCast(msvcrt.global_argc));
+        writeU32(ptr, g_argv, guest_argv_addr);
+        writeU32(ptr, g_envp, guest_envp_addr);
+        writeU32(ptr, g_pgmptr, guest_pgmptr_addr);
     }
 }
 
@@ -171,6 +231,7 @@ pub fn p_environ() callconv(.c) usize {
 var guest_args_buf: ?[]u8 = null;
 pub var guest_argv_addr: u32 = 0;
 pub var guest_envp_addr: u32 = 0;
+pub var guest_pgmptr_addr: u32 = 0;
 
 /// Reset cached guest argv/envp state. Called by the WASM spawn handler
 /// so the child PE's CRT rebuilds argv from the new global_argv.
@@ -178,9 +239,10 @@ pub fn resetGuestArgs() void {
     guest_args_buf = null;
     guest_argv_addr = 0;
     guest_envp_addr = 0;
+    guest_pgmptr_addr = 0;
     guest_globals_addr = 0;
 }
-const guest_args_base: u32 = 0x50000000;
+const guest_args_base: u32 = 0x04000000;
 
 pub fn ensureGuestArgs() void {
     if (guest_args_buf != null) return;
@@ -234,6 +296,7 @@ pub fn ensureGuestArgs() void {
             argv_str_addrs[i] = putStr(block, &gpos, std.mem.span(arg_ptr), base_addr);
         }
     }
+    guest_pgmptr_addr = if (argc_val > 0) argv_str_addrs[0] else 0;
 
     // 2) Build argv array of u32 pointers, null-terminated
     guest_argv_addr = base_addr +% @as(u32, @intCast(gpos));
@@ -294,6 +357,8 @@ pub fn getmainargs(
     if (envp_ptr != 0) {
         @as(*u32, @ptrFromInt(trace.addr(envp_ptr))).* = guest_envp_addr;
     }
+
+    updateGuestGlobals();
 
     if (trace.enable_tracing) {
         trace.print("MSVCRT: __getmainargs argc={d} argv=0x{X} envp=0x{X}\n", .{
@@ -361,14 +426,14 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         if (trace.enable_tracing) trace.print("MSVCRT: _spawnvp not supported on this platform\n", .{});
         return -1;
     }
-    var args: std.ArrayListUnmanaged([]const u8) = .{};
+    var args: std.ArrayListUnmanaged([]const u8) = .empty;
     defer args.deinit(std.heap.page_allocator);
 
     if (cmdname_ptr == 0) return -1;
     const cmdname = trace.c_span(cmdname_ptr);
     if (trace.enable_tracing) trace.print("spawnvp cmd: {s}\n", .{cmdname});
 
-    const raw_loader_exe = std.fs.selfExePathAlloc(std.heap.page_allocator) catch "zine";
+    const raw_loader_exe = std.process.executablePathAlloc(runtime.io(), std.heap.page_allocator) catch "zine";
     const loader_exe = std.fmt.allocPrint(std.heap.page_allocator, "{s}\x00", .{raw_loader_exe}) catch return -1;
 
     args.append(std.heap.page_allocator, loader_exe[0 .. loader_exe.len - 1]) catch return -1;
@@ -448,22 +513,23 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     }
 
     // Prepare argv array for execvpe
-    var c_args: std.ArrayListUnmanaged(?[*:0]const u8) = .{};
+    var c_args: std.ArrayListUnmanaged(?[*:0]const u8) = .empty;
     for (args.items) |arg| {
         c_args.append(std.heap.page_allocator, @as([*:0]const u8, @ptrCast(arg.ptr))) catch return -1;
 
         if (arg.len > 1 and arg[0] == '@') {
             const rsp_file = arg[1 .. arg.len - 1]; // remove null char? arg is [*:0] but arg.len doesn't include null
-            if (std.fs.cwd().openFile(rsp_file, .{})) |file| {
+            if (std.Io.Dir.cwd().openFile(runtime.io(), rsp_file, .{})) |file| {
                 var buf: [4096]u8 = undefined;
-                const rb = file.readAll(&buf) catch 0;
+                const rb = file.readPositionalAll(runtime.io(), &buf, 0) catch 0;
                 if (trace.enable_tracing) trace.print("RESPONSE FILE DUMP:\n{s}\n---END DUMP---\n", .{buf[0..rb]});
-                file.close();
+                file.close(runtime.io());
             } else |_| {}
         }
     }
 
-    var new_env_map = std.process.EnvMap.init(std.heap.page_allocator);
+    const rt_io = runtime.io();
+    var new_env_map = std.process.Environ.Map.init(std.heap.page_allocator);
     defer new_env_map.deinit();
 
     var env_i: usize = 0;
@@ -480,11 +546,10 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         new_env_map.put(v.key, v.val) catch {};
     }
 
-    var child = std.process.Child.init(args.items, std.heap.page_allocator);
-    child.env_map = &new_env_map;
-    const term = child.spawnAndWait() catch return -1;
+    var child = std.process.spawn(rt_io, .{ .argv = args.items }) catch return -1;
+    const term = child.wait(rt_io) catch return -1;
     switch (term) {
-        .Exited => |code| return @intCast(code),
+        .exited => |code| return @intCast(code),
         else => return -1,
     }
 }
@@ -530,7 +595,7 @@ pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
     // Windows usually expects TMP or TEMP to exist, but if it's missing in the native
     // environment, we'll provide a generic fallback since CLI tools frequently require it.
     if (std.ascii.eqlIgnoreCase(name, "TMP") or std.ascii.eqlIgnoreCase(name, "TEMP")) {
-        const tmp_str = "tmp\x00";
+        const tmp_str = ".\x00";
         const stub_common = @import("../shared.zig");
         const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(4096) orelse return null));
         @memset(ptr[0..4096], 0);
@@ -589,6 +654,7 @@ pub fn p_pgmptr() callconv(.c) usize {
             if (guest_argv_addr != 0) {
                 const first_arg = gmem.read32(guest_argv_addr);
                 gmem.write32(g + g_pgmptr, first_arg);
+                if (trace.enable_tracing) trace.print("MSVCRT: __p__pgmptr -> 0x{X} (points to string: '{s}')\n", .{g + g_pgmptr, trace.c_span(first_arg)});
             }
         } else if (guest_argv_addr != 0) {
             // Native x86_64: guest_argv_addr points to the low-4GB argv array.
@@ -715,18 +781,24 @@ pub fn p_initenv() callconv(.c) usize {
 /// p_timezone
 /// Implementation status: Partially implemented
 pub fn p_timezone() callconv(.c) *i32 {
+    const g = ensureGuestGlobals();
+    if (g != 0) return @ptrFromInt(g + g_timezone);
     return &msvcrt.msvcrt_timezone;
 }
 
 /// p_daylight
 /// Implementation status: Partially implemented
 pub fn p_daylight() callconv(.c) *i32 {
+    const g = ensureGuestGlobals();
+    if (g != 0) return @ptrFromInt(g + g_daylight);
     return &msvcrt.msvcrt_daylight;
 }
 
 /// p_tzname
 /// Implementation status: Partially implemented
 pub fn p_tzname() callconv(.c) *[2]?*anyopaque {
+    const g = ensureGuestGlobals();
+    if (g != 0) return @ptrFromInt(g + g_tzname);
     return &msvcrt.msvcrt_tzname;
 }
 

@@ -11,7 +11,7 @@ const platform = @import("../platform.zig");
 pub const EXCEPTION_RECORD = extern struct {
     ExceptionCode: u32,
     ExceptionFlags: u32,
-    ExceptionRecord: ?*EXCEPTION_RECORD,
+    ExceptionRecordPtr: u32 = 0,
     ExceptionAddress: u32,
     NumberParameters: u32,
     ExceptionInformation: [15]u32,
@@ -107,6 +107,115 @@ pub const PEB = extern struct {
     ProcessHeap: u32 = 0,
     /// Fast PEB lock handle
     FastPebLock: u32 = 0,
+    /// FastPebLockRoutine
+    FastPebLockRoutine: u32 = 0,
+    /// FastPebUnlockRoutine
+    FastPebUnlockRoutine: u32 = 0,
+    /// EnvironmentUpdateCount
+    EnvironmentUpdateCount: u32 = 0,
+    /// KernelCallbackTable
+    KernelCallbackTable: u32 = 0,
+    /// SystemReserved
+    SystemReserved: [1]u32 = .{0},
+    /// AtlThunkSListPtr32
+    AtlThunkSListPtr32: u32 = 0,
+    /// FreeList
+    FreeList: u32 = 0,
+    /// TlsExpansionCounter
+    TlsExpansionCounter: u32 = 0,
+    /// TlsBitmap
+    TlsBitmap: u32 = 0,
+    /// TlsBitmapBits
+    TlsBitmapBits: [2]u32 = .{0, 0},
+    /// ReadOnlySharedMemoryBase
+    ReadOnlySharedMemoryBase: u32 = 0,
+    /// SharedData
+    SharedData: u32 = 0,
+    /// ReadOnlyStaticServerData
+    ReadOnlyStaticServerData: u32 = 0,
+    /// AnsiCodePageData
+    AnsiCodePageData: u32 = 0,
+    /// OemCodePageData
+    OemCodePageData: u32 = 0,
+    /// UnicodeCaseTableData
+    UnicodeCaseTableData: u32 = 0,
+    /// NumberOfProcessors
+    NumberOfProcessors: u32 = 1,
+    /// NtGlobalFlag
+    NtGlobalFlag: u32 = 0,
+    /// CriticalSectionTimeout
+    Padding_NtGlobalFlag: u32 = 0,
+    CriticalSectionTimeout: u64 align(4) = 0,
+    /// HeapSegmentReserve
+    HeapSegmentReserve: u32 = 0,
+    /// HeapSegmentCommit
+    HeapSegmentCommit: u32 = 0,
+    /// HeapDeCommitTotalFreeThreshold
+    HeapDeCommitTotalFreeThreshold: u32 = 0,
+    /// HeapDeCommitFreeBlockThreshold
+    HeapDeCommitFreeBlockThreshold: u32 = 0,
+    /// NumberOfHeaps
+    NumberOfHeaps: u32 = 0,
+    /// MaximumNumberOfHeaps
+    MaximumNumberOfHeaps: u32 = 0,
+    /// ProcessHeaps
+    ProcessHeaps: u32 = 0,
+    /// GdiSharedHandleTable
+    GdiSharedHandleTable: u32 = 0,
+    /// ProcessStarterHelper
+    ProcessStarterHelper: u32 = 0,
+    /// GdiDCAttributeList
+    GdiDCAttributeList: u32 = 0,
+    /// LoaderLock
+    LoaderLock: u32 = 0,
+    /// OSMajorVersion
+    OSMajorVersion: u32 = 5,
+    /// OSMinorVersion
+    OSMinorVersion: u32 = 1,
+    /// OSBuildNumber
+    OSBuildNumber: u16 = 2600,
+    /// OSCSDVersion
+    OSCSDVersion: u16 = 0,
+    /// OSPlatformId
+    OSPlatformId: u32 = 2,
+    /// ImageSubsystem
+    ImageSubsystem: u32 = 2,
+    /// ImageSubsystemMajorVersion
+    ImageSubsystemMajorVersion: u32 = 5,
+    /// ImageSubsystemMinorVersion
+    ImageSubsystemMinorVersion: u32 = 1,
+    /// ImageProcessAffinityMask
+    ImageProcessAffinityMask: u32 = 1,
+    /// GdiHandleBuffer
+    GdiHandleBuffer: [34]u32 = .{0} ** 34,
+    /// PostProcessInitRoutine
+    PostProcessInitRoutine: u32 = 0,
+    /// TlsExpansionBitmap
+    TlsExpansionBitmap: u32 = 0,
+    /// TlsExpansionBitmapBits
+    TlsExpansionBitmapBits: [32]u32 = .{0} ** 32,
+    /// SessionId
+    SessionId: u32 = 0,
+    /// AppCompatFlags
+    AppCompatFlags: u64 align(4) = 0,
+    /// AppCompatFlagsUser
+    AppCompatFlagsUser: u64 align(4) = 0,
+    /// pShimData
+    pShimData: u32 = 0,
+    /// AppCompatInfo
+    AppCompatInfo: u32 = 0,
+    /// CSDVersion
+    CSDVersion: UNICODE_STRING = .{},
+    /// ActivationContextData
+    ActivationContextData: u32 = 0,
+    /// ProcessAssemblyStorageMap
+    ProcessAssemblyStorageMap: u32 = 0,
+    /// SystemDefaultActivationContextData
+    SystemDefaultActivationContextData: u32 = 0,
+    /// SystemAssemblyStorageMap
+    SystemAssemblyStorageMap: u32 = 0,
+    /// MinimumStackCommit
+    MinimumStackCommit: u32 = 0,
 };
 
 /// Thread Information Block (TIB) - located at the start of the TEB

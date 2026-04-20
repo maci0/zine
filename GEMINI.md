@@ -12,14 +12,14 @@ Zine is a Win32 PE binary interpreter that runs 32-bit Windows executables on Li
 - **Architecture**: x86 interpreter runs on x86/x86_64 Linux and WASM — must maintain all three targets
 - **ABI**: Win32 stubs use C calling convention with raw usize parameters — new APIs must follow this pattern
 - **Memory model**: Guest binaries live in a 32-bit address space with host address translation via `trace.addr()`
-- **Zig version**: Must compile with Zig 0.15.2
+- **Zig version**: Must compile with Zig 0.16.0
 <!-- GSD:project-end -->
 
 <!-- GSD:stack-start source:codebase/STACK.md -->
 ## Technology Stack
 
 ## Language & Runtime
-- **Primary Language:** Zig 0.15.2 (minimum version)
+- **Primary Language:** Zig 0.16.0 (minimum version)
 - **Build System:** Native Zig build system (`build.zig`)
 - **Target Architectures:** x86 (default), x86_64, wasm32, wasm64
 ## Core Dependencies
@@ -59,7 +59,7 @@ Zine is a Win32 PE binary interpreter that runs 32-bit Windows executables on Li
 ## Conventions
 
 ## Language Style
-- **Zig 0.15.2** — Uses latest Zig idioms (comptime, error unions, tagged unions)
+- **Zig 0.16.0** — Uses latest Zig idioms (comptime, error unions, tagged unions)
 - Standard `camelCase` for functions and variables, `PascalCase` for types
 - Win32 API functions use their original names (e.g., `CreateWindowExA`, `GetModuleHandleA`)
 ## Win32 Stub Patterns

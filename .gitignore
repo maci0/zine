@@ -40,6 +40,55 @@ hello.c
 NNET.DAT
 test_archive.7z
 
+# Root-level debug scratch (traces, obj/exe dumps, tmp files)
+/*.obj
+/*.exe
+/*.wasm
+/*.asm
+/*.tmp
+/tmp_*
+/trace_*
+/cl_trace.txt
+/gdb_trace.txt
+/cpuid_out.txt
+/native_cl_out.txt
+/native_branch.txt
+/wasm_branch.txt
+/my_cl_out.txt
+/my_real_cl_out.txt
+/link_manual.txt
+/test_int.txt
+/test_nat.txt
+/out.txt
+/temp_out.txt
+/handover.md
+
+# Ad-hoc debug scripts and experiments
+/parse_relocs.py
+/parse_trace.py
+/scan.py
+/patch_fpregs.sh
+/run_single.sh
+/test_fpregs_ptr.sh
+/trace_c1.gdb
+
+# Scratch Zig/C test fixtures in root (real tests live under tests/)
+/test_argv.zig
+/test_c1_float.zig
+/test_f80.zig
+/test_fistp.zig
+/test_mmap.zig
+/test_offset.zig
+/test_open.zig
+/test_uctx.zig
+/test_cpuid
+/test_cpuid.c
+/test_mmap.c
+/e2e.c
+
+# Downloaded Zig package cache
+/zig-pkg/
+
 # Review artifacts (generated, not source)
 cli-review.md
 code-review.md

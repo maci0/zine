@@ -5,6 +5,7 @@
 //! batch scripts (e.g. VCVARS32.BAT).
 
 const std = @import("std");
+const runtime = @import("runtime.zig");
 
 pub const BatEnv = struct {
     allocator: std.mem.Allocator,
@@ -17,7 +18,7 @@ pub const BatEnv = struct {
             .env = std.StringHashMap([]const u8).init(allocator),
         };
         // Load initial env
-        var it = std.process.getEnvMap(allocator) catch |e| {
+        var it = runtime.environ().createMap(allocator) catch |e| {
             std.debug.print("bat: failed to load environment: {}\n", .{e});
             return e;
         };
@@ -44,7 +45,7 @@ pub const BatEnv = struct {
     }
 
     fn expand(self: *BatEnv, input: []const u8, args: [][]const u8, current_bat_dir: []const u8) ![]const u8 {
-        var out: std.ArrayList(u8) = .{};
+        var out: std.ArrayList(u8) = .empty;
         defer out.deinit(self.allocator);
 
         var i: usize = 0;
@@ -113,20 +114,21 @@ pub const BatEnv = struct {
         if (open_path.len >= 2 and open_path[1] == ':' and std.ascii.isAlphabetic(open_path[0])) {
             open_path = open_path[2..];
         }
-        var file = std.fs.cwd().openFile(open_path, .{}) catch {
-            var err_buf: [512]u8 = undefined;
-            const msg = std.fmt.bufPrint(&err_buf, "Error: failed to open batch file '{s}'.\n", .{open_path}) catch "Error: failed to open batch file.\n";
-            std.fs.File.stderr().writeAll(msg) catch {};
+        const io = runtime.io();
+        var file = std.Io.Dir.cwd().openFile(io, open_path, .{}) catch {
+            std.debug.print("Error: failed to open batch file '{s}'.\n", .{open_path});
             return null;
         };
-        defer file.close();
+        defer file.close(io);
 
         // Read the entire file into a string
-        const file_content = try file.readToEndAlloc(self.allocator, 10 * 1024 * 1024); // 10MB max
+        var reader_buf: [4096]u8 = undefined;
+        var file_reader = file.reader(io, &reader_buf);
+        const file_content = try file_reader.interface.allocRemaining(self.allocator, .limited(10 * 1024 * 1024));
         defer self.allocator.free(file_content);
 
         // Resolve absolute dir of the bat file for %~dp0
-        const abs_path = try std.fs.cwd().realpathAlloc(self.allocator, open_path);
+        const abs_path = try std.Io.Dir.cwd().realPathFileAlloc(io, open_path, self.allocator);
         defer self.allocator.free(abs_path);
 
         const parent_dir = std.fs.path.dirname(abs_path) orelse ".";
@@ -157,25 +159,25 @@ pub const BatEnv = struct {
 
             // Handle "if" conditions
             if (std.ascii.startsWithIgnoreCase(cmd_line, "if ")) {
-                cmd_line = std.mem.trimLeft(u8, cmd_line[3..], " \t");
+                cmd_line = std.mem.trimStart(u8, cmd_line[3..], " \t");
                 var is_not = false;
                 if (std.ascii.startsWithIgnoreCase(cmd_line, "not ")) {
                     is_not = true;
-                    cmd_line = std.mem.trimLeft(u8, cmd_line[4..], " \t");
+                    cmd_line = std.mem.trimStart(u8, cmd_line[4..], " \t");
                 }
 
                 if (cmd_line[0] == '"') {
                     if (std.mem.indexOfScalarPos(u8, cmd_line, 1, '"')) |quote_end| {
                         const lhs = cmd_line[1..quote_end];
-                        const rest1 = std.mem.trimLeft(u8, cmd_line[quote_end + 1 ..], " \t");
+                        const rest1 = std.mem.trimStart(u8, cmd_line[quote_end + 1 ..], " \t");
                         if (std.ascii.startsWithIgnoreCase(rest1, "==")) {
-                            const rest2 = std.mem.trimLeft(u8, rest1[2..], " \t");
+                            const rest2 = std.mem.trimStart(u8, rest1[2..], " \t");
                             if (rest2[0] == '"') {
                                 if (std.mem.indexOfScalarPos(u8, rest2, 1, '"')) |quote2_end| {
                                     const rhs = rest2[1..quote2_end];
                                     const cond_met = std.ascii.eqlIgnoreCase(lhs, rhs);
                                     if (cond_met != is_not) {
-                                        cmd_line = std.mem.trimLeft(u8, rest2[quote2_end + 1 ..], " \t");
+                                        cmd_line = std.mem.trimStart(u8, rest2[quote2_end + 1 ..], " \t");
                                     } else {
                                         continue; // skip this line
                                     }
@@ -187,7 +189,7 @@ pub const BatEnv = struct {
             }
 
             if (std.ascii.startsWithIgnoreCase(cmd_line, "set ")) {
-                const assign = std.mem.trimLeft(u8, cmd_line[4..], " \t");
+                const assign = std.mem.trimStart(u8, cmd_line[4..], " \t");
                 if (std.mem.indexOfScalar(u8, assign, '=')) |eq_idx| {
                     const key = std.mem.trim(u8, assign[0..eq_idx], " \t");
                     const val = std.mem.trim(u8, assign[eq_idx + 1 ..], " \t");
@@ -203,7 +205,7 @@ pub const BatEnv = struct {
             }
 
             if (std.ascii.startsWithIgnoreCase(cmd_line, "call ")) {
-                var call_target = std.mem.trimLeft(u8, cmd_line[5..], " \t");
+                var call_target = std.mem.trimStart(u8, cmd_line[5..], " \t");
                 if (call_target[0] == '"') {
                     if (std.mem.indexOfScalarPos(u8, call_target, 1, '"')) |q| {
                         call_target = call_target[1..q];
@@ -221,7 +223,7 @@ pub const BatEnv = struct {
 
             // Unrecognized command — treat as the final executable invocation.
             // Split by whitespace with basic quote stripping.
-            var final_args: std.ArrayList([]const u8) = .{};
+            var final_args: std.ArrayList([]const u8) = .empty;
             var it = std.mem.tokenizeAny(u8, cmd_line, " \t");
             while (it.next()) |token| {
                 if (token.len > 0 and token[0] == '"' and token[token.len - 1] == '"' and token.len >= 2) {
@@ -240,7 +242,7 @@ pub const BatEnv = struct {
 
     /// Builds an environment vector (envp) from the current batch environment.
     pub fn buildEnvp(self: *BatEnv) !?[*]?[*:0]u8 {
-        var envp_list: std.ArrayList(?[*:0]u8) = .{};
+        var envp_list: std.ArrayList(?[*:0]u8) = .empty;
         var it = self.env.iterator();
         while (it.next()) |entry| {
             const str = try std.fmt.allocPrint(self.allocator, "{s}={s}", .{entry.key_ptr.*, entry.value_ptr.*});
@@ -380,9 +382,10 @@ test "parseFile: state machine and env tracking" {
         \\if not "%TEST_VAR%"=="456" set NOT_VAR=yes
         \\final_target.exe "arg1"
     ;
-    try tmp_dir.dir.writeFile(.{ .sub_path = bat_name, .data = bat_content });
+    const test_io = runtime.io();
+    try tmp_dir.dir.writeFile(test_io, .{ .sub_path = bat_name, .data = bat_content });
 
-    const abs_path = try tmp_dir.dir.realpathAlloc(testing.allocator, bat_name);
+    const abs_path = try tmp_dir.dir.realPathFileAlloc(test_io, bat_name, testing.allocator);
     defer testing.allocator.free(abs_path);
 
     // Call parseFile

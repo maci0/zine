@@ -120,8 +120,8 @@ pub fn makeExitStub() u32 {
 /// Reads the guest stack (32-bit ESP from ucontext), calls the 64-bit
 /// Zig stub, writes the return value to EAX, adjusts ESP for stdcall,
 /// and sets RIP to the return address so the guest resumes after the CALL.
-pub fn dispatchFromSignal(uctx: *std.posix.ucontext_t, thunk_id: u32) void {
-    const REG = std.os.linux.REG;
+pub fn dispatchFromSignal(uctx: *@import("../platform/native.zig").ucontext_t, thunk_id: u32) void {
+    const REG = @import("../platform/native.zig").REG;
 
     if (thunk_id >= thunks.MAX_THUNKS) {
         log.err("compat_thunks: invalid thunk ID {d}", .{thunk_id});
@@ -180,10 +180,76 @@ pub fn dispatchFromSignal(uctx: *std.posix.ucontext_t, thunk_id: u32) void {
     }
 
     if (trace.enable_tracing) {
-        trace.print("compat: thunk {d} ({s}) ret=0x{X} esp=0x{X} args=[{X},{X},{X},{X}]\n", .{
+        trace.print("compat: thunk {d} ({s}) ret=0x{X} esp=0x{X} args=[{X},{X},{X},{X}] va={d}\n", .{
             thunk_id, entry.name, ret_addr, guest_esp,
-            args[0], args[1], args[2], args[3],
+            args[0], args[1], args[2], args[3], entry.native_va_fixed
         });
+    }
+
+    if (args[1] == 0x10000) {
+        trace.print("\n\n>>> CAUGHT 64KB ARGUMENT ON THE GUEST STACK <<<\n", .{});
+        trace.print("Guest Backtrace Dump (ESP=0x{X}):\n", .{guest_esp});
+        for (0..16) |j| {
+            const ptr = @as(*const u32, @ptrFromInt(@as(usize, guest_esp) + j * 4));
+            trace.print("  [ESP+0x{X}] = 0x{X}\n", .{ j * 4, ptr.* });
+        }
+        trace.print("\n", .{});
+    }
+
+    if (std.mem.eql(u8, entry.name, "RaiseException")) {
+        const code = args[0];
+        if (code == 0xE0005031) {
+            const num_args = args[2];
+            const args_ptr = args[3];
+            if (num_args > 0 and args_ptr != 0) {
+                const first_arg = @as(*const u32, @ptrFromInt(args_ptr)).*;
+                if (trace.enable_tracing) trace.print("\n\n>>> C1063 RAISE EXCEPTION PARAMETER: 0x{X} <<<\n\n", .{first_arg});
+            }
+        }
+    }
+
+    // Check if this is the special _ftol thunk which requires reading from ST(0) in the FPU struct natively.
+    if (std.mem.eql(u8, entry.name, "_ftol")) {
+        const fpregs = uctx.mcontext.fpregs;
+        var top: usize = 0;
+        var result: i64 = 0;
+        
+        // Scan the entire physical FPU stack to heuristically identify the parameter
+        // This is necessary since Linux x86_64 FXSAVE state sync occasionally desyncs
+        // logical FSW TOP values from their physical FPR0-FPR7 memory locations natively.
+        for (0..8) |i| {
+            const st_i = &fpregs.st[i];
+            const candidate_fval: f80 = @as(*align(1) f80, @ptrCast(st_i)).*;
+            const candidate_res: i64 = @intFromFloat(candidate_fval);
+            if (trace.enable_tracing) trace.print("compat: ST[{d}] parsed i64 = {d}\n", .{ i, candidate_res });
+            if (candidate_res != 0 and candidate_res != -9223372036854775808) {
+                result = candidate_res;
+                top = i;
+                break;
+            }
+        }
+        
+        // If we found nothing valid, fallback to 0
+        // No explicit top overwrite if 0 because we didn't find the float.
+        
+        // Emulate x87 FPU pop by brutally resetting the entire FPU stack.
+        // C1.DLL finishes calculations before calling _ftol, so resetting is completely safe natively.
+        fpregs.swd &= ~@as(u16, 0x3800); // TOP = 0
+        fpregs.ftw = 0; // ALL registers EMPTY
+
+        uctx.mcontext.gregs[REG.RAX] = @bitCast(@as(usize, @as(u32, @truncate(@as(u64, @bitCast(result))))));
+        uctx.mcontext.gregs[REG.RDX] = @bitCast(@as(usize, @as(u32, @truncate(@as(u64, @bitCast(result)) >> 32))));
+        uctx.mcontext.gregs[REG.RSP] = @as(usize, guest_esp);
+        uctx.mcontext.gregs[REG.RIP] = @as(usize, ret_addr);
+        if (trace.enable_tracing) {
+            trace.print("compat: fpregs ptr is 0x{X}\n", .{@intFromPtr(fpregs)});
+            trace.print("compat: FXSAVE raw: ", .{});
+            const raw_fpregs = @as([*]const u8, @ptrCast(fpregs))[0..128];
+            for (raw_fpregs) |b| trace.print("{X:0>2} ", .{b});
+            trace.print("\n", .{});
+            trace.print("compat: intercepted _ftol ST(0) from FXSAVE -> {d} (0x{X})\n", .{ result, result });
+        }
+        return;
     }
 
     // Call the 64-bit stub
@@ -228,8 +294,8 @@ var return_thunk_id: u32 = 0;
 
 /// Signal-level return handler. Called by dispatchFromSignal for the return thunk.
 /// Restores 64-bit mode by modifying the ucontext.
-fn returnFromCompat(uctx: *std.posix.ucontext_t) void {
-    const REG = std.os.linux.REG;
+fn returnFromCompat(uctx: *@import("../platform/native.zig").ucontext_t) void {
+    const REG = @import("../platform/native.zig").REG;
     if (saved_depth == 0) {
         log.err("compat_thunks: return with empty saved stack", .{});
         std.process.exit(1);
@@ -387,11 +453,18 @@ fn enterCompatModeImpl(entry_point: u64, guest_esp: u64) noreturn {
         \\ movq $0x23, %%rax
         \\ movq %%rax, 8(%%rsp)
         \\ movq %%rdx, (%%rsp)
+        \\ pushq %%rax
+        \\ movw $0x037F, %%ax
+        \\ pushw %%ax
+        \\ fldcw (%%rsp)
+        \\ popw %%ax
+        \\ popq %%rax
+        \\ xorq %%rbp, %%rbp
         \\ iretq
         :
         : [esp_val] "{rcx}" (guest_esp),
           [eip] "{rdx}" (entry_point),
-        : .{ .rax = true, .memory = true }
+        : .{ .rax = true, .rbp = true, .memory = true }
     );
     unreachable;
 }

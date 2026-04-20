@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 
 /// MSVCRT path utilities: _splitpath, _makepath, _fullpath,
@@ -55,6 +56,7 @@ pub fn mktemp(template: ?*anyopaque) callconv(.c) ?*anyopaque {
 /// Implementation status: Partially implemented
 pub fn splitpath(path: [*:0]const u8, drv_out: ?[*]u8, dir_out: ?[*]u8, fname_out: ?[*]u8, ext_out: ?[*]u8) callconv(.c) void {
     const s = std.mem.span(path);
+    if (trace.enable_tracing) trace.print("MSVCRT: _splitpath('{s}')\n", .{ s });
     var drive_len: usize = 0;
     if (s.len >= 2 and s[1] == ':') drive_len = 2;
 
@@ -69,27 +71,38 @@ pub fn splitpath(path: [*:0]const u8, drv_out: ?[*]u8, dir_out: ?[*]u8, fname_ou
     if (drv_out) |d| {
         if (drive_len > 0) @memcpy(d[0..drive_len], s[0..drive_len]);
         d[drive_len] = 0;
+        if (trace.enable_tracing) trace.print("MSVCRT: _splitpath drv='{s}'\n", .{d[0..drive_len]});
     }
     if (dir_out) |d| {
         const dir_len = de - drive_len;
         if (dir_len > 0) @memcpy(d[0..dir_len], s[drive_len..de]);
         d[dir_len] = 0;
+        if (trace.enable_tracing) trace.print("MSVCRT: _splitpath dir='{s}'\n", .{d[0..dir_len]});
     }
     if (fname_out) |d| {
         const fname_len = es - de;
         if (fname_len > 0) @memcpy(d[0..fname_len], s[de..es]);
         d[fname_len] = 0;
+        if (trace.enable_tracing) trace.print("MSVCRT: _splitpath fname='{s}'\n", .{d[0..fname_len]});
     }
     if (ext_out) |d| {
         const ext_len = s.len - es;
         if (ext_len > 0) @memcpy(d[0..ext_len], s[es..s.len]);
         d[ext_len] = 0;
+        if (trace.enable_tracing) trace.print("MSVCRT: _splitpath ext='{s}'\n", .{d[0..ext_len]});
     }
 }
 
 /// makepath
 /// Implementation status: Partially implemented
 pub fn makepath(out: [*]u8, drv: ?[*:0]const u8, dir: ?[*:0]const u8, fname: ?[*:0]const u8, ext: ?[*:0]const u8) callconv(.c) void {
+    if (trace.enable_tracing) {
+        const d_str = if (drv) |d| std.mem.span(d) else "null";
+        const dir_str = if (dir) |d| std.mem.span(d) else "null";
+        const f_str = if (fname) |d| std.mem.span(d) else "null";
+        const e_str = if (ext) |d| std.mem.span(d) else "null";
+        trace.print("MSVCRT: _makepath(drv='{s}', dir='{s}', fname='{s}', ext='{s}')\n", .{d_str, dir_str, f_str, e_str});
+    }
     var len: usize = 0;
     if (drv) |d| {
         const s = std.mem.span(d);
@@ -141,6 +154,9 @@ pub fn fullpath(abs_buf: usize, rel: usize, max: usize) callconv(.c) usize {
     @memcpy(@as([*]u8, @ptrFromInt(dp))[0..cl], s[0..cl]);
     @as([*]u8, @ptrFromInt(dp))[cl] = 0;
     if (trace.enable_tracing) trace.print("MSVCRT: _fullpath(abs={x}, rel='{s}', max={d}) -> {x}\n", .{ abs_buf, s, max, dp });
+    if (std.mem.indexOf(u8, s, "hello.obj") != null) {
+        trace.enable_instructions = true;
+    }
     return dp;
 }
 
@@ -190,7 +206,7 @@ pub fn searchenv(filename_ptr: usize, varname_ptr: usize, result_ptr: usize) cal
 /// getcwd
 /// Implementation status: Partially implemented
 pub fn getcwd(buffer_ptr: usize, maxlen: i32) callconv(.c) ?*anyopaque {
-    const path = std.process.getCwdAlloc(std.heap.page_allocator) catch return null;
+    const path = std.process.currentPathAlloc(runtime.io(), std.heap.page_allocator) catch return null;
     defer std.heap.page_allocator.free(path);
 
     if (buffer_ptr != 0) {
@@ -229,8 +245,8 @@ pub fn tempnam(dir_ptr: usize, prefix_ptr: usize) callconv(.c) usize {
     @memcpy(alloc_ptr[0..name.len], name[0..name.len]);
     if (trace.enable_tracing) trace.print("MSVCRT: _tempnam -> '{s}'\n", .{alloc_ptr[0 .. name.len - 1]});
 
-    if (std.fs.cwd().createFile(alloc_ptr[0 .. name.len - 1], .{})) |file| {
-        file.close();
+    if (std.Io.Dir.cwd().createFile(runtime.io(), alloc_ptr[0 .. name.len - 1], .{})) |file| {
+        file.close(runtime.io());
     } else |_| {}
 
     return @intFromPtr(alloc_ptr.ptr);

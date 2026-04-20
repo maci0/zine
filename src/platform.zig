@@ -59,6 +59,8 @@ pub const getProcessId = backend.getProcessId;
 pub const exitProcess = backend.exitProcess;
 /// Returns the current timestamp as a Unix epoch value (seconds).
 pub const timestamp = backend.timestamp;
+/// lseek wrapper; returns new offset or -1 on error.
+pub const lseek = backend.lseek;
 
 // -------------------------------------------------------------------------
 // Stack bounds

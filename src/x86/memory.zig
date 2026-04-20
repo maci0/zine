@@ -96,6 +96,9 @@ pub const GuestMemory = struct {
 
     /// Writes a 16-bit little-endian value to guest memory at `addr`.
     pub inline fn write16(self: *GuestMemory, addr: u32, val: u16) void {
+        if ((addr >= 0x512A70 and addr <= 0x512A78) or addr == 0x512A6C) {
+            @import("../trace.zig").print(">>> MEMORY CORRUPTION write16 AT {X} val {X} <<<\n", .{addr, val});
+        }
         if (self.native_linear) { if (addr >= 4096) @as(*align(1) u16, @ptrFromInt(addr)).* = val; return; }
         if (self.isWriteProtected(addr)) return;
         const a = self.translate(addr);
@@ -106,6 +109,9 @@ pub const GuestMemory = struct {
 
     /// Writes a 32-bit little-endian value to guest memory at `addr`.
     pub inline fn write32(self: *GuestMemory, addr: u32, val: u32) void {
+        if ((addr >= 0x512A70 and addr <= 0x512A78) or addr == 0x512A6C) {
+            @import("../trace.zig").print(">>> MEMORY CORRUPTION write32 AT {X} val {X} <<<\n", .{addr, val});
+        }
         if (self.native_linear) { if (addr >= 4096) @as(*align(1) u32, @ptrFromInt(addr)).* = val; return; }
         if (self.isWriteProtected(addr)) return;
         const a = self.translate(addr);

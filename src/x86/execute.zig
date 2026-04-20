@@ -19,6 +19,7 @@
 //!   5. Branch fusion: peek at next instruction for Jcc
 
 const std = @import("std");
+const runtime = @import("../runtime.zig");
 const cpu_mod = @import("cpu.zig");
 const decoder = @import("decoder.zig");
 const decode_cache = @import("decode_cache.zig");
@@ -42,7 +43,15 @@ const Segment = cpu_mod.Segment;
 
 /// Continually executes instructions in the provided CPU context until the `halted` flag is set.
 pub fn run(cpu: *Cpu) void {
+    var insn_count: u64 = 0;
     while (!cpu.halted) {
+        if (cpu.eip == 0x4A3FE7) {
+            trace.print(">>> STOSD TRIGGER: ECX={X}, EDI={X}, EDX={X}, EAX={X} <<<\n", .{cpu.ecx, cpu.edi, cpu.edx, cpu.eax});
+        }
+        insn_count += 1;
+        if (insn_count % 100 == 0) {
+             trace.print("x86 exec: [{d}] EIP={X:0>8} ESP={X:0>8} EAX={X} ECX={X} EDX={X}\n", .{ insn_count, cpu.eip, cpu.esp, cpu.eax, cpu.ecx, cpu.edx });
+        }
         step(cpu);
     }
 }
@@ -662,7 +671,7 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
 }
 
 /// Safe float-to-int conversion: saturates on overflow, returns 0 for NaN.
-fn safeFloatToInt(comptime T: type, val: f64) T {
+pub fn safeFloatToInt(comptime T: type, val: f64) T {
     const info = @typeInfo(T).int;
     if (val != val) return 0; // NaN
     if (info.signedness == .signed) {
@@ -1175,7 +1184,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // RDTSC (0F 31) — read timestamp counter
         0x0F31 => {
-            const tsc: u64 = @intCast(@as(i128, std.time.nanoTimestamp()));
+            const tsc: u64 = @intCast(@as(i128, runtime.nanoTimestamp()));
             cpu.eax = @truncate(tsc);
             cpu.edx = @truncate(tsc >> 32);
         },

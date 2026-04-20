@@ -18,7 +18,7 @@ pub const Buffer = struct {
     pub fn init(allocator: std.mem.Allocator) Buffer {
         return .{
             .allocator = allocator,
-            .bytes = .{},
+            .bytes = .empty,
         };
     }
 

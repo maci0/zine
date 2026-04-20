@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
 const host_io = @import("../host_io.zig");
@@ -38,7 +39,7 @@ pub fn ReadConsoleW(hConsoleInput: usize, lpBuffer: [*]u16, nNumberOfCharsToRead
     const stdin = host_io.fileFromFd(0);
     var narrow_buf: [4096]u8 = undefined;
     const max_read = @min(nNumberOfCharsToRead, narrow_buf.len);
-    const bytes_read = stdin.read(narrow_buf[0..max_read]) catch return 0;
+    const bytes_read = @import("../host_io.zig").readFromFile(stdin, narrow_buf[0..max_read]) catch return 0;
     if (bytes_read == 0) return 0;
 
     for (0..bytes_read) |i| {
@@ -58,7 +59,9 @@ pub fn WriteConsoleW(hConsoleOutput: usize, lpBuffer: [*]const u16, nNumberOfCha
         buf_a[i] = @intCast(lpBuffer[i] & 0xFF);
     }
     const file = host_io.fileFromFd(fd);
-    const written = file.write(buf_a[0..len]) catch return 0;
+    const io = runtime.io();
+    file.writeStreamingAll(io, buf_a[0..len]) catch return 0;
+    const written = len;
     if (lpNumberOfCharsWritten) |p| p.* = @intCast(written);
     return 1;
 }
@@ -69,7 +72,9 @@ pub fn WriteConsoleA(hConsoleOutput: usize, lpBuffer: [*]const u8, nNumberOfChar
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hConsoleOutput))));
     const buf = lpBuffer[0..nNumberOfCharsToWrite];
     const file = host_io.fileFromFd(fd);
-    const written = file.write(buf) catch return 0;
+    const io = runtime.io();
+    file.writeStreamingAll(io, buf) catch return 0;
+    const written = buf.len;
     if (lpNumberOfCharsWritten) |p| p.* = @intCast(written);
     return 1;
 }

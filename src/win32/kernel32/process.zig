@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const env = @import("../../loader/env.zig");
 const trace = @import("../../trace.zig");
 const log = @import("../../log.zig");
@@ -141,29 +142,65 @@ pub fn LoadLibraryA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
                 };
             }
 
+            if (comptime platform.is_wasm) {
+                loader.copyModuleToGuest(mod);
+            }
+
             if (!mod.attached) {
                 mod.attached = true;
                 const opt_header = &mod.parser.getNtHeaders().OptionalHeader;
                 if (opt_header.AddressOfEntryPoint != 0) {
-                    const entry_point_addr = @intFromPtr(mod.mapped_memory.ptr) + opt_header.AddressOfEntryPoint;
-                    if (trace.enable_tracing) trace.print("KERNEL32: Executing DllMain for {s} at {x}\n", .{ load_name, entry_point_addr });
-                    if (comptime platform.is_x86_64) {
-                        const compat_thunks_mod = @import("../../x86/compat_thunks.zig");
-                        _ = compat_thunks_mod.callCompat32(
-                            @truncate(entry_point_addr),
-                            @truncate(@intFromPtr(mod.mapped_memory.ptr)),
-                            1, // DLL_PROCESS_ATTACH
-                            0, // lpReserved
-                        );
+                    if (comptime !platform.is_wasm) {
+                        const entry_point_addr = @intFromPtr(mod.mapped_memory.ptr) + opt_header.AddressOfEntryPoint;
+                        if (trace.enable_tracing) trace.print("KERNEL32: Executing DllMain for {s} at {x}\n", .{ load_name, entry_point_addr });
+                        if (comptime platform.is_x86_64) {
+                            const compat_thunks_mod = @import("../../x86/compat_thunks.zig");
+                            _ = compat_thunks_mod.callCompat32(
+                                @truncate(entry_point_addr),
+                                @truncate(@intFromPtr(mod.mapped_memory.ptr)),
+                                1, // DLL_PROCESS_ATTACH
+                                0, // lpReserved
+                            );
+                        } else {
+                            const DllMain = @as(*const fn (usize, u32, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(entry_point_addr));
+                            const ret = DllMain(@intFromPtr(mod.mapped_memory.ptr), 1, 0);
+                            if (trace.enable_tracing) trace.print("KERNEL32: DllMain returned {d}\n", .{ret});
+                        }
                     } else {
-                        const DllMain = @as(*const fn (usize, u32, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(entry_point_addr));
-                        const ret = DllMain(@intFromPtr(mod.mapped_memory.ptr), 1, 0);
-                        if (trace.enable_tracing) trace.print("KERNEL32: DllMain returned {d}\n", .{ret});
+                        const shared = @import("../shared.zig");
+                        if (shared.guest_memory) |gmem| {
+                            const stack_base = gmem.guestAlloc(64);
+                            if (stack_base != 0) {
+                                const x86_cpu = @import("../../x86/cpu.zig");
+                                const x86_execute = @import("../../x86/execute.zig");
+                                var temp_cpu = x86_cpu.Cpu{};
+                                temp_cpu.memory = gmem.*;
+                                if (shared.child_cpu) |child| {
+                                    temp_cpu.fs_base = child.fs_base;
+                                }
+                                
+                                temp_cpu.memory.write8(stack_base, 0xF4); // HLT
+                                
+                                temp_cpu.esp = stack_base + 64;
+                                temp_cpu.esp -= 4; temp_cpu.memory.write32(temp_cpu.esp, 0); // lpReserved
+                                temp_cpu.esp -= 4; temp_cpu.memory.write32(temp_cpu.esp, 1); // DLL_PROCESS_ATTACH
+                                temp_cpu.esp -= 4; temp_cpu.memory.write32(temp_cpu.esp, @truncate(mod.image_base)); // hModule
+                                temp_cpu.esp -= 4; temp_cpu.memory.write32(temp_cpu.esp, stack_base); // Return to HLT
+                                
+                                temp_cpu.eip = @truncate(mod.image_base + opt_header.AddressOfEntryPoint);
+                                
+                                if (trace.enable_tracing) trace.print("KERNEL32: Executing DllMain for {s} at guest {x} (WASM emulator)\n", .{ load_name, temp_cpu.eip });
+                                
+                                x86_execute.run(&temp_cpu);
+                                
+                                if (trace.enable_tracing) trace.print("KERNEL32: DllMain (WASM) returned {d}\n", .{temp_cpu.eax});
+                            }
+                        }
                     }
                 }
             }
 
-            return @intFromPtr(mod.mapped_memory.ptr);
+            return mod.image_base;
         } else |err| {
             // Windows API set DLLs (api-ms-win-core-*) redirect to kernel32/ntdll
             if (std.ascii.startsWithIgnoreCase(name, "api-ms-win-")) {
@@ -249,7 +286,7 @@ pub fn GetProcAddress(hModule: usize, lpProcName_ptr: usize) callconv(w32cc.WINA
         var it = genv.registry.modules.iterator();
         while (it.next()) |entry| {
             const mod = entry.value_ptr.*;
-            if (@intFromPtr(mod.mapped_memory.ptr) == hModule) {
+            if (mod.image_base == hModule) {
                 target_mod = mod;
                 break;
             }
@@ -355,15 +392,19 @@ pub fn GetModuleHandleW(lpModuleName_ptr: usize) callconv(w32cc.WINAPI) usize {
     return GetModuleHandleA(@intFromPtr(&narrow_buf));
 }
 
-var cmdline_buf: [4096]u8 = undefined;
 var cmdline_initialized: bool = false;
 var cmdline_result_addr: usize = 0; // Final address to return (host or guest)
+
+var cmdline_w_initialized: bool = false;
+var cmdline_w_result_addr: usize = 0;
 
 /// Reset command line state so the next GetCommandLineA rebuilds from current argv.
 /// Called by the WASM spawn handler before executing a child PE.
 pub fn resetCommandLine() void {
     cmdline_initialized = false;
     cmdline_result_addr = 0;
+    cmdline_w_initialized = false;
+    cmdline_w_result_addr = 0;
 }
 
 /// Retrieves the command-line string for the current process.
@@ -372,20 +413,15 @@ pub fn GetCommandLineA() callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineA\n", .{});
 
     if (!cmdline_initialized) {
-        // Determine working buffer: guest memory if available, else host static buf.
+        // Determine working buffer: allocate from shared guest heap
         const kernel32_mem_mod = @import("mem.zig");
-        var buf: []u8 = &cmdline_buf;
-        if (kernel32_mem_mod.guest_memory()) |gmem| {
-            const guest_va = gmem.guestAlloc(4096);
-            if (guest_va != 0) {
-                const host_ptr = @as([*]u8, @ptrFromInt(trace.addr(guest_va)));
-                buf = host_ptr[0..4096];
-                cmdline_result_addr = guest_va;
-            }
-        }
         if (cmdline_result_addr == 0) {
-            cmdline_result_addr = @intFromPtr(&cmdline_buf);
+            const raw = kernel32_mem_mod.raw_alloc(4096) orelse return 0;
+            cmdline_result_addr = @intFromPtr(raw);
         }
+        
+        const host_ptr = @as([*]u8, @ptrFromInt(trace.addr(cmdline_result_addr)));
+        var buf: []u8 = host_ptr[0..4096];
 
         const msvcrt = @import("../msvcrt.zig");
         var pos: usize = 0;
@@ -552,8 +588,9 @@ pub fn GetModuleFileNameA(hModule: usize, lpFilename: usize, nSize: u32) callcon
             _ = genv;
             const msvcrt = @import("../msvcrt.zig");
             if (msvcrt.global_argc > 0 and msvcrt.global_argv[0] != null) {
-                const exe_path = trace.c_span(@intFromPtr(msvcrt.global_argv[0].?));
-                const buf = @as([*]u8, @ptrFromInt(lpFilename));
+                const exe_path = std.mem.span(msvcrt.global_argv[0].?);
+                const host_buf_addr = trace.addr(lpFilename);
+                const buf = @as([*]u8, @ptrFromInt(host_buf_addr));
                 const copy_len = @min(exe_path.len, nSize - 1);
                 const buf_slice = buf[0..copy_len];
                 @memcpy(buf_slice, exe_path[0..copy_len]);
@@ -677,7 +714,9 @@ pub fn CreateProcessA(
 
     // Get our own executable path to re-invoke zine
     var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const self_exe = std.fs.readLinkAbsolute("/proc/self/exe", &self_exe_buf) catch {
+    const rt_io = runtime.io();
+    const self_exe_len = std.process.executablePath(rt_io, &self_exe_buf) catch 0;
+    if (self_exe_len == 0) {
         log.warn("CreateProcessA: failed to read /proc/self/exe", .{});
         if (lpProcessInformation != 0) {
             const pi = @as(*align(1) w32.PROCESS_INFORMATION, @ptrFromInt(lpProcessInformation));
@@ -687,7 +726,8 @@ pub fn CreateProcessA(
             pi.dwThreadId = 1338;
         }
         return 1;
-    };
+    }
+    const self_exe = self_exe_buf[0..self_exe_len];
 
     // Build argv: [zine, "--", <posix_path>]
     // Also pass through any additional command-line args from cmd_line
@@ -743,11 +783,7 @@ pub fn CreateProcessA(
     }
 
     // Spawn the child process
-    var child = std.process.Child.init(argv_buf[0..argc], std.heap.page_allocator);
-    child.stdin_behavior = .Inherit;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-    child.spawn() catch |err| {
+    const child = std.process.spawn(rt_io, .{ .argv = argv_buf[0..argc] }) catch |err| {
         log.warn("CreateProcessA: spawn failed: {}", .{err});
         return 0; // FALSE
     };
@@ -758,8 +794,8 @@ pub fn CreateProcessA(
             const pi = @as(*align(1) w32.PROCESS_INFORMATION, @ptrFromInt(lpProcessInformation));
             pi.hProcess = 0x1234;
             pi.hThread = 0x5678;
-            pi.dwProcessId = @intCast(child.id);
-            pi.dwThreadId = @intCast(child.id);
+            pi.dwProcessId = @intCast(child.id orelse 0);
+            pi.dwThreadId = @intCast(child.id orelse 0);
         }
         return 1;
     };
@@ -768,11 +804,11 @@ pub fn CreateProcessA(
         const pi = @as(*align(1) w32.PROCESS_INFORMATION, @ptrFromInt(lpProcessInformation));
         pi.hProcess = @truncate(proc_handle);
         pi.hThread = @truncate(proc_handle + 0x10000); // fake thread handle
-        pi.dwProcessId = @intCast(child.id);
-        pi.dwThreadId = @intCast(child.id);
+        pi.dwProcessId = @intCast(child.id orelse 0);
+        pi.dwThreadId = @intCast(child.id orelse 0);
     }
 
-    log.info("Spawned child process (pid={d}, handle=0x{X})", .{ child.id, proc_handle });
+    log.info("Spawned child process (pid={d}, handle=0x{X})", .{ child.id orelse 0, proc_handle });
     return 1; // TRUE
 }
 
@@ -917,7 +953,7 @@ const ThreadInfo = struct {
 };
 
 var thread_registry: [MAX_GUEST_THREADS]ThreadInfo = [_]ThreadInfo{.{}} ** MAX_GUEST_THREADS;
-var thread_registry_mutex: if (platform.is_native) std.Thread.Mutex else struct {
+var thread_registry_mutex: if (platform.is_native) runtime.Mutex else struct {
     pub fn lock(_: *@This()) void {}
     pub fn unlock(_: *@This()) void {}
 } = .{};
@@ -998,8 +1034,8 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
             cpu.memory = gm.*;
         }
         cpu.eip = @intCast(start_address);
-        // Allocate 64KB guest stack
-        const stack_size: u32 = 64 * 1024;
+        // Allocate 8MB guest stack (standard Linux thread stack size, Windows default is 1MB but compilers are hungry)
+        const stack_size: u32 = 8 * 1024 * 1024;
         if (shared.raw_alloc(stack_size)) |stack_ptr| {
             cpu.esp = @intCast(@intFromPtr(stack_ptr) + stack_size - 16);
         }
@@ -1097,8 +1133,7 @@ pub fn ExitThread(dwExitCode: u32) callconv(w32cc.WINAPI) void {
     // then sets running=false. On WASM, the interpreter continues until halt.
 }
 
-var cmdline_w_buf: [8192]u8 = undefined;
-var cmdline_w_initialized: bool = false;
+// Deprecated: cmdline_w_buf is removed because pointers to .bss truncate on 64-bit systems.
 
 /// Implementation status: Partially implemented
 pub fn GetModuleFileNameW(hModule: usize, lpFilename: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
@@ -1128,7 +1163,14 @@ pub fn GetCommandLineW() callconv(w32cc.WINAPI) usize {
         // Get narrow command line and widen it
         const narrow_ptr = GetCommandLineA();
         const narrow = trace.c_span(narrow_ptr);
-        const wbuf = @as([*]u16, @ptrCast(@alignCast(&cmdline_w_buf)));
+        
+        const kernel32_mem_mod = @import("mem.zig");
+        if (cmdline_w_result_addr == 0) {
+            const raw = kernel32_mem_mod.raw_alloc(8192) orelse return 0;
+            cmdline_w_result_addr = @intFromPtr(raw);
+        }
+        
+        const wbuf = @as([*]u16, @ptrFromInt(trace.addr(cmdline_w_result_addr)));
         const copy_len = @min(narrow.len, 4095);
         for (0..copy_len) |i| {
             wbuf[i] = narrow[i];
@@ -1136,17 +1178,7 @@ pub fn GetCommandLineW() callconv(w32cc.WINAPI) usize {
         wbuf[copy_len] = 0;
         cmdline_w_initialized = true;
     }
-    // On WASM, allocate in guest memory so x86 code can dereference
-    const shared = @import("../shared.zig");
-    if (shared.guest_memory != null) {
-        const raw = shared.raw_alloc(cmdline_w_buf.len * 2) orelse return @intFromPtr(&cmdline_w_buf);
-        const ptr = @as([*]u16, @ptrCast(@alignCast(raw)));
-        for (0..cmdline_w_buf.len) |i| {
-            ptr[i] = cmdline_w_buf[i];
-        }
-        return @intFromPtr(raw);
-    }
-    return @intFromPtr(&cmdline_w_buf);
+    return cmdline_w_result_addr;
 }
 
 /// Implementation status: Partially implemented

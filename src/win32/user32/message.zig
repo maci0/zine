@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const user32 = @import("../user32.zig");
 const w32 = @import("../constants.zig");
@@ -119,7 +120,7 @@ pub fn PeekMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFil
 
     // Check for expired SetTimer-based timers — WM_TIMER has lowest priority (after WM_PAINT)
     const input = @import("../user32/input.zig");
-    const now = std.time.milliTimestamp();
+    const now = runtime.milliTimestamp();
     for (&input.timers) |*t| {
         if (t.active) {
             const elapsed = now - t.last_fire;
@@ -228,7 +229,7 @@ pub fn GetMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFilt
         // Flush any pending screen updates while idle
         const rend = @import("../../gui/renderer.zig");
         rend.flushScreenIfDirty();
-        std.Thread.sleep(1 * 1000 * 1000); // 1ms
+        @import("../../platform.zig").sleep(1 * 1000 * 1000); // 1ms
     }
 }
 
@@ -407,7 +408,7 @@ pub fn WaitMessage() callconv(w32cc.WINAPI) i32 {
 // -------------------------------------------------------------------------
 
 pub fn GetMessageTime() callconv(w32cc.WINAPI) i32 {
-    const ts = std.time.milliTimestamp();
+    const ts = runtime.milliTimestamp();
     return @truncate(ts);
 }
 
