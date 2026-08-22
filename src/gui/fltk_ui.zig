@@ -75,13 +75,51 @@ var cmd_write: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
 var cmd_read: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
 var queue_mutex: runtime.Mutex = .{};
 
+/// Frees the heap strings owned by a command's payload. Callers enqueue
+/// `g_allocator.dupe`d slices; once the command has been delivered (or is
+/// dropped because the queue is full) nobody references them again — the FLTK
+/// bridge copies every string it keeps.
+fn freeCommandPayload(cmd: *const Command) void {
+    switch (cmd.*) {
+        .set_title,
+        .set_menu,
+        .show_dialog,
+        .show_controls,
+        .set_icon,
+        .set_clipboard,
+        .edit_set_text,
+        .edit_replace_sel,
+        => |s| g_allocator.free(s),
+        .update_control_text => |ut| g_allocator.free(ut.text),
+        .set_listbox_items => |sl| g_allocator.free(sl.items),
+        .show_message_box => |mb| {
+            g_allocator.free(mb.title);
+            g_allocator.free(mb.text);
+        },
+        .add_control => |ac| {
+            g_allocator.free(ac.class);
+            g_allocator.free(ac.text);
+        },
+        .open_file_dialog => |fd| g_allocator.free(fd.filters),
+        .open_font_dialog => |ff| g_allocator.free(ff.face),
+        .open_find_dialog => |fd| {
+            g_allocator.free(fd.find_text);
+            g_allocator.free(fd.replace_text);
+        },
+        .open_page_setup_dialog => |ps| g_allocator.free(ps.units),
+        .show_context_menu => |cm| g_allocator.free(cm.json),
+        else => {},
+    }
+}
+
 fn enqueue(cmd: Command) void {
     queue_mutex.lock();
     defer queue_mutex.unlock();
     const w = cmd_write.load(.acquire);
     const next = (w + 1) % QUEUE_SIZE;
     if (next == cmd_read.load(.acquire)) {
-        // Queue full — drop command
+        // Queue full — drop command (and its payload, or it would leak).
+        freeCommandPayload(&cmd);
         return;
     }
     cmd_queue[w] = cmd;
@@ -106,6 +144,7 @@ fn drainQueue() void {
         if (build_options.use_fltk) {
             processCommand(cmd);
         }
+        freeCommandPayload(&cmd);
     }
 }
 
@@ -463,12 +502,14 @@ fn eventCallback(event_type: c_int, param1: c_int, param2: c_int) callconv(.c) v
             if (renderer.on_color_selected) |cb| cb(@as(u32, @bitCast(param1)));
         },
         c.FLTK_EVT_MENU_CMD => {
-            if (context_menu_open) {
+            if (context_menu_open.load(.acquire)) {
                 // A popup (TrackPopupMenu) is waiting — deliver the selection
                 // the same way the web backend's context_menu_select does.
-                renderer.context_menu_result = @intCast(param1);
-                renderer.context_menu_chosen = true;
-                context_menu_open = false;
+                // Result first: the guest only reads it after it observes
+                // chosen==true via acquire.
+                renderer.context_menu_result.store(@intCast(param1), .release);
+                renderer.context_menu_chosen.store(true, .release);
+                context_menu_open.store(false, .release);
             } else if (renderer.on_command) |cb| {
                 cb(@intCast(param1));
             }
@@ -729,12 +770,14 @@ pub fn setClipboard(text: []const u8) void {
 }
 
 // --- Context Menu ---
-var context_menu_open: bool = false;
+/// Written by the guest thread (showContextMenu), cleared by the FLTK thread
+/// (eventCallback), so it must be atomic.
+var context_menu_open: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 /// Displays a context menu at the specified coordinates.
 pub fn showContextMenu(x: i32, y: i32, items_json: []const u8) void {
     const owned = g_allocator.dupe(u8, items_json) catch return;
-    context_menu_open = true;
+    context_menu_open.store(true, .release);
     enqueue(.{ .show_context_menu = .{ .x = x, .y = y, .json = owned } });
 }
 

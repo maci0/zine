@@ -98,7 +98,9 @@ var timer_id_counter: u32 = 1;
 const MAX_MM_TIMERS = 8;
 
 pub const MmTimer = struct {
-    active: bool = false,
+    /// Cleared by the guest thread (timeKillEvent / one-shot expiry) while
+    /// the timer thread polls it, so it must be atomic.
+    active: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     id: u32 = 0,
     delay_ms: u32 = 0,
     callback: usize = 0,
@@ -116,9 +118,9 @@ fn mmTimerThread(idx: usize) void {
     const teb = @import("../teb.zig");
     const builtin = @import("builtin");
 
-    while (timer.active) {
+    while (timer.active.load(.acquire)) {
         @import("../../platform.zig").sleep(delay_ns);
-        if (!timer.active) break;
+        if (!timer.active.load(.acquire)) break;
 
         if (timer.callback != 0) {
             // Save current FS base and set TEB FS base for x86 context.
@@ -380,7 +382,7 @@ fn mmTimerThread(idx: usize) void {
         }
 
         if (!timer.periodic) {
-            timer.active = false;
+            timer.active.store(false, .release);
             break;
         }
     }
@@ -397,7 +399,7 @@ pub fn timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usize, f
     // Find a free timer slot
     var slot: ?usize = null;
     for (&mm_timers, 0..) |*t, i| {
-        if (!t.active) {
+        if (!t.active.load(.acquire)) {
             slot = i;
             break;
         }
@@ -408,7 +410,7 @@ pub fn timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usize, f
     timer_id_counter += 1;
 
     mm_timers[idx] = .{
-        .active = true,
+        .active = std.atomic.Value(bool).init(true),
         .id = id,
         .delay_ms = if (uDelay < 1) 1 else uDelay,
         .callback = fptc,
@@ -420,7 +422,7 @@ pub fn timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usize, f
     // Spawn timer thread (only on native — WASM is single-threaded)
     if (comptime platform.is_native) {
         mm_timers[idx].thread = std.Thread.spawn(.{}, mmTimerThread, .{idx}) catch {
-            mm_timers[idx].active = false;
+            mm_timers[idx].active.store(false, .release);
             return 0;
         };
     } else {
@@ -435,8 +437,8 @@ pub fn timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usize, f
 /// Implementation status: Partially implemented
 pub fn timeKillEvent(uTimerID: u32) callconv(w32cc.WINAPI) u32 {
     for (&mm_timers) |*t| {
-        if (t.active and t.id == uTimerID) {
-            t.active = false;
+        if (t.active.load(.acquire) and t.id == uTimerID) {
+            t.active.store(false, .release);
             if (comptime platform.is_native) {
                 if (t.thread) |thread| {
                     thread.detach();

@@ -92,10 +92,16 @@ pub const EventRingBuffer = struct {
     events: [EVENT_BUFFER_SIZE]DIDEVICEOBJECTDATA = undefined,
     head: u32 = 0,
     tail: u32 = 0, // head == tail means empty
+    /// Producers run on FLTK/web backend threads; the guest consumes via
+    /// GetDeviceData. Producers even advance `tail` when dropping on full, so
+    /// every operation must hold this lock.
+    lock: runtime.Mutex = .{},
 
     /// Push an event onto the buffer.
     /// Implementation status: Partially implemented
     pub fn push(self: *EventRingBuffer, evt: DIDEVICEOBJECTDATA) void {
+        self.lock.lock();
+        defer self.lock.unlock();
         const next_head = (self.head + 1) % EVENT_BUFFER_SIZE;
         if (next_head == self.tail) {
             // Buffer full — drop oldest event
@@ -107,7 +113,9 @@ pub const EventRingBuffer = struct {
 
     /// Return the number of events in the buffer.
     /// Implementation status: Partially implemented
-    pub fn count(self: *const EventRingBuffer) u32 {
+    pub fn count(self: *EventRingBuffer) u32 {
+        self.lock.lock();
+        defer self.lock.unlock();
         if (self.head >= self.tail) {
             return self.head - self.tail;
         } else {
@@ -118,6 +126,8 @@ pub const EventRingBuffer = struct {
     /// Drain events from the buffer.
     /// Implementation status: Partially implemented
     pub fn drain(self: *EventRingBuffer, out: [*]DIDEVICEOBJECTDATA, max_items: u32, peek: bool) u32 {
+        self.lock.lock();
+        defer self.lock.unlock();
         var n: u32 = 0;
         var pos = self.tail;
         while (pos != self.head and n < max_items) {
@@ -134,12 +144,16 @@ pub const EventRingBuffer = struct {
     /// Flush the buffer.
     /// Implementation status: Partially implemented
     pub fn flush(self: *EventRingBuffer) void {
+        self.lock.lock();
+        defer self.lock.unlock();
         self.tail = self.head;
     }
 };
 
 // Global sequence counter for event ordering
-var global_sequence: u32 = 0;
+/// Monotonic event sequence shared by all producers (UI threads), so it must
+/// be atomic.
+var global_sequence: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
 /// Global keyboard event buffer.
 pub var keyboard_events: EventRingBuffer = .{};
@@ -151,12 +165,12 @@ pub var mouse_events: EventRingBuffer = .{};
 /// pressed: true for key down, false for key up
 /// Implementation status: Partially implemented
 pub fn pushKeyEvent(scancode: u8, pressed: bool) void {
-    global_sequence += 1;
+    const seq = global_sequence.fetchAdd(1, .monotonic) + 1;
     keyboard_events.push(.{
         .dwOfs = scancode,
         .dwData = if (pressed) 0x80 else 0x00,
         .dwTimeStamp = getTickCount(),
-        .dwSequence = global_sequence,
+        .dwSequence = seq,
     });
     if (trace.enable_tracing) trace.print("DINPUT: pushKeyEvent(scancode=0x{x}, pressed={})  buf_count={d}\n", .{ scancode, pressed, keyboard_events.count() });
 }
@@ -166,12 +180,12 @@ pub fn pushKeyEvent(scancode: u8, pressed: bool) void {
 /// dwData: axis delta or button state (0x80=down, 0x00=up)
 /// Implementation status: Partially implemented
 pub fn pushMouseEvent(dwOfs: u32, dwData: u32) void {
-    global_sequence += 1;
+    const seq = global_sequence.fetchAdd(1, .monotonic) + 1;
     mouse_events.push(.{
         .dwOfs = dwOfs,
         .dwData = dwData,
         .dwTimeStamp = getTickCount(),
-        .dwSequence = global_sequence,
+        .dwSequence = seq,
     });
 }
 

@@ -249,16 +249,23 @@ pub fn TrackPopupMenu(hMenu: usize, uFlags: u32, x: i32, y: i32, nReserved: i32,
 
     if (trace.enable_tracing) trace.print("USER32: TrackPopupMenu({x}) -> show_context_menu({d},{d})\n", .{ hMenu, x, y });
 
+    // Reset BEFORE publishing the menu: a selection stored by the backend
+    // threads is only valid after this point, so it cannot be wiped by a
+    // late-running reset on this thread.
+    renderer.context_menu_chosen.store(false, .release);
+    renderer.context_menu_result.store(0, .release);
+
     renderer.showContextMenu(x, y, items_buf[0..items_len]);
 
     // Block until the frontend reports a selection (context_menu_select).
-    renderer.context_menu_chosen = false;
-    renderer.context_menu_result = 0;
-    while (!renderer.context_menu_chosen) {
+    // Atomic load: the flag is stored from FLTK/web backend threads; a plain
+    // bool could be hoisted out of this loop by the optimizer.
+    while (!renderer.context_menu_chosen.load(.acquire)) {
         platform.sleep(10 * std.time.ns_per_ms);
     }
-    if (trace.enable_tracing) trace.print("USER32: TrackPopupMenu -> {d}\n", .{renderer.context_menu_result});
-    return @intCast(renderer.context_menu_result);
+    const chosen = renderer.context_menu_result.load(.acquire);
+    if (trace.enable_tracing) trace.print("USER32: TrackPopupMenu -> {d}\n", .{chosen});
+    return @intCast(chosen);
 }
 
 // Menu item state tracking: key = (hMenu << 16) | uId, value = MF_* flags

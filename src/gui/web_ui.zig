@@ -12,7 +12,6 @@ var clients_mutex: if (platform.is_native) runtime.Mutex else struct {
     pub fn unlock(_: *@This()) void {}
 } = .{};
 var g_allocator: std.mem.Allocator = undefined;
-var selected_file_path: [1024]u8 = undefined;
 
 /// Initializes the Web UI backend.
 pub fn init(allocator: std.mem.Allocator) !void {
@@ -195,20 +194,29 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
         clients.append(g_allocator, stream) catch {};
         clients_mutex.unlock();
 
-        // Push initial state to reconnecting client
-        if (renderer.last_resolution_json) |json| pushMessage(json);
+        // Push initial state to reconnecting client. Hold cache_mutex across
+        // the burst: the guest thread frees-and-replaces these cached strings,
+        // so reading them unlocked could observe freed memory. Scoped block so
+        // the lock is released before this thread settles into its read loop.
+        // Frame first: it can block on socket writes (up to 4 MiB), so keep
+        // it outside the cache_mutex critical section below.
         pushFrame();
-        if (renderer.dynamic_menu_json) |json| pushMessage(json);
-        if (renderer.icon_json) |json| pushMessage(json);
-        if (renderer.desktop_icons_json) |json| pushMessage(json);
-        if (renderer.active_dialog) |json| pushMessage(json);
-        if (renderer.last_window_pos_json) |json| pushMessage(json);
-        if (renderer.last_title_json) |json| pushMessage(json);
-        if (renderer.last_edit_control_json) |json| pushMessage(json);
-        if (renderer.last_audio_format_json) |json| pushMessage(json);
-        if (renderer.last_controls_json) |json| pushMessage(json);
-        if (renderer.last_color_dialog_json) |json| pushMessage(json);
-        for (renderer.cached_control_text_updates.items) |json| pushMessage(json);
+        {
+            renderer.cache_mutex.lock();
+            defer renderer.cache_mutex.unlock();
+            if (renderer.last_resolution_json) |json| pushMessage(json);
+            if (renderer.dynamic_menu_json) |json| pushMessage(json);
+            if (renderer.icon_json) |json| pushMessage(json);
+            if (renderer.desktop_icons_json) |json| pushMessage(json);
+            if (renderer.active_dialog) |json| pushMessage(json);
+            if (renderer.last_window_pos_json) |json| pushMessage(json);
+            if (renderer.last_title_json) |json| pushMessage(json);
+            if (renderer.last_edit_control_json) |json| pushMessage(json);
+            if (renderer.last_audio_format_json) |json| pushMessage(json);
+            if (renderer.last_controls_json) |json| pushMessage(json);
+            if (renderer.last_color_dialog_json) |json| pushMessage(json);
+            for (renderer.cached_control_text_updates.items) |json| pushMessage(json);
+        }
 
         // Read loop for incoming messages
         while (true) {
@@ -255,9 +263,18 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                                         continue;
                                     }
 
-                                    const path = std.fmt.bufPrint(&selected_file_path, "drive_c/{s}/{s}", .{ dir_path, file_val.string }) catch null;
+                                    var path_buf: [1024]u8 = undefined;
+                                    const path = std.fmt.bufPrint(&path_buf, "drive_c/{s}/{s}", .{ dir_path, file_val.string }) catch null;
                                     if (path) |p| {
-                                        if (renderer.on_file_uploaded) |cb| cb(p);
+                                        if (renderer.on_file_uploaded) |cb| {
+                                            // Own the string: the comdlg stub
+                                            // keeps the slice indefinitely, and
+                                            // this handler runs on a per-client
+                                            // thread, so a shared buffer would
+                                            // race with concurrent uploads.
+                                            const owned = g_allocator.dupe(u8, p) catch continue;
+                                            cb(owned);
+                                        }
                                     }
                                 }
                             }
@@ -288,9 +305,14 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                                         sendError(&ws, "Invalid path traversal attempt");
                                         continue;
                                     }
-                                    const path = std.fmt.bufPrint(&selected_file_path, "drive_c/{s}", .{req_path}) catch null;
+                                    var path_buf: [1024]u8 = undefined;
+                                    const path = std.fmt.bufPrint(&path_buf, "drive_c/{s}", .{req_path}) catch null;
                                     if (path) |p| {
-                                        if (renderer.on_file_uploaded) |cb| cb(p);
+                                        if (renderer.on_file_uploaded) |cb| {
+                                            // Owned copy, same reasoning as above.
+                                            const owned = g_allocator.dupe(u8, p) catch continue;
+                                            cb(owned);
+                                        }
                                     }
                                 }
                             }
@@ -423,8 +445,10 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                             // Context menu item selected
                             if (root.object.get("id")) |id_val| {
                                 if (id_val == .integer) {
-                                    renderer.context_menu_result = @intCast(@as(u32, @truncate(@as(u64, @bitCast(id_val.integer)))));
-                                    renderer.context_menu_chosen = true;
+                                    // Result first so a guest that observes
+                                    // chosen==true also observes the result.
+                                    renderer.context_menu_result.store(@intCast(@as(u32, @truncate(@as(u64, @bitCast(id_val.integer))))), .release);
+                                    renderer.context_menu_chosen.store(true, .release);
                                 }
                             }
                         } else if (std.mem.eql(u8, type_val.?.string, "set_volume")) {
@@ -479,8 +503,11 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                 }
             }
         }
-        stream.close(runtime.io());
-
+        // Deregister BEFORE closing the socket: pushFrame/pushMessage run on
+        // other threads and must never touch this fd again. After close() the
+        // OS can recycle the descriptor for a freshly accepted connection (or
+        // a file opened by the guest), and frames would be written into that
+        // unrelated stream.
         clients_mutex.lock();
         for (clients.items, 0..) |client_stream, i| {
             if (client_stream.socket.handle == stream.socket.handle) {
@@ -489,6 +516,7 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
             }
         }
         clients_mutex.unlock();
+        stream.close(runtime.io());
     } else {
         var file_path_buf: [256]u8 = undefined;
         var req_path = target;

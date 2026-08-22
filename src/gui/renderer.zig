@@ -312,10 +312,28 @@ pub fn clearClipboard() void {
 
 // --- Context menu blocking ---
 
-/// Whether a context menu selection has been made.
-pub var context_menu_chosen: bool = false;
+/// Whether a context menu selection has been made. Atomic: the guest thread
+/// polls this while FLTK/web backend threads store the selection.
+pub var context_menu_chosen: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 /// The ID of the item chosen from the context menu.
-pub var context_menu_result: u32 = 0;
+pub var context_menu_result: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+// --- Cached JSON replay state (written by guest thread, read by web clients) ---
+
+/// Guards the cached_*_json fields and cached_control_text_updates below:
+/// writers free-and-replace under this lock, web_ui's reconnect burst reads
+/// under it, so a client can never observe a freed buffer.
+pub var cache_mutex: runtime.Mutex = .{};
+
+/// Replaces a cached JSON string under `cache_mutex`, freeing the old value.
+/// Takes ownership of nothing; duplicates `json` first so callers keep theirs.
+fn cacheReplace(field: *?[]const u8, json: []const u8) void {
+    const owned = g_allocator.dupe(u8, json) catch return;
+    cache_mutex.lock();
+    defer cache_mutex.unlock();
+    if (field.*) |old| g_allocator.free(old);
+    field.* = owned;
+}
 
 // --- Lifecycle ---
 
@@ -391,8 +409,7 @@ pub fn setResolution(w: u32, h: u32) void {
         .web_ui => {
             var buf: [128]u8 = undefined;
             const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_resolution\",\"width\":{d},\"height\":{d}}}", .{ w, h }) catch return;
-            if (last_resolution_json) |old| g_allocator.free(old);
-            last_resolution_json = g_allocator.dupe(u8, json) catch null;
+            cacheReplace(&last_resolution_json, json);
             web_ui.pushMessage(json);
         },
         .fltk => fltk_ui.setResolution(w, h),
@@ -410,8 +427,7 @@ pub fn setTitle(title: []const u8) void {
             const esc_len = jsonEscape(title, &escaped);
             var buf: [1024]u8 = undefined;
             const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_title\",\"title\":\"{s}\"}}", .{escaped[0..esc_len]}) catch return;
-            if (last_title_json) |old| g_allocator.free(old);
-            last_title_json = g_allocator.dupe(u8, json) catch null;
+            cacheReplace(&last_title_json, json);
             web_ui.pushMessage(json);
         },
         .fltk => fltk_ui.setTitle(title),
@@ -425,8 +441,7 @@ pub fn setWindowPos(cx: i32, cy: i32, clientW: i32, clientH: i32) void {
         .web_ui => {
             var buf: [192]u8 = undefined;
             const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_window_pos\",\"cx\":{d},\"cy\":{d},\"clientW\":{d},\"clientH\":{d}}}", .{ cx, cy, clientW, clientH }) catch return;
-            if (last_window_pos_json) |old| g_allocator.free(old);
-            last_window_pos_json = g_allocator.dupe(u8, json) catch null;
+            cacheReplace(&last_window_pos_json, json);
             web_ui.pushMessage(json);
         },
         .fltk => fltk_ui.setWindowPos(cx, cy, clientW, clientH),
@@ -439,7 +454,11 @@ pub fn showEditControl(multiline: bool) void {
     switch (active_backend) {
         .web_ui => {
             const msg = if (multiline) "{\"type\":\"show_edit_control\",\"multiline\":true}" else "{\"type\":\"show_edit_control\",\"multiline\":false}";
-            last_edit_control_json = msg;
+            {
+                cache_mutex.lock();
+                defer cache_mutex.unlock();
+                last_edit_control_json = msg;
+            }
             web_ui.pushMessage(msg);
         },
         .fltk => fltk_ui.showEditControl(multiline),
@@ -462,8 +481,7 @@ pub fn resizeEditControl(x: i32, y: i32, width: i32, height: i32) void {
 
 /// Sets the application icon from a JSON description.
 pub fn setIcon(json: []const u8) void {
-    if (icon_json) |old| g_allocator.free(old);
-    icon_json = g_allocator.dupe(u8, json) catch null;
+    cacheReplace(&icon_json, json);
     switch (active_backend) {
         .web_ui => web_ui.pushMessage(json),
         .fltk => fltk_ui.setIcon(json),
@@ -473,8 +491,7 @@ pub fn setIcon(json: []const u8) void {
 
 /// Sets the application menu from a JSON description.
 pub fn setMenu(json: []const u8) void {
-    if (dynamic_menu_json) |old| g_allocator.free(old);
-    dynamic_menu_json = g_allocator.dupe(u8, json) catch null;
+    cacheReplace(&dynamic_menu_json, json);
     switch (active_backend) {
         .web_ui => web_ui.pushMessage(json),
         .fltk => fltk_ui.setMenu(json),
@@ -688,7 +705,7 @@ pub fn showMessageBox(title: []const u8, text: []const u8) void {
 
 /// Displays a dialog from a JSON description.
 pub fn showDialog(json: []const u8) void {
-    active_dialog = g_allocator.dupe(u8, json) catch null;
+    cacheReplace(&active_dialog, json);
     switch (active_backend) {
         .web_ui => web_ui.pushMessage(json),
         .fltk => fltk_ui.showDialog(json),
@@ -709,8 +726,7 @@ pub fn showControls(json: []const u8) void {
         buf.appendSlice(g_allocator, json) catch return;
     }
 
-    if (last_controls_json) |old| g_allocator.free(old);
-    last_controls_json = g_allocator.dupe(u8, buf.items) catch null;
+    cacheReplace(&last_controls_json, buf.items);
 
     switch (active_backend) {
         .web_ui => web_ui.pushMessage(buf.items),
@@ -736,6 +752,8 @@ pub fn addControl(class: []const u8, hwnd_id: usize, x: i32, y: i32, w: i32, h: 
             // Cache for reconnect: like resolution/title, controls created before
             // a client connects would otherwise never reach the browser.
             if (g_allocator.dupe(u8, json)) |cached| {
+                cache_mutex.lock();
+                defer cache_mutex.unlock();
                 cached_control_text_updates.append(g_allocator, cached) catch {
                     g_allocator.free(cached);
                 };
@@ -756,6 +774,8 @@ pub fn updateControlText(nIDDlgItem: i32, text: []const u8) void {
     // console apps keep backend .none and never call init()).
     if (g_allocator_ready) {
         const cached = g_allocator.dupe(u8, json) catch return;
+        cache_mutex.lock();
+        defer cache_mutex.unlock();
         cached_control_text_updates.append(g_allocator, cached) catch {
             g_allocator.free(cached);
             return;
@@ -791,8 +811,7 @@ pub fn openColorDialog(initial: u32) void {
         .web_ui => {
             var buf: [128]u8 = undefined;
             const json = std.fmt.bufPrint(&buf, "{{\"type\":\"show_color_dialog\",\"initial\":{d}}}", .{initial}) catch return;
-            if (last_color_dialog_json) |old_json| g_allocator.free(old_json);
-            last_color_dialog_json = g_allocator.dupe(u8, json) catch null;
+            cacheReplace(&last_color_dialog_json, json);
             web_ui.pushMessage(json);
         },
         .fltk => fltk_ui.openColorDialog(initial),
@@ -833,6 +852,8 @@ pub fn updateControlValue(nIDDlgItem: i32, value: i32) void {
     const json = std.fmt.bufPrint(&buf, "{{\"type\":\"update_control_value\",\"id\":{d},\"value\":{d}}}", .{ nIDDlgItem, value }) catch return;
     if (g_allocator_ready) {
         const cached = g_allocator.dupe(u8, json) catch return;
+        cache_mutex.lock();
+        defer cache_mutex.unlock();
         cached_control_text_updates.append(g_allocator, cached) catch {
             g_allocator.free(cached);
             return;
@@ -852,6 +873,8 @@ pub fn updateControlRange(nIDDlgItem: i32, min: i32, max: i32) void {
     const json = std.fmt.bufPrint(&buf, "{{\"type\":\"update_control_range\",\"id\":{d},\"min\":{d},\"max\":{d}}}", .{ nIDDlgItem, min, max }) catch return;
     if (g_allocator_ready) {
         const cached = g_allocator.dupe(u8, json) catch return;
+        cache_mutex.lock();
+        defer cache_mutex.unlock();
         cached_control_text_updates.append(g_allocator, cached) catch {
             g_allocator.free(cached);
             return;
@@ -888,8 +911,7 @@ pub fn openFileDialog(filters: ?[]const u8, is_save: bool) void {
             files_json.appendSlice(g_allocator, ",\"path\":\"Desktop\"") catch {};
             files_json.appendSlice(g_allocator, "}") catch {};
 
-            if (active_dialog) |old| g_allocator.free(old);
-            active_dialog = g_allocator.dupe(u8, files_json.items) catch null;
+            cacheReplace(&active_dialog, files_json.items);
             web_ui.pushMessage(files_json.items);
         },
         .fltk => fltk_ui.openFileDialog(filters, is_save),
@@ -1011,8 +1033,7 @@ pub fn openFontDialog(face_name: []const u8, point_size: i32, bold: bool, italic
                 "{{\"type\":\"open_font_dialog\",\"face\":\"{s}\",\"size\":{d},\"bold\":{},\"italic\":{}}}",
                 .{ face_name, point_size, bold, italic },
             ) catch return;
-            if (active_dialog) |old| g_allocator.free(old);
-            active_dialog = g_allocator.dupe(u8, json) catch null;
+            cacheReplace(&active_dialog, json);
             web_ui.pushMessage(json);
         },
         .fltk => fltk_ui.openFontDialog(face_name, point_size, bold, italic),
@@ -1030,8 +1051,7 @@ pub fn openPrintDialog(from_page: i32, to_page: i32, min_page: i32, max_page: i3
                 "{{\"type\":\"show_print_dialog\",\"from\":{d},\"to\":{d},\"min\":{d},\"max\":{d},\"copies\":{d}}}",
                 .{ from_page, to_page, min_page, max_page, copies },
             ) catch return;
-            if (active_dialog) |old| g_allocator.free(old);
-            active_dialog = g_allocator.dupe(u8, json) catch null;
+            cacheReplace(&active_dialog, json);
             web_ui.pushMessage(json);
         },
         .fltk => fltk_ui.openPrintDialog(from_page, to_page, min_page, max_page, copies),
@@ -1053,8 +1073,7 @@ pub fn openFindDialog(find_text: []const u8, replace_text: []const u8, is_replac
                 "{{\"type\":\"open_find_dialog\",\"mode\":\"{s}\",\"findText\":\"{s}\",\"replaceText\":\"{s}\"}}",
                 .{ if (is_replace) "replace" else "find", esc_find[0..f_len], esc_repl[0..r_len] },
             ) catch return;
-            if (active_dialog) |old| g_allocator.free(old);
-            active_dialog = g_allocator.dupe(u8, json) catch null;
+            cacheReplace(&active_dialog, json);
             web_ui.pushMessage(json);
         },
         .fltk => fltk_ui.openFindDialog(find_text, replace_text, is_replace),
@@ -1076,8 +1095,7 @@ pub fn openPageSetupDialog(left: i32, top: i32, right: i32, bottom: i32, paper_w
                 "{{\"type\":\"show_page_setup_dialog\",\"left\":{d},\"top\":{d},\"right\":{d},\"bottom\":{d},\"paperW\":{d},\"paperH\":{d},\"orientation\":{d},\"units\":\"{s}\"}}",
                 .{ left, top, right, bottom, paper_w, paper_h, orientation, esc_label[0..l_len] },
             ) catch return;
-            if (active_dialog) |old| g_allocator.free(old);
-            active_dialog = g_allocator.dupe(u8, json) catch null;
+            cacheReplace(&active_dialog, json);
             web_ui.pushMessage(json);
         },
         .fltk => fltk_ui.openPageSetupDialog(left, top, right, bottom, paper_w, paper_h, orientation, units_label),
@@ -1087,6 +1105,8 @@ pub fn openPageSetupDialog(left: i32, top: i32, right: i32, bottom: i32, paper_w
 
 /// Closes the currently active dialog.
 pub fn closeDialog() void {
+    cache_mutex.lock();
+    defer cache_mutex.unlock();
     active_dialog = null;
     switch (active_backend) {
         .web_ui => web_ui.pushMessage("{\"type\":\"close_dialog\"}"),
@@ -1123,8 +1143,7 @@ pub fn setAudioFormat(sample_rate: u32, channels: u16, bits_per_sample: u16) voi
         .web_ui => {
             var buf: [128]u8 = undefined;
             const json = std.fmt.bufPrint(&buf, "{{\"type\":\"audio_format\",\"sampleRate\":{d},\"channels\":{d},\"bitsPerSample\":{d}}}", .{ sample_rate, channels, bits_per_sample }) catch return;
-            if (last_audio_format_json) |old| g_allocator.free(old);
-            last_audio_format_json = g_allocator.dupe(u8, json) catch null;
+            cacheReplace(&last_audio_format_json, json);
             web_ui.pushMessage(json);
         },
         .fltk => fltk_ui.setAudioFormat(sample_rate, channels, bits_per_sample),
@@ -1214,8 +1233,7 @@ pub fn sendDesktopIcons() void {
     json.appendSlice(g_allocator, "]}") catch {};
 
     // Cache for reconnecting clients
-    if (desktop_icons_json) |old| g_allocator.free(old);
-    desktop_icons_json = g_allocator.dupe(u8, json.items) catch null;
+    cacheReplace(&desktop_icons_json, json.items);
 
     web_ui.pushMessage(json.items);
     json.deinit(g_allocator);

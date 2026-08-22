@@ -19,21 +19,66 @@ const renderer = if (@import("builtin").os.tag != .windows) @import("../../gui/r
     pub var on_page_setup_chosen: ?*const fn (i32, i32, i32, i32, i32, i32, i32) void = null;
 };
 const kernel32 = @import("../kernel32.zig");
+const runtime = @import("../../runtime.zig");
+
+/// Guards every dialog result variable below (pending_file_path,
+/// dialog_cancelled, pending_color, font/print/pagesetup results). The guest
+/// thread resets and polls them while FLTK/web backend threads store the
+/// outcomes from their own threads.
+var dlg_result_mutex: runtime.Mutex = .{};
 
 var dialog_cancelled: bool = false;
 var pending_file_path: ?[]const u8 = null;
 
+fn fileDialogDone() bool {
+    dlg_result_mutex.lock();
+    defer dlg_result_mutex.unlock();
+    return pending_file_path != null or dialog_cancelled;
+}
+
+fn colorDialogDone() bool {
+    dlg_result_mutex.lock();
+    defer dlg_result_mutex.unlock();
+    return pending_color != null or dialog_cancelled;
+}
+
+fn fontDialogDone() bool {
+    dlg_result_mutex.lock();
+    defer dlg_result_mutex.unlock();
+    return font_pending or dialog_cancelled;
+}
+
+fn printDialogDone() bool {
+    dlg_result_mutex.lock();
+    defer dlg_result_mutex.unlock();
+    return print_pending or dialog_cancelled;
+}
+
+fn pageSetupDialogDone() bool {
+    dlg_result_mutex.lock();
+    defer dlg_result_mutex.unlock();
+    return page_setup_pending or dialog_cancelled;
+}
+
 fn handleCancelDialog() void {
+    dlg_result_mutex.lock();
+    defer dlg_result_mutex.unlock();
     dialog_cancelled = true;
 }
 
 fn handleFileUploaded(path: []const u8) void {
+    dlg_result_mutex.lock();
+    defer dlg_result_mutex.unlock();
     pending_file_path = path;
 }
 
 fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
-    pending_file_path = null;
-    dialog_cancelled = false;
+    {
+        dlg_result_mutex.lock();
+        defer dlg_result_mutex.unlock();
+        pending_file_path = null;
+        dialog_cancelled = false;
+    }
 
     var filters_json: ?[]const u8 = null;
     if (lpofn_ptr != 0) {
@@ -51,7 +96,7 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
     renderer.on_file_uploaded = &handleFileUploaded;
     renderer.on_cancel_dialog = &handleCancelDialog;
 
-    while (pending_file_path == null and !dialog_cancelled) {
+    while (!fileDialogDone()) {
         @import("../../platform.zig").sleep(10 * 1000 * 1000); // 10ms
     }
 
@@ -60,7 +105,12 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
 
     renderer.closeDialog();
 
-    if (pending_file_path) |path| {
+    const path_opt: ?[]const u8 = blk: {
+        dlg_result_mutex.lock();
+        defer dlg_result_mutex.unlock();
+        break :blk pending_file_path;
+    };
+    if (path_opt) |path| {
         if (lpofn_ptr != 0) {
             const ofn = @as(*w32.OPENFILENAMEA, @ptrFromInt(lpofn_ptr));
 
@@ -124,7 +174,11 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
                     }
                 }
 
-                pending_file_path = null;
+                {
+                    dlg_result_mutex.lock();
+                    defer dlg_result_mutex.unlock();
+                    pending_file_path = null;
+                }
                 return 1;
             }
         }
@@ -148,8 +202,12 @@ pub fn GetSaveFileNameA(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 fn commonFileDialogW(lpofn_ptr: usize, is_save: bool) i32 {
-    pending_file_path = null;
-    dialog_cancelled = false;
+    {
+        dlg_result_mutex.lock();
+        defer dlg_result_mutex.unlock();
+        pending_file_path = null;
+        dialog_cancelled = false;
+    }
 
     var filters_json: ?[]const u8 = null;
     if (lpofn_ptr != 0) {
@@ -167,7 +225,7 @@ fn commonFileDialogW(lpofn_ptr: usize, is_save: bool) i32 {
     renderer.on_file_uploaded = &handleFileUploaded;
     renderer.on_cancel_dialog = &handleCancelDialog;
 
-    while (pending_file_path == null and !dialog_cancelled) {
+    while (!fileDialogDone()) {
         @import("../../platform.zig").sleep(10 * 1000 * 1000); // 10ms
     }
 
@@ -176,7 +234,12 @@ fn commonFileDialogW(lpofn_ptr: usize, is_save: bool) i32 {
 
     renderer.closeDialog();
 
-    if (pending_file_path) |path| {
+    const path_opt: ?[]const u8 = blk: {
+        dlg_result_mutex.lock();
+        defer dlg_result_mutex.unlock();
+        break :blk pending_file_path;
+    };
+    if (path_opt) |path| {
         if (lpofn_ptr != 0) {
             const ofn = @as(*w32.OPENFILENAMEA, @ptrFromInt(lpofn_ptr));
 
@@ -246,7 +309,11 @@ fn commonFileDialogW(lpofn_ptr: usize, is_save: bool) i32 {
                     }
                 }
 
-                pending_file_path = null;
+                {
+                    dlg_result_mutex.lock();
+                    defer dlg_result_mutex.unlock();
+                    pending_file_path = null;
+                }
                 return 1;
             }
         }
@@ -272,6 +339,8 @@ pub fn GetSaveFileNameW(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
 var pending_color: ?u32 = null;
 
 fn handleColorSelected(color: u32) void {
+    dlg_result_mutex.lock();
+    defer dlg_result_mutex.unlock();
     pending_color = color;
 }
 
@@ -283,8 +352,12 @@ pub fn ChooseColorA(lpcc_ptr: usize) callconv(w32cc.WINAPI) i32 {
     const initial = @as(*align(1) const u32, @ptrCast(cc + 12)).*; // rgbResult
     if (trace.enable_tracing) trace.print("COMDLG32: ChooseColorA(initial={x})\n", .{initial});
 
-    pending_color = null;
-    dialog_cancelled = false;
+    {
+        dlg_result_mutex.lock();
+        defer dlg_result_mutex.unlock();
+        pending_color = null;
+        dialog_cancelled = false;
+    }
     renderer.openColorDialog(initial & 0xFFFFFF);
 
     const prev_color_cb = renderer.on_color_selected;
@@ -292,7 +365,7 @@ pub fn ChooseColorA(lpcc_ptr: usize) callconv(w32cc.WINAPI) i32 {
     renderer.on_color_selected = &handleColorSelected;
     renderer.on_cancel_dialog = &handleCancelDialog;
 
-    while (pending_color == null and !dialog_cancelled) {
+    while (!colorDialogDone()) {
         @import("../../platform.zig").sleep(10 * 1000 * 1000); // 10ms
     }
 
@@ -300,7 +373,12 @@ pub fn ChooseColorA(lpcc_ptr: usize) callconv(w32cc.WINAPI) i32 {
     renderer.on_cancel_dialog = prev_cancel_cb;
     renderer.closeDialog();
 
-    if (pending_color) |color| {
+    const color_opt: ?u32 = blk: {
+        dlg_result_mutex.lock();
+        defer dlg_result_mutex.unlock();
+        break :blk pending_color;
+    };
+    if (color_opt) |color| {
         @as(*align(1) u32, @ptrCast(cc + 12)).* = color & 0xFFFFFF; // rgbResult
         if (trace.enable_tracing) trace.print("COMDLG32: ChooseColorA -> {x} (ok)\n", .{color});
         return 1;
@@ -328,6 +406,8 @@ var pending_font_bold: bool = false;
 var pending_font_italic: bool = false;
 
 fn handleFontChosen(face: []const u8, size: i32, bold: bool, italic: bool) void {
+    dlg_result_mutex.lock();
+    defer dlg_result_mutex.unlock();
     const n = @min(face.len, pending_font_face.len - 1);
     @memcpy(pending_font_face[0..n], face[0..n]);
     pending_font_face[n] = 0;
@@ -395,8 +475,12 @@ fn commonChooseFont(lpcf_ptr: usize, wide: bool) i32 {
         if (pt < 1) pt = 1;
     }
 
-    font_pending = false;
-    dialog_cancelled = false;
+    {
+        dlg_result_mutex.lock();
+        defer dlg_result_mutex.unlock();
+        font_pending = false;
+        dialog_cancelled = false;
+    }
     renderer.openFontDialog(face_buf[0..face_len], pt, lf_weight >= 600, lf_italic != 0);
 
     const prev_font_cb = renderer.on_font_chosen;
@@ -404,7 +488,7 @@ fn commonChooseFont(lpcf_ptr: usize, wide: bool) i32 {
     renderer.on_font_chosen = &handleFontChosen;
     renderer.on_cancel_dialog = &handleCancelDialog;
 
-    while (!font_pending and !dialog_cancelled) {
+    while (!fontDialogDone()) {
         @import("../../platform.zig").sleep(10 * 1000 * 1000); // 10ms
     }
 
@@ -470,6 +554,8 @@ var pending_print_to: i32 = 1;
 var pending_print_copies: i32 = 1;
 
 fn handlePrintChosen(from_page: i32, to_page: i32, copies: i32) void {
+    dlg_result_mutex.lock();
+    defer dlg_result_mutex.unlock();
     pending_print_from = from_page;
     pending_print_to = to_page;
     pending_print_copies = copies;
@@ -501,8 +587,12 @@ fn commonPrintDlg(lppd_ptr: usize, wide: bool) i32 {
     const copies = @as(*align(1) const u16, @ptrCast(pd + 32)).*;
     if (trace.enable_tracing) trace.print("COMDLG32: PrintDlg(pages={d}-{d}/{d}-{d}, copies={d})\n", .{ from_page, to_page, min_page, max_page, copies });
 
-    print_pending = false;
-    dialog_cancelled = false;
+    {
+        dlg_result_mutex.lock();
+        defer dlg_result_mutex.unlock();
+        print_pending = false;
+        dialog_cancelled = false;
+    }
     renderer.openPrintDialog(from_page, to_page, min_page, max_page, copies);
 
     const prev_print_cb = renderer.on_print_chosen;
@@ -510,7 +600,7 @@ fn commonPrintDlg(lppd_ptr: usize, wide: bool) i32 {
     renderer.on_print_chosen = &handlePrintChosen;
     renderer.on_cancel_dialog = &handleCancelDialog;
 
-    while (!print_pending and !dialog_cancelled) {
+    while (!printDialogDone()) {
         @import("../../platform.zig").sleep(10 * 1000 * 1000); // 10ms
     }
 
@@ -781,6 +871,8 @@ var pending_ps_paper_h: i32 = 11000;
 var pending_ps_orientation: i32 = 0;
 
 fn handlePageSetupChosen(left: i32, top: i32, right: i32, bottom: i32, paper_w: i32, paper_h: i32, orientation: i32) void {
+    dlg_result_mutex.lock();
+    defer dlg_result_mutex.unlock();
     pending_ps_left = left;
     pending_ps_top = top;
     pending_ps_right = right;
@@ -815,8 +907,12 @@ fn commonPageSetupDlg(lppsd_ptr: usize, wide: bool) i32 {
     const units_label: []const u8 = if ((flags & PSD_INHUNDREDTHSOFMILLIMETERS) != 0) "0.01 mm" else "0.001 in";
     if (trace.enable_tracing) trace.print("COMDLG32: PageSetupDlg(margins={d},{d},{d},{d} paper={d}x{d})\n", .{ init_left, init_top, init_right, init_bottom, paper_w, paper_h });
 
-    page_setup_pending = false;
-    dialog_cancelled = false;
+    {
+        dlg_result_mutex.lock();
+        defer dlg_result_mutex.unlock();
+        page_setup_pending = false;
+        dialog_cancelled = false;
+    }
     renderer.openPageSetupDialog(init_left, init_top, init_right, init_bottom, paper_w, paper_h, 0, units_label);
 
     const prev_cb = renderer.on_page_setup_chosen;
@@ -824,7 +920,7 @@ fn commonPageSetupDlg(lppsd_ptr: usize, wide: bool) i32 {
     renderer.on_page_setup_chosen = &handlePageSetupChosen;
     renderer.on_cancel_dialog = &handleCancelDialog;
 
-    while (!page_setup_pending and !dialog_cancelled) {
+    while (!pageSetupDialogDone()) {
         @import("../../platform.zig").sleep(10 * 1000 * 1000); // 10ms
     }
 
