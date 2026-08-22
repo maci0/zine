@@ -61,6 +61,28 @@ pub const FpuState = struct {
     }
 };
 
+/// Round to integer per an x87/SSE rounding-control field: 00 nearest-even
+/// (the default), 01 down, 10 up, 11 toward zero.
+pub fn roundPerRc(rc: u2, val: f64) f64 {
+    return switch (rc) {
+        0b00 => roundHalfEven(val),
+        0b01 => @floor(val),
+        0b10 => @ceil(val),
+        0b11 => @trunc(val),
+    };
+}
+
+fn roundHalfEven(x: f64) f64 {
+    const t = @trunc(x);
+    const diff = x - t;
+    const adiff = @abs(diff);
+    if (adiff < 0.5) return t;
+    if (adiff > 0.5) return t + std.math.sign(diff);
+    // Exact tie: choose the even neighbor.
+    if (@mod(t, 2.0) == 0) return t;
+    return t + std.math.sign(diff);
+}
+
 // -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------

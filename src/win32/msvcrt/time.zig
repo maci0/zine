@@ -5,6 +5,7 @@ const x86_memory = @import("../../x86/memory.zig");
 const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
+const civil_time = @import("../civil_time.zig");
 
 /// struct tm for localtime
 const Tm = extern struct {
@@ -49,7 +50,10 @@ pub fn time(time_out: ?*i32) callconv(.c) i32 {
 
 /// Convert time_t to struct tm as local time.
 pub fn localtime(time_in: *const i32) callconv(.c) *Tm {
-    const ts: u64 = @intCast(time_in.*);
+    const raw = time_in.*;
+    // Negative times (pre-1970, or the -1 error sentinel) clamp to the epoch
+    // like ctime() below; a plain @intCast to u64 would panic on safe builds.
+    const ts: u64 = if (raw >= 0) @intCast(raw) else 0;
     fillTm(&localtime_result, ts);
     return &localtime_result;
 }
@@ -130,29 +134,13 @@ pub fn stub_futime(fd: i32, times_ptr: usize) callconv(.c) i32 {
 /// Convert struct tm to time_t.
 /// Implementation status: Partially implemented
 pub fn mktime(tm: *const Tm) callconv(.c) i32 {
+    // Normalize the month into [1, 12], carrying overflow into the year.
+    // tm_mon is 0-based; @divFloor/@mod handle out-of-range and negative values.
+    const y: i64 = @as(i64, tm.tm_year) + 1900 + @divFloor(tm.tm_mon, 12);
+    const m: i64 = @mod(tm.tm_mon, 12) + 1;
 
-    // Convert struct tm to Unix timestamp
-    const year: i64 = @as(i64, tm.tm_year) + 1900;
-    var month: i64 = @as(i64, tm.tm_mon) + 1;
-    var y = year;
-
-    // Adjust for months out of range
-    if (month <= 0) {
-        y -= 1;
-        month += 12;
-    } else if (month > 12) {
-        y += @divTrunc(month - 1, 12);
-        month = @mod(month - 1, 12) + 1;
-    }
-
-    // Days from epoch (1970-01-01) using a simplified algorithm
-    if (month <= 2) {
-        y -= 1;
-        month += 12;
-    }
-    const era_days = 365 * (y - 1970) + @divFloor(y - 1969, 4) - @divFloor(y - 1901, 100) + @divFloor(y - 1601, 400);
-    const month_days = @divTrunc(153 * (month - 3) + 2, 5);
-    const total_days = era_days + month_days + @as(i64, tm.tm_mday) - 1 - 306;
+    // Days from epoch (1970-01-01), exact Gregorian calendar.
+    const total_days = civil_time.daysFromCivil(y, m, tm.tm_mday);
 
     const total_secs = total_days * 86400 + @as(i64, tm.tm_hour) * 3600 + @as(i64, tm.tm_min) * 60 + @as(i64, tm.tm_sec);
 

@@ -4,6 +4,7 @@ const trace = @import("../../trace.zig");
 const platform = @import("../../platform.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
+const civil_time = @import("../civil_time.zig");
 
 /// Implementation status: Partially implemented
 pub fn GetTimeZoneInformation(lpTimeZoneInformation: usize) callconv(w32cc.WINAPI) u32 {
@@ -160,24 +161,21 @@ pub fn SystemTimeToFileTime(lpSystemTime: usize, lpFileTime: usize) callconv(w32
     const st = @as(*const w32.SYSTEMTIME, @ptrFromInt(lpSystemTime));
     const ft = @as(*w32.FILETIME, @ptrFromInt(lpFileTime));
 
-    // Convert SYSTEMTIME to days since epoch (1601-01-01)
-    // Simplified: use year/month/day to compute days, then add time
-    var year: i64 = st.wYear;
-    var month: i64 = st.wMonth;
-    if (month <= 2) {
-        year -= 1;
-        month += 12;
-    }
-    // Days from 1601-01-01 to the given date (approximate Gregory)
-    const days: i64 = 365 * (year - 1601) + @divTrunc(year - 1601, 4) - @divTrunc(year - 1601, 100) + @divTrunc(year - 1601, 400) + @divTrunc(153 * (month - 3) + 2, 5) + st.wDay - 1;
+    // Days from 1601-01-01 to the given date, exact Gregorian calendar.
+    // SYSTEMTIME months outside [1, 12] are normalized like mktime does.
+    const y: i64 = st.wYear + @divFloor(@as(i64, st.wMonth) - 1, 12);
+    const m: i64 = @mod(@as(i64, st.wMonth) - 1, 12) + 1;
+    const days: i64 = civil_time.daysFromCivil(y, m, st.wDay) - civil_time.daysFromCivil(1601, 1, 1);
 
-    const total_100ns: u64 = @intCast(
-        days * 24 * 60 * 60 * 10_000_000 +
-            @as(i64, st.wHour) * 60 * 60 * 10_000_000 +
-            @as(i64, st.wMinute) * 60 * 10_000_000 +
-            @as(i64, st.wSecond) * 10_000_000 +
-            @as(i64, st.wMilliseconds) * 10_000,
-    );
+    const total_100ns_i64: i64 = days * 24 * 60 * 60 * 10_000_000 +
+        @as(i64, st.wHour) * 60 * 60 * 10_000_000 +
+        @as(i64, st.wMinute) * 60 * 10_000_000 +
+        @as(i64, st.wSecond) * 10_000_000 +
+        @as(i64, st.wMilliseconds) * 10_000;
+
+    // FILETIME is unsigned; dates before 1601 saturate at the epoch instead
+    // of panicking on the cast.
+    const total_100ns: u64 = if (total_100ns_i64 < 0) 0 else @intCast(total_100ns_i64);
 
     ft.dwLowDateTime = @intCast(total_100ns & 0xFFFFFFFF);
     ft.dwHighDateTime = @intCast(total_100ns >> 32);
@@ -191,26 +189,23 @@ pub fn FileTimeToSystemTime(lpFileTime: usize, lpSystemTime: usize) callconv(w32
     const st = @as(*w32.SYSTEMTIME, @ptrFromInt(lpSystemTime));
 
     const total_100ns: u64 = (@as(u64, ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
-    const total_secs = total_100ns / 10_000_000;
+    const total_secs: i64 = @intCast(total_100ns / 10_000_000);
     const remaining_100ns = total_100ns % 10_000_000;
 
-    // Convert seconds since 1601-01-01 to Unix timestamp
-    const win_to_unix: u64 = 11644473600;
-    const unix_secs: u64 = if (total_secs >= win_to_unix) total_secs - win_to_unix else 0;
+    // Seconds since the Unix epoch; FILETIMEs between 1601 and 1970 are
+    // valid and must not be clamped to 1970.
+    const unix_secs: i64 = total_secs - 11644473600;
+    // std.time.epoch only handles post-1970 days, so convert via civil date.
+    const cd = civil_time.civilFromDays(@divFloor(unix_secs, 86400));
+    const secs_into_day: u17 = @intCast(@mod(unix_secs, 86400));
 
-    const epoch_secs = std.time.epoch.EpochSeconds{ .secs = unix_secs };
-    const epoch_day = epoch_secs.getEpochDay();
-    const year_day = epoch_day.calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
-    const day_secs = epoch_secs.getDaySeconds();
-
-    st.wYear = @intCast(year_day.year);
-    st.wMonth = @intFromEnum(month_day.month);
-    st.wDayOfWeek = @intCast((epoch_day.day + 4) % 7);
-    st.wDay = month_day.day_index + 1;
-    st.wHour = @intCast(day_secs.getHoursIntoDay());
-    st.wMinute = @intCast(day_secs.getMinutesIntoHour());
-    st.wSecond = @intCast(day_secs.getSecondsIntoMinute());
+    st.wYear = @intCast(std.math.clamp(cd.year, 1601, 30827));
+    st.wMonth = @intCast(cd.month);
+    st.wDayOfWeek = @intCast(@mod(@divFloor(unix_secs, 86400) + 4, 7));
+    st.wDay = @intCast(cd.day);
+    st.wHour = @intCast(secs_into_day / 3600);
+    st.wMinute = @intCast((secs_into_day / 60) % 60);
+    st.wSecond = @intCast(secs_into_day % 60);
     st.wMilliseconds = @intCast(remaining_100ns / 10_000);
     return 1; // TRUE
 }

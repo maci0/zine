@@ -491,12 +491,9 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                         },
                         4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - fval),
                         5 => cpu.fpu.setSt(0, fval - cpu.fpu.st(0)),
-                        6 => if (fval != 0) {
-                            cpu.fpu.setSt(0, cpu.fpu.st(0) / fval);
-                        },
-                        7 => if (cpu.fpu.st(0) != 0) {
-                            cpu.fpu.setSt(0, fval / cpu.fpu.st(0));
-                        },
+                        // Masked x87: division by zero yields +/-inf (ZE flag), not a skipped op.
+                        6 => cpu.fpu.setSt(0, cpu.fpu.st(0) / fval),
+                        7 => cpu.fpu.setSt(0, fval / cpu.fpu.st(0)),
                         else => {},
                     }
                 }
@@ -511,12 +508,9 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     },
                     4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - sti),
                     5 => cpu.fpu.setSt(0, sti - cpu.fpu.st(0)),
-                    6 => if (sti != 0) {
-                        cpu.fpu.setSt(0, cpu.fpu.st(0) / sti);
-                    },
-                    7 => if (cpu.fpu.st(0) != 0) {
-                        cpu.fpu.setSt(0, sti / cpu.fpu.st(0));
-                    },
+                    // Masked x87: division by zero yields +/-inf (ZE flag), not a skipped op.
+                    6 => cpu.fpu.setSt(0, cpu.fpu.st(0) / sti),
+                    7 => cpu.fpu.setSt(0, sti / cpu.fpu.st(0)),
                     else => {},
                 }
             }
@@ -572,12 +566,9 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                         },
                         4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - ival),
                         5 => cpu.fpu.setSt(0, ival - cpu.fpu.st(0)),
-                        6 => if (ival != 0) {
-                            cpu.fpu.setSt(0, cpu.fpu.st(0) / ival);
-                        },
-                        7 => if (cpu.fpu.st(0) != 0) {
-                            cpu.fpu.setSt(0, ival / cpu.fpu.st(0));
-                        },
+                        // Masked x87: division by zero yields +/-inf (ZE flag), not a skipped op.
+                        6 => cpu.fpu.setSt(0, cpu.fpu.st(0) / ival),
+                        7 => cpu.fpu.setSt(0, ival / cpu.fpu.st(0)),
                         else => {},
                     }
                 }
@@ -588,9 +579,9 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                 if (mem_addr) |addr| {
                     switch (reg) {
                         0 => cpu.fpu.push(@floatFromInt(@as(i32, @bitCast(cpu.memory.read32(addr))))), // FILD m32
-                        2 => cpu.memory.write32(addr, @bitCast(safeFloatToInt(i32, cpu.fpu.st(0)))), // FIST m32
+                        2 => cpu.memory.write32(addr, @bitCast(fistToInt(i32, cpu.fpu.control_word, cpu.fpu.st(0)))), // FIST m32
                         3 => {
-                            cpu.memory.write32(addr, @bitCast(safeFloatToInt(i32, cpu.fpu.st(0))));
+                            cpu.memory.write32(addr, @bitCast(fistToInt(i32, cpu.fpu.control_word, cpu.fpu.st(0))));
                             _ = cpu.fpu.pop();
                         }, // FISTP
                         5 => { // FLD m80 (approx as f64)
@@ -627,12 +618,9 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                         },
                         4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - fval),
                         5 => cpu.fpu.setSt(0, fval - cpu.fpu.st(0)),
-                        6 => if (fval != 0) {
-                            cpu.fpu.setSt(0, cpu.fpu.st(0) / fval);
-                        },
-                        7 => if (cpu.fpu.st(0) != 0) {
-                            cpu.fpu.setSt(0, fval / cpu.fpu.st(0));
-                        },
+                        // Masked x87: division by zero yields +/-inf (ZE flag), not a skipped op.
+                        6 => cpu.fpu.setSt(0, cpu.fpu.st(0) / fval),
+                        7 => cpu.fpu.setSt(0, fval / cpu.fpu.st(0)),
                         else => {},
                     }
                 }
@@ -643,14 +631,9 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     1 => cpu.fpu.setSt(i, cpu.fpu.st(i) * cpu.fpu.st(0)),
                     4 => cpu.fpu.setSt(i, cpu.fpu.st(i) - cpu.fpu.st(0)),
                     5 => cpu.fpu.setSt(i, cpu.fpu.st(0) - cpu.fpu.st(i)),
-                    6 => {
-                        const s = cpu.fpu.st(0);
-                        if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(i) / s);
-                    },
-                    7 => {
-                        const s = cpu.fpu.st(i);
-                        if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(0) / s);
-                    },
+                    // Masked x87: division by zero yields +/-inf (ZE flag), not a skipped op.
+                    6 => cpu.fpu.setSt(i, cpu.fpu.st(i) / cpu.fpu.st(0)),
+                    7 => cpu.fpu.setSt(i, cpu.fpu.st(0) / cpu.fpu.st(i)),
                     else => {},
                 }
             }
@@ -701,12 +684,9 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                         1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * ival),
                         4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - ival),
                         5 => cpu.fpu.setSt(0, ival - cpu.fpu.st(0)),
-                        6 => if (ival != 0) {
-                            cpu.fpu.setSt(0, cpu.fpu.st(0) / ival);
-                        },
-                        7 => if (cpu.fpu.st(0) != 0) {
-                            cpu.fpu.setSt(0, ival / cpu.fpu.st(0));
-                        },
+                        // Masked x87: division by zero yields +/-inf (ZE flag), not a skipped op.
+                        6 => cpu.fpu.setSt(0, cpu.fpu.st(0) / ival),
+                        7 => cpu.fpu.setSt(0, ival / cpu.fpu.st(0)),
                         else => {},
                     }
                 }
@@ -722,21 +702,23 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                         _ = cpu.fpu.pop();
                     },
                     4 => {
-                        cpu.fpu.setSt(i, cpu.fpu.st(i) - cpu.fpu.st(0));
-                        _ = cpu.fpu.pop();
-                    },
-                    5 => {
+                        // DE /4 = FSUBRP ST(i), ST(0): ST(i) <- ST(0) - ST(i)
                         cpu.fpu.setSt(i, cpu.fpu.st(0) - cpu.fpu.st(i));
                         _ = cpu.fpu.pop();
                     },
+                    5 => {
+                        // DE /5 = FSUBP ST(i), ST(0): ST(i) <- ST(i) - ST(0)
+                        cpu.fpu.setSt(i, cpu.fpu.st(i) - cpu.fpu.st(0));
+                        _ = cpu.fpu.pop();
+                    },
                     6 => {
-                        const s = cpu.fpu.st(0);
-                        if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(i) / s);
+                        // DE /6 = FDIVRP ST(i), ST(0): ST(i) <- ST(0) / ST(i)
+                        cpu.fpu.setSt(i, cpu.fpu.st(0) / cpu.fpu.st(i));
                         _ = cpu.fpu.pop();
                     },
                     7 => {
-                        const s = cpu.fpu.st(i);
-                        if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(0) / s);
+                        // DE /7 = FDIVP ST(i), ST(0): ST(i) <- ST(i) / ST(0)
+                        cpu.fpu.setSt(i, cpu.fpu.st(i) / cpu.fpu.st(0));
                         _ = cpu.fpu.pop();
                     },
                     else => {},
@@ -748,9 +730,9 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                 if (mem_addr) |addr| {
                     switch (reg) {
                         0 => cpu.fpu.push(@floatFromInt(@as(i16, @bitCast(cpu.memory.read16(addr))))), // FILD m16
-                        2 => cpu.memory.write16(addr, @bitCast(safeFloatToInt(i16, cpu.fpu.st(0)))), // FIST m16
+                        2 => cpu.memory.write16(addr, @bitCast(fistToInt(i16, cpu.fpu.control_word, cpu.fpu.st(0)))), // FIST m16
                         3 => {
-                            cpu.memory.write16(addr, @bitCast(safeFloatToInt(i16, cpu.fpu.st(0))));
+                            cpu.memory.write16(addr, @bitCast(fistToInt(i16, cpu.fpu.control_word, cpu.fpu.st(0))));
                             _ = cpu.fpu.pop();
                         }, // FISTP
                         5 => { // FILD m64
@@ -759,7 +741,7 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                             cpu.fpu.push(@floatFromInt(@as(i64, @bitCast(@as(u64, hi) << 32 | lo))));
                         },
                         7 => { // FISTP m64
-                            const bits: u64 = @bitCast(safeFloatToInt(i64, cpu.fpu.st(0)));
+                            const bits: u64 = @bitCast(fistToInt(i64, cpu.fpu.control_word, cpu.fpu.st(0)));
                             cpu.memory.write32(addr, @truncate(bits));
                             cpu.memory.write32(addr +% 4, @truncate(bits >> 32));
                             _ = cpu.fpu.pop();
@@ -777,21 +759,48 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
     }
 }
 
-/// Safe float-to-int conversion: saturates on overflow, returns 0 for NaN.
+/// Safe float-to-int conversion with masked-x87 semantics: truncate toward
+/// zero; NaN and out-of-range inputs produce the integer indefinite value
+/// (most-negative), matching real FISTP/_ftol instead of saturating.
 pub fn safeFloatToInt(comptime T: type, val: f64) T {
-    const info = @typeInfo(T).int;
-    if (val != val) return 0; // NaN
-    if (info.signedness == .signed) {
-        const min_f: f64 = @floatFromInt(std.math.minInt(T));
-        const max_f: f64 = @floatFromInt(std.math.maxInt(T));
-        if (val <= min_f) return std.math.minInt(T);
-        if (val >= max_f) return std.math.maxInt(T);
-    } else {
-        if (val < 0) return 0;
-        const max_f: f64 = @floatFromInt(std.math.maxInt(T));
-        if (val >= max_f) return std.math.maxInt(T);
-    }
-    return @intFromFloat(val);
+    comptime std.debug.assert(@typeInfo(T).int.signedness == .signed);
+    if (!std.math.isFinite(val)) return std.math.minInt(T);
+    const t = @trunc(val);
+    const min_f: f64 = @floatFromInt(std.math.minInt(T));
+    // Exact power-of-two upper bound above maxInt avoids f64 rounding
+    // ambiguity near maxInt for wide types.
+    const max_excl: f64 = @floatFromInt(@as(u64, 1) << (@bitSizeOf(T) - 1));
+    if (t < min_f or t >= max_excl) return std.math.minInt(T);
+    return @intFromFloat(t);
+}
+
+/// Round to integer per the x87 control-word RC field (bits 10..11):
+/// 00 nearest-even, 01 down, 10 up, 11 toward zero.
+fn roundPerControlWord(rc: u2, val: f64) f64 {
+    return switch (rc) {
+        0b00 => roundHalfEven(val),
+        0b01 => @floor(val),
+        0b10 => @ceil(val),
+        0b11 => @trunc(val),
+    };
+}
+
+fn roundHalfEven(x: f64) f64 {
+    const t = @trunc(x);
+    const diff = x - t;
+    const adiff = @abs(diff);
+    if (adiff < 0.5) return t;
+    if (adiff > 0.5) return t + std.math.sign(diff);
+    // Exact tie: choose the even neighbor.
+    if (@mod(t, 2.0) == 0) return t;
+    return t + std.math.sign(diff);
+}
+
+/// FIST/FISTP conversion: honors the rounding-control field, then applies
+/// the same NaN/out-of-range integer-indefinite rule as real hardware.
+pub fn fistToInt(comptime T: type, control_word: u16, val: f64) T {
+    const rc: u2 = @truncate(control_word >> 10);
+    return safeFloatToInt(T, roundPerControlWord(rc, val));
 }
 
 /// Helper: set x87 condition codes for comparison (C3,C0).
