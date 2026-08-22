@@ -418,11 +418,10 @@ zine/
 │   ├── JIT.md               # JIT compiler architecture
 │   ├── MEMORY_LAYOUT.md     # Memory layout details
 │   ├── phase0-audit-results.md # Phase 0 codebase audit findings
-│   ├── TODO.md              # Task tracking
-│   ├── TODO_UI.md           # UI task tracking
+│   ├── STATUS.md            # Current implementation & verification status
+│   ├── TODO.md              # Remaining work / task tracking
 │   ├── WASM_PLAN.md         # WASM porting plan
 │   ├── WEBGPU_TRANSLATION.md # DirectDraw/D3D → WebGPU translation guide
-│   ├── WIN32_STATUS.md      # Win32 API implementation status
 │   └── X86_64_NATIVE_EXECUTION.md # x86_64 native execution notes
 ├── drive_c/                 # Virtual C: drive for guest apps
 ├── src/

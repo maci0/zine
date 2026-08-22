@@ -32,3 +32,9 @@ CSDVersion = "Service Pack 4"
 ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment"]
 TEMP = "C:\\TEMP"
 TMP = "C:\\TEMP"
+
+# Per-application overrides: an "app:<MODULE>:<KEY>" section is served ONLY
+# when the named module (the launched executable, basename) queries that key.
+# It takes precedence over the global value for that key.
+["app:REGAPP.EXE:HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion"]
+ProductName = "Microsoft Windows 2000 (regapp)"

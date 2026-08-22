@@ -128,12 +128,17 @@ pub var last_resolution_json: ?[]const u8 = null;
 pub var last_edit_control_json: ?[]const u8 = null;
 /// Cached JSON representation of the last audio format.
 pub var last_audio_format_json: ?[]const u8 = null;
+/// Cached JSON for the color dialog, replayed to reconnecting clients.
+pub var last_color_dialog_json: ?[]const u8 = null;
 /// Cached JSON representation of the last controls state.
 pub var last_controls_json: ?[]const u8 = null;
 /// List of cached control text updates for replay.
 pub var cached_control_text_updates: std.ArrayListUnmanaged([]const u8) = .empty;
 
 var g_allocator: std.mem.Allocator = undefined;
+/// True once renderer.init() ran. Console apps keep the .none backend and never
+/// call init(), so g_allocator stays undefined — cache paths must skip it.
+var g_allocator_ready: bool = false;
 var last_frame_time: ?i64 = null;
 
 // --- Frame Batching ---
@@ -164,6 +169,8 @@ pub var on_resize: ?*const fn (i32, i32, usize) void = null;
 pub var on_key_event: ?*const fn (usize, bool) void = null;
 /// Callback for mouse events (WM_MOUSEMOVE/LBUTTONDOWN/etc).
 pub var on_mouse_event: ?*const fn (u32, i32, i32) void = null; // (msg_id, x, y)
+/// Mouse wheel: (delta, x, y). Called by backends when the wheel turns.
+pub var on_wheel_event: ?*const fn (i32, i32, i32) void = null;
 /// Callback for window close events (WM_CLOSE).
 pub var on_close: ?*const fn () void = null;
 /// Callback for dialog cancellation.
@@ -174,6 +181,11 @@ pub var on_file_uploaded: ?*const fn ([]const u8) void = null;
 pub var on_find_action: ?*const fn ([]const u8, []const u8, []const u8, bool, bool) void = null;
 /// Callback for context menu selection.
 pub var on_context_menu_select: ?*const fn (u32) void = null;
+/// Callback for the color dialog result (0x00RRGGBB).
+pub var on_color_selected: ?*const fn (u32) void = null;
+
+/// Callback for listbox item selection (web/FLTK click).
+pub var on_listbox_select: ?*const fn (u32, i32) void = null;
 
 // --- Edit text cache (synced from frontend textarea) ---
 
@@ -211,6 +223,49 @@ pub fn setEditTextFromSlice(text: []const u8) void {
     @memcpy(edit_text_data.ptr[0..text.len], text);
     edit_text_data.ptr[text.len] = 0; // null terminate for C compat
     edit_text_data.len = text.len;
+}
+
+/// Handles WM_CHAR for the EDIT control: appends a character to the shared
+/// edit buffer (or deletes the last code point on backspace) and pushes the
+/// new text to the frontend so the native textarea stays in sync with
+/// guest-driven input (SendMessage/PostMessage WM_CHAR).
+pub fn editInsertChar(ch: u8) void {
+    const text = editTextSlice();
+
+    if (ch == 0x08) {
+        // Backspace: drop the last UTF-8 code point. Shrink in place —
+        // setEditTextFromSlice(trimmed) would alias the same buffer.
+        var end = text.len;
+        while (end > 0 and (text[end - 1] & 0xC0) == 0x80) end -= 1;
+        if (end > 0) end -= 1;
+        edit_text_data.len = end;
+        edit_text_data.ptr[end] = 0;
+        setEditText(edit_text_data[0..end]);
+        return;
+    }
+
+    if (ch < 0x20 and ch != '\t') return; // other control chars are ignored
+
+    var buf: [4]u8 = undefined;
+    const n = std.unicode.utf8Encode(ch, &buf) catch return;
+
+    const old_len = edit_text_data.len;
+    const needed = old_len + n + 1; // +1 null terminator
+    if (needed > edit_text_data_cap) {
+        const new_cap = @max(needed, edit_text_data_cap * 2);
+        const new_buf = g_allocator.alloc(u8, new_cap) catch return;
+        if (edit_text_data_cap > 0) {
+            // Preserve existing content across the realloc.
+            @memcpy(new_buf[0..old_len], edit_text_data.ptr[0..old_len]);
+            g_allocator.free(edit_text_data.ptr[0..edit_text_data_cap]);
+        }
+        edit_text_data.ptr = new_buf.ptr;
+        edit_text_data_cap = new_cap;
+    }
+    @memcpy(edit_text_data.ptr[old_len .. old_len + n], buf[0..n]);
+    edit_text_data.ptr[old_len + n] = 0;
+    edit_text_data.len = old_len + n;
+    setEditText(edit_text_data[0..edit_text_data.len]);
 }
 
 // --- Clipboard buffer ---
@@ -267,6 +322,7 @@ pub var context_menu_result: u32 = 0;
 /// Initializes the renderer and the active backend.
 pub fn init(allocator: std.mem.Allocator) !void {
     g_allocator = allocator;
+    g_allocator_ready = true;
     global_framebuf = try allocator.alloc(u8, 1024 * 1024 * 4);
     // Initialize to COLOR_BTNFACE gray (0xC0C0C0) with full alpha (BGRA pixel order).
     // This ensures any unpainted areas default to the correct Win32
@@ -671,6 +727,13 @@ pub fn addControl(class: []const u8, hwnd_id: usize, x: i32, y: i32, w: i32, h: 
                 .{ class, hwnd_id, x, y, w, h, style, escaped[0..esc_len] },
             ) catch return;
             web_ui.pushMessage(json);
+            // Cache for reconnect: like resolution/title, controls created before
+            // a client connects would otherwise never reach the browser.
+            if (g_allocator.dupe(u8, json)) |cached| {
+                cached_control_text_updates.append(g_allocator, cached) catch {
+                    g_allocator.free(cached);
+                };
+            } else |_| {}
         },
         .fltk => fltk_ui.addControl(class, hwnd_id, x, y, w, h, style, text),
         .none => {},
@@ -683,16 +746,115 @@ pub fn updateControlText(nIDDlgItem: i32, text: []const u8) void {
     const esc_len = jsonEscape(text, &escaped);
     var buf: [1024]u8 = undefined;
     const json = std.fmt.bufPrint(&buf, "{{\"type\":\"update_control_text\",\"id\":{d},\"text\":\"{s}\"}}", .{ nIDDlgItem, escaped[0..esc_len] }) catch return;
-    // Cache for replay on reconnect
-    const cached = g_allocator.dupe(u8, json) catch return;
-    cached_control_text_updates.append(g_allocator, cached) catch {
-        g_allocator.free(cached);
-        return;
-    };
+    // Cache for replay on reconnect (only when the renderer allocator is live —
+    // console apps keep backend .none and never call init()).
+    if (g_allocator_ready) {
+        const cached = g_allocator.dupe(u8, json) catch return;
+        cached_control_text_updates.append(g_allocator, cached) catch {
+            g_allocator.free(cached);
+            return;
+        };
+    }
 
     switch (active_backend) {
         .web_ui => web_ui.pushMessage(json),
         .fltk => fltk_ui.updateControlText(nIDDlgItem, text),
+        .none => {},
+    }
+}
+
+/// Update the value (position) of a control, e.g. progress-bar fill.
+/// Sets the background color of a control (from WM_CTLCOLOR). Color is
+/// 0x00RRGGBB; 0xFFFFFFFF means "use the default".
+pub fn updateControlColor(nIDDlgItem: i32, color: u32) void {
+    if (color == 0xFFFFFFFF) return;
+    switch (active_backend) {
+        .web_ui => {
+            var buf: [256]u8 = undefined;
+            const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_control_color\",\"id\":{d},\"color\":{d}}}", .{ nIDDlgItem, color }) catch return;
+            web_ui.pushMessage(json);
+        },
+        .fltk => fltk_ui.setControlColor(nIDDlgItem, color),
+        .none => {},
+    }
+}
+
+/// Opens the host color chooser dialog (ChooseColor).
+pub fn openColorDialog(initial: u32) void {
+    switch (active_backend) {
+        .web_ui => {
+            var buf: [128]u8 = undefined;
+            const json = std.fmt.bufPrint(&buf, "{{\"type\":\"show_color_dialog\",\"initial\":{d}}}", .{initial}) catch return;
+            if (last_color_dialog_json) |old_json| g_allocator.free(old_json);
+            last_color_dialog_json = g_allocator.dupe(u8, json) catch null;
+            web_ui.pushMessage(json);
+        },
+        .fltk => fltk_ui.openColorDialog(initial),
+        .none => {},
+    }
+}
+
+/// Pushes the item list of a listbox control to the backend. `items` is a
+/// newline-joined string (one item per line).
+pub fn setControlItems(nIDDlgItem: i32, items: []const u8) void {
+    switch (active_backend) {
+        .web_ui => {
+            // JSON-escape and send as an array of strings.
+            var esc: [8192]u8 = undefined;
+            const esc_len = jsonEscape(items, &esc);
+            var buf: [16384]u8 = undefined;
+            const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_listbox_items\",\"id\":{d},\"items\":\"{s}\"}}", .{ nIDDlgItem, esc[0..esc_len] }) catch return;
+            web_ui.pushMessage(json);
+        },
+        .fltk => fltk_ui.setListboxItems(nIDDlgItem, items),
+        .none => {},
+    }
+}
+
+/// Updates the checked state of a checkbox/radio button control.
+pub fn updateControlChecked(nIDDlgItem: i32, checked: bool) void {
+    var buf: [256]u8 = undefined;
+    const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_control_checked\",\"id\":{d},\"checked\":{}}}", .{ nIDDlgItem, checked }) catch return;
+    switch (active_backend) {
+        .web_ui => web_ui.pushMessage(json),
+        .fltk => fltk_ui.updateControlChecked(nIDDlgItem, checked),
+        .none => {},
+    }
+}
+
+pub fn updateControlValue(nIDDlgItem: i32, value: i32) void {
+    var buf: [256]u8 = undefined;
+    const json = std.fmt.bufPrint(&buf, "{{\"type\":\"update_control_value\",\"id\":{d},\"value\":{d}}}", .{ nIDDlgItem, value }) catch return;
+    if (g_allocator_ready) {
+        const cached = g_allocator.dupe(u8, json) catch return;
+        cached_control_text_updates.append(g_allocator, cached) catch {
+            g_allocator.free(cached);
+            return;
+        };
+    }
+
+    switch (active_backend) {
+        .web_ui => web_ui.pushMessage(json),
+        .fltk => fltk_ui.updateControlValue(nIDDlgItem, value),
+        .none => {},
+    }
+}
+
+/// Update the range (min/max) of a control, e.g. progress-bar bounds.
+pub fn updateControlRange(nIDDlgItem: i32, min: i32, max: i32) void {
+    var buf: [256]u8 = undefined;
+    const json = std.fmt.bufPrint(&buf, "{{\"type\":\"update_control_range\",\"id\":{d},\"min\":{d},\"max\":{d}}}", .{ nIDDlgItem, min, max }) catch return;
+    if (g_allocator_ready) {
+        const cached = g_allocator.dupe(u8, json) catch return;
+        cached_control_text_updates.append(g_allocator, cached) catch {
+            g_allocator.free(cached);
+            return;
+        };
+    }
+
+    switch (active_backend) {
+        .web_ui => web_ui.pushMessage(json),
+        .fltk => fltk_ui.updateControlRange(nIDDlgItem, min, max),
         .none => {},
     }
 }
@@ -825,6 +987,14 @@ fn jsonEscapeAppend(json: *std.ArrayListUnmanaged(u8), s: []const u8) void {
 /// Callback for when a font is chosen in the font dialog.
 pub var on_font_chosen: ?*const fn ([]const u8, i32, bool, bool) void = null;
 
+/// Callback for when a print dialog is confirmed: (from_page, to_page, copies).
+pub var on_print_chosen: ?*const fn (i32, i32, i32) void = null;
+
+/// Callback for when a page-setup dialog is confirmed:
+/// (left, top, right, bottom, paper_w, paper_h, orientation) — margins and
+/// paper size in the dialog's units; orientation 0 = portrait, 1 = landscape.
+pub var on_page_setup_chosen: ?*const fn (i32, i32, i32, i32, i32, i32, i32) void = null;
+
 /// Opens a font selection dialog.
 pub fn openFontDialog(face_name: []const u8, point_size: i32, bold: bool, italic: bool) void {
     switch (active_backend) {
@@ -839,6 +1009,68 @@ pub fn openFontDialog(face_name: []const u8, point_size: i32, bold: bool, italic
             web_ui.pushMessage(json);
         },
         .fltk => fltk_ui.openFontDialog(face_name, point_size, bold, italic),
+        .none => {},
+    }
+}
+
+/// Opens a host print dialog (PrintDlg) with the caller's page range + copies.
+pub fn openPrintDialog(from_page: i32, to_page: i32, min_page: i32, max_page: i32, copies: i32) void {
+    switch (active_backend) {
+        .web_ui => {
+            var buf: [256]u8 = undefined;
+            const json = std.fmt.bufPrint(&buf,
+                "{{\"type\":\"show_print_dialog\",\"from\":{d},\"to\":{d},\"min\":{d},\"max\":{d},\"copies\":{d}}}",
+                .{ from_page, to_page, min_page, max_page, copies },
+            ) catch return;
+            if (active_dialog) |old| g_allocator.free(old);
+            active_dialog = g_allocator.dupe(u8, json) catch null;
+            web_ui.pushMessage(json);
+        },
+        .fltk => fltk_ui.openPrintDialog(from_page, to_page, min_page, max_page, copies),
+        .none => {},
+    }
+}
+
+/// Opens a modeless Find/Replace dialog (FindTextA / ReplaceTextA).
+pub fn openFindDialog(find_text: []const u8, replace_text: []const u8, is_replace: bool) void {
+    switch (active_backend) {
+        .web_ui => {
+            var esc_find: [512]u8 = undefined;
+            const f_len = jsonEscape(find_text, &esc_find);
+            var esc_repl: [512]u8 = undefined;
+            const r_len = jsonEscape(replace_text, &esc_repl);
+            var buf: [1536]u8 = undefined;
+            const json = std.fmt.bufPrint(&buf,
+                "{{\"type\":\"open_find_dialog\",\"mode\":\"{s}\",\"findText\":\"{s}\",\"replaceText\":\"{s}\"}}",
+                .{ if (is_replace) "replace" else "find", esc_find[0..f_len], esc_repl[0..r_len] },
+            ) catch return;
+            if (active_dialog) |old| g_allocator.free(old);
+            active_dialog = g_allocator.dupe(u8, json) catch null;
+            web_ui.pushMessage(json);
+        },
+        .fltk => fltk_ui.openFindDialog(find_text, replace_text, is_replace),
+        .none => {},
+    }
+}
+
+/// Opens a host page-setup dialog (PageSetupDlg). Margins/paper in the
+/// caller's units (thousandths of an inch by default); orientation 0 =
+/// portrait, 1 = landscape.
+pub fn openPageSetupDialog(left: i32, top: i32, right: i32, bottom: i32, paper_w: i32, paper_h: i32, orientation: i32, units_label: []const u8) void {
+    switch (active_backend) {
+        .web_ui => {
+            var esc_label: [64]u8 = undefined;
+            const l_len = jsonEscape(units_label, &esc_label);
+            var buf: [512]u8 = undefined;
+            const json = std.fmt.bufPrint(&buf,
+                "{{\"type\":\"show_page_setup_dialog\",\"left\":{d},\"top\":{d},\"right\":{d},\"bottom\":{d},\"paperW\":{d},\"paperH\":{d},\"orientation\":{d},\"units\":\"{s}\"}}",
+                .{ left, top, right, bottom, paper_w, paper_h, orientation, esc_label[0..l_len] },
+            ) catch return;
+            if (active_dialog) |old| g_allocator.free(old);
+            active_dialog = g_allocator.dupe(u8, json) catch null;
+            web_ui.pushMessage(json);
+        },
+        .fltk => fltk_ui.openPageSetupDialog(left, top, right, bottom, paper_w, paper_h, orientation, units_label),
         .none => {},
     }
 }

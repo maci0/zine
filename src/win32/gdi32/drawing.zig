@@ -306,32 +306,42 @@ pub const FramebufferInfo = struct {
     is_screen: bool,
 
     pub fn setPixel(self: *const FramebufferInfo, x: i32, y: i32, color: u32) void {
+        if (self.buf.len == 0) return; // headless (.none backend): no framebuffer
         if (x < 0 or y < 0 or x >= @as(i32, @intCast(self.w)) or y >= @as(i32, @intCast(self.h))) return;
         const di: u32 = (@as(u32, @intCast(y)) * self.w + @as(u32, @intCast(x))) * 4;
-        self.buf[di + 0] = @as(u8, @intCast(color & 0xFF));
-        self.buf[di + 1] = @as(u8, @intCast((color >> 8) & 0xFF));
-        self.buf[di + 2] = @as(u8, @intCast((color >> 16) & 0xFF));
+        // color is a Win32 COLORREF (0x00BBGGRR). The framebuffer is BGRA, so
+        // the byte order must be swapped: COLORREF's R (low byte) goes into the
+        // framebuffer's R slot (buf+2), B (high byte) into buf+0. The previous
+        // code wrote R into the B slot, so every non-gray color rendered
+        // red<->blue swapped on screen.
+        self.buf[di + 0] = @as(u8, @intCast((color >> 16) & 0xFF)); // B
+        self.buf[di + 1] = @as(u8, @intCast((color >> 8) & 0xFF)); // G
+        self.buf[di + 2] = @as(u8, @intCast(color & 0xFF)); // R
         self.buf[di + 3] = 255;
     }
 
     pub fn getPixel(self: *const FramebufferInfo, x: i32, y: i32) u32 {
         if (x < 0 or y < 0 or x >= @as(i32, @intCast(self.w)) or y >= @as(i32, @intCast(self.h))) return 0;
         const di: u32 = (@as(u32, @intCast(y)) * self.w + @as(u32, @intCast(x))) * 4;
-        const r = @as(u32, self.buf[di + 0]);
+        // Invert of setPixel: framebuffer is BGRA, COLORREF is 0x00BBGGRR.
+        const b = @as(u32, self.buf[di + 0]);
         const g = @as(u32, self.buf[di + 1]);
-        const b = @as(u32, self.buf[di + 2]);
+        const r = @as(u32, self.buf[di + 2]);
         return (b << 16) | (g << 8) | r;
     }
     
     pub fn drawLine(self: *const FramebufferInfo, x0: i32, y0: i32, x1: i32, y1: i32, color: u32) void {
         var cx = x0;
         var cy = y0;
-        const dx = @as(i32, if (x1 > x0) x1 - x0 else x0 - x1);
-        const dy = @as(i32, if (y1 > y0) y0 - y1 else y1 - y0);
+        const dx: i32 = @intCast(@abs(x1 - x0));
+        // Bresenham requires dy NEGATIVE (the error term accumulates toward
+        // zero). With a positive dy both branches fired each step and the walk
+        // filled the entire bounding box instead of drawing a line.
+        const dy: i32 = -@as(i32, @intCast(@abs(y1 - y0)));
         const sx: i32 = if (x0 < x1) 1 else -1;
         const sy: i32 = if (y0 < y1) 1 else -1;
         var err = dx + dy;
-        
+
         while (true) {
             self.setPixel(cx, cy, color);
             if (cx == x1 and cy == y1) break;
@@ -371,38 +381,58 @@ pub fn getFramebufferForDc(hdc: usize) ?FramebufferInfo {
 }
 
 pub fn TextOutA(hdc: usize, x: i32, y: i32, lpString: usize, c: i32) callconv(w32cc.WINAPI) i32 {
-    _ = lpString;
+    if (lpString == 0 or c <= 0) return 1;
     if (getFramebufferForDc(hdc)) |fb| {
+        const font = @import("font5x7.zig");
         const dc_entry = gdi32.getDc(hdc);
         const bg_color = if (dc_entry) |dc| dc.bk_color else 0x00FFFFFF;
         const fg_color = if (dc_entry) |dc| dc.text_color else 0x00000000;
         const bk_mode = if (dc_entry) |dc| dc.bk_mode else 2;
 
-        // Get font metrics from selected font
-        var aw: i32 = 6;
-        var fh: i32 = 13;
-        if (dc_entry) |dc| {
-            if (dc.font != 0) {
-                if (gdi32.findObject(dc.font)) |obj| {
-                    if (obj.obj_type == .Font) {
-                        aw = obj.data.font.aveCharWidth();
-                        fh = obj.data.font.tmHeight();
+        // lpString is a guest VA (usize param — not auto-translated).
+        const src = @as([*]const u8, @ptrFromInt(trace.addr(lpString)));
+        const count: usize = @intCast(@min(c, 4096));
+
+        // Draw opaque background over the whole text run first.
+        if (bk_mode == 2) {
+            const width = @as(i32, @intCast(count)) * font.glyph_width;
+            fb.fillRect(x, y, width, font.glyph_height, bg_color);
+        }
+
+        // Render each glyph with the 5x7 bitmap font.
+        var gx: i32 = x;
+        for (0..count) |i| {
+            const ch = src[i];
+            if (ch == '\n' or ch == '\r') continue;
+            const rows = font.glyphForChar(ch);
+            var row: i32 = 0;
+            while (row < font.glyph_height) : (row += 1) {
+                const bits = rows[@intCast(row)];
+                var col: i32 = 0;
+                while (col < 5) : (col += 1) {
+                    if ((bits >> @intCast(col)) & 1 != 0) {
+                        fb.setPixel(gx + col, y + row, fg_color);
                     }
                 }
             }
+            gx += font.glyph_width;
         }
-
-        const width = c * aw;
-        // Draw background if OPAQUE mode
-        if (bk_mode == 2) fb.fillRect(x, y, width, fh, bg_color);
-        // Draw a cross-through to indicate text presence
-        fb.drawLine(x, y, x + width, y + fh, fg_color);
+        if (fb.is_screen) renderer.markScreenDirty();
     }
     return 1;
 }
 
 pub fn TextOutW(hdc: usize, x: i32, y: i32, lpString: usize, c: i32) callconv(w32cc.WINAPI) i32 {
-    return TextOutA(hdc, x, y, lpString, c);
+    // Widen ASCII-compatible wide strings by narrowing each wchar to its
+    // low byte, then reuse the A renderer. Non-ASCII wchars render as '?'.
+    if (lpString == 0 or c <= 0) return 1;
+    var narrow_buf: [4096]u8 = undefined;
+    const count: usize = @intCast(@min(c, 4096));
+    const wsrc = @as([*]const u16, @ptrFromInt(trace.addr(lpString)));
+    for (0..count) |i| {
+        narrow_buf[i] = @intCast(wsrc[i] & 0xFF);
+    }
+    return TextOutA(hdc, x, y, @intFromPtr(&narrow_buf), @intCast(count));
 }
 
 pub fn SetPixel(hdc: usize, x: i32, y: i32, color: u32) callconv(w32cc.WINAPI) u32 {
@@ -564,6 +594,7 @@ pub fn ExtTextOutA(hdc: usize, x: i32, y: i32, options: u32, lprect: usize, lpSt
             const right = @as(*const i32, @ptrFromInt(lprect + 8)).*;
             const bot = @as(*const i32, @ptrFromInt(lprect + 12)).*;
             fb.fillRect(left, top, right - left, bot - top, bg_color);
+            if (fb.is_screen) renderer.markScreenDirty();
         }
     }
     return TextOutA(hdc, x, y, lpString, @intCast(c));

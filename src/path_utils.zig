@@ -659,6 +659,7 @@ test "hasDriveLetter: exactly two chars" {
 
 /// Case-insensitive path resolution: scan parent directory for matching filename.
 pub fn tryCaseInsensitiveResolve(path: []const u8, buf: []u8) ?[]const u8 {
+    if (comptime builtin.target.os.tag == .linux) return tryCaseInsensitiveResolveLinux(path, buf);
     if (path.len > buf.len) return null;
 
     var last_slash: usize = 0;
@@ -756,4 +757,83 @@ pub fn tryCaseInsensitiveResolve(path: []const u8, buf: []u8) ?[]const u8 {
         }
     }
     return null;
+}
+
+/// Linux native version of `tryCaseInsensitiveResolve` using only raw
+/// syscalls (open + getdents64). std.Io.Dir iteration goes through
+/// Io.Threaded (TLS), which faults when invoked from a stub running inside
+/// the compat-mode SIGSEGV dispatch handler (FS points at the guest TEB).
+fn tryCaseInsensitiveResolveLinux(path: []const u8, buf: []u8) ?[]const u8 {
+    const linux = std.os.linux;
+
+    var last_slash: usize = 0;
+    var found_slash = false;
+    for (0..path.len) |i| {
+        if (path[i] == '/') {
+            last_slash = i;
+            found_slash = true;
+        }
+    }
+    const filename = if (found_slash) path[last_slash + 1 ..] else path;
+    if (filename.len == 0 or filename.len > 255) return null;
+
+    // Build the directory path (NUL-terminated).
+    var dir_buf: [std.posix.PATH_MAX]u8 = undefined;
+    var dir_len: usize = 0;
+    if (found_slash) {
+        const dir_path = path[0..last_slash];
+        if (dir_path.len == 0 or (dir_path.len == 1 and dir_path[0] == '/')) {
+            dir_buf[0] = '/';
+            dir_len = 1;
+        } else {
+            if (dir_path.len >= dir_buf.len) return null;
+            @memcpy(dir_buf[0..dir_path.len], dir_path);
+            dir_len = dir_path.len;
+        }
+    } else {
+        dir_buf[0] = '.';
+        dir_len = 1;
+    }
+    dir_buf[dir_len] = 0;
+
+    const oflags: linux.O = .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true };
+    const open_rc = linux.open(@ptrCast(&dir_buf), oflags, 0);
+    const fd: isize = @bitCast(open_rc);
+    if (fd < 0) return null;
+
+    var ent_buf: [4096]u8 align(8) = undefined;
+    var matched_name: [256]u8 = undefined;
+    var matched = false;
+    while (true) {
+        const n_rc = linux.getdents64(@intCast(fd), &ent_buf, ent_buf.len);
+        const n: isize = @bitCast(n_rc);
+        if (n <= 0) break;
+        var pos: usize = 0;
+        while (pos < @as(usize, @intCast(n))) {
+            const d = @as(*align(1) linux.dirent64, @ptrCast(ent_buf[pos..].ptr));
+            const name_ptr: [*:0]const u8 = @ptrCast(&d.name);
+            const name = std.mem.sliceTo(name_ptr, 0);
+            pos += d.reclen;
+            if (name.len == filename.len and std.ascii.eqlIgnoreCase(name, filename)) {
+                @memcpy(matched_name[0..name.len], name);
+                matched = true;
+                break;
+            }
+        }
+        if (matched) break;
+    }
+    _ = linux.close(@intCast(fd));
+    if (!matched) return null;
+
+    if (found_slash) {
+        const total = dir_len + 1 + filename.len;
+        if (total > buf.len) return null;
+        @memcpy(buf[0..dir_len], dir_buf[0..dir_len]);
+        buf[dir_len] = '/';
+        @memcpy(buf[dir_len + 1 .. total], matched_name[0..filename.len]);
+        return buf[0..total];
+    }
+    if (filename.len > buf.len) return null;
+    @memcpy(buf[0..filename.len], matched_name[0..filename.len]);
+    return buf[0..filename.len];
 }

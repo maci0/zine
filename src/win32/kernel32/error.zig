@@ -51,6 +51,33 @@ pub const EXCEPTION_REGISTRATION_RECORD = extern struct {
     Handler: u32,
 };
 
+/// Read a u32 the guest can see: on WASM the address is a guest VA (read via
+/// guest memory); on native, guest == host (direct pointer read).
+fn readGuestU32(va: u32) u32 {
+    if (comptime platform.is_wasm) {
+        const shared = @import("../shared.zig");
+        if (shared.guest_memory) |gmem| return gmem.read32(va);
+        return 0;
+    }
+    return @as(*const u32, @ptrFromInt(va)).*;
+}
+
+/// Guest-memory u32 read (SEH chain records live in guest memory;
+/// direct on native).
+inline fn gmemRead(va: u32) u32 {
+    return readGuestU32(va);
+}
+
+/// Guest-memory u32 write (the SEH record slots live in guest memory).
+inline fn gmemWrite(va: u32, val: u32) void {
+    if (comptime platform.is_wasm) {
+        const shared = @import("../shared.zig");
+        if (shared.guest_memory) |gmem| gmem.write32(va, val);
+    } else {
+        @as(*u32, @ptrFromInt(va)).* = val;
+    }
+}
+
 /// Raises an exception in the calling thread.
 /// Implementation status: Partially implemented
 pub var raise_exception_depth: u32 = 0;
@@ -139,7 +166,7 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
     if (exception_list == 0 or exception_list == 0xFFFFFFFF) {
         const teb_mod = @import("../teb.zig");
         if (teb_mod.teb_base_addr != 0) {
-            const teb_val = @as(*const u32, @ptrFromInt(teb_mod.teb_base_addr)).*;
+            const teb_val = readGuestU32(@intCast(teb_mod.teb_base_addr));
             if (teb_val != 0 and teb_val != 0xFFFFFFFF) {
                 exception_list = teb_val;
             }
@@ -214,8 +241,7 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
             }
         }
         if (trace.enable_tracing) trace.print("  SEH Node: {x}\n", .{current_node});
-        const node = @as(*EXCEPTION_REGISTRATION_RECORD, @ptrFromInt(current_node));
-        const handler = node.Handler;
+        const handler = readGuestU32(current_node + 4); // EXCEPTION_REGISTRATION_RECORD.Handler
 
         if (handler != 0) {
             if (trace.enable_tracing) trace.print("  Calling SEH Handler: {x}\n", .{handler});
@@ -241,6 +267,51 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
                 teb_ptr.NtTib.StackBase = old_base;
                 teb_ptr.NtTib.StackLimit = old_limit;
                 break :blk disp_res;
+            } else if (comptime platform.is_wasm) blk: {
+                // WASM: the SEH handler is guest x86 code at a guest VA — run it
+                // via the interpreter on the app's own stack. If the handler
+                // accepts, it jumps into the __except block and the nested run
+                // continues the app (never returns). If it declines it returns a
+                // disposition for the walk. rec/ctx must live in guest memory so
+                // the interpreted handler can read them.
+                const except_mod = @import("../msvcrt/except.zig");
+                const shared = @import("../shared.zig");
+                const teb_mod = @import("../teb.zig");
+                var rec_va: u32 = 0;
+                var ctx_va: u32 = 0;
+                if (shared.guest_memory) |gmem| {
+                    rec_va = gmem.guestAlloc(@sizeOf(EXCEPTION_RECORD));
+                    ctx_va = gmem.guestAlloc(@sizeOf(CONTEXT));
+                    if (gmem.writeSlice(rec_va, @sizeOf(EXCEPTION_RECORD))) |dst| {
+                        @memcpy(dst, @as([*]const u8, @ptrCast(rec))[0..@sizeOf(EXCEPTION_RECORD)]);
+                    }
+                    if (gmem.writeSlice(ctx_va, @sizeOf(CONTEXT))) |dst| {
+                        @memcpy(dst, @as([*]const u8, @ptrCast(ctx))[0..@sizeOf(CONTEXT)]);
+                    }
+                }
+                const x86_cpu = @import("../../x86/cpu.zig");
+                const x86_execute = @import("../../x86/execute.zig");
+                var cpu = x86_cpu.Cpu{};
+                if (shared.guest_memory) |gm| cpu.memory = gm.*;
+                if (teb_mod.teb_base_addr != 0) cpu.fs_base = @intCast(teb_mod.teb_base_addr);
+                cpu.esp = except_mod.seh_current_guest_esp;
+                cpu.ebp = except_mod.seh_current_guest_ebp;
+                // MSVC6's _except_handler3 expects the dispatcher to have
+                // written the ExceptionRecord* / Context* at [establisher-0x14]
+                // and [establisher-0x10] (GetExceptionCode reads them).
+                if (current_node >= 0x14) {
+                    gmemWrite(current_node -% 0x14, rec_va);
+                    gmemWrite(current_node -% 0x10, ctx_va);
+                }
+                // cdecl: push args right-to-left, then a halt return address.
+                cpu.push32(0); // dispatcherContext (arg4)
+                cpu.push32(ctx_va); // arg3
+                cpu.push32(current_node); // arg2 (establisher frame)
+                cpu.push32(rec_va); // arg1
+                cpu.push32(0);
+                cpu.eip = handler;
+                x86_execute.run(&cpu);
+                break :blk @as(i32, @bitCast(cpu.eax)); // disposition if it returned
             } else blk: {
                 const HandlerFn = *const fn (record: *EXCEPTION_RECORD, establisherFrame: u32, contextRecord: *CONTEXT, dispatcherContext: u32) callconv(w32cc.WINAPI) u32;
                 const func = @as(HandlerFn, @ptrFromInt(handler));
@@ -250,8 +321,16 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
             if (handler_faulted) {
                 handler_faulted = false;
                 if (trace.enable_tracing) trace.print("  Handler at {x} faulted, skipping to next\n", .{handler});
-                current_node = node.Next;
+                current_node = readGuestU32(current_node); // Next
                 continue;
+            }
+            // On WASM, a host-side _except_handler3 that accepted sets the
+            // redirect for the suspended interpreter — stop the walk.
+            if (comptime platform.is_wasm) {
+                if (@import("../msvcrt/except.zig").wasm_seh_redirect != null) {
+                    if (trace.enable_tracing) trace.print("  WASM SEH redirect set — stopping walk\n", .{});
+                    return;
+                }
             }
             if (trace.enable_tracing) trace.print("  Handler returned: {d}\n", .{disp});
 
@@ -275,7 +354,7 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
             }
         }
 
-        current_node = node.Next;
+        current_node = readGuestU32(current_node); // Next
     }
 
     // If we get here, no SEH handler handled the exception.

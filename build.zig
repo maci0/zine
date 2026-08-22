@@ -22,6 +22,10 @@ fn queryForArch(arch: std.Target.Cpu.Arch) std.Target.Query {
         .x86_64 => .{
             .cpu_arch = .x86_64,
             .os_tag = .linux,
+            // glibc: the FLTK backend links system (glibc) shared libraries.
+            // Zig's default musl ABI would produce a dynamic binary needing
+            // /lib/ld-musl-x86_64.so.1, which is absent on glibc hosts.
+            .abi = .gnu,
         },
         .wasm32 => .{
             .cpu_arch = .wasm32,
@@ -79,8 +83,11 @@ fn addNativeExe(
         exe.image_base = 0x70000000;
     }
 
-    // FLTK native GUI backend (optional, x86 only)
-    if (use_fltk and arch == .x86) {
+    // FLTK native GUI backend (optional). Originally x86-only because the
+    // bridge targets the 32-bit build, but the x86_64 compat build links the
+    // same C++ bridge against the system FLTK libs fine — and on 64-bit-only
+    // hosts (no i386 FLTK packages) that is the only way to get the FLTK UI.
+    if (use_fltk) {
         exe.root_module.addCSourceFile(.{
             .file = b.path("src/gui/fltk_bridge.cpp"),
             .flags = &.{ "-std=c++11", "-fno-exceptions", "-I/usr/include/fltk1.3" },
@@ -105,7 +112,7 @@ fn addNativeExe(
     }
 
     const options = b.addOptions();
-    options.addOption(bool, "use_fltk", use_fltk and arch == .x86);
+    options.addOption(bool, "use_fltk", use_fltk and arch != .wasm32);
     options.addOption(bool, "embed_stubs", embed_stubs);
     exe.root_module.addOptions("build_options", options);
 
@@ -291,20 +298,32 @@ pub fn build(b: *std.Build) void {
     // -----------------------------------------------------------------------
     const build_host = b.option(bool, "host", "Build zine-host (wasmer wrapper with JIT support)") orelse false;
     if (build_host) {
-        const host_exe = b.addExecutable(.{
-            .name = "zine-host",
+        // Zig 0.16's lld rejects the .sframe relocations in GCC 16's crt1.o
+        // ("unhandled relocation type R_X86_64_PC64"), so compile host_main.zig
+        // to an object with Zig and do the final link with the system cc.
+        const host_obj = b.addObject(.{
+            .name = "zine-host-obj",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/host_main.zig"),
                 .target = b.graph.host,
                 .optimize = optimize,
             }),
         });
-        host_exe.root_module.link_libc = true;
-        // wasmer's pkg-config may have stale paths; add system paths explicitly
-        host_exe.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
-        host_exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
-        host_exe.root_module.linkSystemLibrary("wasmer", .{});
-        b.installArtifact(host_exe);
+        host_obj.root_module.link_libc = true;
+        // wasmer's pkg-config has stale build-machine paths (-L/build/.wasmer/lib
+        // which doesn't exist here), so do NOT linkSystemLibrary("wasmer") on the
+        // object — lld then fails on the missing library dir. The object only
+        // needs the header (wasmer.h lives in /usr/include); the final link with
+        // -lwasmer happens in the cc step below.
+        host_obj.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
+
+        const host_link = b.addSystemCommand(&.{ "cc", "-o" });
+        const host_out = host_link.addOutputFileArg("zine-host");
+        host_link.addArtifactArg(host_obj);
+        host_link.addArgs(&.{ "-lwasmer", "-lc" });
+        const install_host = b.addInstallFileWithDir(host_out, .{ .custom = "bin" }, "zine-host");
+        install_host.step.dependOn(&host_link.step);
+        b.getInstallStep().dependOn(&install_host.step);
     }
 
     // -----------------------------------------------------------------------

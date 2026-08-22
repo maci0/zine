@@ -35,6 +35,21 @@ pub fn c_span(ptr: usize) []const u8 {
     return p[0..len];
 }
 
+/// Returns a slice of HOST memory containing a null-terminated C string.
+/// Unlike c_span, the pointer is NOT translated through GuestMemory — use
+/// this for host-allocated buffers such as the global_argv/global_envp
+/// string entries, which on WASM live in linear memory but must not be
+/// re-mapped through the guest VA range.
+pub fn host_c_span(ptr: usize) []const u8 {
+    if (ptr == 0) return "";
+    const p = @as([*]const u8, @ptrFromInt(ptr));
+    var len: usize = 0;
+    while (len < 65536 and p[len] != 0) {
+        len += 1;
+    }
+    return p[0..len];
+}
+
 /// Returns a slice of the guest memory containing a null-terminated UTF-16 C string.
 pub fn c_span_w(ptr: usize) []const u16 {
     if (ptr < 0x10000) return &[_]u16{};

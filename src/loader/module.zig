@@ -10,12 +10,70 @@ const pe = @import("../pe.zig");
 const log = @import("../log.zig");
 const builtin = @import("builtin");
 
+/// statx mask for raw fstat (see openFilePortable for why std.Io is avoided
+/// in the compat-mode signal dispatch context).
+const linux_statx_mask: std.os.linux.STATX = .{
+    .TYPE = true,
+    .MODE = true,
+    .ATIME = true,
+    .MTIME = true,
+    .CTIME = true,
+    .INO = true,
+    .SIZE = true,
+    .NLINK = true,
+    .BLOCKS = true,
+};
+
+/// Raw fstat (statx with EMPTY_PATH) on native Linux.
+fn fileLengthLinux(file: std.Io.File) !u64 {
+    const linux = std.os.linux;
+    var stx = std.mem.zeroes(linux.Statx);
+    const rc = linux.statx(file.handle, "", linux.AT.EMPTY_PATH, linux_statx_mask, &stx);
+    if (@as(isize, @bitCast(rc)) < 0) return error.Unexpected;
+    return stx.size;
+}
+
 /// PE resource directory constants.
 const RESOURCE_DATA_IS_DIRECTORY: u32 = 0x80000000;
 const RESOURCE_OFFSET_MASK: u32 = 0x7FFFFFFF;
 
+/// CVTRES under the emulator writes resource type/name entries as string names
+/// holding the NUMERIC value in a single wchar (char 0x0006 for type 6), and
+/// byte-swaps the resource data RVA. Normalize an entry's NameOrId to its
+/// numeric id so lookups match both forms.
+fn entryNameValue(self: *Module, res_dir_rva: u32, name_or_id: u32) ?u32 {
+    if (name_or_id & 0x80000000 == 0) return name_or_id;
+    const off = res_dir_rva + (name_or_id & RESOURCE_OFFSET_MASK);
+    if (off + 4 > self.mapped_memory.len) return null;
+    const len = std.mem.readInt(u16, self.mapped_memory[off..][0..2], .little);
+    if (len != 1) return null;
+    return std.mem.readInt(u16, self.mapped_memory[off + 2 ..][0..2], .little);
+}
+
+/// CVTRES byte-swaps the 16-bit halves of the resource data RVA (0x9060
+/// written as 0x6090). Return a value that actually points into the image.
+fn fixDataRva(self: *Module, rva: u32, size: u32) u32 {
+    if (rva + size <= self.mapped_memory.len) return rva;
+    const swapped = ((rva & 0xFFFF) << 16) | (rva >> 16);
+    if (swapped + size <= self.mapped_memory.len) return swapped;
+    return rva;
+}
+
 /// Open a file portably — on WASI, resolves absolute paths through preopened dirs.
 fn openFilePortable(path: []const u8) !std.Io.File {
+    if (comptime builtin.os.tag == .linux) {
+        // Raw open: std.Io.Dir goes through Io.Threaded (TLS), which faults
+        // when invoked from a stub (e.g. LoadLibraryA) running inside the
+        // compat-mode SIGSEGV dispatch handler (FS points at the guest TEB).
+        var buf: [std.posix.PATH_MAX]u8 = undefined;
+        if (path.len >= buf.len) return error.NameTooLong;
+        @memcpy(buf[0..path.len], path);
+        buf[path.len] = 0;
+        const rc = std.os.linux.open(@ptrCast(&buf), .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+        const fd: isize = @bitCast(rc);
+        if (fd < 0) return error.FileNotFound;
+        return std.Io.File{ .handle = @intCast(fd), .flags = .{ .nonblocking = false } };
+    }
     if (comptime builtin.os.tag == .wasi) {
         if (std.fs.path.isAbsolute(path)) {
             // Iterate WASI preopened fds (start at fd 3, after stdin/stdout/stderr)
@@ -44,6 +102,20 @@ fn openFilePortable(path: []const u8) !std.Io.File {
             }
             return error.FileNotFound;
         }
+        // Relative path: the WASI cwd (fd 3) may not be the actual working
+        // dir — zine-host preopens "/" at fd 3, so relative opens against the
+        // cwd fail. Try the path against every preopened dir.
+        var fd2: std.os.wasi.fd_t = 3;
+        while (true) : (fd2 += 1) {
+            var prestat: std.os.wasi.prestat_t = undefined;
+            switch (std.os.wasi.fd_prestat_get(fd2, &prestat)) {
+                .SUCCESS => {},
+                else => break,
+            }
+            const dir = std.Io.Dir{ .handle = fd2 };
+            if (dir.openFile(runtime.io(), path, .{})) |f| return f else |_| {}
+        }
+        return error.FileNotFound;
     }
     return std.Io.Dir.cwd().openFile(runtime.io(), path, .{});
 }
@@ -88,13 +160,30 @@ pub const Module = struct {
             log.err("Module.load: failed to open '{s}': {}", .{ path, err });
             return err;
         };
-        defer file.close(runtime.io());
+        defer if (comptime builtin.os.tag == .linux) {
+            _ = std.os.linux.close(file.handle);
+        } else {
+            file.close(runtime.io());
+        };
 
-        const file_size = try file.length(runtime.io());
+        const file_size = if (comptime builtin.os.tag == .linux)
+            try fileLengthLinux(file)
+        else
+            try file.length(runtime.io());
         const file_data = try allocator.alloc(u8, @intCast(file_size));
         errdefer allocator.free(file_data);
 
-        _ = try file.readPositionalAll(runtime.io(), file_data, 0);
+        if (comptime builtin.os.tag == .linux) {
+            var off: u64 = 0;
+            while (off < file_data.len) {
+                const rc = std.os.linux.pread(file.handle, file_data.ptr + @as(usize, @intCast(off)), file_data.len - @as(usize, @intCast(off)), @as(i64, @intCast(off)));
+                const signed: isize = @bitCast(rc);
+                if (signed <= 0) return error.ReadFailed;
+                off += @intCast(rc);
+            }
+        } else {
+            _ = try file.readPositionalAll(runtime.io(), file_data, 0);
+        }
 
         var parser = try pe.PEParser.parse(allocator, file_data);
         const opt_header = &parser.getNtHeaders().OptionalHeader;
@@ -264,7 +353,7 @@ pub const Module = struct {
         
         var type_offset: ?u32 = null;
         for (0..num_type_entries) |i| {
-            if (type_entries[i].NameOrId == resource_type) {
+            if ((entryNameValue(self, res_dir_rva, type_entries[i].NameOrId) orelse continue) == resource_type) {
                 type_offset = type_entries[i].OffsetToData & RESOURCE_OFFSET_MASK;
                 break;
             }
@@ -275,18 +364,27 @@ pub const Module = struct {
         const num_name_entries = name_dir.NumberOfNamedEntries + name_dir.NumberOfIdEntries;
         if (num_name_entries == 0) return null;
         const name_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + type_offset.? + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
-        const name_offset = name_entries[0].OffsetToData & RESOURCE_OFFSET_MASK;
+        var name_offset: ?u32 = null;
+        for (0..num_name_entries) |i| {
+            if ((entryNameValue(self, res_dir_rva, name_entries[i].NameOrId) orelse continue) == resource_type) {
+                name_offset = name_entries[i].OffsetToData & RESOURCE_OFFSET_MASK;
+                break;
+            }
+        }
+        if (name_offset == null) name_offset = name_entries[0].OffsetToData & RESOURCE_OFFSET_MASK;
+        const name_offset_val = name_offset.?;
 
-        const lang_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset])));
+        const lang_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset_val])));
         if (lang_dir.NumberOfIdEntries == 0 and lang_dir.NumberOfNamedEntries == 0) return null;
 
-        const lang_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
+        const lang_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset_val + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
         const data_offset = lang_entries[0].OffsetToData & RESOURCE_OFFSET_MASK;
 
         const data_entry = @as(*pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + data_offset])));
 
-        if (data_entry.OffsetToData + data_entry.Size > self.mapped_memory.len) return null;
-        return self.mapped_memory[data_entry.OffsetToData .. data_entry.OffsetToData + data_entry.Size];
+        const data_rva = fixDataRva(self, data_entry.OffsetToData, data_entry.Size);
+        if (data_rva + data_entry.Size > self.mapped_memory.len) return null;
+        return self.mapped_memory[data_rva .. data_rva + data_entry.Size];
     }
 
     /// Returns the raw data of a specific resource by type and ID.
@@ -306,7 +404,7 @@ pub const Module = struct {
         
         var type_offset: ?u32 = null;
         for (0..num_type_entries) |i| {
-            if (type_entries[i].NameOrId == resource_type) {
+            if ((entryNameValue(self, res_dir_rva, type_entries[i].NameOrId) orelse continue) == resource_type) {
                 type_offset = type_entries[i].OffsetToData & RESOURCE_OFFSET_MASK;
                 break;
             }
@@ -319,7 +417,7 @@ pub const Module = struct {
 
         var name_offset: ?u32 = null;
         for (0..num_name_entries) |i| {
-            if (name_entries[i].NameOrId == resource_id) {
+            if ((entryNameValue(self, res_dir_rva, name_entries[i].NameOrId) orelse continue) == resource_id) {
                 name_offset = name_entries[i].OffsetToData & RESOURCE_OFFSET_MASK;
                 break;
             }
@@ -334,8 +432,9 @@ pub const Module = struct {
 
         const data_entry = @as(*pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + data_offset])));
 
-        if (data_entry.OffsetToData + data_entry.Size > self.mapped_memory.len) return null;
-        return self.mapped_memory[data_entry.OffsetToData .. data_entry.OffsetToData + data_entry.Size];
+        const data_rva = fixDataRva(self, data_entry.OffsetToData, data_entry.Size);
+        if (data_rva + data_entry.Size > self.mapped_memory.len) return null;
+        return self.mapped_memory[data_rva .. data_rva + data_entry.Size];
     }
 
     /// Look up a resource by type ID and string name (e.g., Delphi form resources).
@@ -401,7 +500,8 @@ pub const Module = struct {
         const data_offset = lang_entries[0].OffsetToData & RESOURCE_OFFSET_MASK;
         const data_entry = @as(*pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + data_offset])));
 
-        if (data_entry.OffsetToData + data_entry.Size > self.mapped_memory.len) return null;
-        return self.mapped_memory[data_entry.OffsetToData .. data_entry.OffsetToData + data_entry.Size];
+        const data_rva = fixDataRva(self, data_entry.OffsetToData, data_entry.Size);
+        if (data_rva + data_entry.Size > self.mapped_memory.len) return null;
+        return self.mapped_memory[data_rva .. data_rva + data_entry.Size];
     }
 };

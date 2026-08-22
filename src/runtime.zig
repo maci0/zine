@@ -35,20 +35,28 @@ pub fn environ() std.process.Environ {
     return environ_instance;
 }
 
-/// Wraps `std.Io.Mutex` and hides the `io` parameter by pulling it from the
-/// process-wide singleton. Used by code that predates the 0.16 Io interface
-/// (Win32 stubs, signal-driven paths) where threading `io` through is infeasible.
+/// Plain spinlock. Deliberately NOT `std.Io.Mutex`:
+/// std.Io.Mutex goes through the Io cancel-protection machinery when contended
+/// (futexWait via the io instance), which reads per-thread TLS
+/// (Io.Threaded.Thread.current). In x86_64 compat mode the guest runs with
+/// FS = LDT selector 0x07 (its TEB), so TLS reads from host stubs (which
+/// execute inside the SIGSEGV dispatch handler) dereference the guest TEB —
+/// crashing (null+0x308) or deadlocking in the park logic while inside a
+/// signal handler. A raw spinlock uses neither TLS nor io and its critical
+/// sections here are always short (queue pushes, message posts).
 pub const Mutex = struct {
-    inner: std.Io.Mutex = std.Io.Mutex.init,
+    state: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     pub fn lock(self: *Mutex) void {
-        self.inner.lockUncancelable(io());
+        while (self.state.cmpxchgWeak(0, 1, .acquire, .monotonic) != null) {
+            std.atomic.spinLoopHint();
+        }
     }
     pub fn unlock(self: *Mutex) void {
-        self.inner.unlock(io());
+        self.state.store(0, .release);
     }
     pub fn tryLock(self: *Mutex) bool {
-        return self.inner.tryLock();
+        return self.state.cmpxchgStrong(0, 1, .acquire, .monotonic) == null;
     }
 };
 
@@ -63,17 +71,24 @@ pub fn nanoTimestamp() i128 {
     return ts.nanoseconds;
 }
 
-/// Wraps `std.Io.Condition` like `Mutex` above.
+/// Spin-based condition variable (see `Mutex` above for why we avoid
+/// `std.Io.Condition` — it parks on the io instance, which breaks inside the
+/// compat-mode signal dispatch context).
 pub const Condition = struct {
-    inner: std.Io.Condition = std.Io.Condition.init,
+    epoch: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     pub fn wait(self: *Condition, m: *Mutex) void {
-        self.inner.waitUncancelable(io(), &m.inner);
+        const e = self.epoch.load(.acquire);
+        m.unlock();
+        while (self.epoch.load(.acquire) == e) {
+            std.atomic.spinLoopHint();
+        }
+        m.lock();
     }
     pub fn signal(self: *Condition) void {
-        self.inner.signal(io());
+        _ = self.epoch.fetchAdd(1, .release);
     }
     pub fn broadcast(self: *Condition) void {
-        self.inner.broadcast(io());
+        _ = self.epoch.fetchAdd(1, .release);
     }
 };

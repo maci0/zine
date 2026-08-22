@@ -76,3 +76,23 @@ pub fn memmove(dest: [*]u8, src: [*]const u8, count: usize) callconv(.c) [*]u8 {
     }
     return dest;
 }
+
+/// memcmp — byte-wise comparison, no NUL termination semantics
+pub fn memcmp(s1: [*]const u8, s2: [*]const u8, count: usize) callconv(.c) i32 {
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        if (s1[i] != s2[i]) return @as(i32, s1[i]) - @as(i32, s2[i]);
+    }
+    return 0;
+}
+
+/// _memicmp — case-insensitive memcmp
+pub fn memicmp(s1: [*]const u8, s2: [*]const u8, count: usize) callconv(.c) i32 {
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const c1 = std.ascii.toLower(s1[i]);
+        const c2 = std.ascii.toLower(s2[i]);
+        if (c1 != c2) return @as(i32, c1) - @as(i32, c2);
+    }
+    return 0;
+}

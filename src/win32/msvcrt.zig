@@ -71,6 +71,7 @@ const process = @import("msvcrt/process.zig");
 const mem = @import("msvcrt/mem.zig");
 const math = @import("msvcrt/math.zig");
 const misc = @import("msvcrt/misc.zig");
+const posix_fs = @import("msvcrt/posix_fs.zig");
 const path = @import("msvcrt/path.zig");
 const except = @import("msvcrt/except.zig");
 const time_mod = @import("msvcrt/time.zig");
@@ -153,7 +154,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "strcpy", string.strcpy);
     try environment.addBuiltinExportComptime(m, "strncpy", string.strncpy);
     try environment.addBuiltinExportComptime(m, "strcat", string.strcat);
-    try environment.addBuiltinExportComptime(m, "strncat", misc.stub_ignore_ptr);
+    try environment.addBuiltinExportComptime(m, "strncat", string.strncat);
     try environment.addBuiltinExportComptime(m, "strcmp", string.strcmp);
     try environment.addBuiltinExportComptime(m, "strncmp", string.strncmp);
     try environment.addBuiltinExportComptime(m, "_stricmp", string.stricmp);
@@ -162,16 +163,16 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "strchr", string.strchr);
     try environment.addBuiltinExportComptime(m, "strrchr", string.strrchr);
     try environment.addBuiltinExportComptime(m, "strstr", string.strstr);
-    try environment.addBuiltinExportComptime(m, "strpbrk", misc.stub_ignore_ptr);
+    try environment.addBuiltinExportComptime(m, "strpbrk", string.strpbrk);
     try environment.addBuiltinExportComptime(m, "strcspn", string.strcspn);
-    try environment.addBuiltinExportComptime(m, "strtok", misc.stub_ignore_ptr);
+    try environment.addBuiltinExportComptime(m, "strtok", string.strtok);
     try environment.addBuiltinExportComptime(m, "_strdup", string.strdup);
     try environment.addBuiltinExportComptime(m, "_wcsdup", string.wcsdup);
     try environment.addBuiltinExportComptime(m, "memset", mem.memset);
     try environment.addBuiltinExportComptime(m, "memcpy", mem.memcpy);
     try environment.addBuiltinExportComptime(m, "memmove", mem.memmove);
-    try environment.addBuiltinExportComptime(m, "memcmp", string.strncmp);
-    try environment.addBuiltinExportComptime(m, "_memicmp", misc.stub_ignore_i32);
+    try environment.addBuiltinExportComptime(m, "memcmp", mem.memcmp);
+    try environment.addBuiltinExportComptime(m, "_memicmp", mem.memicmp);
     try environment.addBuiltinExportComptime(m, "atoi", string.atoi);
     try environment.addBuiltinExportComptime(m, "atol", string.atoi);
     try environment.addBuiltinExportComptime(m, "_itoa", string.itoa);
@@ -257,14 +258,14 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "puts", fmt.puts);
     try environment.addBuiltinExportComptime(m, "fputs", fmt.fputs);
     try environment.addBuiltinExportComptime(m, "ungetc", misc.stub_ignore_i32);
-    try environment.addBuiltinExportComptime(m, "fflush", misc.stub_ignore_i32);
-    try environment.addBuiltinExportComptime(m, "_flushall", misc.stub_ignore_i32);
-    try environment.addBuiltinExportComptime(m, "setvbuf", misc.stub_ignore_i32);
-    try environment.addBuiltinExportComptime(m, "rewind", misc.stub_ignore_i32);
-    try environment.addBuiltinExportComptime(m, "freopen", misc.stub_ignore_ptr);
+    try environment.addBuiltinExportComptime(m, "fflush", io.fflush);
+    try environment.addBuiltinExportComptime(m, "_flushall", io._flushall);
+    try environment.addBuiltinExportComptime(m, "setvbuf", io.setvbuf);
+    try environment.addBuiltinExportComptime(m, "rewind", io.rewind);
+    try environment.addBuiltinExportComptime(m, "freopen", io.freopen);
     try environment.addBuiltinExportComptime(m, "fgets", io.fgets);
     try environment.addBuiltinExportComptime(m, "_fsopen", io.fsopen);
-    try environment.addBuiltinExportComptime(m, "_fcloseall", misc.stub_ignore_i32);
+    try environment.addBuiltinExportComptime(m, "_fcloseall", io._fcloseall);
     try environment.addBuiltinExportComptime(m, "__p__iob", io.p_iob);
 
     // Formatted I/O — variadic functions use addBuiltinExportComptimeVA
@@ -300,7 +301,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "iswctype", string.iswctype);
     try environment.addBuiltinExportComptime(m, "towlower", string.towlower);
     try environment.addBuiltinExportComptime(m, "towupper", string.towupper);
-    try environment.addBuiltinExportComptime(m, "mbtowc", misc.stub_ignore_i32);
+    try environment.addBuiltinExportComptime(m, "mbtowc", misc.mbtowc);
     try environment.addBuiltinExportComptime(m, "setlocale", misc.setlocale);
     try environment.addBuiltinExportComptime(m, "_isctype", string.isctype);
 

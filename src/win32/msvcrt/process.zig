@@ -2,6 +2,7 @@ const std = @import("std");
 const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
+const builtin = @import("builtin");
 
 const io = @import("io.zig");
 const platform = @import("../../platform.zig");
@@ -433,10 +434,23 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     const cmdname = trace.c_span(cmdname_ptr);
     if (trace.enable_tracing) trace.print("spawnvp cmd: {s}\n", .{cmdname});
 
-    const raw_loader_exe = std.process.executablePathAlloc(runtime.io(), std.heap.page_allocator) catch "zine";
-    const loader_exe = std.fmt.allocPrint(std.heap.page_allocator, "{s}\x00", .{raw_loader_exe}) catch return -1;
-
-    args.append(std.heap.page_allocator, loader_exe[0 .. loader_exe.len - 1]) catch return -1;
+    if (comptime builtin.os.tag == .linux) {
+        // Raw readlink: std.process.executablePathAlloc goes through std.Io
+        // (TLS), which faults inside the compat-mode SIGSEGV dispatch handler.
+        var exe_buf: [4096]u8 = undefined;
+        const rl = std.os.linux.readlink("/proc/self/exe", &exe_buf, exe_buf.len);
+        const rl_signed: isize = @bitCast(rl);
+        if (rl_signed > 0) {
+            const loader_exe2 = std.fmt.allocPrint(std.heap.page_allocator, "{s}\x00", .{exe_buf[0..@intCast(rl_signed)]}) catch return -1;
+            args.append(std.heap.page_allocator, loader_exe2[0 .. loader_exe2.len - 1]) catch return -1;
+        } else {
+            args.append(std.heap.page_allocator, "zine") catch return -1;
+        }
+    } else {
+        const raw_loader_exe = std.process.executablePathAlloc(runtime.io(), std.heap.page_allocator) catch "zine";
+        const loader_exe = std.fmt.allocPrint(std.heap.page_allocator, "{s}\x00", .{raw_loader_exe}) catch return -1;
+        args.append(std.heap.page_allocator, loader_exe[0 .. loader_exe.len - 1]) catch return -1;
+    }
     if (trace.enable_tracing) {
         args.append(std.heap.page_allocator, "--trace") catch return -1;
     }
@@ -449,6 +463,10 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
             const arg0 = trace.c_span(@as(usize, argv[0]));
             var clean_arg0 = std.heap.page_allocator.dupe(u8, arg0) catch return -1;
             std.mem.replaceScalar(u8, clean_arg0, '/', '\\');
+            // Strip surrounding quotes (the CRT/tool may pass argv[0] quoted).
+            if (clean_arg0.len >= 2 and clean_arg0[0] == '"' and clean_arg0[clean_arg0.len - 1] == '"') {
+                clean_arg0 = clean_arg0[1 .. clean_arg0.len - 1];
+            }
             if (std.mem.lastIndexOfScalar(u8, clean_arg0, '\\')) |idx| {
                 clean_arg0 = clean_arg0[idx + 1 ..];
             }
@@ -507,7 +525,11 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
                 if (clean_arg.len >= 2 and clean_arg[0] == '"' and clean_arg[clean_arg.len - 1] == '"') {
                     clean_arg = clean_arg[1 .. clean_arg.len - 1];
                 }
-                args.append(std.heap.page_allocator, clean_arg) catch return -1;
+                // Copy to host-owned memory: the slice points into guest memory
+                // (the parent's heap), which is not stable across the fork/exec
+                // used to launch the child.
+                const owned = std.heap.page_allocator.dupe(u8, clean_arg) catch return -1;
+                args.append(std.heap.page_allocator, owned) catch return -1;
             }
         }
     }
@@ -519,7 +541,25 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
 
         if (arg.len > 1 and arg[0] == '@') {
             const rsp_file = arg[1 .. arg.len - 1]; // remove null char? arg is [*:0] but arg.len doesn't include null
-            if (std.Io.Dir.cwd().openFile(runtime.io(), rsp_file, .{})) |file| {
+            if (comptime builtin.os.tag == .linux) {
+                // Raw open/read/close (std.Io touches TLS in the signal context).
+                var nt: [1025]u8 = undefined;
+                if (rsp_file.len < nt.len) {
+                    @memcpy(nt[0..rsp_file.len], rsp_file);
+                    nt[rsp_file.len] = 0;
+                    const orc = std.os.linux.open(@ptrCast(&nt), .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+                    const ofd: isize = @bitCast(orc);
+                    if (ofd >= 0) {
+                        var buf: [4096]u8 = undefined;
+                        const rr = std.os.linux.read(@intCast(ofd), &buf, buf.len);
+                        const rrs: isize = @bitCast(rr);
+                        if (rrs > 0) {
+                            if (trace.enable_tracing) trace.print("RESPONSE FILE DUMP:\n{s}\n---END DUMP---\n", .{buf[0..@intCast(rrs)]});
+                        }
+                        _ = std.os.linux.close(@intCast(ofd));
+                    }
+                }
+            } else if (std.Io.Dir.cwd().openFile(runtime.io(), rsp_file, .{})) |file| {
                 var buf: [4096]u8 = undefined;
                 const rb = file.readPositionalAll(runtime.io(), &buf, 0) catch 0;
                 if (trace.enable_tracing) trace.print("RESPONSE FILE DUMP:\n{s}\n---END DUMP---\n", .{buf[0..rb]});
@@ -544,6 +584,36 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
 
     for (msvcrt.msvcrt_env_vars.items) |v| {
         new_env_map.put(v.key, v.val) catch {};
+    }
+
+        if (comptime builtin.os.tag == .linux) {
+        // Raw fork/execve/waitpid: std.process.spawn goes through std.Io
+        // (TLS), which faults inside the compat-mode SIGSEGV dispatch handler.
+        // All allocations happen before fork; the child only calls execve.
+        var envp_items: std.ArrayListUnmanaged(?[*:0]const u8) = .empty;
+        defer envp_items.deinit(std.heap.page_allocator);
+        var env_it = new_env_map.iterator();
+        while (env_it.next()) |entry| {
+            const kv = std.fmt.allocPrint(std.heap.page_allocator, "{s}={s}", .{ entry.key_ptr.*, entry.value_ptr.* }) catch continue;
+            envp_items.append(std.heap.page_allocator, @as([*:0]const u8, @ptrCast(kv.ptr))) catch {};
+        }
+        envp_items.append(std.heap.page_allocator, null) catch return -1;
+        c_args.append(std.heap.page_allocator, null) catch return -1;
+
+        const pid = std.os.linux.fork();
+        const pid_signed: isize = @bitCast(pid);
+        if (pid_signed < 0) return -1;
+        if (pid_signed == 0) {
+            // Child: exec the loader (no allocation, no locks).
+            const argv_z: [*:null]const ?[*:0]const u8 = @ptrCast(c_args.items.ptr);
+            const envp_z: [*:null]const ?[*:0]const u8 = @ptrCast(envp_items.items.ptr);
+            _ = std.os.linux.execve(@as([*:0]const u8, @ptrCast(args.items[0].ptr)), argv_z, envp_z);
+            _ = std.os.linux.exit(127);
+        }
+        var status: u32 = 0;
+        _ = std.os.linux.waitpid(@intCast(pid), &status, 0);
+        if (std.posix.W.IFEXITED(status)) return std.posix.W.EXITSTATUS(status);
+        return -1;
     }
 
     var child = std.process.spawn(rt_io, .{ .argv = args.items }) catch return -1;

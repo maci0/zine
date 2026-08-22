@@ -126,6 +126,10 @@ pub fn CreateStatusWindowA(style: u32, lpszText: usize, hwndParent: usize, wID: 
         const text = if (lpszText != 0) trace.c_span(lpszText) else "";
         const r = @import("../../gui/renderer.zig");
         r.addControl("msctls_statusbar32", hwnd, 0, 0, 0, 20, style, text);
+        // Register the class so later SendMessage(SB_SETTEXT, …) to this hwnd
+        // is dispatched as a status-bar update (not a progress-bar one).
+        const msg_mod = @import("../user32/message.zig");
+        msg_mod.setControlClass(hwnd, "msctls_statusbar32");
     }
 
     return hwnd;

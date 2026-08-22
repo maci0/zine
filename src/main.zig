@@ -333,6 +333,8 @@ pub fn main(init: std.process.Init) !void {
 
     const exe_name = std.fs.path.basename(target_exe);
     const main_module = try environment.registry.loadModule(exe_name);
+    // Per-application registry overrides (app:<MODULE>: sections).
+    @import("win32/advapi32/registry.zig").setAppModule(exe_name);
     stubs_kernel32.main_module_handle = @intFromPtr(main_module.mapped_memory.ptr);
 
     // Set app code bounds from the PE's .text section for SIGSEGV recovery
@@ -543,6 +545,11 @@ pub fn main(init: std.process.Init) !void {
     const peb = @as(*teb.PEB, @ptrFromInt(thread_env.ProcessEnvironmentBlock));
     const params = @as(*teb.RTL_USER_PROCESS_PARAMETERS, @ptrFromInt(peb.ProcessParameters));
     params.Environment = @truncate(@intFromPtr(env_block));
+
+    // Capture the host TLS base before FS is switched to the guest TEB, so
+    // stubs that must call libc (e.g. pthread_create for the WM_TIMER thread)
+    // can temporarily restore host TLS via platform.useHostFs().
+    platform.saveHostFsBase();
 
     try teb.setupFS(thread_env);
 

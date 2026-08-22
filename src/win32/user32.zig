@@ -19,9 +19,11 @@ pub fn register(environment: *env.Environment) !void {
     // Wire up renderer input callbacks
     const renderer = @import("../gui/renderer.zig");
     renderer.on_command = &handleCommand;
+    renderer.on_listbox_select = &handleListboxSelect;
     renderer.on_resize = &handleExternalResize;
     renderer.on_key_event = &handleKeyEvent;
     renderer.on_mouse_event = &handleMouseEvent;
+    renderer.on_wheel_event = &handleWheelEvent;
     renderer.on_close = &handleClose;
 
     const m = "USER32.dll";
@@ -82,7 +84,7 @@ pub fn register(environment: *env.Environment) !void {
     // Messaging (message.zig)
     try environment.addBuiltinExportComptime(m, "PeekMessageA", message.PeekMessageA);
     try environment.addBuiltinExportComptime(m, "GetMessageA", message.GetMessageA);
-    try environment.addBuiltinExportComptime(m, "TranslateMessage", message.stub_TranslateMessage);
+    try environment.addBuiltinExportComptime(m, "TranslateMessage", message.TranslateMessage);
     try environment.addBuiltinExportComptime(m, "DispatchMessageA", message.DispatchMessageA);
     try environment.addBuiltinExportComptime(m, "PostMessageA", message.PostMessageA);
     try environment.addBuiltinExportComptime(m, "PostQuitMessage", message.PostQuitMessage);
@@ -94,7 +96,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "EndDialog", dialog.EndDialog);
     try environment.addBuiltinExportComptime(m, "GetDlgItem", dialog.GetDlgItem);
     try environment.addBuiltinExportComptime(m, "SetDlgItemTextA", dialog.SetDlgItemTextA);
-    try environment.addBuiltinExportComptime(m, "GetDlgItemTextA", dialog.stub_GetDlgItemTextA);
+    try environment.addBuiltinExportComptime(m, "GetDlgItemTextA", dialog.GetDlgItemTextA);
     try environment.addBuiltinExportComptime(m, "SendDlgItemMessageA", dialog.stub_SendDlgItemMessageA);
 
     // Resource Loading (resource.zig)
@@ -139,7 +141,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "RegisterWindowMessageA", class.RegisterWindowMessageA);
     try environment.addBuiltinExportComptime(m, "GetSystemMenu", window.stub_GetSystemMenu);
     try environment.addBuiltinExportComptime(m, "GetMessageTime", message.GetMessageTime);
-    try environment.addBuiltinExportComptime(m, "IsDialogMessageA", dialog.stub_IsDialogMessageA);
+    try environment.addBuiltinExportComptime(m, "IsDialogMessageA", dialog.IsDialogMessageA);
     try environment.addBuiltinExportComptime(m, "MsgWaitForMultipleObjects", message.stub_MsgWaitForMultipleObjects);
     try environment.addBuiltinExportComptime(m, "GetWindowPlacement", window.GetWindowPlacement);
     try environment.addBuiltinExportComptime(m, "SetWindowPlacement", window.stub_SetWindowPlacement);
@@ -183,8 +185,8 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "CheckDlgButton", dialog.stub_CheckDlgButton);
     try environment.addBuiltinExportComptime(m, "CheckRadioButton", dialog.stub_CheckRadioButton);
     try environment.addBuiltinExportComptime(m, "IsDlgButtonChecked", dialog.stub_IsDlgButtonChecked);
-    try environment.addBuiltinExportComptime(m, "GetDlgItemInt", dialog.stub_GetDlgItemInt);
-    try environment.addBuiltinExportComptime(m, "SetDlgItemInt", dialog.stub_SetDlgItemInt);
+    try environment.addBuiltinExportComptime(m, "GetDlgItemInt", dialog.GetDlgItemInt);
+    try environment.addBuiltinExportComptime(m, "SetDlgItemInt", dialog.SetDlgItemInt);
     try environment.addBuiltinExportComptime(m, "CreateDialogParamA", dialog.CreateDialogParamA);
     try environment.addBuiltinExportComptime(m, "MessageBoxW", dialog.MessageBoxW);
 
@@ -258,10 +260,10 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetWindowTextW", window.stub_GetWindowTextA);
     try environment.addBuiltinExportComptime(m, "DialogBoxParamW", dialog.DialogBoxParamA);
     try environment.addBuiltinExportComptime(m, "CreateDialogParamW", dialog.CreateDialogParamA);
-    try environment.addBuiltinExportComptime(m, "SetDlgItemTextW", dialog.SetDlgItemTextA);
-    try environment.addBuiltinExportComptime(m, "GetDlgItemTextW", dialog.stub_GetDlgItemTextA);
+    try environment.addBuiltinExportComptime(m, "SetDlgItemTextW", dialog.SetDlgItemTextW);
+    try environment.addBuiltinExportComptime(m, "GetDlgItemTextW", dialog.GetDlgItemTextW);
     try environment.addBuiltinExportComptime(m, "SendDlgItemMessageW", dialog.stub_SendDlgItemMessageA);
-    try environment.addBuiltinExportComptime(m, "IsDialogMessageW", dialog.stub_IsDialogMessageA);
+    try environment.addBuiltinExportComptime(m, "IsDialogMessageW", dialog.IsDialogMessageA);
     try environment.addBuiltinExportComptime(m, "SetScrollPos", stub_ret0_4);
     try environment.addBuiltinExportComptime(m, "WinHelpW", dialog.stub_WinHelpA);
     try environment.addBuiltinExportComptime(m, "GetDlgCtrlID", stub_ret0_1);
@@ -295,7 +297,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "LoadBitmapW", resource.LoadBitmapW);
     try environment.addBuiltinExportComptime(m, "RegisterClipboardFormatW", class.RegisterClipboardFormatA);
     try environment.addBuiltinExportComptime(m, "RemoveMenu", menu.stub_DeleteMenu);
-    try environment.addBuiltinExportComptime(m, "AppendMenuW", menu.stub_AppendMenuA);
+    try environment.addBuiltinExportComptime(m, "AppendMenuW", menu.AppendMenuW);
     try environment.addBuiltinExportComptime(m, "TrackPopupMenuEx", stub_ret0_6);
     try environment.addBuiltinExportComptime(m, "CountClipboardFormats", stub_ret0_0);
     try environment.addBuiltinExportComptime(m, "GetMessagePos", stub_ret0_0);
@@ -501,10 +503,13 @@ pub const RECT = extern struct {
 };
 
 pub const MSG = extern struct {
-    hwnd: usize,
+    // 32-bit fields: the guest writes/reads this struct directly (Win32 MSG
+    // is 28 bytes). usize fields would make it 44 bytes on x86_64, corrupting
+    // the guest's stack and its direct msg.hwnd/msg.message reads.
+    hwnd: u32,
     message: u32,
-    wParam: usize,
-    lParam: isize,
+    wParam: u32,
+    lParam: u32,
     time: u32,
     pt_x: i32,
     pt_y: i32,
@@ -543,6 +548,24 @@ pub var main_form_created: bool = false;
 pub var needs_paint: bool = false;
 pub var wndclass_bg_brush: u32 = 0; // hbrBackground from RegisterClass
 pub var bg_needs_erase: bool = true; // Set true on first paint / InvalidateRect
+
+/// The window that currently has keyboard focus (SetFocus/GetFocus).
+/// Defaults to the main window; IsDialogMessage moves it between the
+/// dialog's child controls on Tab and activates buttons on Enter/Escape.
+pub var focused_hwnd: usize = 0;
+
+/// Cached title of the main window (set via CreateWindowEx / SetWindowText),
+/// so GetWindowText on the main window returns it.
+pub var main_window_title: [256]u8 = undefined;
+pub var main_window_title_len: usize = 0;
+
+/// Store the main window title (copied into the fixed buffer).
+pub fn setMainWindowTitle(title: []const u8) void {
+    const n = @min(title.len, main_window_title.len - 1);
+    @memcpy(main_window_title[0..n], title[0..n]);
+    main_window_title[n] = 0;
+    main_window_title_len = n;
+}
 
 // Per-hwnd WndProc lookup table (for dialogs, subclassed windows, etc.)
 const WndProcType = *const fn (usize, u32, usize, isize) callconv(w32cc.WINAPI) isize;
@@ -587,6 +610,49 @@ pub fn getWndProc(hwnd: usize) ?usize {
     return null;
 }
 pub var edit_hwnd: usize = 0;
+pub var rich_edit_hwnd: usize = 0;
+/// Guest-side edit/RichEdit selection (EM_SETSEL/EM_GETSEL), kept in sync
+/// with the frontend via renderer.setEditSelection.
+pub var edit_sel_start: i32 = 0;
+pub var edit_sel_end: i32 = 0;
+
+// --- Per-hwnd control text store ---
+// SetWindowTextA/WM_SETTEXT on CreateWindowEx child controls (Button, Static,
+// …) write here; GetWindowTextA / WM_GETTEXT read it back, so apps can query
+// control text uniformly (control-ization of the window text APIs).
+pub const HwndText = struct { hwnd: usize, text: [512]u8, len: u16 };
+pub var hwnd_texts: [64]HwndText = undefined;
+pub var hwnd_text_count: usize = 0;
+
+pub fn setHwndText(hwnd: usize, text: []const u8) void {
+    if (hwnd == 0) return;
+    for (hwnd_texts[0..hwnd_text_count]) |*e| {
+        if (e.hwnd == hwnd) {
+            const n = @min(text.len, e.text.len);
+            @memcpy(e.text[0..n], text[0..n]);
+            e.len = @intCast(n);
+            return;
+        }
+    }
+    if (hwnd_text_count < hwnd_texts.len) {
+        const e = &hwnd_texts[hwnd_text_count];
+        hwnd_text_count += 1;
+        e.hwnd = hwnd;
+        const n = @min(text.len, e.text.len);
+        @memcpy(e.text[0..n], text[0..n]);
+        e.len = @intCast(n);
+    }
+}
+
+pub fn getHwndText(hwnd: usize) []const u8 {
+    var i: usize = hwnd_text_count;
+    while (i > 0) {
+        i -= 1;
+        const e = &hwnd_texts[i];
+        if (e.hwnd == hwnd) return e.text[0..e.len];
+    }
+    return "";
+}
 
 pub var window_style: u32 = 0;
 pub var window_exstyle: u32 = 0;
@@ -687,10 +753,10 @@ pub fn postGenericMessage(msg_id: u32, wParam: usize, lParam: isize) void {
     const next_head = (pending_messages_head + 1) % pending_messages.len;
     if (next_head != pending_messages_tail) {
         pending_messages[pending_messages_head] = .{
-            .hwnd = global_hwnd,
+            .hwnd = @intCast(global_hwnd),
             .message = msg_id,
-            .wParam = wParam,
-            .lParam = lParam,
+            .wParam = @intCast(wParam),
+            .lParam = @truncate(@as(u64, @bitCast(@as(i64, @intCast(lParam))))),
             .time = 0,
             .pt_x = 0,
             .pt_y = 0,
@@ -704,7 +770,16 @@ pub const postKeyboardMessage = postGenericMessage;
 // --- Renderer Input Callbacks ---
 
 fn handleCommand(id: u32) void {
+    // Auto checkboxes/radios toggle their state on click before the
+    // WM_COMMAND is delivered (real button-class behavior).
+    const msg_mod = @import("user32/message.zig");
+    msg_mod.toggleAutoButton(id);
     postCommand(id);
+}
+
+fn handleListboxSelect(id: u32, index: i32) void {
+    const msg_mod = @import("user32/message.zig");
+    msg_mod.setListboxCursor(id, index);
 }
 
 fn handleClose() void {
@@ -752,7 +827,23 @@ fn handleKeyEvent(vk_code: usize, is_down: bool) void {
     var lp: u32 = 0;
     if (!is_down) lp |= (1 << 31); // transition state
     if (is_sys and is_down) lp |= (1 << 29); // Alt context code
-    postKeyboardMessage(msg_id, vk_code, @as(isize, @intCast(@as(i32, @bitCast(lp)))));
+
+    // Real Win32 routes keyboard messages to the FOCUSED window. If a child
+    // control has focus (SetFocus / IsDialogMessage Tab), deliver there so
+    // WM_KEYDOWN → TranslateMessage → WM_CHAR reaches the edit control etc.
+    const target_hwnd = if (focused_hwnd != 0 and focused_hwnd != global_hwnd)
+        focused_hwnd
+    else
+        global_hwnd;
+    const msg_mod = @import("user32/message.zig");
+    msg_mod.postMessageTo(target_hwnd, msg_id, vk_code, @as(isize, @intCast(@as(i32, @bitCast(lp)))));
+}
+
+fn handleWheelEvent(delta: i32, x: i32, y: i32) void {
+    // WM_MOUSEWHEEL: wParam = (delta << 16) | key flags, lParam = screen coords
+    const w: u32 = @bitCast(@as(i32, delta) << 16);
+    const lp: i32 = ((y & 0xFFFF) << 16) | (x & 0xFFFF);
+    postGenericMessage(w32.WM_MOUSEWHEEL, w, @intCast(lp));
 }
 
 fn handleMouseEvent(msg_id: u32, x: i32, y: i32) void {
@@ -872,9 +963,10 @@ comptime {
             \\  call *%eax
             \\
             \\.L_cleanup:
-            \\  // Uninstall SEH
-            \\  popl %eax
-            \\  movl %eax, %fs:0
+            \\  // Uninstall SEH — pop the saved next pointer into ECX so the
+            \\  // WndProc's return value in EAX is preserved.
+            \\  popl %ecx
+            \\  movl %ecx, %fs:0
             \\  addl $16, %esp   // Pop rest of SEH frame
             \\
             \\  movl %ebp, %esp
@@ -895,10 +987,52 @@ pub const callWndProcSafe = if (native_arch == .x86 and @import("builtin").targe
 
 extern fn callWndProcSafe_extern(wndproc: usize, hwnd: usize, msg: u32, wParam: usize, lParam: isize, err_out: *u32) callconv(.c) isize;
 
-/// x86_64: direct call without SEH frame (no 32-bit SEH on x86_64)
+/// x86_64: the guest WndProc is 32-bit code running in compatibility mode
+/// (CS=0x23). It must be entered through the compat transition — a direct
+/// call from 64-bit mode executes 32-bit bytes as 64-bit code and faults.
+/// WASM: the guest WndProc is x86 code at a guest VA — a guest function
+/// pointer is not a valid WASM indirect-call index, so it must run on a
+/// nested interpreter CPU (mirrors callComparator's WASM path).
 fn callWndProcSafe_zig(wndproc: usize, hwnd: usize, msg: u32, wParam: usize, lParam: isize, err_out: *u32) callconv(.c) isize {
     err_out.* = 0;
     if (wndproc == 0) return 0;
+    if (native_arch == .x86_64) {
+        const compat = @import("../x86/compat_thunks.zig");
+        const result = compat.callCompat32_4(
+            @truncate(wndproc),
+            @truncate(hwnd),
+            msg,
+            @truncate(wParam),
+            @truncate(@as(u64, @bitCast(lParam))),
+        );
+        return @as(isize, @bitCast(@as(u64, result)));
+    }
+    if (comptime @import("../platform.zig").is_wasm) {
+        const x86_cpu = @import("../x86/cpu.zig");
+        const x86_execute = @import("../x86/execute.zig");
+        const shared = @import("shared.zig");
+        const teb_mod = @import("teb.zig");
+        const stack_size: u32 = 64 * 1024;
+        var cpu = x86_cpu.Cpu{};
+        if (shared.guest_memory) |gm| cpu.memory = gm.*;
+        if (teb_mod.teb_base_addr != 0) cpu.fs_base = @intCast(teb_mod.teb_base_addr);
+        const stack_va = cpu.memory.guestAlloc(stack_size);
+        if (stack_va == 0) return 0;
+        // HLT byte as the return address so the interpreter halts cleanly.
+        const halt_va = cpu.memory.guestAlloc(1);
+        if (halt_va == 0) return 0;
+        cpu.memory.write8(halt_va, 0xF4); // HLT
+        cpu.esp = stack_va + stack_size - 16;
+        // stdcall: args pushed right-to-left, then the (halting) return addr.
+        cpu.push32(@truncate(@as(u32, @bitCast(lParam))));
+        cpu.push32(@truncate(wParam));
+        cpu.push32(msg);
+        cpu.push32(@truncate(hwnd));
+        cpu.push32(halt_va);
+        cpu.eip = @truncate(wndproc);
+        x86_execute.run(&cpu);
+        return @bitCast(@as(u32, cpu.eax));
+    }
     const WndProc = *const fn (usize, u32, usize, isize) callconv(w32cc.WINAPI) isize;
     const func = @as(WndProc, @ptrFromInt(wndproc));
     return func(hwnd, msg, wParam, lParam);
@@ -966,7 +1100,7 @@ fn stub_CallWindowProcW(lpPrevWndFunc: usize, hWnd: usize, msg: u32, wParam: usi
     if (lpPrevWndFunc == 0) {
         if (trace.enable_tracing) trace.print("USER32: CallWindowProcW(proc=0, msg={x}) -> fallback to common controls\n", .{msg});
         const message_mod = @import("user32/message.zig");
-        return message_mod.handleCommonControlMsg(msg, wParam);
+        return message_mod.handleCommonControlMsg(hWnd, msg, wParam, lParam);
     }
     
     if (trace.enable_tracing) trace.print("USER32: CallWindowProcW(proc={x}, msg={x})\n", .{ lpPrevWndFunc, msg });

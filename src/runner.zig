@@ -121,13 +121,15 @@ pub fn registerAllStubs(environment: *Environment, not_implemented_addr: usize) 
     try stubs_setupapi.register(environment);
     try stubs_mpr.register(environment);
 
-    // MSPDB60 and RCDLL stubs are only needed on WASM where the real DLL code
-    // cannot execute in the interpreter. On native/interpret the real DLLs work.
+    // MSPDB60 and RCDLL stubs. The real RCDLL.DLL fails to compile DIALOG
+    // templates under the emulator on native, so register the embedded stub
+    // (which now handles STRINGTABLE + DIALOG) on every platform. MSPDB60's
+    // stub is only needed on WASM where the real DLL cannot run.
     const platform = @import("platform.zig");
     if (comptime platform.is_wasm) {
         try stubs_mspdb60.register(environment);
-        try stubs_rcdll.register(environment);
     }
+    try stubs_rcdll.register(environment);
 }
 
 var dll_path_buf: [std.fs.max_path_bytes]u8 = undefined;

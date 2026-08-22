@@ -143,20 +143,26 @@ pub fn fullpath(abs_buf: usize, rel: usize, max: usize) callconv(.c) usize {
     if (rel == 0) return 0;
     const s = trace.c_span(rel);
     var dp = abs_buf;
+    var dp_host: usize = 0;
     if (dp == 0) {
         const alloc_size = if (max > 0) max else 4096;
         const stub_common = @import("../shared.zig");
         const p = stub_common.raw_alloc(alloc_size) orelse return 0;
         dp = @intFromPtr(p);
+        dp_host = dp; // raw_alloc returns a host pointer already
+    } else {
+        // abs_buf is a GUEST virtual address (usize param — the comptime
+        // thunk does not auto-translate). Without this, the result was
+        // written to the raw guest VA in linear memory and the caller read
+        // back an empty name → "fatal error C1074: 'IDB' is illegal
+        // extension for PDB file".
+        dp_host = trace.addr(dp);
     }
     const buf_size = if (max > 0) max else 4096;
     const cl = @min(s.len, buf_size - 1);
-    @memcpy(@as([*]u8, @ptrFromInt(dp))[0..cl], s[0..cl]);
-    @as([*]u8, @ptrFromInt(dp))[cl] = 0;
+    @memcpy(@as([*]u8, @ptrFromInt(dp_host))[0..cl], s[0..cl]);
+    @as([*]u8, @ptrFromInt(dp_host))[cl] = 0;
     if (trace.enable_tracing) trace.print("MSVCRT: _fullpath(abs={x}, rel='{s}', max={d}) -> {x}\n", .{ abs_buf, s, max, dp });
-    if (std.mem.indexOf(u8, s, "hello.obj") != null) {
-        trace.enable_instructions = true;
-    }
     return dp;
 }
 
@@ -174,7 +180,10 @@ pub fn searchenv(filename_ptr: usize, varname_ptr: usize, result_ptr: usize) cal
 
     const env_val_ptr = @import("process.zig").getenv(varname_ptr);
     if (env_val_ptr == null) return;
-    const env_val = trace.c_span(@intFromPtr(env_val_ptr.?));
+    // getenv is called directly (not through the thunk layer), so it returns
+    // a HOST pointer — do NOT run it through trace.c_span, which expects a
+    // guest VA and would re-translate the host pointer into garbage.
+    const env_val = std.mem.span(@as([*:0]const u8, @ptrCast(env_val_ptr.?)));
 
     var it = std.mem.splitScalar(u8, env_val, ';');
     while (it.next()) |dir| {
@@ -192,8 +201,13 @@ pub fn searchenv(filename_ptr: usize, varname_ptr: usize, result_ptr: usize) cal
         full_len += filename.len;
         full_path[full_len] = 0;
 
-        const file_mod = @import("file.zig");
-        if (file_mod.access(@intFromPtr(&full_path), 0) == 0) {
+        // full_path is a HOST buffer on the stub stack — its address can
+        // numerically fall inside the guest VA range, so passing it through
+        // the guest-facing access() stub (which c_spans/translates its arg)
+        // would re-translate it into garbage. Call the POSIX-level access
+        // directly: it takes a host path and does its own toHostPath.
+        const posix_fs = @import("posix_fs.zig");
+        if (posix_fs.access(@as([*:0]const u8, @ptrCast(&full_path)), 0) == 0) {
             @memcpy(result_buf[0..full_len], full_path[0..full_len]);
             result_buf[full_len] = 0;
             if (trace.enable_tracing) trace.print("  -> found at '{s}'\n", .{full_path[0..full_len]});
@@ -206,8 +220,11 @@ pub fn searchenv(filename_ptr: usize, varname_ptr: usize, result_ptr: usize) cal
 /// getcwd
 /// Implementation status: Partially implemented
 pub fn getcwd(buffer_ptr: usize, maxlen: i32) callconv(.c) ?*anyopaque {
-    const path = std.process.currentPathAlloc(runtime.io(), std.heap.page_allocator) catch return null;
-    defer std.heap.page_allocator.free(path);
+    const host_io = @import("../host_io.zig");
+    var cwd_buf: [1024]u8 = undefined;
+    const cwd_len = host_io.getCwd(&cwd_buf); // raw syscall on Linux (TLS-safe)
+    if (cwd_len == 0) return null;
+    const path = cwd_buf[0..cwd_len];
 
     if (buffer_ptr != 0) {
         if (path.len >= maxlen) return null;
@@ -245,7 +262,18 @@ pub fn tempnam(dir_ptr: usize, prefix_ptr: usize) callconv(.c) usize {
     @memcpy(alloc_ptr[0..name.len], name[0..name.len]);
     if (trace.enable_tracing) trace.print("MSVCRT: _tempnam -> '{s}'\n", .{alloc_ptr[0 .. name.len - 1]});
 
-    if (std.Io.Dir.cwd().createFile(runtime.io(), alloc_ptr[0 .. name.len - 1], .{})) |file| {
+    if (comptime @import("builtin").os.tag == .linux) {
+        // Raw create: std.Io.Dir.createFile touches TLS (see _close).
+        var nt_buf: [512]u8 = undefined;
+        const name_slice = alloc_ptr[0 .. name.len - 1];
+        if (name_slice.len < nt_buf.len) {
+            @memcpy(nt_buf[0..name_slice.len], name_slice);
+            nt_buf[name_slice.len] = 0;
+            const rc = std.os.linux.open(@ptrCast(&nt_buf), .{ .ACCMODE = .WRONLY, .CREAT = true, .CLOEXEC = true }, 0o666);
+            const fd: isize = @bitCast(rc);
+            if (fd >= 0) _ = std.os.linux.close(@intCast(fd));
+        }
+    } else if (std.Io.Dir.cwd().createFile(runtime.io(), alloc_ptr[0 .. name.len - 1], .{})) |file| {
         file.close(runtime.io());
     } else |_| {}
 

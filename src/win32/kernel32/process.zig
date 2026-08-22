@@ -393,18 +393,22 @@ pub fn GetModuleHandleW(lpModuleName_ptr: usize) callconv(w32cc.WINAPI) usize {
 }
 
 var cmdline_initialized: bool = false;
-var cmdline_result_addr: usize = 0; // Final address to return (host or guest)
+var cmdline_host_addr: usize = 0; // Host pointer to the command-line buffer
+var cmdline_guest_addr: usize = 0; // Guest VA handed back to the x86 code
 
 var cmdline_w_initialized: bool = false;
-var cmdline_w_result_addr: usize = 0;
+var cmdline_w_host_addr: usize = 0; // Host pointer to the wide command-line buffer
+var cmdline_w_guest_addr: usize = 0; // Guest VA handed back to the x86 code
 
 /// Reset command line state so the next GetCommandLineA rebuilds from current argv.
 /// Called by the WASM spawn handler before executing a child PE.
 pub fn resetCommandLine() void {
     cmdline_initialized = false;
-    cmdline_result_addr = 0;
+    cmdline_host_addr = 0;
+    cmdline_guest_addr = 0;
     cmdline_w_initialized = false;
-    cmdline_w_result_addr = 0;
+    cmdline_w_host_addr = 0;
+    cmdline_w_guest_addr = 0;
 }
 
 /// Retrieves the command-line string for the current process.
@@ -413,22 +417,26 @@ pub fn GetCommandLineA() callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineA\n", .{});
 
     if (!cmdline_initialized) {
-        // Determine working buffer: allocate from shared guest heap
+        // Determine working buffer: allocate from shared guest heap.
+        // raw_alloc returns a HOST pointer; writes below use it directly and
+        // hostToGuest() derives the guest VA that x86 code sees in EAX.
         const kernel32_mem_mod = @import("mem.zig");
-        if (cmdline_result_addr == 0) {
+        if (cmdline_host_addr == 0) {
             const raw = kernel32_mem_mod.raw_alloc(4096) orelse return 0;
-            cmdline_result_addr = @intFromPtr(raw);
+            cmdline_host_addr = @intFromPtr(raw);
+            cmdline_guest_addr = @import("../shared.zig").hostToGuest(cmdline_host_addr);
         }
         
-        const host_ptr = @as([*]u8, @ptrFromInt(trace.addr(cmdline_result_addr)));
+        const host_ptr = @as([*]u8, @ptrFromInt(cmdline_host_addr));
         var buf: []u8 = host_ptr[0..4096];
 
         const msvcrt = @import("../msvcrt.zig");
         var pos: usize = 0;
         if (msvcrt.global_argc > 0) {
-            // Use the actual argv[0] (already has Win32-style path from posixToWin32)
+            // Use the actual argv[0] (already has Win32-style path from posixToWin32).
+            // global_argv entries are HOST pointers — read without translation.
             if (msvcrt.global_argv[0]) |argv0| {
-                const span = trace.c_span(@intFromPtr(argv0));
+                const span = trace.host_c_span(@intFromPtr(argv0));
                 const copy_len = @min(span.len, 4094);
                 @memcpy(buf[0..copy_len], span[0..copy_len]);
                 pos = copy_len;
@@ -441,7 +449,7 @@ pub fn GetCommandLineA() callconv(w32cc.WINAPI) usize {
             var i: usize = 1;
             while (i < msvcrt.global_argc) : (i += 1) {
                 if (msvcrt.global_argv[i]) |arg_ptr| {
-                    const arg = trace.c_span(@intFromPtr(arg_ptr));
+                    const arg = trace.host_c_span(@intFromPtr(arg_ptr));
 
                     if (pos < 4094) {
                         buf[pos] = ' ';
@@ -484,8 +492,8 @@ pub fn GetCommandLineA() callconv(w32cc.WINAPI) usize {
         cmdline_initialized = true;
     }
 
-    if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineA -> '{s}'\n", .{trace.c_span(cmdline_result_addr)});
-    return cmdline_result_addr;
+    if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineA -> '{s}'\n", .{trace.c_span(cmdline_guest_addr)});
+    return cmdline_guest_addr;
 }
 
 /// Retrieves a pseudo-handle for the current process.
@@ -530,54 +538,70 @@ pub fn SetEnvironmentVariableA(lpName: usize, lpValue: usize) callconv(w32cc.WIN
     return 0; // FALSE
 }
 
+/// Look up an environment variable by narrow name, returning a slice into the
+/// host-side env storage (overridden vars first, then global_envp).
+fn getEnvValue(name: []const u8) ?[]const u8 {
+    const msvcrt = @import("../msvcrt.zig");
+    // First check overridden vars
+    for (msvcrt.msvcrt_env_vars.items) |v| {
+        if (std.ascii.eqlIgnoreCase(v.key, name)) {
+            return v.val;
+        }
+    }
+    // Then check global_envp (entries are HOST pointers — no translation)
+    var env_i: usize = 0;
+    while (msvcrt.global_envp[env_i]) |e_ptr| : (env_i += 1) {
+        const e_str = trace.host_c_span(@intFromPtr(e_ptr));
+        if (std.ascii.startsWithIgnoreCase(e_str, name) and e_str.len > name.len and e_str[name.len] == '=') {
+            return e_str[name.len + 1 ..];
+        }
+    }
+    return null;
+}
+
 /// Implementation status: Partially implemented
 pub fn GetEnvironmentVariableA(lpName: usize, lpBuffer: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
     const name = trace.c_span(lpName);
     if (trace.enable_tracing) trace.print("KERNEL32: GetEnvironmentVariableA('{s}')\n", .{name});
 
-    const msvcrt = @import("../msvcrt.zig");
-    var value: ?[]const u8 = null;
+    const value = getEnvValue(name) orelse return 0; // Not found
 
-    // First check overridden vars
-    for (msvcrt.msvcrt_env_vars.items) |v| {
-        if (std.ascii.eqlIgnoreCase(v.key, name)) {
-            value = v.val;
-            break;
-        }
+    if (lpBuffer != 0 and nSize > value.len) {
+        // lpBuffer is a guest VA (usize param — not auto-translated)
+        const buf = @as([*]u8, @ptrFromInt(trace.addr(lpBuffer)));
+        @memcpy(buf[0..value.len], value);
+        buf[value.len] = 0;
+        return @intCast(value.len);
     }
-
-    // Then check global_envp
-    if (value == null) {
-        var env_i: usize = 0;
-        while (msvcrt.global_envp[env_i]) |e_ptr| : (env_i += 1) {
-            const e_str = trace.c_span(@intFromPtr(e_ptr));
-            if (std.ascii.startsWithIgnoreCase(e_str, name) and e_str.len > name.len and e_str[name.len] == '=') {
-                value = e_str[name.len + 1 ..];
-                break;
-            }
-        }
-    }
-
-    if (value) |v| {
-        if (lpBuffer != 0 and nSize > v.len) {
-            const buf = @as([*]u8, @ptrFromInt(lpBuffer));
-            @memcpy(buf[0..v.len], v);
-            buf[v.len] = 0;
-            return @intCast(v.len);
-        }
-        return @intCast(v.len + 1); // Return required size
-    }
-
-    return 0; // Not found
+    return @intCast(value.len + 1); // Return required size
 }
 
 /// GetEnvironmentVariableW — retrieves the value of an environment variable (wide).
-/// Returns 0 (variable not found).
 pub fn GetEnvironmentVariableW(lpName: usize, lpBuffer: usize, nSize: u32) callconv(w32cc.WINAPI) u32 {
-    _ = lpBuffer;
-    _ = nSize;
-    if (trace.enable_tracing) trace.print("KERNEL32: GetEnvironmentVariableW(name={x}) -> 0 (not found)\n", .{lpName});
-    return 0;
+    const name_w = trace.c_span_w(lpName);
+    if (name_w.len == 0) return 0;
+    if (trace.enable_tracing) trace.print("KERNEL32: GetEnvironmentVariableW(len={d})\n", .{name_w.len});
+
+    // Narrow the name (ASCII subset) and look up through the shared helper.
+    var narrow_buf: [512]u8 = undefined;
+    if (name_w.len >= narrow_buf.len) return 0;
+    for (name_w, 0..) |c, i| {
+        narrow_buf[i] = @intCast(c & 0xFF);
+    }
+    narrow_buf[name_w.len] = 0;
+
+    const value = getEnvValue(narrow_buf[0..name_w.len]) orelse return 0;
+
+    if (lpBuffer != 0 and @as(usize, nSize) > value.len) {
+        // lpBuffer is a guest VA (usize param — not auto-translated).
+        const buf = @as([*]u16, @ptrFromInt(trace.addr(lpBuffer)));
+        for (value, 0..) |c, i| {
+            buf[i] = c;
+        }
+        buf[value.len] = 0;
+        return @intCast(value.len);
+    }
+    return @intCast(value.len + 1); // Required size in WCHARs (incl. NUL)
 }
 
 /// Implementation status: Partially implemented
@@ -874,7 +898,7 @@ pub fn GetEnvironmentStringsA() callconv(w32cc.WINAPI) ?*anyopaque {
     if (msvcrt.global_env_initialized) {
         var i: usize = 0;
         while (msvcrt.global_envp[i]) |env_ptr| : (i += 1) {
-            total_len += trace.c_span(@intFromPtr(env_ptr)).len + 1;
+            total_len += trace.host_c_span(@intFromPtr(env_ptr)).len + 1;
         }
     }
 
@@ -884,7 +908,7 @@ pub fn GetEnvironmentStringsA() callconv(w32cc.WINAPI) ?*anyopaque {
     if (msvcrt.global_env_initialized) {
         var i: usize = 0;
         while (msvcrt.global_envp[i]) |env_ptr| : (i += 1) {
-            const span = trace.c_span(@intFromPtr(env_ptr));
+            const span = trace.host_c_span(@intFromPtr(env_ptr));
             @memcpy(buf[pos .. pos + span.len], span);
             pos += span.len;
             buf[pos] = 0;
@@ -915,7 +939,7 @@ pub fn GetEnvironmentStringsW() callconv(w32cc.WINAPI) ?*anyopaque {
     if (msvcrt.global_env_initialized) {
         var i: usize = 0;
         while (msvcrt.global_envp[i]) |env_ptr| : (i += 1) {
-            total_chars += trace.c_span(@intFromPtr(env_ptr)).len + 1;
+            total_chars += trace.host_c_span(@intFromPtr(env_ptr)).len + 1;
         }
     }
 
@@ -925,7 +949,7 @@ pub fn GetEnvironmentStringsW() callconv(w32cc.WINAPI) ?*anyopaque {
     if (msvcrt.global_env_initialized) {
         var i: usize = 0;
         while (msvcrt.global_envp[i]) |env_ptr| : (i += 1) {
-            const span = trace.c_span(@intFromPtr(env_ptr));
+            const span = trace.host_c_span(@intFromPtr(env_ptr));
             for (span) |c| {
                 buf[pos] = c;
                 pos += 1;
@@ -1165,12 +1189,13 @@ pub fn GetCommandLineW() callconv(w32cc.WINAPI) usize {
         const narrow = trace.c_span(narrow_ptr);
         
         const kernel32_mem_mod = @import("mem.zig");
-        if (cmdline_w_result_addr == 0) {
+        if (cmdline_w_host_addr == 0) {
             const raw = kernel32_mem_mod.raw_alloc(8192) orelse return 0;
-            cmdline_w_result_addr = @intFromPtr(raw);
+            cmdline_w_host_addr = @intFromPtr(raw);
+            cmdline_w_guest_addr = @import("../shared.zig").hostToGuest(cmdline_w_host_addr);
         }
         
-        const wbuf = @as([*]u16, @ptrFromInt(trace.addr(cmdline_w_result_addr)));
+        const wbuf = @as([*]u16, @ptrFromInt(cmdline_w_host_addr));
         const copy_len = @min(narrow.len, 4095);
         for (0..copy_len) |i| {
             wbuf[i] = narrow[i];
@@ -1178,7 +1203,7 @@ pub fn GetCommandLineW() callconv(w32cc.WINAPI) usize {
         wbuf[copy_len] = 0;
         cmdline_w_initialized = true;
     }
-    return cmdline_w_result_addr;
+    return cmdline_w_guest_addr;
 }
 
 /// Implementation status: Partially implemented

@@ -48,7 +48,8 @@ pub fn MultiByteToWideChar(CodePage: u32, dwFlags: u32, lpMultiByteStr_ptr: usiz
     _ = dwFlags;
 
     if (lpMultiByteStr_ptr == 0) return 0;
-    const mb_str = @as([*]const u8, @ptrFromInt(lpMultiByteStr_ptr));
+    // Both pointers are guest VAs (usize params — not auto-translated).
+    const mb_str = @as([*]const u8, @ptrFromInt(trace.addr(lpMultiByteStr_ptr)));
 
     const len: usize = if (cbMultiByte == -1)
         trace.c_span(lpMultiByteStr_ptr).len + 1
@@ -67,12 +68,13 @@ pub fn MultiByteToWideChar(CodePage: u32, dwFlags: u32, lpMultiByteStr_ptr: usiz
     // Safety: reject obviously invalid output buffer pointers
     if (lpWideCharStr_ptr < 0x10000) return @intCast(len);
 
-    const wc_str = @as([*]u16, @ptrFromInt(lpWideCharStr_ptr));
+    const wc_str = @as([*]u16, @ptrFromInt(trace.addr(lpWideCharStr_ptr)));
     if (cchWideChar < len) {
         if (trace.enable_tracing and len > 0 and len < 1024) trace.print("  -> ERROR_INSUFFICIENT_BUFFER\n", .{});
         return 0;
     }
 
+    // Byte-widening is correct for the ANSI/ASCII subset.
     for (0..len) |i| wc_str[i] = mb_str[i];
     if (trace.enable_tracing and len > 0 and len < 1024) trace.print("  -> success, returning {d}\n", .{len});
     return @intCast(len);
@@ -87,7 +89,8 @@ pub fn WideCharToMultiByte(CodePage: u32, dwFlags: u32, lpWideCharStr_ptr: usize
     _ = lpUsedDefaultChar;
 
     if (lpWideCharStr_ptr == 0) return 0;
-    const wc_str = @as([*]const u16, @ptrFromInt(lpWideCharStr_ptr));
+    // Both pointers are guest VAs (usize params — not auto-translated).
+    const wc_str = @as([*]const u16, @ptrFromInt(trace.addr(lpWideCharStr_ptr)));
 
     const len: usize = if (cchWideChar < 0)
         trace.c_span_w(lpWideCharStr_ptr).len + 1
@@ -96,7 +99,7 @@ pub fn WideCharToMultiByte(CodePage: u32, dwFlags: u32, lpWideCharStr_ptr: usize
 
     if (cbMultiByte == 0 or lpMultiByteStr_ptr == 0) return @intCast(len);
 
-    const mb_str = @as([*]u8, @ptrFromInt(lpMultiByteStr_ptr));
+    const mb_str = @as([*]u8, @ptrFromInt(trace.addr(lpMultiByteStr_ptr)));
     const copy_len = @min(len, @as(usize, @intCast(cbMultiByte)));
     for (0..copy_len) |i| mb_str[i] = @intCast(wc_str[i] & 0xFF);
     return @intCast(copy_len);
@@ -144,8 +147,12 @@ pub fn FormatMessageA(dwFlags: u32, lpSource: ?*anyopaque, dwMessageId: u32, dwL
             const out_buf = @as([*]u8, @ptrCast(p));
             @memcpy(out_buf[0..msg.len], msg);
 
+            // lpBuffer is a typed pointer (auto-translated to host). The slot
+            // must receive the GUEST VA of the message so the x86 code can
+            // read it back through the interpreter.
+            const shared = @import("../shared.zig");
             const out_ptr = @as(*?[*]u8, @ptrCast(@alignCast(lpBuffer)));
-            out_ptr.* = out_buf;
+            out_ptr.* = @ptrFromInt(shared.hostToGuest(@intFromPtr(p)));
             if (trace.enable_tracing) trace.print("  -> returning {d}\n", .{msg.len - 1});
             return @intCast(msg.len - 1);
         }
@@ -212,8 +219,9 @@ pub fn GetStringTypeW(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpCharType:
     const len: usize = if (cchSrc < 0) trace.c_span_w(lpSrcStr).len else @intCast(cchSrc);
     if (len == 0) return 0;
 
-    const src = @as([*]const u16, @ptrFromInt(lpSrcStr));
-    const out = @as([*]u16, @ptrFromInt(lpCharType));
+    // lpSrcStr/lpCharType are guest VAs (usize params — not auto-translated).
+    const src = @as([*]const u16, @ptrFromInt(trace.addr(lpSrcStr)));
+    const out = @as([*]u16, @ptrFromInt(trace.addr(lpCharType)));
 
     // CT_CTYPE1 = 1, CT_CTYPE2 = 2, CT_CTYPE3 = 4
     if (dwInfoType == 1) {
@@ -234,8 +242,9 @@ pub fn GetStringTypeA(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpCharType:
     const len: usize = if (cchSrc < 0) trace.c_span(lpSrcStr).len else @intCast(cchSrc);
     if (len == 0) return 0;
 
-    const src = @as([*]const u8, @ptrFromInt(lpSrcStr));
-    const out = @as([*]u16, @ptrFromInt(lpCharType));
+    // lpSrcStr/lpCharType are guest VAs (usize params — not auto-translated).
+    const src = @as([*]const u8, @ptrFromInt(trace.addr(lpSrcStr)));
+    const out = @as([*]u16, @ptrFromInt(trace.addr(lpCharType)));
 
     if (dwInfoType == 1) {
         for (0..len) |i| out[i] = getCharTypeW(src[i]);
@@ -255,8 +264,9 @@ pub fn LCMapStringA(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, 
     const src_len: usize = if (cchSrc < 0) trace.c_span(lpSrcStr).len + 1 else @intCast(cchSrc);
     if (cchDest == 0 or lpDestStr == 0) return @intCast(src_len);
 
-    const src = @as([*]const u8, @ptrFromInt(lpSrcStr));
-    const dst = @as([*]u8, @ptrFromInt(lpDestStr));
+    // lpSrcStr/lpDestStr are guest VAs (usize params — not auto-translated).
+    const src = @as([*]const u8, @ptrFromInt(trace.addr(lpSrcStr)));
+    const dst = @as([*]u8, @ptrFromInt(trace.addr(lpDestStr)));
     const copy_len = @min(src_len, @as(usize, @intCast(cchDest)));
 
     const LCMAP_UPPERCASE = 0x00000200;
@@ -284,8 +294,9 @@ pub fn LCMapStringW(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, 
     const src_len: usize = if (cchSrc < 0) trace.c_span_w(lpSrcStr).len + 1 else @intCast(cchSrc);
     if (cchDest == 0 or lpDestStr == 0) return @intCast(src_len);
 
-    const src = @as([*]const u16, @ptrFromInt(lpSrcStr));
-    const dst = @as([*]u16, @ptrFromInt(lpDestStr));
+    // lpSrcStr/lpDestStr are guest VAs (usize params — not auto-translated).
+    const src = @as([*]const u16, @ptrFromInt(trace.addr(lpSrcStr)));
+    const dst = @as([*]u16, @ptrFromInt(trace.addr(lpDestStr)));
     const copy_len = @min(src_len, @as(usize, @intCast(cchDest)));
 
     const LCMAP_UPPERCASE = 0x00000200;
@@ -393,8 +404,7 @@ pub fn EnumSystemLocalesA(lpLocaleEnumProc: usize, dwFlags: u32) callconv(w32cc.
     if (lpLocaleEnumProc != 0) {
         // Call callback with "00000409" (English US)
         var buf: [9]u8 = .{ '0', '0', '0', '0', '0', '4', '0', '9', 0 };
-        const cb = @as(*const fn (usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(lpLocaleEnumProc));
-        _ = cb(@intFromPtr(&buf));
+        callGuestCallback1(lpLocaleEnumProc, @intFromPtr(&buf));
     }
     return 1;
 }
@@ -406,10 +416,37 @@ pub fn EnumSystemLocalesW(lpLocaleEnumProc: usize, dwFlags: u32) callconv(w32cc.
     if (lpLocaleEnumProc != 0) {
         // Call callback with L"00000409" (English US)
         var buf: [9]u16 = .{ '0', '0', '0', '0', '0', '4', '0', '9', 0 };
-        const cb = @as(*const fn (usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(lpLocaleEnumProc));
-        _ = cb(@intFromPtr(&buf));
+        callGuestCallback1(lpLocaleEnumProc, @intFromPtr(&buf));
     }
     return 1;
+}
+
+/// Invoke a 32-bit guest callback: direct on native x86, via the compat
+/// dispatcher on native x86_64 (a direct 64-bit call misdecodes the 32-bit
+/// machine code), and via the interpreter on WASM.
+fn callGuestCallback1(cb_addr: usize, arg0: usize) void {
+    const platform = @import("../../platform.zig");
+    if (comptime platform.is_x86) {
+        const cb = @as(*const fn (usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(cb_addr));
+        _ = cb(arg0);
+    } else if (comptime platform.is_x86_64) {
+        const compat = @import("../../x86/compat_thunks.zig");
+        _ = compat.callCompat32_4(@truncate(cb_addr), @truncate(arg0), 0, 0, 0);
+    } else {
+        // WASM: run the callback via the interpreter (guest fn ptr is not a
+        // valid WASM indirect-call index).
+        const x86_cpu = @import("../../x86/cpu.zig");
+        const x86_execute = @import("../../x86/execute.zig");
+        const shared = @import("../shared.zig");
+        var cpu = x86_cpu.Cpu{};
+        if (shared.guest_memory) |gm| cpu.memory = gm.*;
+        var stack: [256]u8 = undefined;
+        cpu.esp = @intFromPtr(&stack) + stack.len - 16;
+        cpu.push32(@intCast(arg0));
+        cpu.push32(0);
+        cpu.eip = @intCast(cb_addr);
+        x86_execute.run(&cpu);
+    }
 }
 
 /// Maps one character string to another, performing a specified locale-dependent transformation using a locale name.

@@ -43,6 +43,48 @@ pub fn sleep(ns: u64) void {
 
 pub const Mutex = runtime.Mutex;
 
+// -------------------------------------------------------------------------
+// FS segment swap for libc calls from stub contexts
+// -------------------------------------------------------------------------
+
+/// Host TLS base of the main thread, captured before setupFS switches FS to
+/// the guest TEB. libc (pthread_create, malloc, ...) reads per-thread state
+/// via %fs; inside a compat-mode stub the FS selector points at the guest
+/// TEB, so libc sees garbage. useHostFs() temporarily restores the host TLS
+/// so such calls work, and restoreFs() puts the guest selector back.
+var host_fs_base: usize = 0;
+
+/// Capture the host FS base (call once from main, before setupFS).
+pub fn saveHostFsBase() void {
+    if (comptime is_x86_64) {
+        var base: usize = 0;
+        _ = std.os.linux.syscall2(std.os.linux.SYS.arch_prctl, 0x1003, @intFromPtr(&base)); // ARCH_GET_FS
+        host_fs_base = base;
+    }
+}
+
+/// Switch the current thread to host TLS (selector 0 + MSR host base).
+/// Returns the FS selector to restore with restoreFs().
+pub fn useHostFs() u16 {
+    if (comptime is_x86_64) {
+        var sel: u16 = undefined;
+        asm volatile ("mov %%fs, %[s]" : [s] "=r" (sel));
+        asm volatile ("mov %[z], %%fs" :: [z] "r" (@as(u16, 0)));
+        _ = std.os.linux.syscall2(std.os.linux.SYS.arch_prctl, 0x1002, host_fs_base); // ARCH_SET_FS
+        return sel;
+    }
+    return 0;
+}
+
+/// Restore the guest FS selector captured by useHostFs().
+pub fn restoreFs(sel: u16) void {
+    if (comptime is_x86_64) {
+        if (sel != 0) {
+            asm volatile ("mov %[s], %%fs" :: [s] "r" (sel));
+        }
+    }
+}
+
 /// Spawns a new thread. Returns true on success.
 pub fn spawnThread(func: anytype, args: anytype) bool {
     _ = std.Thread.spawn(.{}, func, args) catch return false;

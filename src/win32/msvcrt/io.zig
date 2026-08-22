@@ -142,17 +142,21 @@ var file_ptrs: [max_files]usize = [_]usize{0} ** max_files;
 /// Implementation status: Partially implemented
 pub fn getFile(ptr: ?*anyopaque) ?std.Io.File {
     if (ptr) |p| {
-        // Since we pass guest pointers back to the caller, ptr_val is a 32-bit address.
+        // The thunk layer hands us a HOST pointer for the guest FILE*.
         const ptr_val = @intFromPtr(p);
 
         // Check standard streams
         if (trace.enable_tracing) trace.print("MSVCRT: getFile(ptr_val={X}, iob_guest_addr={X})\n", .{ ptr_val, iob_guest_addr });
         if (iob_guest_addr != 0) {
-            // iob_guest_addr is the start of the [3]FILE array in guest memory.
-            const iob_end = iob_guest_addr + @sizeOf([3]MSVCRT_FILE);
-            if (ptr_val >= iob_guest_addr and ptr_val < iob_end) {
-                if (trace.enable_tracing) trace.print("MSVCRT: got std idx {d}\n", .{(ptr_val - iob_guest_addr) / @sizeOf(MSVCRT_FILE)});
-                return stdFileFromIobIndex((ptr_val - iob_guest_addr) / @sizeOf(MSVCRT_FILE));
+            // iob_guest_addr is a GUEST address; translate to a host address
+            // for the comparison (trace.addr is a no-op where guest==host).
+            // On WASM, failing to translate made stdio FILE* lookups miss and
+            // silently dropped every fwrite/fputs to stdout/stderr.
+            const iob_host = trace.addr(iob_guest_addr);
+            const iob_end = iob_host + @sizeOf([3]MSVCRT_FILE);
+            if (ptr_val >= iob_host and ptr_val < iob_end) {
+                if (trace.enable_tracing) trace.print("MSVCRT: got std idx {d}\n", .{(ptr_val - iob_host) / @sizeOf(MSVCRT_FILE)});
+                return stdFileFromIobIndex((ptr_val - iob_host) / @sizeOf(MSVCRT_FILE));
             }
         } else {
             // Host-address _iob (pure native fallback)
@@ -284,9 +288,6 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
     @memcpy(mode_slice, mode[0..mode_len]);
 
     trace.print("MSVCRT_IO: fopen {s} (mode: {s})\n", .{ name_slice, mode_slice });
-    trace.print("  raw hex: ", .{});
-    for (name_slice) |b| trace.print("{x:0>2} ", .{b});
-    trace.print("\n", .{});
 
     var fixed: [1024]u8 = undefined;
     const name_len = @min(name_slice.len, 1023);
@@ -330,14 +331,19 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
         
         const shared = @import("../shared.zig");
         const ptr_opaque = shared.raw_alloc(@sizeOf(MSVCRT_FILE)) orelse {
-            file.close(runtime.io());
+            @import("../host_io.zig").closeFile(file);
             file_handles[idx] = null;
             return null;
         };
         const ptr = @intFromPtr(ptr_opaque);
         file_ptrs[idx] = ptr;
-        
-        var ms_file = @as(*MSVCRT_FILE, @ptrFromInt(trace.addr(ptr)));
+
+        // raw_alloc already returns a HOST pointer. Do NOT run it through
+        // trace.addr again — on WASM a host pointer can numerically fall
+        // inside the guest address range, and the second translation would
+        // corrupt the address. The guest FILE* must translate back to this
+        // exact host address in getFile() for fwrite/fread to match.
+        var ms_file = @as(*MSVCRT_FILE, @ptrFromInt(ptr));
         ms_file._ptr = 0;
         ms_file._cnt = 0;
         ms_file._base = 0;
@@ -355,7 +361,7 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
         ms_file._file = @intCast(file.handle); // Store raw fd just in case
         return @ptrCast(ms_file); // Returns the guest pointer (from raw_alloc) mapped down by the thunks
     } else {
-        file.close(runtime.io());
+        @import("../host_io.zig").closeFile(file);
         return null;
     }
 }
@@ -368,7 +374,13 @@ pub fn fclose(f: ?*anyopaque) callconv(.c) i32 {
         const ptr_val = @intFromPtr(f.?);
         for (0..max_files) |idx| {
             if (file_ptrs[idx] == ptr_val) {
-                file.close(runtime.io());
+                if (comptime @import("builtin").os.tag == .linux) {
+                    // Raw close: std.Io.File.close touches TLS, which faults
+                    // inside the compat-mode SIGSEGV dispatch handler.
+                    _ = std.os.linux.close(file.handle);
+                } else {
+                    file.close(runtime.io());
+                }
                 file_handles[idx] = null;
                 file_ptrs[idx] = 0;
                 // Currently we don't free raw_alloc memory, so it leaks slightly.
@@ -379,6 +391,58 @@ pub fn fclose(f: ?*anyopaque) callconv(.c) i32 {
         return 0;
     }
     return -1;
+}
+
+/// Flushes a stream (or all streams when stream is null).
+/// Writes are unbuffered (direct fd), so this is a no-op that reports success.
+pub fn fflush(f: ?*anyopaque) callconv(.c) i32 {
+    if (f == null) {
+        _ = _flushall();
+        return 0;
+    }
+    if (getFile(f)) |_| return 0;
+    return -1; // EOF
+}
+
+/// Flushes all streams; returns the number of streams open.
+pub fn _flushall() callconv(.c) i32 {
+    var n: i32 = 3; // stdin/stdout/stderr always open
+    for (0..max_files) |idx| {
+        if (file_handles[idx] != null) n += 1;
+    }
+    return n;
+}
+
+/// Sets the buffering mode/size of a stream. Buffering is a no-op here
+/// (writes go straight to the fd); accept and return 0.
+pub fn setvbuf(stream: ?*anyopaque, buffer: ?*anyopaque, mode: i32, size: usize) callconv(.c) i32 {
+    _ = .{ stream, buffer, mode, size };
+    return 0;
+}
+
+/// Closes all open streams (except the standard streams); returns the count.
+pub fn _fcloseall() callconv(.c) i32 {
+    var closed: i32 = 0;
+    for (0..max_files) |idx| {
+        if (file_handles[idx]) |file| {
+            if (comptime @import("builtin").os.tag == .linux) {
+                _ = std.os.linux.close(file.handle);
+            } else {
+                file.close(runtime.io());
+            }
+            file_handles[idx] = null;
+            file_ptrs[idx] = 0;
+            closed += 1;
+        }
+    }
+    return closed;
+}
+
+/// Closes a stream and reopens it with a new path/mode. Returns the new
+/// stream pointer (or null on failure).
+pub fn freopen(filename_ptr: usize, mode_ptr: usize, f: ?*anyopaque) callconv(.c) ?*anyopaque {
+    _ = fclose(f);
+    return fopen(filename_ptr, mode_ptr);
 }
 
 /// Reads data from a stream.
@@ -441,6 +505,21 @@ pub fn fseek(f: ?*anyopaque, offset: i32, origin: i32) callconv(.c) i32 {
     return -1;
 }
 
+/// Repositions the file pointer to the beginning of a stream and clears its
+/// error indicators. Equivalent to fseek(f, 0, SEEK_SET) plus clearing
+/// _IOEOF/_IOERR. MSVC c1/c2 use this to re-read their intermediate files;
+/// a no-op here left the file position past the written data, so re-reads
+/// came back empty/truncated ("compiler limit: out of keys" in P2).
+pub fn rewind(f: ?*anyopaque) callconv(.c) void {
+    trace.print("MSVCRT_IO: rewind\n", .{});
+    if (f == null) return;
+    _ = fseek(f, 0, 0);
+    // Clear _IOEOF (0x10) and _IOERR (0x20) flags in the guest FILE struct.
+    // f is a host pointer (translated by the thunk layer).
+    const ms_file = @as(*MSVCRT_FILE, @ptrCast(@alignCast(f.?)));
+    ms_file._flag &= ~(@as(u16, 0x0010) | @as(u16, 0x0020));
+}
+
 /// Gets the current position of a file pointer.
 /// Implementation status: Partially implemented
 pub fn ftell(f: ?*anyopaque) callconv(.c) i32 {
@@ -459,7 +538,11 @@ pub fn ftell(f: ?*anyopaque) callconv(.c) i32 {
 pub fn fgets(buf_ptr: usize, max_count: i32, f: ?*anyopaque) callconv(.c) usize {
     if (buf_ptr == 0 or max_count <= 1) return 0;
     if (getFile(f)) |file| {
-        const buf = @as([*]u8, @ptrFromInt(buf_ptr));
+        // buf_ptr is a guest VA (usize param — not auto-translated). Without
+        // translation the line was written to the raw guest VA in linear
+        // memory, leaving the guest's buffer empty — LINK's response-file
+        // (@file) expansion then saw no arguments → LNK4001/LNK1561.
+        const buf = @as([*]u8, @ptrFromInt(trace.addr(buf_ptr)));
         const limit = @as(usize, @intCast(max_count - 1));
         var i: usize = 0;
         while (i < limit) {
@@ -540,15 +623,17 @@ fn stub_fprintf_native(f: ?*anyopaque, format_ptr: usize, ...) callconv(.c) i32 
 }
 
 fn fprintf_impl(f: ?*anyopaque, format_ptr: usize, ap: usize) i32 {
-    if (getFile(f)) |file| {
-        if (format_ptr != 0) {
-            const fmt = @as([*:0]const u8, @ptrFromInt(trace.addr(format_ptr)));
-            var buf: [4096]u8 = undefined;
-            const len = fmt_mod.x86_vsnprintf(&buf, 4096, fmt, ap);
-            @import("../host_io.zig").writeAllToFile(file, buf[0..len]) catch return -1;
-            return @intCast(len);
-        }
-        return -1;
+    // Fall back to stdout when the FILE* can't be resolved (e.g. a child
+    // process's _iob FILE* that doesn't match the recorded iob range) — the
+    // vfprintf stub does the same. Without this, DUMPBIN/LIB diagnostics were
+    // silently dropped (exit 0, no output).
+    const file = getFile(f) orelse @import("../host_io.zig").fileFromFd(1);
+    if (format_ptr != 0) {
+        const fmt = @as([*:0]const u8, @ptrFromInt(trace.addr(format_ptr)));
+        var buf: [4096]u8 = undefined;
+        const len = fmt_mod.x86_vsnprintf(&buf, 4096, fmt, ap);
+        @import("../host_io.zig").writeAllToFile(file, buf[0..len]) catch return -1;
+        return @intCast(len);
     }
     return -1;
 }

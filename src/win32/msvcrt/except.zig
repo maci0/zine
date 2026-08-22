@@ -154,6 +154,16 @@ pub fn except_handler3(
 
             if (filter_result == 1) { // EXCEPTION_EXECUTE_HANDLER
                 try_level_ptr.* = enclosing_level;
+                if (comptime platform.is_wasm) {
+                    // Redirect the suspended interpreter to the __except block.
+                    // RaiseException stops its walk when the redirect is set.
+                    wasm_seh_redirect = .{
+                        .eip = @intCast(handler_func_addr),
+                        .esp = @intCast(frame_ebp),
+                        .ebp = @intCast(frame_ebp),
+                    };
+                    return 0; // ExceptionContinueExecution (redirect pending)
+                }
                 jump_to_seh_handler(handler_func_addr, frame_ebp);
                 unreachable;
             } else if (filter_result == -1) { // EXCEPTION_CONTINUE_EXECUTION
@@ -201,13 +211,34 @@ fn call_seh_filter_x64(filter_addr: usize, frame_ebp: usize) i32 {
     return @bitCast(result);
 }
 
-/// On WASM, SEH filter functions are x86 code at guest VAs — they can't be
-/// called directly as host functions. Return -1 (EXCEPTION_CONTINUE_EXECUTION)
-/// to skip the filter and let the app continue.
+/// On WASM, the interpreter stashes the guest ESP/EBP here right before each
+/// native import call, so RaiseException can run SEH handlers on the app's
+/// own stack.
+pub var seh_current_guest_esp: u32 = 0;
+pub var seh_current_guest_ebp: u32 = 0;
+
+/// On WASM, when a host-side SEH stub (imported _except_handler3) accepts an
+/// exception, it sets this redirect; execute.zig applies it to the suspended
+/// interpreter CPU instead of resuming at the import's return address.
+pub var wasm_seh_redirect: ?struct { eip: u32, esp: u32, ebp: u32 } = null;
+
+/// On WASM, SEH filter functions are x86 code at guest VAs — run them via the
+/// interpreter (mirrors callComparator's WASM path).
 fn call_seh_filter_wasm(filter_addr: usize, frame_ebp: usize) i32 {
-    _ = .{ filter_addr, frame_ebp };
-    if (trace.enable_tracing) trace.print("SEH: skipping filter call on WASM (guest addr 0x{X})\n", .{filter_addr});
-    return -1; // EXCEPTION_CONTINUE_EXECUTION
+    const x86_cpu = @import("../../x86/cpu.zig");
+    const x86_execute = @import("../../x86/execute.zig");
+    const shared = @import("../shared.zig");
+    const teb_mod = @import("../teb.zig");
+    var cpu = x86_cpu.Cpu{};
+    if (shared.guest_memory) |gm| cpu.memory = gm.*;
+    if (teb_mod.teb_base_addr != 0) cpu.fs_base = @intCast(teb_mod.teb_base_addr);
+    var stack: [4096]u8 = undefined;
+    cpu.esp = @intFromPtr(&stack) + stack.len - 16;
+    cpu.ebp = @intCast(frame_ebp);
+    cpu.eip = @intCast(filter_addr);
+    x86_execute.run(&cpu);
+    if (trace.enable_tracing) trace.print("SEH: wasm filter @{x} -> {d}\n", .{ filter_addr, cpu.eax });
+    return @bitCast(cpu.eax);
 }
 
 /// Jumps to a SEH handler function with the specified frame EBP.

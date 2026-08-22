@@ -30,6 +30,10 @@ var jit_block_count: i32 = 0;
 // Shared memory from the main module — JIT blocks import this.
 var shared_memory: ?*c.wasm_memory_t = null;
 var shared_store: ?*c.wasm_store_t = null;
+// Exports vec of the main instance. wasm_extern_as_memory returns a pointer
+// INTO the extern struct, so freeing the vec would dangle shared_memory.
+// Keep the vec alive for the whole process and delete it at exit.
+var shared_exports: c.wasm_extern_vec_t = undefined;
 
 // ---------------------------------------------------------------------------
 // JIT host functions (called from WASM guest)
@@ -265,22 +269,27 @@ pub fn main(init: std.process.Init) !void {
     c.wasi_config_inherit_stdout(wasi_config);
     c.wasi_config_inherit_stderr(wasi_config);
     // Preopen directories for WASI filesystem access.
-    // preopen_dir opens a host directory as a WASI fd.
-    // We need "." for relative paths and "/" for absolute paths.
+    // wasmtime maps `--dir=.` to the virtual "." and `--dir=/` to "/"; mirror
+    // that with mapdir so relative paths and absolute paths both resolve.
     {
         var cwd_buf: [4096]u8 = undefined;
         const cwd_len = std.process.currentPath(runtime.io(), &cwd_buf) catch 0;
         const cwd = if (cwd_len > 0) cwd_buf[0..cwd_len] else ".";
         const cwd_z = std.heap.page_allocator.dupeZ(u8, cwd) catch ".";
+        // First preopen = fd 3 = the WASI cwd (Zig's Dir.cwd() on WASI uses
+        // fd 3), mirroring wasmtime's `--dir=.`. The "/" preopen then serves
+        // absolute paths, mirroring `--dir=/`.
         _ = c.wasi_config_preopen_dir(wasi_config, cwd_z);
         _ = c.wasi_config_preopen_dir(wasi_config, "/");
     }
 
-    // Inherit environment
+    // Inherit environment (wasi_config_env needs null-terminated C strings)
     const env_iter = init.environ_map;
     var env_it = env_iter.iterator();
     while (env_it.next()) |entry| {
-        c.wasi_config_env(wasi_config, entry.key_ptr.*.ptr, entry.value_ptr.*.ptr);
+        const kz = std.heap.page_allocator.dupeZ(u8, entry.key_ptr.*) catch continue;
+        const vz = std.heap.page_allocator.dupeZ(u8, entry.value_ptr.*) catch continue;
+        c.wasi_config_env(wasi_config, kz.ptr, vz.ptr);
     }
 
     // Get WASI imports
@@ -323,17 +332,53 @@ pub fn main(init: std.process.Init) !void {
     defer c.wasm_functype_delete(call_functype);
     const call_func = c.wasm_func_new(store, call_functype, &jitCall);
 
-    // Build imports array matching the module's import list
-    // WASI imports are resolved by wasi_get_imports; we patch in JIT functions
-    var wasi_imports: c.wasm_extern_vec_t = undefined;
-    if (!c.wasi_get_imports(store, wasi_env, module, &wasi_imports)) {
+    // Build imports array matching the module's import list.
+    // wasi_get_imports FAILS on modules with non-WASI imports (it tries to
+    // resolve every import, including our custom "jit" ones), so use
+    // wasi_get_unordered_imports instead — it only fills the WASI imports as
+    // named externs. We then place them in module-import order and patch in
+    // the custom JIT functions.
+    var named_imports: c.wasmer_named_extern_vec_t = undefined;
+    if (!c.wasi_get_unordered_imports(wasi_env, module, &named_imports)) {
         writeErr("Error: failed to get WASI imports.\n");
         printWasmerError();
         std.process.exit(1);
     }
-    defer c.wasm_extern_vec_delete(&wasi_imports);
+    // NOTE: named_imports and wasi_imports are deliberately NOT freed here.
+    // wasm_instance_new consumes the import externs (the instance owns them
+    // and frees them when deleted), and wasi_imports borrows the same extern
+    // objects from named_imports — freeing either vector would double-free the
+    // shared externs. Both are small arrays; leaking them for the process
+    // lifetime is harmless in this one-shot CLI.
 
-    // Patch JIT imports into the import vector
+    var wasi_imports: c.wasm_extern_vec_t = undefined;
+    c.wasm_extern_vec_new_uninitialized(&wasi_imports, import_types.size);
+
+    // First pass: fill each module import with the matching named WASI extern
+    for (0..named_imports.size) |j| {
+        const named = named_imports.data[j];
+        const ne_mod = c.wasmer_named_extern_module(named);
+        const ne_name = c.wasmer_named_extern_name(named);
+        const ne_ext = c.wasmer_named_extern_unwrap(named);
+
+        const ne_mod_slice = ne_mod.*.data[0..ne_mod.*.size];
+        const ne_name_slice = ne_name.*.data[0..ne_name.*.size];
+
+        for (0..import_types.size) |i| {
+            const imp = import_types.data[i];
+            const mod_name = c.wasm_importtype_module(imp);
+            const field_name = c.wasm_importtype_name(imp);
+
+            const mod_slice = mod_name.*.data[0..mod_name.*.size];
+            const field_slice = field_name.*.data[0..field_name.*.size];
+
+            if (std.mem.eql(u8, mod_slice, ne_mod_slice) and std.mem.eql(u8, field_slice, ne_name_slice)) {
+                wasi_imports.data[i] = @constCast(ne_ext);
+            }
+        }
+    }
+
+    // Second pass: patch custom JIT imports into the vector
     for (0..import_types.size) |i| {
         const imp = import_types.data[i];
         const mod_name = c.wasm_importtype_module(imp);
@@ -370,18 +415,16 @@ pub fn main(init: std.process.Init) !void {
     };
     defer c.wasm_instance_delete(instance);
 
-    // Capture shared memory for JIT blocks
-    {
-        var exports: c.wasm_extern_vec_t = undefined;
-        c.wasm_instance_exports(instance, &exports);
-        defer c.wasm_extern_vec_delete(&exports);
+    // Capture shared memory for JIT blocks. The exports vec is kept alive
+    // globally: wasm_extern_as_memory borrows into the extern struct, so the
+    // vec must outlive the JIT execution (see shared_exports above).
+    c.wasm_instance_exports(instance, &shared_exports);
 
-        // Find the memory export
-        for (0..exports.size) |i| {
-            if (c.wasm_extern_as_memory(exports.data[i])) |mem| {
-                shared_memory = mem;
-                break;
-            }
+    // Find the memory export
+    for (0..shared_exports.size) |i| {
+        if (c.wasm_extern_as_memory(shared_exports.data[i])) |mem| {
+            shared_memory = mem;
+            break;
         }
     }
 
@@ -407,10 +450,17 @@ pub fn main(init: std.process.Init) !void {
         // Check if it's a proc_exit (normal termination)
         var msg: c.wasm_message_t = undefined;
         c.wasm_trap_message(t, &msg);
+        var exit_code: ?u8 = null;
         if (msg.size > 0) {
             const s = msg.data[0..msg.size];
-            // wasmer encodes proc_exit as a trap message
-            if (std.mem.indexOf(u8, s, "exit") == null) {
+            // wasmer encodes proc_exit as "WASI exited with code: ExitCode::N"
+            if (std.mem.indexOf(u8, s, "WASI exited with code") != null) {
+                if (std.mem.lastIndexOfScalar(u8, s, ':')) |colon| {
+                    // Message is NUL-terminated; cut at the NUL before parsing.
+                    const num = std.mem.trim(u8, std.mem.sliceTo(s[colon + 1 ..], 0), " \r\n");
+                    exit_code = std.fmt.parseInt(u8, num, 10) catch null;
+                }
+            } else if (std.mem.indexOf(u8, s, "exit") == null) {
                 writeErr("Error: WASM trap: ");
                 writeErr(s);
                 writeErr("\n");
@@ -418,11 +468,17 @@ pub fn main(init: std.process.Init) !void {
             c.wasm_byte_vec_delete(&msg);
         }
         c.wasm_trap_delete(t);
+        if (exit_code) |code| {
+            std.process.exit(code);
+        }
     }
 
     // Clean up JIT blocks
     for (0..@intCast(jit_block_count)) |i| {
         if (jit_instances[i]) |inst| c.wasm_instance_delete(inst);
         if (jit_modules[i]) |mod| c.wasm_module_delete(mod);
+    }
+    if (shared_exports.size > 0) {
+        c.wasm_extern_vec_delete(&shared_exports);
     }
 }

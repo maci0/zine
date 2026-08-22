@@ -191,6 +191,44 @@ pub fn CreateDirectoryA(lpPathName: usize, lpSecurityAttributes: usize) callconv
     return 1;
 }
 
+/// Deletes an existing empty directory. Returns TRUE on success.
+/// Implementation status: Fully implemented
+pub fn RemoveDirectoryA(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
+    if (lpPathName == 0) return 0;
+    const path = trace.c_span(lpPathName);
+    if (trace.enable_tracing) trace.print("KERNEL32: RemoveDirectoryA('{s}')\n", .{path});
+    var host_buf: [1024]u8 = undefined;
+    const path_utils = @import("../../path_utils.zig");
+    const host_len = path_utils.toHostPath(path, &host_buf);
+    if (host_len == 0) return 0;
+
+    if (!deleteDirHost(host_buf[0..host_len])) {
+        // Case-insensitive fallback: lowercase the final component
+        var last_sep: usize = 0;
+        for (0..host_len) |i| {
+            if (host_buf[i] == '/') last_sep = i + 1;
+        }
+        for (last_sep..host_len) |i| {
+            host_buf[i] = std.ascii.toLower(host_buf[i]);
+        }
+        if (!deleteDirHost(host_buf[0..host_len])) return 0;
+    }
+    return 1;
+}
+
+fn deleteDirHost(host_path: []const u8) bool {
+    if (comptime @import("builtin").target.os.tag == .linux) {
+        var nt: [std.posix.PATH_MAX]u8 = undefined;
+        if (host_path.len >= nt.len) return false;
+        @memcpy(nt[0..host_path.len], host_path);
+        nt[host_path.len] = 0;
+        const rc = std.os.linux.rmdir(@ptrCast(&nt));
+        return @as(isize, @bitCast(rc)) == 0;
+    }
+    std.Io.Dir.cwd().deleteDir(runtime.io(), host_path) catch return false;
+    return true;
+}
+
 /// Determines whether a disk drive is a removable, fixed, CD-ROM, RAM disk, or network drive.
 /// Implementation status: No-op fallback (returns DRIVE_FIXED)
 pub fn stub_GetDriveTypeA(lpRootPathName: usize) callconv(w32cc.WINAPI) u32 {

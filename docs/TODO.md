@@ -1,46 +1,59 @@
-# General TODOs
+# Zine — TODO / Remaining Work
 
-This document tracks unimplemented features and tasks for Zine.
+Open items, prioritized. Current state and what is already implemented:
+see [`STATUS.md`](STATUS.md). Detailed per-slice notes: `handover.md` (repo root).
 
-## x86_64 Native Execution (Phase 5 — Implemented)
-- [x] Signal-based INT 0xFE dispatch via SIGSEGV handler
-- [x] 256KB compat thunk pool with MAP_32BIT
-- [x] iretq trampoline (CS=0x23 compat mode entry)
-- [x] IAT patching with compat thunk addresses
-- [x] TEB allocation in low 4GB
-- [ ] CS=0x23 check for non-thunk faults (SEH dispatch in compat mode)
-- [ ] Full 32-bit CONTEXT extraction from 64-bit ucontext
-- [ ] Performance: upgrade to direct lcall/lret trampolines (avoid signal overhead)
+Verified baseline (2026-08-08): native **158/0**, native64 **158/0**,
+wasmtime **128/0**, FLTK smoke **20/0** — all suites green.
 
-## WASM Compatibility (23/36 tests passing)
-- [ ] Fix child PE argv passing — DUMPBIN/LIB/EDITBIN spawn LINK.EXE but child's CRT `__getmainargs` uses stale cached argv
-- [ ] Fix CL.EXE child process execution — C1.DLL/C2.DLL spawned code hits EIP out of bounds
-- [x] ~~Fix NMAKE exit code (exits 0 instead of 2 when no makefile found)~~
-- [ ] Fix RC.EXE — needs native DLL dispatch for RCDLL.DLL on WASM
-- [ ] Fix zine-host WASI filesystem preopening (guest can't open files via wasmer C API)
-- [ ] Implement zine-host JIT block execution end-to-end test
+## GUI (web + FLTK backends)
 
-## JIT Pipeline
-- [ ] Implement zine-host wasmtime/wasmer C API JIT block execution
-- [ ] Browser JS JIT glue (`WebAssembly.instantiate` for compiled blocks)
-- [ ] Hot block detection and execution counting
-- [ ] JIT invalidation on code page writes
+No remaining items — the common-dialog set (Open/Save, Color, Font, Print,
+Page Setup, Find/Replace), the standard + common controls (Button, Static,
+Edit, RichEdit, ListBox, ComboBox, Tab, ListView, TreeView, Header, StatusBar,
+Progress, UpDown, Trackbar, DateTimePicker), menus, dialogs, clipboard,
+icons, timers, input, focus and window-text APIs are all implemented in both
+backends and covered by the suite (`--native` 158/0, `--wasmtime` 128/0) plus
+`tests/fltk_smoke.sh` (FLTK 20/0 under Xvfb).
 
-## x86 Interpreter
-- [x] ~~Basic block decoding and caching~~ → `src/x86/decode_cache.zig` (1024-entry hash-indexed instruction cache)
-- [x] ~~x87 FPU instruction execution~~ → extensive support in `execute.zig` (FADD, FMUL, FSUB, FDIV, FCOM, FLD, FST, FILD, FISTP, FXCH, FCHS, FABS, FLD1, FLDZ, etc.)
-- [ ] Threaded dispatch optimization
+## native64 (x86_64 compat)
 
-## Win32 API Stubs
-- [ ] Implement mouse message posting (`src/win32/user32.zig`)
+Fully green (158/0) — LINK.EXE ReadSymbolTable and the LIB spawn-path TLS
+crash were fixed in the 2026-08-08 slice (callComparator compat routing +
+RCDLL raw-syscall file IO).
 
-## Registry & Configuration
-- [x] ~~Move hardcoded registry settings to external config~~ → `src/win32/advapi32/registry.toml` (TOML, embedded at compile time via `@embedFile`, parsed by sam701/zig-toml)
-- [ ] Add per-application registry overrides (e.g., game-specific keys)
+## WASM
 
-## Browser Frontend
-- [ ] JS host (`index.html` + `host.js`) with `WebAssembly.instantiate`
-- [ ] Canvas/WebGL rendering for GUI apps
-- [ ] Virtual filesystem (IndexedDB or preloaded archives)
-- [ ] Web Audio API bridge for DirectSound/WinMM
-- [ ] `performance.now()` for timestamp support
+- [ ] **WASI single-threaded timers** — the timer thread is native-only; WASI
+      builds (wasmtime/wasmer/zine-host) don't fire WM_TIMER (single-threaded
+      runtime). The timer suite section is skipped on WASM for this reason.
+- [ ] **JIT instruction coverage** — the JIT executes straight-line blocks
+      end-to-end via zine-host, but blocks containing untranslated opcodes
+      fall back to the interpreter. Broaden the translator (SSE, x87, string
+      ops, etc.) so fewer blocks degrade; plus hot-block pre-warming (compile
+      the hottest blocks on startup instead of on first encounter).
+- [ ] **zine-host CLI toolchain** — CL.EXE gets to the C1.DLL spawn under
+      zine-host but the child spawn (C1.EXE) fails — a pre-existing
+      spawn/file gap in zine-host, unrelated to JIT (the wasmtime suite is
+      unaffected). Would let the full MSVC toolchain run under
+      `zine-host --jit`.
+
+## MSVCRT / stdio
+
+`fflush`/`_flushall`/`setvbuf`/`_fcloseall`/`freopen` are implemented
+(2026-08-08 slice). The remaining stdio gap is the pre-existing wasmtime
+text-mode `fgets`/`fread` read-back issue: kernel32 file I/O (used by the CLI
+tools) works, but msvcrt `fopen("r")` + buffered read returns empty on
+wasmtime (the CRT's text-mode loop reads past the ReadFile byte count into
+garbage/zeros). Not covered by the suite (tests use append-write).
+
+## Long-term / infra (not GUI-blocking)
+
+- [x] JIT x86→WASM block execution end-to-end (2026-08-08 slice) — blocks
+      compile, execute via zine-host/wasmer, and re-run as hot blocks
+      (sehtest/sehnest/regapp green under `--jit`). See WASM section above
+      for the remaining coverage/pre-warming items.
+- [ ] Browser JS JIT glue (`WebAssembly.instantiate` for compiled blocks) —
+      the JIT host imports (`jit.jit_compile`/`jit.jit_call`) are ready; a
+      browser runtime would provide them instead of zine-host.
+- [ ] Threaded dispatch optimization for the interpreter.

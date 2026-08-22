@@ -125,7 +125,8 @@ pub fn stub_CoCreateInstance(rclsid: usize, pUnkOuter: usize, dwClsContext: u32,
 pub fn CoTaskMemAlloc(cb: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("OLE32: CoTaskMemAlloc({d})\n", .{cb});
     if (shared.raw_alloc(cb)) |ptr| {
-        return @intFromPtr(ptr);
+        // usize return — hand back a guest VA, not the raw host pointer.
+        return shared.hostToGuest(@intFromPtr(ptr));
     }
     return 0;
 }
@@ -165,14 +166,17 @@ pub fn SysAllocStringLen(strIn: usize, ui: u32) callconv(w32cc.WINAPI) usize {
     @as(*align(1) u32, @ptrFromInt(base)).* = @intCast(byte_len);
     const data_ptr = base + 4;
     if (strIn != 0 and byte_len > 0) {
-        const src = @as([*]const u8, @ptrFromInt(strIn));
+        // strIn is a guest VA (usize param — not auto-translated).
+        const src = @as([*]const u8, @ptrFromInt(trace.addr(strIn)));
         @memcpy(@as([*]u8, @ptrFromInt(data_ptr))[0..byte_len], src[0..byte_len]);
     } else if (byte_len > 0) {
         @memset(@as([*]u8, @ptrFromInt(data_ptr))[0..byte_len], 0);
     }
     @as(*align(1) u16, @ptrFromInt(data_ptr + byte_len)).* = 0;
-    if (trace.enable_tracing) trace.print("OLEAUT32: SysAllocStringLen(len={d}) -> 0x{X}\n", .{ ui, data_ptr });
-    return data_ptr;
+    // usize return — hand back a guest VA, not the raw host pointer.
+    const guest_va = shared.hostToGuest(data_ptr);
+    if (trace.enable_tracing) trace.print("OLEAUT32: SysAllocStringLen(len={d}) -> 0x{X}\n", .{ ui, guest_va });
+    return guest_va;
 }
 
 /// VariantClear — release any resources in a VARIANT and zero it

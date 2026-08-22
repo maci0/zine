@@ -147,9 +147,39 @@ fn modalMessageLoop(dlgproc: usize) void {
                 break;
             }
 
+            // Dialog-manager keyboard: Tab/Enter/Escape handled like
+            // IsDialogMessage does for modeless dialogs.
+            if (msg.message == 0x0100 or msg.message == 0x0104) { // WM_KEYDOWN / WM_SYSKEYDOWN
+                const vk = msg.wParam & 0xFF;
+                const handled = switch (vk) {
+                    0x09 => blk: { // VK_TAB
+                        const shift = (renderer.keyboard_state[0x10] & 0x80) != 0;
+                        const next = nextTabStop(DIALOG_HWND, user32.focused_hwnd, shift);
+                        if (next != user32.focused_hwnd) {
+                            _ = @import("window.zig").stub_SetFocus(next);
+                        }
+                        break :blk true;
+                    },
+                    0x0D => blk: { // VK_RETURN
+                        const def_btn = findDefaultButton(DIALOG_HWND);
+                        if (def_btn != 0) {
+                            const id = if (user32.getWindowInfo(def_btn)) |info| @as(u32, @intCast(info.id)) else 1;
+                            sendDialogCommand(DIALOG_HWND, id);
+                        }
+                        break :blk true;
+                    },
+                    0x1B => blk: { // VK_ESCAPE
+                        sendDialogCommand(DIALOG_HWND, DLGKB_IDCANCEL);
+                        break :blk true;
+                    },
+                    else => false,
+                };
+                if (handled) continue;
+            }
+
             if (dlgproc != 0) {
                 var err_flag: u32 = 0;
-                _ = user32.callWndProcSafe(dlgproc, DIALOG_HWND, msg.message, msg.wParam, msg.lParam, &err_flag);
+                _ = user32.callWndProcSafe(dlgproc, DIALOG_HWND, msg.message, msg.wParam, @as(isize, @intCast(msg.lParam)), &err_flag);
             }
         }
 
@@ -186,23 +216,113 @@ pub fn GetDlgItem(hDlg: usize, nIDDlgItem: i32) callconv(w32cc.WINAPI) usize {
     return (hDlg << 8) ^ @as(usize, @bitCast(@as(isize, nIDDlgItem)));
 }
 
+// --- Dialog control text store (guest-visible state) ---
+// SetDlgItemTextA/W and SetDlgItemInt write here; GetDlgItemTextA/W and
+// GetDlgItemInt read it back, matching real Win32 where the control owns its
+// text. Keyed by control id (the same id renderer.updateControlText uses).
+const CtrlText = struct { id: i32, text: [512]u8, len: u16 };
+var ctrl_texts: [64]CtrlText = undefined;
+var ctrl_text_count: usize = 0;
+
+fn setCtrlText(id: i32, text: []const u8) void {
+    for (ctrl_texts[0..ctrl_text_count]) |*e| {
+        if (e.id == id) {
+            const n = @min(text.len, e.text.len);
+            @memcpy(e.text[0..n], text[0..n]);
+            e.len = @intCast(n);
+            return;
+        }
+    }
+    if (ctrl_text_count < ctrl_texts.len) {
+        const e = &ctrl_texts[ctrl_text_count];
+        ctrl_text_count += 1;
+        e.id = id;
+        const n = @min(text.len, e.text.len);
+        @memcpy(e.text[0..n], text[0..n]);
+        e.len = @intCast(n);
+    }
+}
+
+pub fn getCtrlText(id: i32) []const u8 {
+    var i: usize = ctrl_text_count;
+    while (i > 0) {
+        i -= 1;
+        const e = &ctrl_texts[i];
+        if (e.id == id) return e.text[0..e.len];
+    }
+    return "";
+}
+
 pub fn SetDlgItemTextA(hDlg: usize, nIDDlgItem: i32, lpString: usize) callconv(w32cc.WINAPI) i32 {
     _ = hDlg;
     const text = if (lpString != 0) trace.c_span(lpString) else "";
     if (trace.enable_tracing) {
         trace.print("USER32: SetDlgItemTextA(id={d}, text='{s}')\n", .{ nIDDlgItem, text });
     }
+    setCtrlText(nIDDlgItem, text);
     renderer.updateControlText(nIDDlgItem, text);
     return 1;
 }
 
-pub fn stub_GetDlgItemTextA(hDlg: usize, nIDDlgItem: i32, lpString: usize, cchMax: i32) callconv(w32cc.WINAPI) i32 {
+pub fn SetDlgItemTextW(hDlg: usize, nIDDlgItem: i32, lpString: usize) callconv(w32cc.WINAPI) i32 {
     _ = hDlg;
-    _ = nIDDlgItem;
+    const text = if (lpString != 0) trace.c_span_w(lpString) else &[_]u16{};
+    var buf: [512]u8 = undefined;
+    const n = std.unicode.utf16LeToUtf8(&buf, text) catch 0;
+    if (trace.enable_tracing) {
+        trace.print("USER32: SetDlgItemTextW(id={d}, text='{s}')\n", .{ nIDDlgItem, buf[0..n] });
+    }
+    setCtrlText(nIDDlgItem, buf[0..n]);
+    renderer.updateControlText(nIDDlgItem, buf[0..n]);
+    return 1;
+}
+
+pub fn GetDlgItemTextA(hDlg: usize, nIDDlgItem: i32, lpString: usize, cchMax: i32) callconv(w32cc.WINAPI) i32 {
+    _ = hDlg;
+    const text = getCtrlText(nIDDlgItem);
     if (lpString != 0 and cchMax > 0) {
-        @as([*]u8, @ptrFromInt(lpString))[0] = 0;
+        const dst: [*]u8 = @ptrFromInt(trace.addr(lpString));
+        const n = @min(@as(usize, @intCast(cchMax)) - 1, text.len);
+        @memcpy(dst[0..n], text[0..n]);
+        dst[n] = 0;
+        return @intCast(n);
     }
     return 0;
+}
+
+pub fn GetDlgItemTextW(hDlg: usize, nIDDlgItem: i32, lpString: usize, cchMax: i32) callconv(w32cc.WINAPI) i32 {
+    _ = hDlg;
+    const text = getCtrlText(nIDDlgItem);
+    if (lpString != 0 and cchMax > 0) {
+        const dst: [*]u16 = @ptrFromInt(trace.addr(lpString));
+        var pos: usize = 0;
+        // UTF-8 -> UTF-16LE
+        var it = (std.unicode.Utf8View.init(text) catch return 0).iterator();
+        while (it.nextCodepoint()) |cp| {
+            var pair: [2]u16 = undefined;
+            const n = encodeUtf16(cp, &pair);
+            if (pos + n >= @as(usize, @intCast(cchMax))) break;
+            for (pair[0..n]) |u| {
+                dst[pos] = u;
+                pos += 1;
+            }
+        }
+        dst[pos] = 0;
+        return @intCast(pos);
+    }
+    return 0;
+}
+
+/// Encode a Unicode codepoint as UTF-16 (1 or 2 code units, surrogate pair).
+fn encodeUtf16(cp: u21, out: *[2]u16) usize {
+    if (cp < 0x10000) {
+        out[0] = @intCast(cp);
+        return 1;
+    }
+    const v = cp - 0x10000;
+    out[0] = @intCast(0xD800 + (v >> 10));
+    out[1] = @intCast(0xDC00 + (v & 0x3FF));
+    return 2;
 }
 
 pub fn stub_SendDlgItemMessageA(hDlg: usize, nIDDlgItem: i32, Msg: u32, wParam: usize, lParam: isize) callconv(w32cc.WINAPI) isize {
@@ -237,14 +357,29 @@ pub fn stub_IsDlgButtonChecked(hDlg: usize, nIDButton: i32) callconv(w32cc.WINAP
     return 0;
 }
 
-pub fn stub_GetDlgItemInt(hDlg: usize, nIDDlgItem: i32, lpTranslated: usize, bSigned: i32) callconv(w32cc.WINAPI) u32 {
+pub fn GetDlgItemInt(hDlg: usize, nIDDlgItem: i32, lpTranslated: usize, bSigned: i32) callconv(w32cc.WINAPI) u32 {
     _ = hDlg;
-    _ = nIDDlgItem;
-    _ = bSigned;
-    if (lpTranslated != 0) {
-        @as(*i32, @ptrFromInt(lpTranslated)).* = 0; // FALSE = translation failed
+    const text = getCtrlText(nIDDlgItem);
+    var i: usize = 0;
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) i += 1;
+    var neg = false;
+    if (i < text.len and (text[i] == '-' or text[i] == '+')) {
+        neg = (text[i] == '-');
+        i += 1;
     }
-    return 0;
+    var value: u32 = 0;
+    const start = i;
+    while (i < text.len and text[i] >= '0' and text[i] <= '9') {
+        value = value *% 10 +% (text[i] - '0');
+        i += 1;
+    }
+    const ok = i > start;
+    if (lpTranslated != 0) {
+        @as(*i32, @ptrFromInt(trace.addr(lpTranslated))).* = if (ok) 1 else 0;
+    }
+    if (!ok) return 0;
+    if (bSigned != 0 and neg) return 0 -% value;
+    return value;
 }
 
 var next_dialog_hwnd: usize = DIALOG_HWND;
@@ -307,13 +442,34 @@ pub fn CreateDialogParamA(hInstance: usize, lpTemplateName: usize, hWndParent: u
         _ = user32.callWndProcSafe(lpDialogFunc, dialog_hwnd, 0x0110, 0, @bitCast(dwInitParam), &err_flag);
     }
 
+    // Real dialogs focus the first WS_TABSTOP control. This gives
+    // IsDialogMessage a starting point for Tab navigation.
+    {
+        const first = nextTabStop(dialog_hwnd, 0, false);
+        if (first != 0) {
+            user32.focused_hwnd = first;
+            if (trace.enable_tracing) trace.print("USER32: CreateDialogParamA initial focus={x}\n", .{first});
+        }
+    }
+
     return dialog_hwnd;
 }
 
-pub fn stub_SetDlgItemInt(hDlg: usize, nIDDlgItem: i32, uValue: u32, bSigned: i32) callconv(w32cc.WINAPI) i32 {
+pub fn SetDlgItemInt(hDlg: usize, nIDDlgItem: i32, uValue: u32, bSigned: i32) callconv(w32cc.WINAPI) i32 {
     _ = hDlg;
-    _ = bSigned;
     if (trace.enable_tracing) trace.print("USER32: SetDlgItemInt(id={d}, val={d})\n", .{ nIDDlgItem, uValue });
+    // Format as a decimal string (signed when bSigned, else unsigned) and push
+    // it through the same text path so GetDlgItemInt round-trips and the UI
+    // shows the value.
+    var buf: [16]u8 = undefined;
+    var text: []const u8 = undefined;
+    if (bSigned != 0 and (@as(i32, @bitCast(uValue)) < 0)) {
+        text = std.fmt.bufPrint(&buf, "{d}", .{@as(i32, @bitCast(uValue))}) catch buf[0..0];
+    } else {
+        text = std.fmt.bufPrint(&buf, "{d}", .{uValue}) catch buf[0..0];
+    }
+    setCtrlText(nIDDlgItem, text);
+    renderer.updateControlText(nIDDlgItem, text);
     return 1;
 }
 
@@ -321,16 +477,15 @@ pub fn MessageBoxW(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32) cal
     _ = hWnd;
     _ = uType;
     if (trace.enable_tracing) trace.print("USER32: MessageBoxW\n", .{});
-    // Convert wide strings for display
+    // Convert wide (UTF-16LE) strings to UTF-8 for the renderer. The old
+    // @truncate-per-wchar approach garbled any non-ASCII text.
     if (lpCaption != 0 and lpText != 0) {
         const caption_w = trace.c_span_w(lpCaption);
         const text_w = trace.c_span_w(lpText);
         var caption_buf: [256]u8 = undefined;
-        var text_buf: [1024]u8 = undefined;
-        const cap_len = @min(caption_w.len, caption_buf.len);
-        const txt_len = @min(text_w.len, text_buf.len);
-        for (0..cap_len) |i| caption_buf[i] = @truncate(caption_w[i]);
-        for (0..txt_len) |i| text_buf[i] = @truncate(text_w[i]);
+        var text_buf: [2048]u8 = undefined;
+        const cap_len = std.unicode.utf16LeToUtf8(&caption_buf, caption_w) catch 0;
+        const txt_len = std.unicode.utf16LeToUtf8(&text_buf, text_w) catch 0;
         renderer.showMessageBox(caption_buf[0..cap_len], text_buf[0..txt_len]);
     }
     return 1; // IDOK
@@ -340,9 +495,132 @@ pub fn MessageBoxW(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32) cal
 // Dialog utility stubs (moved from misc.zig)
 // -------------------------------------------------------------------------
 
-pub fn stub_IsDialogMessageA(hDlg: usize, lpMsg: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hDlg;
-    _ = lpMsg;
+/// Sends WM_COMMAND to a dialog's DlgProc (the per-hwnd WndProc registered by
+/// CreateDialogParamA/DialogBoxParamA). wParam = control id (low word), like
+/// the existing modal-command dispatch path. Falls back to the modal DlgProc
+/// (DialogBoxParamA doesn't register a per-hwnd WndProc).
+fn sendDialogCommand(hDlg: usize, ctrl_id: u32) void {
+    const proc_addr = user32.getWndProc(hDlg) orelse modal_dlgproc;
+    if (proc_addr == 0) return;
+    var err_flag: u32 = 0;
+    if (trace.enable_tracing) trace.print("USER32: IsDialogMessage -> WM_COMMAND({d}) to dialog {x}\n", .{ ctrl_id, hDlg });
+    _ = user32.callWndProcSafe(proc_addr, hDlg, w32.WM_COMMAND, ctrl_id, 0, &err_flag);
+}
+
+const DLGKB_WS_TABSTOP: u32 = 0x00010000;
+const DLGKB_WS_VISIBLE: u32 = 0x10000000;
+const DLGKB_BS_DEFPUSHBUTTON: u32 = 0x00000001;
+const DLGKB_IDCANCEL: u32 = 2;
+const DLGKB_VK_TAB: u32 = 0x09;
+const DLGKB_VK_RETURN: u32 = 0x0D;
+const DLGKB_VK_ESCAPE: u32 = 0x1B;
+const DLGKB_WM_KEYDOWN: u32 = 0x0100;
+const DLGKB_WM_SYSKEYDOWN: u32 = 0x0104;
+
+/// Collect the dialog's child controls (hwnd + style + id) from the window
+/// table. Returns the number found.
+fn dialogChildren(hDlg: usize, out_hwnds: []usize, out_styles: []u32) usize {
+    var n: usize = 0;
+    for (user32.window_info_table[0..user32.window_info_count]) |*entry| {
+        if (entry.parent != hDlg) continue;
+        if (n < out_hwnds.len) {
+            out_hwnds[n] = entry.hwnd;
+            out_styles[n] = @bitCast(entry.style);
+            n += 1;
+        }
+    }
+    return n;
+}
+
+/// Find the next (or previous, for Shift+Tab) control with WS_TABSTOP after
+/// `from_hwnd`. If `from_hwnd` isn't a child, starts from the first tabstop
+/// (forward) or the last one (backward). Returns the control hwnd, or
+/// `from_hwnd` if none.
+fn nextTabStop(hDlg: usize, from_hwnd: usize, backward: bool) usize {
+    var hwnds: [64]usize = undefined;
+    var styles: [64]u32 = undefined;
+    const n = dialogChildren(hDlg, &hwnds, &styles);
+    if (n == 0) return from_hwnd;
+
+    var from_idx: ?usize = null;
+    for (0..n) |i| {
+        if (hwnds[i] == from_hwnd) {
+            from_idx = i;
+            break;
+        }
+    }
+
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const idx = if (backward)
+            (from_idx orelse 0) +% n -% (i + 1)
+        else
+            ((from_idx orelse n -% 1) +% 1 +% i) % n;
+        if ((styles[idx] & DLGKB_WS_TABSTOP) != 0 and (styles[idx] & DLGKB_WS_VISIBLE) != 0) {
+            return hwnds[idx];
+        }
+    }
+    return from_hwnd;
+}
+
+/// Find the default push button (BS_DEFPUSHBUTTON) among the dialog's children.
+fn findDefaultButton(hDlg: usize) usize {
+    var hwnds: [64]usize = undefined;
+    var styles: [64]u32 = undefined;
+    const n = dialogChildren(hDlg, &hwnds, &styles);
+    for (0..n) |i| {
+        if ((styles[i] & DLGKB_BS_DEFPUSHBUTTON) != 0) return hwnds[i];
+    }
+    return 0;
+}
+
+/// IsDialogMessageA: dialog-manager keyboard handling. Returns 1 if the
+/// message was consumed (Tab moves focus, Enter activates the default button,
+/// Escape activates IDCANCEL), 0 otherwise.
+pub fn IsDialogMessageA(hDlg: usize, lpMsg: usize) callconv(w32cc.WINAPI) i32 {
+    if (lpMsg == 0) return 0;
+
+    // Read the 32-bit guest MSG directly (message at +4, wParam at +8).
+    const msg_ptr = @as([*]const u8, @ptrFromInt(trace.addr(lpMsg)));
+    const message = std.mem.readInt(u32, msg_ptr[4..8], .little);
+    const wparam = std.mem.readInt(u32, msg_ptr[8..12], .little);
+
+    if (message == DLGKB_WM_KEYDOWN or message == DLGKB_WM_SYSKEYDOWN) {
+        const vk = wparam & 0xFF;
+        switch (vk) {
+            DLGKB_VK_TAB => {
+                const shift = (renderer.keyboard_state[0x10] & 0x80) != 0; // VK_SHIFT
+                const next = nextTabStop(hDlg, user32.focused_hwnd, shift);
+                if (next != user32.focused_hwnd) {
+                    _ = @import("window.zig").stub_SetFocus(next);
+                }
+                if (trace.enable_tracing) trace.print("USER32: IsDialogMessage Tab -> focus={x}\n", .{next});
+                return 1;
+            },
+            DLGKB_VK_RETURN => {
+                const def_btn = findDefaultButton(hDlg);
+                if (def_btn != 0) {
+                    const id = if (user32.getWindowInfo(def_btn)) |info| @as(u32, @intCast(info.id)) else 1;
+                    sendDialogCommand(hDlg, id);
+                }
+                return 1;
+            },
+            DLGKB_VK_ESCAPE => {
+                sendDialogCommand(hDlg, DLGKB_IDCANCEL);
+                return 1;
+            },
+            else => {},
+        }
+    }
+
+    // WM_CHAR: if the focused control is the edit control (which wants
+    // characters), let the message flow (return 0). Buttons and other
+    // controls consume stray chars (real dialog manager behavior).
+    if (message == 0x0102) { // WM_CHAR
+        if (user32.focused_hwnd == user32.edit_hwnd) return 0;
+        return 1;
+    }
+
     return 0;
 }
 

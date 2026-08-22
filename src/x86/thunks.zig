@@ -115,8 +115,30 @@ pub fn dispatch(cpu: *Cpu) void {
         if (@import("../trace.zig").enable_tracing) {
             @import("../trace.zig").print("THUNK EXEC: {s}\n", .{entry.name});
         }
+
+        // Stash the guest ESP/EBP so RaiseException can run WASM SEH handlers
+        // on the app's own stack (this thunk path is how WASM imports dispatch).
+        if (comptime !@import("../platform.zig").is_native) {
+            const except_mod = @import("../win32/msvcrt/except.zig");
+            except_mod.seh_current_guest_esp = cpu.esp;
+            except_mod.seh_current_guest_ebp = cpu.ebp;
+        }
         
         entry.handler(cpu);
+
+        // On WASM, a host-side _except_handler3 that accepted sets a redirect —
+        // apply it to this CPU instead of resuming at the import's return
+        // address (the catch block continues the app from there).
+        if (comptime !@import("../platform.zig").is_native) {
+            const except_mod = @import("../win32/msvcrt/except.zig");
+            if (except_mod.wasm_seh_redirect) |rd| {
+                except_mod.wasm_seh_redirect = null;
+                cpu.eip = rd.eip;
+                cpu.esp = rd.esp;
+                cpu.ebp = rd.ebp;
+                return;
+            }
+        }
 
         // For stdcall: callee pops parameters
         if (entry.param_count) |n| {
@@ -200,22 +222,26 @@ fn dispatchNativeThunk(cpu: *Cpu) void {
     }
 
     const platform = @import("../platform.zig");
-    if (comptime platform.is_native) {
-        // Special case: _ftol reads from x87 FPU stack (ST0), but in interpreter
-        // mode the FPU state is emulated — the real x87 stack is empty.
-        const msvcrt_math = @import("../win32/msvcrt/math.zig");
-        if (target_addr == @intFromPtr(msvcrt_math.ftol)) {
-            const fval = cpu.fpu.pop();
-            const ival = @import("execute.zig").safeFloatToInt(i64, fval);
-            const uval = @as(u64, @bitCast(ival));
-            cpu.eax = @truncate(uval);
-            cpu.edx = @truncate(uval >> 32);
-            cpu.eip = ret_addr;
-            log.info("x86_thunks: _ftol(ST0={d}) -> EDX:EAX={X}:{X}", .{ fval, cpu.edx, cpu.eax });
-            // _ftol is cdecl (no cleanup needed)
-            return;
-        }
 
+    // Special case: _ftol reads from x87 FPU stack (ST0). In interpreter
+    // mode the FPU state is emulated — the real x87 stack is empty. Match
+    // by thunk name instead of target address: on WASM, function pointers
+    // have no meaningful integer address, so the address comparison never
+    // matches and the generic fallback would return 0. c1.dll uses _ftol
+    // when computing its internal heap limits, so a wrong result surfaces
+    // as "fatal error C1076/C1063: compiler heap exhausted".
+    if (std.mem.eql(u8, entry.name, "_ftol")) {
+        const fval = cpu.fpu.pop();
+        const ival = @import("execute.zig").safeFloatToInt(i64, fval);
+        const uval = @as(u64, @bitCast(ival));
+        cpu.eax = @truncate(uval);
+        cpu.edx = @truncate(uval >> 32);
+        cpu.eip = ret_addr;
+        // _ftol is cdecl (no cleanup needed)
+        return;
+    }
+
+    if (comptime platform.is_native) {
         // Read up to 16 dword arguments from guest stack
         var args: [16]u32 = undefined;
         for (0..16) |i| {

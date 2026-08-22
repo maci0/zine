@@ -138,7 +138,13 @@ pub fn close(fd: i32) callconv(.c) i32 {
     }
     if (fd >= 3) {
         const file = @import("../host_io.zig").fileFromFd(fd);
-        file.close(runtime.io());
+        if (comptime @import("builtin").os.tag == .linux) {
+            // Raw close: std.Io.File.close goes through Io.Threaded (TLS),
+            // which faults inside the compat-mode SIGSEGV dispatch handler.
+            _ = std.os.linux.close(file.handle);
+        } else {
+            file.close(runtime.io());
+        }
         return 0;
     }
     return -1;
@@ -173,6 +179,12 @@ pub fn tell(fd: i32) callconv(.c) i32 {
 /// Implementation status: Fully implemented
 pub fn chsize(fd: i32, size: i32) callconv(.c) i32 {
     const file = @import("../host_io.zig").fileFromFd(fd);
+    if (comptime @import("builtin").os.tag == .linux) {
+        // Raw ftruncate: std.Io.File.setLength touches TLS (see _close).
+        const rc = std.os.linux.ftruncate(file.handle, size);
+        if (@as(isize, @bitCast(rc)) < 0) return -1;
+        return 0;
+    }
     file.setLength(runtime.io(), @intCast(size)) catch return -1;
     return 0;
 }
@@ -181,6 +193,12 @@ pub fn chsize(fd: i32, size: i32) callconv(.c) i32 {
 /// Implementation status: Fully implemented
 pub fn filelength(fd: i32) callconv(.c) i32 {
     const file = @import("../host_io.zig").fileFromFd(fd);
+    if (comptime @import("builtin").os.tag == .linux) {
+        const posix_fs = @import("posix_fs.zig");
+        const st = posix_fs.fstatFdLinux(file.handle) orelse return -1;
+        if (trace.enable_tracing) trace.print("MSVCRT: _filelength(fd={d}) -> {d}\n", .{ fd, st.size });
+        return @intCast(st.size);
+    }
     if (file.length(runtime.io())) |pos| {
         if (trace.enable_tracing) trace.print("MSVCRT: _filelength(fd={d}) -> {d}\n", .{ fd, pos });
         return @intCast(pos);
@@ -218,18 +236,22 @@ pub fn stat(path_str: [*:0]const u8, stat_out: [*]u8) callconv(.c) i32 {
 pub fn fstat(fd: i32, stat_out: [*]u8) callconv(.c) i32 {
     {
         const file = @import("../host_io.zig").fileFromFd(fd);
-        if (file.stat(runtime.io()) catch null) |st| {
+        const st = if (comptime @import("builtin").os.tag == .linux)
+            @import("posix_fs.zig").fstatFdLinux(file.handle)
+        else
+            file.stat(runtime.io()) catch null;
+        if (st) |st_| {
             const stat_buf = stat_out;
             @memset(stat_buf[0..36], 0);
             stat_buf[4] = 0x00;
             stat_buf[5] = 0x80; // _S_IFREG
-            const size = @as(u32, @intCast(st.size));
+            const size = @as(u32, @intCast(st_.size));
             stat_buf[20] = @intCast(size & 0xFF);
             stat_buf[21] = @intCast((size >> 8) & 0xFF);
             stat_buf[22] = @intCast((size >> 16) & 0xFF);
             stat_buf[23] = @intCast((size >> 24) & 0xFF);
 
-            if (trace.enable_tracing) trace.print("MSVCRT: _fstat(fd={d}) -> size {d}\n", .{ fd, st.size });
+            if (trace.enable_tracing) trace.print("MSVCRT: _fstat(fd={d}) -> size {d}\n", .{ fd, st_.size });
             return 0;
         }
     }

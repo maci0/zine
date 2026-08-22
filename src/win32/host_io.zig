@@ -62,15 +62,92 @@ pub fn readFromFile(file: std.Io.File, buf: []u8) error{ReadFailed}!usize {
         if (signed < 0) return error.ReadFailed;
         return rc;
     }
-    return file.readPositionalAll(runtime.io(), buf, 0) catch error.ReadFailed;
+    // Sequential read at the CURRENT file position. readPositionalAll(..., 0)
+    // reads offset 0 on every call, so repeated fread/fgetc calls would keep
+    // returning the same leading bytes (breaking P2's intermediate-file parse
+    // into "compiler limit: out of keys").
+    const result = file.readStreaming(runtime.io(), &.{buf}) catch return error.ReadFailed;
+    return result;
 }
 
 pub fn closeFile(file: std.Io.File) void {
+    if (comptime builtin.target.os.tag == .linux) {
+        _ = std.os.linux.close(file.handle);
+        return;
+    }
     file.close(runtime.io());
 }
 
 pub fn statFile(file: std.Io.File) ?std.Io.File.Stat {
+    if (comptime builtin.target.os.tag == .linux) {
+        return posix_fs.fstatFdLinux(file.handle);
+    }
     return file.stat(runtime.io()) catch null;
+}
+
+/// Raw setLength (ftruncate) on Linux; std.Io elsewhere.
+pub fn setLength(file: std.Io.File, len: u64) error{TruncFailed}!void {
+    if (comptime builtin.target.os.tag == .linux) {
+        const rc = std.os.linux.ftruncate(file.handle, @intCast(len));
+        if (@as(isize, @bitCast(rc)) < 0) return error.TruncFailed;
+        return;
+    }
+    file.setLength(runtime.io(), len) catch return error.TruncFailed;
+}
+
+/// Sequential positional read at the CURRENT file position; raw pread on
+/// Linux (std.Io.File.readPositionalAll touches TLS, which faults inside
+/// the compat-mode SIGSEGV dispatch handler).
+pub fn readPositional(file: std.Io.File, buf: []u8, offset: u64) error{ReadFailed}!usize {
+    if (comptime builtin.target.os.tag == .linux) {
+        var off: usize = 0;
+        while (off < buf.len) {
+            const rc = std.os.linux.pread(file.handle, buf.ptr + off, buf.len - off, @as(i64, @intCast(offset + off)));
+            const signed: isize = @bitCast(rc);
+            if (signed <= 0) return error.ReadFailed;
+            off += rc;
+        }
+        return off;
+    }
+    return file.readPositionalAll(runtime.io(), buf, offset) catch return error.ReadFailed;
+}
+
+/// Raw pwrite on Linux; std.Io elsewhere (see readPositional).
+pub fn writePositional(file: std.Io.File, bytes: []const u8, offset: u64) error{WriteFailed}!void {
+    if (comptime builtin.target.os.tag == .linux) {
+        var off: usize = 0;
+        while (off < bytes.len) {
+            const rc = std.os.linux.pwrite(file.handle, bytes.ptr + off, bytes.len - off, @as(i64, @intCast(offset + off)));
+            const signed: isize = @bitCast(rc);
+            if (signed <= 0) return error.WriteFailed;
+            off += rc;
+        }
+        return;
+    }
+    file.writePositionalAll(runtime.io(), bytes, offset) catch return error.WriteFailed;
+}
+
+/// Raw Dir close on Linux (see closeFile).
+pub fn closeDir(dir: std.Io.Dir) void {
+    if (comptime builtin.target.os.tag == .linux) {
+        _ = std.os.linux.close(dir.handle);
+        return;
+    }
+    dir.close(runtime.io());
+}
+
+/// Raw unlink on Linux; std.Io elsewhere.
+pub fn deleteFilePosix(path: []const u8) bool {
+    if (comptime builtin.target.os.tag == .linux) {
+        var nt: [std.posix.PATH_MAX]u8 = undefined;
+        if (path.len >= nt.len) return false;
+        @memcpy(nt[0..path.len], path);
+        nt[path.len] = 0;
+        const rc = std.os.linux.unlink(@ptrCast(&nt));
+        return @as(isize, @bitCast(rc)) == 0;
+    }
+    std.Io.Dir.cwd().deleteFile(runtime.io(), path) catch return false;
+    return true;
 }
 
 /// Check if a file exists / is accessible given a Win32 path.
@@ -93,6 +170,10 @@ pub fn deleteFile(win32_path: []const u8) bool {
     var host_buf: [1024]u8 = undefined;
     const len = path_utils.toHostPath(win32_path, &host_buf);
     if (len == 0) return false;
+    if (comptime builtin.target.os.tag == .linux) {
+        const rc = std.os.linux.unlink(host_buf[0..len]);
+        return @as(isize, @bitCast(rc)) == 0;
+    }
     std.Io.Dir.cwd().deleteFile(runtime.io(), host_buf[0..len]) catch return false;
     return true;
 }
@@ -100,6 +181,18 @@ pub fn deleteFile(win32_path: []const u8) bool {
 /// Get the current working directory in Win32 format (C:\...).
 /// Returns the number of bytes written, or 0 on failure.
 pub fn getCwd(buf: []u8) usize {
+    if (comptime builtin.target.os.tag == .linux) {
+        // Raw getcwd syscall: std.process.currentPathAlloc goes through
+        // std.Io (TLS), which faults inside the compat signal dispatch.
+        const n = std.os.linux.getcwd(buf.ptr, buf.len);
+        if (n == 0) return 0;
+        var win_buf: [1024]u8 = undefined;
+        const win_len = path_utils.posixToWin32(buf[0..n], &win_buf) catch return 0;
+        if (win_len == 0 or win_len >= buf.len) return 0;
+        @memcpy(buf[0..win_len], win_buf[0..win_len]);
+        buf[win_len] = 0;
+        return win_len;
+    }
     const cwd = std.process.currentPathAlloc(runtime.io(), std.heap.page_allocator) catch return 0;
     defer std.heap.page_allocator.free(cwd);
 

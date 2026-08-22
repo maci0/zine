@@ -10,6 +10,6 @@ comptime {
     @export(&dlg.GetOpenFileNameW, .{ .name = "GetOpenFileNameW" });
     @export(&dlg.GetSaveFileNameW, .{ .name = "GetSaveFileNameW" });
     @export(&dlg.stub_ChooseColorA, .{ .name = "ChooseColorA" });
-    @export(&dlg.stub_ChooseFontA, .{ .name = "ChooseFontA" });
-    @export(&dlg.stub_PrintDlgA, .{ .name = "PrintDlgA" });
+    @export(&dlg.ChooseFontA, .{ .name = "ChooseFontA" });
+    @export(&dlg.PrintDlgA, .{ .name = "PrintDlgA" });
 }

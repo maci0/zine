@@ -217,6 +217,12 @@ pub const WM_TIMER: u32 = 0x0113;
 pub const WM_KEYDOWN: u32 = 0x0100;
 /// Non-system key released.
 pub const WM_KEYUP: u32 = 0x0101;
+/// Character key (from TranslateMessage).
+pub const WM_CHAR: u32 = 0x0102;
+/// System character key (from TranslateMessage with Alt).
+pub const WM_SYSCHAR: u32 = 0x0106;
+/// Mouse wheel rotated.
+pub const WM_MOUSEWHEEL: u32 = 0x020A;
 /// System key pressed.
 pub const WM_SYSKEYDOWN: u32 = 0x0104;
 /// System key released.

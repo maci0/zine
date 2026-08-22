@@ -207,6 +207,7 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
         if (renderer.last_edit_control_json) |json| pushMessage(json);
         if (renderer.last_audio_format_json) |json| pushMessage(json);
         if (renderer.last_controls_json) |json| pushMessage(json);
+        if (renderer.last_color_dialog_json) |json| pushMessage(json);
         for (renderer.cached_control_text_updates.items) |json| pushMessage(json);
 
         // Read loop for incoming messages
@@ -322,6 +323,44 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                                 const is_italic = if (italic_val != null and italic_val.? == .bool) italic_val.?.bool else false;
                                 if (renderer.on_font_chosen) |cb| cb(face_val.?.string, pt_size, is_bold, is_italic);
                             }
+                        } else if (std.mem.eql(u8, type_val.?.string, "print_chosen")) {
+                            // Parse print confirmation: { from, to, copies }
+                            const from_val = root.object.get("from");
+                            const to_val = root.object.get("to");
+                            const copies_val = root.object.get("copies");
+                            if (from_val != null and from_val.? == .integer and
+                                to_val != null and to_val.? == .integer)
+                            {
+                                const from_page = std.math.cast(i32, from_val.?.integer) orelse continue;
+                                const to_page = std.math.cast(i32, to_val.?.integer) orelse continue;
+                                const copies: i32 = if (copies_val != null and copies_val.? == .integer)
+                                    std.math.cast(i32, copies_val.?.integer) orelse 1
+                                else
+                                    1;
+                                if (renderer.on_print_chosen) |cb| cb(from_page, to_page, copies);
+                            }
+                        } else if (std.mem.eql(u8, type_val.?.string, "page_setup_chosen")) {
+                            // Parse page-setup confirmation:
+                            // { left, top, right, bottom, paperW, paperH, orientation }
+                            const left_val = root.object.get("left");
+                            const top_val = root.object.get("top");
+                            if (left_val != null and left_val.? == .integer and top_val != null and top_val.? == .integer) {
+                                const gv = struct { fn get(o: std.json.ObjectMap, k: []const u8, dflt: i32) i32 {
+                                    const v = o.get(k);
+                                    if (v != null and v.? == .integer) return std.math.cast(i32, v.?.integer) orelse dflt;
+                                    return dflt;
+                                } }.get;
+                                if (renderer.on_page_setup_chosen) |cb| {
+                                    const left = std.math.cast(i32, left_val.?.integer) orelse 0;
+                                    const top = std.math.cast(i32, top_val.?.integer) orelse 0;
+                                    cb(left, top,
+                                        gv(root.object, "right", 0),
+                                        gv(root.object, "bottom", 0),
+                                        gv(root.object, "paperW", 8500),
+                                        gv(root.object, "paperH", 11000),
+                                        gv(root.object, "orientation", 0));
+                                }
+                            }
                         } else if (std.mem.eql(u8, type_val.?.string, "cancel_dialog")) {
                             if (renderer.on_cancel_dialog) |cb| cb();
                         } else if (std.mem.eql(u8, type_val.?.string, "find_action")) {
@@ -363,6 +402,26 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                                     renderer.setClipboardFromSlice(text_val.string);
                                 }
                             }
+                        } else if (std.mem.eql(u8, type_val.?.string, "color_selected")) {
+                            // Color dialog result: { color: 0xRRGGBB } (-1 = cancel)
+                            if (root.object.get("color")) |color_val| {
+                                if (color_val == .integer) {
+                                    if (color_val.integer < 0) {
+                                        if (renderer.on_cancel_dialog) |cb| cb();
+                                    } else if (renderer.on_color_selected) |cb| {
+                                        cb(@intCast(@as(u64, @bitCast(color_val.integer)) & 0xFFFFFF));
+                                    }
+                                }
+                            }
+                        } else if (std.mem.eql(u8, type_val.?.string, "listbox_select")) {
+                            // Listbox item clicked: (id, index)
+                            const id_val = root.object.get("id");
+                            const idx_val = root.object.get("index");
+                            if (id_val != null and id_val.? == .integer and idx_val != null and idx_val.? == .integer) {
+                                if (renderer.on_listbox_select) |cb| {
+                                    cb(@intCast(@as(u64, @bitCast(id_val.?.integer))), @intCast(@as(i64, idx_val.?.integer)));
+                                }
+                            }
                         } else if (std.mem.eql(u8, type_val.?.string, "context_menu_select")) {
                             // Context menu item selected
                             if (root.object.get("id")) |id_val| {
@@ -386,6 +445,15 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                                     const vk_code = mapBrowserKey(key_val.string);
                                     if (vk_code != 0) {
                                         if (renderer.on_key_event) |cb| cb(vk_code, is_down);
+                                    }
+                                }
+                            }
+                        } else if (std.mem.eql(u8, type_val.?.string, "wheel")) {
+                            if (root.object.get("delta")) |d_val| {
+                                if (d_val == .integer) {
+                                    if (renderer.on_wheel_event) |cb| {
+                                        const delta = std.math.cast(i32, d_val.integer) orelse 0;
+                                        cb(delta, 0, 0);
                                     }
                                 }
                             }

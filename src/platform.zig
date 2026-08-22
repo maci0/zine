@@ -77,6 +77,9 @@ pub const getStackBounds = backend.getStackBounds;
 
 /// Sets up the FS segment for the current thread.
 pub const setupFS = backend.setupFS;
+pub const saveHostFsBase = backend.saveHostFsBase;
+pub const useHostFs = backend.useHostFs;
+pub const restoreFs = backend.restoreFs;
 
 // -------------------------------------------------------------------------
 // SEH

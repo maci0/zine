@@ -150,6 +150,15 @@ pub const JitCompiler = struct {
         try body.appendOpcode(.local_set);
         try body.appendUleb128(t.LOCAL_MEM_BASE);
 
+        // Load FS segment base (TEB address) for FS-relative memory ops
+        try body.appendOpcode(.i32_const);
+        try body.appendUleb128(state_addr);
+        try body.appendOpcode(.i32_load);
+        try body.appendUleb128(2); // align=4
+        try body.appendUleb128(host.JitCpuState.OFF_FS_BASE);
+        try body.appendOpcode(.local_set);
+        try body.appendUleb128(t.LOCAL_FS_BASE);
+
         // Load 8 general purpose registers (EAX..EDI at offsets 0..28)
         inline for (0..8) |i| {
             try body.appendOpcode(.i32_const);
@@ -329,8 +338,14 @@ pub const JitCompiler = struct {
                 const reg: u3 = @truncate(insn.opcode);
                 try body.appendOpcode(.i32_const);
                 try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
-                try body.appendOpcode(.local_set);
-                try body.appendUleb128(reg);
+                // Byte MOV (B0-B7) must merge into the register preserving
+                // untouched upper bits and handle AH/CH/DH/BH (offset 8).
+                if (insn.op_size == .byte) {
+                    try t.emitStoreOperand(body, insn, 0);
+                } else {
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(reg);
+                }
             },
 
             // ===== PUSH reg (50-57) =====
@@ -385,7 +400,7 @@ pub const JitCompiler = struct {
                 try body.appendOpcode(.i32_add);
                 try body.appendOpcode(.local_tee);
                 try body.appendUleb128(reg);
-                try t.emitUpdateZfSf(body);
+                try t.emitUpdateZfSf(body, insn.op_size);
             },
 
             // ===== DEC reg (48-4F) =====
@@ -398,7 +413,7 @@ pub const JitCompiler = struct {
                 try body.appendOpcode(.i32_sub);
                 try body.appendOpcode(.local_tee);
                 try body.appendUleb128(reg);
-                try t.emitUpdateZfSf(body);
+                try t.emitUpdateZfSf(body, insn.op_size);
             },
 
             // ===== Group 1: ALU r/m, imm (80, 81, 83) =====
@@ -411,7 +426,7 @@ pub const JitCompiler = struct {
                 try t.emitLoadOperand(body, insn, 0);
                 try t.emitLoadOperand(body, insn, 1);
                 try body.appendOpcode(.i32_and);
-                try t.emitUpdateZfSf(body);
+                try t.emitUpdateZfSf(body, insn.op_size);
                 try t.emitClearCfOf(body);
             },
 
@@ -457,8 +472,8 @@ pub const JitCompiler = struct {
                 }
             },
 
-            // ===== MOV Sreg (8C, 8E) — stub as nop =====
-            0x8C, 0x8E => {},
+            // ===== MOV Sreg (8C, 8E) — not translatable; fail the block =====
+            0x8C, 0x8E => return error.UnsupportedOpcode,
 
             // ===== XCHG EAX, reg (91-97) =====
             0x91...0x97 => {
@@ -596,8 +611,8 @@ pub const JitCompiler = struct {
                 try body.appendUleb128(t.LOCAL_DF);
             },
 
-            // ===== SAHF (9E) / LAHF (9F) — stub =====
-            0x9E, 0x9F => {},
+            // ===== SAHF (9E) / LAHF (9F) — not translatable; fail the block =====
+            0x9E, 0x9F => return error.UnsupportedOpcode,
 
             // ===== MOV AL/EAX, moffs (A0, A1) =====
             0xA0, 0xA1 => {
@@ -620,12 +635,9 @@ pub const JitCompiler = struct {
                 try body.appendOpcode(.i32_const);
                 try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
                 try body.appendOpcode(.i32_and);
-                try t.emitUpdateZfSf(body);
+                try t.emitUpdateZfSf(body, insn.op_size);
                 try t.emitClearCfOf(body);
             },
-
-            // ===== String ops (A4-AF) — nop stubs =====
-            0xA4, 0xA5, 0xA6, 0xA7, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF => {},
 
             // ===== RET (C3) =====
             0xC3 => {
@@ -785,7 +797,7 @@ pub const JitCompiler = struct {
                     try t.emitStoreOperand(body, insn, 0);
                     try body.appendOpcode(.local_get);
                     try body.appendUleb128(t.LOCAL_SCRATCH);
-                    try t.emitUpdateZfSf(body);
+                    try t.emitUpdateZfSf(body, insn.op_size);
                 }
             },
 
@@ -1012,29 +1024,42 @@ pub const JitCompiler = struct {
                 }
             },
 
-            // ===== Stubs for rarely-used instructions =====
-            0xCC, 0xCD, 0xF4 => {}, // INT3, INT, HLT
-            0x06, 0x07, 0x0E, 0x16, 0x17, 0x1E, 0x1F => {}, // segment push/pop
-            0x27, 0x2F, 0x37, 0x3F => {}, // BCD adjust
-            0x62 => {}, // BOUND
-            0x6C, 0x6D, 0x6E, 0x6F => {}, // INS/OUTS
-            0xC8 => {}, // ENTER
-            0xC4, 0xC5 => {}, // LES/LDS
-            0xD4, 0xD5 => {}, // AAM/AAD
-            0xD7 => {}, // XLAT
-            0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF => {}, // FPU
-            0xE4, 0xE5, 0xE6, 0xE7, 0xEC, 0xED, 0xEE, 0xEF => {}, // IN/OUT
-            0x9B, 0xF1 => {}, // FWAIT, INT1
-            0x0F18, 0x0F19, 0x0F1A, 0x0F1B, 0x0F1C, 0x0F1D, 0x0F1E, 0x0F1F => {}, // NOP hints
-            0x0FA0, 0x0FA1, 0x0FA8, 0x0FA9 => {}, // PUSH/POP FS/GS
-            0x0FA3, 0x0FAB, 0x0FB3, 0x0FBB, 0x0FBA => {}, // BT family
-            0x0FA4, 0x0FA5, 0x0FAC, 0x0FAD => {}, // SHLD/SHRD
-            0x0FC0, 0x0FC1 => {}, // XADD
-            0x0FB0, 0x0FB1 => {}, // CMPXCHG
-            0x0F02, 0x0F03 => {}, // LAR/LSL
+            // ===== INT3/INT/HLT — control flow, never reached (isControlFlow) =====
+            0xCC, 0xCD, 0xF4 => {},
 
-            // Default: ignore unimplemented
-            else => {},
+            // ===== FWAIT / NOP hints — genuinely side-effect-free, safe to drop =====
+            0x9B => {},
+            0x0F18, 0x0F19, 0x0F1A, 0x0F1B, 0x0F1C, 0x0F1D, 0x0F1E, 0x0F1F => {},
+
+            // ===== String ops (A4-AF) — MOVS/CMPS/STOS/LODS/SCAS with REP =====
+            0xA4, 0xA5, 0xA6, 0xA7, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF => {
+                try translateStringOp(body, insn);
+            },
+
+            // ===== Untranslatable opcodes — MUST fail the block compile =====
+            // Silently skipping these corrupts guest state (e.g. a dropped
+            // STOSB inside the statically-linked CRT printf leaves "%s" raw).
+            // The caller falls back to the interpreter, which is always correct.
+            0x06, 0x07, 0x0E, 0x16, 0x17, 0x1E, 0x1F => return error.UnsupportedOpcode, // segment push/pop
+            0x27, 0x2F, 0x37, 0x3F => return error.UnsupportedOpcode, // BCD adjust
+            0x62 => return error.UnsupportedOpcode, // BOUND
+            0x6C, 0x6D, 0x6E, 0x6F => return error.UnsupportedOpcode, // INS/OUTS
+            0xC8 => return error.UnsupportedOpcode, // ENTER
+            0xC4, 0xC5 => return error.UnsupportedOpcode, // LES/LDS
+            0xD4, 0xD5 => return error.UnsupportedOpcode, // AAM/AAD
+            0xD7 => return error.UnsupportedOpcode, // XLAT
+            0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF => return error.UnsupportedOpcode, // FPU
+            0xE4, 0xE5, 0xE6, 0xE7, 0xEC, 0xED, 0xEE, 0xEF => return error.UnsupportedOpcode, // IN/OUT
+            0xF1 => return error.UnsupportedOpcode, // INT1
+            0x0F02, 0x0F03 => return error.UnsupportedOpcode, // LAR/LSL
+            0x0FA0, 0x0FA1, 0x0FA8, 0x0FA9 => return error.UnsupportedOpcode, // PUSH/POP FS/GS
+            0x0FA3, 0x0FAB, 0x0FB3, 0x0FBB, 0x0FBA => return error.UnsupportedOpcode, // BT family
+            0x0FA4, 0x0FA5, 0x0FAC, 0x0FAD => return error.UnsupportedOpcode, // SHLD/SHRD
+            0x0FB0, 0x0FB1 => return error.UnsupportedOpcode, // CMPXCHG
+            0x0FC0, 0x0FC1 => return error.UnsupportedOpcode, // XADD
+
+            // Default: unimplemented opcode — refuse to compile the block
+            else => return error.UnsupportedOpcode,
         }
     }
 };
@@ -1049,17 +1074,43 @@ fn translateAlu(body: *Body, insn: *const decoder.Instruction) !void {
     const group: u3 = @truncate(insn.opcode >> 3);
     const wasm_op = t.aluGroupToWasmOp(group) orelse return;
 
-    // Load destination and source
+    // Load destination and source, saving operands for CF/OF computation
     try t.emitLoadOperand(body, insn, 0);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(t.LOCAL_SCRATCH2); // operand A
     try t.emitLoadOperand(body, insn, 1);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(t.LOCAL_SCRATCH3); // operand B
 
     // Perform operation
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(t.LOCAL_SCRATCH2);
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(t.LOCAL_SCRATCH3);
     try body.appendOpcode(wasm_op);
+
+    // Mask the result to the operand size — byte/word ALU flags must be
+    // computed from the truncated result (e.g. `or al,al` sees only AL).
+    switch (insn.op_size) {
+        .byte => {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0xFF);
+            try body.appendOpcode(.i32_and);
+        },
+        .word => {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0xFFFF);
+            try body.appendOpcode(.i32_and);
+        },
+        .dword => {},
+    }
 
     // CMP/TEST don't store — just update flags
     if (group == 7) {
         // CMP: result on stack, compute ZF/SF, don't store
-        try t.emitUpdateZfSf(body);
+        try t.emitUpdateZfSf(body, insn.op_size);
+        // CF = borrow, OF = signed overflow (A - B)
+        try t.emitSubCfOf(body, insn, t.LOCAL_SCRATCH2, t.LOCAL_SCRATCH3);
     } else {
         // Store result to destination, then update flags from the stored value
         try body.appendOpcode(.local_tee);
@@ -1067,12 +1118,15 @@ fn translateAlu(body: *Body, insn: *const decoder.Instruction) !void {
         try t.emitStoreOperand(body, insn, 0);
         try body.appendOpcode(.local_get);
         try body.appendUleb128(t.LOCAL_SCRATCH);
-        try t.emitUpdateZfSf(body);
-    }
+        try t.emitUpdateZfSf(body, insn.op_size);
 
-    // Logic ops clear CF/OF
-    if (group == 1 or group == 4 or group == 6) {
-        try t.emitClearCfOf(body);
+        // CF/OF per group
+        switch (group) {
+            0, 2 => try t.emitAddCfOf(body, insn, t.LOCAL_SCRATCH2, t.LOCAL_SCRATCH3), // ADD, ADC
+            3, 5 => try t.emitSubCfOf(body, insn, t.LOCAL_SCRATCH2, t.LOCAL_SCRATCH3), // SBB, SUB
+            1, 4, 6 => try t.emitClearCfOf(body), // OR, AND, XOR
+            else => {},
+        }
     }
 }
 
@@ -1083,24 +1137,53 @@ fn translateGroup1(body: *Body, insn: *const decoder.Instruction) !void {
     const sub_op = insn.modrm_reg;
     const wasm_op = t.aluGroupToWasmOp(sub_op) orelse return;
 
+    // Load destination into SCRATCH2, immediate into SCRATCH3
     try t.emitLoadOperand(body, insn, 0);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(t.LOCAL_SCRATCH2);
     try body.appendOpcode(.i32_const);
     try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(t.LOCAL_SCRATCH3);
+
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(t.LOCAL_SCRATCH2);
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(t.LOCAL_SCRATCH3);
     try body.appendOpcode(wasm_op);
 
+    // Mask the result to the operand size (byte/word ALU flags).
+    switch (insn.op_size) {
+        .byte => {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0xFF);
+            try body.appendOpcode(.i32_and);
+        },
+        .word => {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0xFFFF);
+            try body.appendOpcode(.i32_and);
+        },
+        .dword => {},
+    }
+
     if (sub_op == 7) { // CMP
-        try t.emitUpdateZfSf(body);
+        try t.emitUpdateZfSf(body, insn.op_size);
+        try t.emitSubCfOf(body, insn, t.LOCAL_SCRATCH2, t.LOCAL_SCRATCH3);
     } else {
         try body.appendOpcode(.local_tee);
         try body.appendUleb128(t.LOCAL_SCRATCH);
         try t.emitStoreOperand(body, insn, 0);
         try body.appendOpcode(.local_get);
         try body.appendUleb128(t.LOCAL_SCRATCH);
-        try t.emitUpdateZfSf(body);
-    }
+        try t.emitUpdateZfSf(body, insn.op_size);
 
-    if (sub_op == 1 or sub_op == 4 or sub_op == 6) {
-        try t.emitClearCfOf(body);
+        switch (sub_op) {
+            0, 2 => try t.emitAddCfOf(body, insn, t.LOCAL_SCRATCH2, t.LOCAL_SCRATCH3),
+            3, 5 => try t.emitSubCfOf(body, insn, t.LOCAL_SCRATCH2, t.LOCAL_SCRATCH3),
+            1, 4, 6 => try t.emitClearCfOf(body),
+            else => {},
+        }
     }
 }
 
@@ -1149,7 +1232,7 @@ fn translateShift(body: *Body, insn: *const decoder.Instruction) !void {
     try t.emitStoreOperand(body, insn, 0);
     try body.appendOpcode(.local_get);
     try body.appendUleb128(t.LOCAL_SCRATCH);
-    try t.emitUpdateZfSf(body);
+    try t.emitUpdateZfSf(body, insn.op_size);
 }
 
 /// Translates Group 3 unary instructions (TEST imm, NOT, NEG, MUL, IMUL, DIV, IDIV)
@@ -1162,7 +1245,7 @@ fn translateGroup3(body: *Body, insn: *const decoder.Instruction) !void {
             try body.appendOpcode(.i32_const);
             try body.appendIleb128(@as(i32, @bitCast(insn.imm)));
             try body.appendOpcode(.i32_and);
-            try t.emitUpdateZfSf(body);
+            try t.emitUpdateZfSf(body, insn.op_size);
             try t.emitClearCfOf(body);
         },
         2 => { // NOT
@@ -1182,7 +1265,7 @@ fn translateGroup3(body: *Body, insn: *const decoder.Instruction) !void {
             try t.emitStoreOperand(body, insn, 0);
             try body.appendOpcode(.local_get);
             try body.appendUleb128(t.LOCAL_SCRATCH);
-            try t.emitUpdateZfSf(body);
+            try t.emitUpdateZfSf(body, insn.op_size);
         },
         4 => { // MUL (unsigned): EDX:EAX = EAX * r/m
             try body.appendOpcode(.local_get);
@@ -1259,7 +1342,7 @@ fn translateGroup5(body: *Body, insn: *const decoder.Instruction) !void {
             try t.emitStoreOperand(body, insn, 0);
             try body.appendOpcode(.local_get);
             try body.appendUleb128(t.LOCAL_SCRATCH);
-            try t.emitUpdateZfSf(body);
+            try t.emitUpdateZfSf(body, insn.op_size);
         },
         1 => { // DEC r/m32
             try t.emitLoadOperand(body, insn, 0);
@@ -1271,7 +1354,7 @@ fn translateGroup5(body: *Body, insn: *const decoder.Instruction) !void {
             try t.emitStoreOperand(body, insn, 0);
             try body.appendOpcode(.local_get);
             try body.appendUleb128(t.LOCAL_SCRATCH);
-            try t.emitUpdateZfSf(body);
+            try t.emitUpdateZfSf(body, insn.op_size);
         },
         2 => { // CALL r/m32 (indirect)
             try t.emitLoadOperand(body, insn, 0);
@@ -1291,6 +1374,257 @@ fn translateGroup5(body: *Body, insn: *const decoder.Instruction) !void {
         },
         else => {},
     }
+}
+
+/// Operand size (bytes) of a string instruction, matching the interpreter's
+/// single-step implementation exactly: the byte forms (A4/A6/AA/AC/AE) are
+/// always 1, the dword forms (A5/A7/AB/AD/AF) are always 4 (the interpreter
+/// ignores the 0x66 operand-size override for string ops).
+fn stringOpSize(insn: *const decoder.Instruction) u32 {
+    return switch (insn.opcode) {
+        0xA4, 0xA6, 0xAA, 0xAC, 0xAE => 1,
+        else => 4,
+    };
+}
+
+/// Emit `reg += (DF ? -size : +size)` — direction-flag-aware pointer adjust.
+fn emitStringAdjust(body: *Body, reg_local: u32, size: u32) !void {
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(reg_local);
+    // val1 = -size (picked when DF==1), val2 = +size, cond = DF
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(-@as(i32, @intCast(size)));
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(@as(i32, @intCast(size)));
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(t.LOCAL_DF);
+    try body.appendOpcode(.select);
+    try body.appendOpcode(.i32_add);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(reg_local);
+}
+
+/// Emit a memory load of `size` bytes from guest VA in `reg_local`.
+/// Result (zero-extended into i32) is left on the Wasm stack.
+fn emitStringMemLoad(body: *Body, reg_local: u32, size: u32) !void {
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(reg_local);
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(t.LOCAL_MEM_BASE);
+    try body.appendOpcode(.i32_add);
+    switch (size) {
+        1 => {
+            try body.appendOpcode(.i32_load8_u);
+            try body.appendUleb128(0);
+            try body.appendUleb128(0);
+        },
+        2 => {
+            try body.appendOpcode(.i32_load16_u);
+            try body.appendUleb128(1);
+            try body.appendUleb128(0);
+        },
+        else => {
+            try body.appendOpcode(.i32_load);
+            try body.appendUleb128(2);
+            try body.appendUleb128(0);
+        },
+    }
+}
+
+/// Emit a memory store of `size` bytes to guest VA in `reg_local`.
+/// Value must already be on the Wasm stack below the address (addr on top).
+fn emitStringMemStore(body: *Body, reg_local: u32, size: u32) !void {
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(reg_local);
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(t.LOCAL_MEM_BASE);
+    try body.appendOpcode(.i32_add);
+    switch (size) {
+        1 => {
+            try body.appendOpcode(.i32_store8);
+            try body.appendUleb128(0);
+            try body.appendUleb128(0);
+        },
+        2 => {
+            try body.appendOpcode(.i32_store16);
+            try body.appendUleb128(1);
+            try body.appendUleb128(0);
+        },
+        else => {
+            try body.appendOpcode(.i32_store);
+            try body.appendUleb128(2);
+            try body.appendUleb128(0);
+        },
+    }
+}
+
+/// Emit the body of one string instruction (no REP wrapper).
+/// `size` is the element size in bytes.
+fn emitStringBody(body: *Body, insn: *const decoder.Instruction, size: u32) !void {
+    switch (insn.opcode) {
+        0xA4, 0xA5 => { // MOVS: [EDI] = [ESI]
+            try emitStringMemLoad(body, t.REG_ESI, size);
+            try emitStringMemStore(body, t.REG_EDI, size);
+            try emitStringAdjust(body, t.REG_ESI, size);
+            try emitStringAdjust(body, t.REG_EDI, size);
+        },
+        0xAA, 0xAB => { // STOS: [EDI] = AL/EAX
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.REG_EAX);
+            try emitStringMemStore(body, t.REG_EDI, size);
+            try emitStringAdjust(body, t.REG_EDI, size);
+        },
+        0xAC, 0xAD => { // LODS: AL/EAX = [ESI]
+            try emitStringMemLoad(body, t.REG_ESI, size);
+            if (size == 1) {
+                // Merge low byte into EAX preserving upper bits.
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(0xFF);
+                try body.appendOpcode(.i32_and);
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(t.REG_EAX);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(@as(i32, @bitCast(@as(u32, 0xFFFFFF00))));
+                try body.appendOpcode(.i32_and);
+                try body.appendOpcode(.i32_or);
+            }
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(t.REG_EAX);
+            try emitStringAdjust(body, t.REG_ESI, size);
+        },
+        0xA6, 0xA7 => { // CMPS: compare [ESI] vs [EDI], set flags
+            try emitStringMemLoad(body, t.REG_ESI, size);
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(t.LOCAL_SCRATCH2);
+            try emitStringMemLoad(body, t.REG_EDI, size);
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(t.LOCAL_SCRATCH3);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.LOCAL_SCRATCH2);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.LOCAL_SCRATCH3);
+            try body.appendOpcode(.i32_sub);
+            switch (size) {
+                1 => {
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(0xFF);
+                    try body.appendOpcode(.i32_and);
+                },
+                2 => {
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(0xFFFF);
+                    try body.appendOpcode(.i32_and);
+                },
+                else => {},
+            }
+            try t.emitUpdateZfSf(body, if (size == 1) .byte else if (size == 2) .word else .dword);
+            try t.emitSubCfOf(body, insn, t.LOCAL_SCRATCH2, t.LOCAL_SCRATCH3);
+            try emitStringAdjust(body, t.REG_ESI, size);
+            try emitStringAdjust(body, t.REG_EDI, size);
+        },
+        0xAE, 0xAF => { // SCAS: compare AL/EAX vs [EDI], set flags
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.REG_EAX);
+            // Byte SCAS compares AL only — mask A to the element size so
+            // CF (A < B unsigned) matches the interpreter's byte compare.
+            if (size == 1) {
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(0xFF);
+                try body.appendOpcode(.i32_and);
+            }
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(t.LOCAL_SCRATCH2);
+            try emitStringMemLoad(body, t.REG_EDI, size);
+            try body.appendOpcode(.local_set);
+            try body.appendUleb128(t.LOCAL_SCRATCH3);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.LOCAL_SCRATCH2);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(t.LOCAL_SCRATCH3);
+            try body.appendOpcode(.i32_sub);
+            switch (size) {
+                1 => {
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(0xFF);
+                    try body.appendOpcode(.i32_and);
+                },
+                2 => {
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(0xFFFF);
+                    try body.appendOpcode(.i32_and);
+                },
+                else => {},
+            }
+            try t.emitUpdateZfSf(body, if (size == 1) .byte else if (size == 2) .word else .dword);
+            try t.emitSubCfOf(body, insn, t.LOCAL_SCRATCH2, t.LOCAL_SCRATCH3);
+            try emitStringAdjust(body, t.REG_EDI, size);
+        },
+        else => {},
+    }
+}
+
+/// Translate a string instruction (A4-AF), including the REP/REPE/REPNE
+/// loop wrapper. REP semantics match the interpreter: `while (ECX != 0)`.
+/// REPE (rep) on CMPS/SCAS also stops when ZF==0; REPNE when ZF==1.
+fn translateStringOp(body: *Body, insn: *const decoder.Instruction) !void {
+    const size = stringOpSize(insn);
+
+    if (!insn.rep and !insn.repne) {
+        try emitStringBody(body, insn, size);
+        return;
+    }
+
+    // block $exit (depth 1 from inside the loop)
+    //   loop $top (depth 0)
+    //     ECX == 0 ? br 1 (exit)
+    //     body
+    //     ECX -= 1
+    //     REPE/REPNE ZF early-exit check
+    //     br 0 (continue)
+    //   end
+    // end
+    try body.appendOpcode(.block);
+    try body.append(@intFromEnum(wasm.BlockType.void));
+    try body.appendOpcode(.loop);
+    try body.append(@intFromEnum(wasm.BlockType.void));
+
+    // ECX == 0 → exit
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(t.REG_ECX);
+    try body.appendOpcode(.i32_eqz);
+    try body.appendOpcode(.br_if);
+    try body.appendUleb128(1);
+
+    try emitStringBody(body, insn, size);
+
+    // ECX -= 1
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(t.REG_ECX);
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(1);
+    try body.appendOpcode(.i32_sub);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(t.REG_ECX);
+
+    // REPE (insn.rep) on CMPS/SCAS: exit when ZF==0
+    // REPNE (insn.repne): exit when ZF==1
+    if (insn.rep and (insn.opcode == 0xA6 or insn.opcode == 0xA7 or insn.opcode == 0xAE or insn.opcode == 0xAF)) {
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_ZF);
+        try body.appendOpcode(.i32_eqz);
+        try body.appendOpcode(.br_if);
+        try body.appendUleb128(1);
+    } else if (insn.repne) {
+        try body.appendOpcode(.local_get);
+        try body.appendUleb128(t.LOCAL_ZF);
+        try body.appendOpcode(.br_if);
+        try body.appendUleb128(1);
+    }
+
+    try body.appendOpcode(.br);
+    try body.appendUleb128(0); // continue loop
+    try body.appendOpcode(.end); // loop
+    try body.appendOpcode(.end); // block
 }
 
 // =======================================================================

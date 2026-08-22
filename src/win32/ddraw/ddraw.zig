@@ -592,8 +592,6 @@ fn ddraw_EnumDisplayModes(this: *IDirectDraw, dwFlags: u32, lpDDSurfaceDesc: usi
     _ = lpDDSurfaceDesc;
     if (trace.enable_tracing) trace.print("DDRAW: IDirectDraw::EnumDisplayModes\n", .{});
     if (lpEnumCallback != 0) {
-        const cb = @as(*const fn (usize, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(lpEnumCallback));
-
         // Enumerate several common modes Europa 1400 may want
         const modes = [_]struct { w: u32, h: u32, bpp: u32 }{
             .{ .w = 640, .h = 480, .bpp = 16 },
@@ -628,11 +626,40 @@ fn ddraw_EnumDisplayModes(this: *IDirectDraw, dwFlags: u32, lpDDSurfaceDesc: usi
                 desc.ddpfPixelFormat.dwRGBAlphaBitMask = 0x00000000;
             }
 
-            const cont = cb(@intFromPtr(&desc), lpContext);
+            const cont = ddrawCallEnumCallback(lpEnumCallback, @intFromPtr(&desc), lpContext);
             if (cont == 0) break; // DDENUMRET_CANCEL
         }
     }
     return w32.DD_OK;
+}
+
+/// Invoke a 32-bit guest callback with (arg0, arg1): direct on native x86,
+/// via the compat dispatcher on native x86_64 (a direct 64-bit call
+/// misdecodes the 32-bit machine code), interpreter on WASM.
+fn ddrawCallEnumCallback(cb_addr: usize, arg0: usize, arg1: usize) i32 {
+    const platform = @import("../../platform.zig");
+    if (comptime platform.is_x86) {
+        const cb = @as(*const fn (usize, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(cb_addr));
+        return cb(arg0, arg1);
+    }
+    if (comptime platform.is_x86_64) {
+        const compat = @import("../../x86/compat_thunks.zig");
+        return @bitCast(compat.callCompat32_4(@truncate(cb_addr), @truncate(arg0), @truncate(arg1), 0, 0));
+    }
+    // WASM: interpreter.
+    const x86_cpu = @import("../../x86/cpu.zig");
+    const x86_execute = @import("../../x86/execute.zig");
+    const shared = @import("../shared.zig");
+    var cpu = x86_cpu.Cpu{};
+    if (shared.guest_memory) |gm| cpu.memory = gm.*;
+    var stack: [256]u8 = undefined;
+    cpu.esp = @intFromPtr(&stack) + stack.len - 16;
+    cpu.push32(@intCast(arg1));
+    cpu.push32(@intCast(arg0));
+    cpu.push32(0);
+    cpu.eip = @intCast(cb_addr);
+    x86_execute.run(&cpu);
+    return @bitCast(cpu.eax);
 }
 
 /// IDirectDrawSurface::Blt — performs a bit block transfer.

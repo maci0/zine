@@ -208,12 +208,20 @@ pub fn getDc(handle: usize) ?*DeviceContext {
 /// Registers a new DeviceContext handle in the global table.
 pub fn registerDc(handle: usize) void {
     if (dc_count < dc_entries.len) {
+        // A new DC starts with the BLACK_PEN and WHITE_BRUSH selected (like
+        // real Windows). These stock handles must be registered objects so
+        // SelectObject can restore them: with 0 here, `SelectObject(dc, old)`
+        // with old==0 silently no-oped and the DC kept leaking the previously
+        // selected object (e.g. a blue pen across paint calls).
+        const stock_black_pen = object.GetStockObject(7); // BLACK_PEN
+        const stock_white_brush = object.GetStockObject(0); // WHITE_BRUSH
+        const stock_gui_font = object.GetStockObject(17); // DEFAULT_GUI_FONT
         dc_entries[dc_count] = .{
             .handle = handle,
             .bitmap = 0,
-            .brush = 0,
-            .pen = 0,
-            .font = 0,
+            .brush = stock_white_brush,
+            .pen = stock_black_pen,
+            .font = stock_gui_font,
             .bk_mode = 2,
             .bk_color = 0x00FFFFFF,
             .text_color = 0x00000000,

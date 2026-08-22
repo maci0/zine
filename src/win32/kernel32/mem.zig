@@ -94,7 +94,7 @@ pub fn VirtualAlloc(lpAddress: usize, dwSize: usize, flAllocationType: u32, flPr
 }
 
 /// Releases, decommits, or releases and decommits a region of pages within the virtual address space of the calling process.
-/// Implementation status: Stub
+/// Implementation status: Partially implemented (On WASM zeroes translated guest memory; on native zeroes host memory)
 pub fn VirtualFree(lpAddress: usize, dwSize: usize, dwFreeType: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: VirtualFree(addr={x}, size={x}, type={x})\n", .{ lpAddress, dwSize, dwFreeType });
 
@@ -103,6 +103,42 @@ pub fn VirtualFree(lpAddress: usize, dwSize: usize, dwFreeType: u32) callconv(w3
 
     if (lpAddress == 0) return 0;
 
+    if (guest_memory()) |gmem| {
+        // On WASM, lpAddress is a guest virtual address, not a host pointer.
+        // Wasmtime maps the whole process memory linearly, so blindly casting
+        // a guest VA to a host pointer and zeroing it would scribble over
+        // Zine's own runtime memory, corrupting the interpreter mid-run.
+        // Translate through the guest memory instead.
+        const guest_va: u32 = @truncate(lpAddress);
+
+        if ((dwFreeType & MEM_DECOMMIT) != 0 and dwSize > 0) {
+            // MEM_DECOMMIT: zero the pages to prevent stale data from being
+            // reused when the region is recommitted. Delphi's FastMM relies on
+            // decommitted pages being zeroed when recommitted.
+            const page_start = guest_va & ~@as(u32, 0xFFF);
+            const aligned_size = (dwSize + 0xFFF) & ~@as(usize, 0xFFF);
+            const offset = page_start -% gmem.base_addr;
+            if (offset < gmem.base.len) {
+                const end: usize = @min(@as(usize, offset) + aligned_size, gmem.base.len);
+                @memset(gmem.base[offset..end], 0);
+            }
+        } else if ((dwFreeType & MEM_RELEASE) != 0) {
+            // MEM_RELEASE: zero the region. We can't easily return the pages
+            // because we don't track allocation sizes, but zeroing prevents
+            // stale data from being reused.
+            if (dwSize > 0) {
+                const offset = guest_va -% gmem.base_addr;
+                if (offset < gmem.base.len) {
+                    const end: usize = @min(@as(usize, offset) + dwSize, gmem.base.len);
+                    @memset(gmem.base[offset..end], 0);
+                }
+            }
+        }
+
+        return 1;
+    }
+
+    // Native path: lpAddress is a real host pointer.
     if ((dwFreeType & MEM_DECOMMIT) != 0 and dwSize > 0) {
         // MEM_DECOMMIT: zero the pages to prevent stale data from being
         // reused when the region is recommitted. Delphi's FastMM relies on
@@ -271,9 +307,10 @@ pub fn LocalUnlock(hMem: usize) callconv(w32cc.WINAPI) i32 {
 /// Retrieves the current size of the specified local memory object.
 /// Implementation status: Partially implemented (Reads size from win32HeapAlloc header)
 pub fn LocalSize(hMem: usize) callconv(w32cc.WINAPI) usize {
-    if (hMem == 0) return 0;
-    // win32HeapAlloc stores size in the first 8 bytes of a 16-byte header
-    const header = @as(*const usize, @ptrFromInt(hMem - 16));
+    if (hMem < 16) return 0;
+    // hMem is a guest VA; win32HeapAlloc stores the size in the 16 bytes
+    // before the returned pointer.
+    const header = @as(*const usize, @ptrFromInt(trace.addr(hMem - 16)));
     return header.*;
 }
 
@@ -283,10 +320,12 @@ pub fn LocalReAlloc(hMem: usize, uBytes: usize, uFlags: u32) callconv(w32cc.WINA
     _ = uFlags;
     if (hMem == 0) {
         const ptr = raw_alloc(uBytes) orelse return 0;
-        return @intFromPtr(ptr);
+        // usize return — hand back a guest VA, not the raw host pointer.
+        return stub_common.hostToGuest(@intFromPtr(ptr));
     }
-    const ptr = raw_realloc(@ptrFromInt(hMem), uBytes) orelse return 0;
-    return @intFromPtr(ptr);
+    // hMem is a guest VA; raw_realloc expects a host pointer.
+    const ptr = raw_realloc(@ptrFromInt(trace.addr(hMem)), uBytes) orelse return 0;
+    return stub_common.hostToGuest(@intFromPtr(ptr));
 }
 
 /// Retrieves information about the system's current usage of both physical and virtual memory.
@@ -294,7 +333,11 @@ pub fn LocalReAlloc(hMem: usize, uBytes: usize, uFlags: u32) callconv(w32cc.WINA
 pub fn GlobalMemoryStatus(lpBuffer: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: GlobalMemoryStatus()\n", .{});
     if (lpBuffer != 0) {
-        const status = @as(*w32.MEMORYSTATUS, @ptrFromInt(lpBuffer));
+        // lpBuffer is a guest VA (usize param — not auto-translated). Without
+        // translation the status landed at the raw guest VA in linear memory,
+        // leaving LINK's MEMORYSTATUS struct garbage → LNK1102 "out of memory"
+        // when it computed its heap limit from uninitialized values.
+        const status = @as(*w32.MEMORYSTATUS, @ptrFromInt(trace.addr(lpBuffer)));
         status.* = .{
             .dwMemoryLoad = 50,
             .dwTotalPhys = 1024 * 1024 * 1024,
@@ -313,8 +356,12 @@ pub fn GlobalAlloc(uFlags: u32, dwBytes: usize) callconv(w32cc.WINAPI) usize {
     _ = uFlags;
     const ret_addr = @returnAddress();
     const ptr = raw_alloc(dwBytes) orelse return 0;
-    if (trace.enable_tracing) trace.print("KERNEL32: GlobalAlloc(size={d}) = {x} (from {x})\n", .{ dwBytes, @intFromPtr(ptr), ret_addr });
-    return @intFromPtr(ptr);
+    // usize return — hand back a guest VA, not the raw host pointer, so the
+    // guest dereferences its own address space (HeapAlloc gets this via the
+    // thunk's pointer reverse-translation; GlobalAlloc's usize return does not).
+    const guest_va = stub_common.hostToGuest(@intFromPtr(ptr));
+    if (trace.enable_tracing) trace.print("KERNEL32: GlobalAlloc(size={d}) = {x} (guest {x}, from {x})\n", .{ dwBytes, @intFromPtr(ptr), guest_va, ret_addr });
+    return guest_va;
 }
 
 /// Frees the specified global memory object and invalidates its handle.
@@ -341,9 +388,10 @@ pub fn GlobalUnlock(hMem: usize) callconv(w32cc.WINAPI) i32 {
 /// Retrieves the current size of the specified global memory object.
 /// Implementation status: Partially implemented (Reads size from shared allocator header)
 pub fn GlobalSize(hMem: usize) callconv(w32cc.WINAPI) usize {
-    if (hMem == 0) return 0;
-    // raw_alloc stores size in the 8 bytes before the returned pointer
-    const header = @as(*const usize, @ptrFromInt(hMem - 8));
+    if (hMem < 8) return 0;
+    // raw_alloc stores size in the 8 bytes before the returned pointer; hMem
+    // is a guest VA, so translate before reading.
+    const header = @as(*const usize, @ptrFromInt(trace.addr(hMem - 8)));
     return header.*;
 }
 
@@ -353,10 +401,11 @@ pub fn GlobalReAlloc(hMem: usize, dwBytes: usize, uFlags: u32) callconv(w32cc.WI
     _ = uFlags;
     if (hMem == 0) {
         const ptr = raw_alloc(dwBytes) orelse return 0;
-        return @intFromPtr(ptr);
+        return stub_common.hostToGuest(@intFromPtr(ptr));
     }
-    const ptr = raw_realloc(@ptrFromInt(hMem), dwBytes) orelse return 0;
-    return @intFromPtr(ptr);
+    // hMem is a guest VA; raw_realloc expects a host pointer.
+    const ptr = raw_realloc(@ptrFromInt(trace.addr(hMem)), dwBytes) orelse return 0;
+    return stub_common.hostToGuest(@intFromPtr(ptr));
 }
 
 /// Changes the protection on a region of committed pages.
@@ -373,7 +422,8 @@ pub fn VirtualProtect(lpAddress: usize, dwSize: usize, flNewProtect: u32, lpflOl
 
     // Write old protection value (pretend everything was PAGE_READWRITE)
     if (lpflOldProtect != 0) {
-        @as(*u32, @ptrFromInt(lpflOldProtect)).* = w32.PAGE_READWRITE;
+        // lpflOldProtect is a guest VA (usize param — not auto-translated).
+        @as(*u32, @ptrFromInt(trace.addr(lpflOldProtect))).* = w32.PAGE_READWRITE;
     }
     return 1; // TRUE
 }

@@ -132,6 +132,16 @@ pub fn setupFS(teb_ptr: *anyopaque) !void {
     // No-op on WASM (interpreter uses cpu.fs_base directly)
 }
 
+pub fn saveHostFsBase() void {}
+
+pub fn useHostFs() u16 {
+    return 0;
+}
+
+pub fn restoreFs(sel: u16) void {
+    _ = sel;
+}
+
 /// Installs a handler for segmentation faults and other signals.
 pub fn installSegfaultHandler() void {}
 
@@ -170,8 +180,11 @@ pub fn dup(fd: i32) !i32 {
     return error.SystemResources;
 }
 
-/// Stubbed lseek for WASM; file seeking goes through std.Io.File APIs there.
+/// Seek on WASM: the fd is a WASI fd, so delegate to fd_seek.
+/// Returns the new file position, or -1 on error.
 pub fn lseek(fd: i32, offset: i64, whence: u32) i64 {
-    _ = .{ fd, offset, whence };
-    return -1;
+    var new_offset: u64 = undefined;
+    const rc = std.os.wasi.fd_seek(fd, offset, @enumFromInt(whence), &new_offset);
+    if (rc != .SUCCESS) return -1;
+    return @intCast(new_offset);
 }

@@ -13,6 +13,11 @@ pub fn initConfig(allocator: std.mem.Allocator) void {
     reg_config.init(allocator);
 }
 
+/// Set the current application module so `app:<MODULE>:` overrides apply.
+pub fn setAppModule(module_basename: []const u8) void {
+    reg_config.setAppModule(module_basename);
+}
+
 /// Opens the specified registry key.
 /// Implementation status: Stub (always returns ERROR_FILE_NOT_FOUND)
 /// Fake registry handle for HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0
@@ -28,7 +33,8 @@ pub fn RegOpenKeyExA(hKey: usize, lpSubKey: usize, ulOptions: u32, samDesired: u
     if (reg_config.keyExists(full_path)) {
         if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExA(0x{X}, '{s}') -> OK (config)\n", .{ hKey, key });
         if (phkResult != 0) {
-            @as(*u32, @ptrFromInt(phkResult)).* = next_reg_handle;
+            // phkResult is a guest pointer (usize param — not auto-translated).
+            @as(*u32, @ptrFromInt(trace.addr(phkResult))).* = next_reg_handle;
             // Store the path for later RegQueryValueEx lookups
             storeHandlePath(next_reg_handle, full_path);
             next_reg_handle +%= 1;
@@ -39,12 +45,12 @@ pub fn RegOpenKeyExA(hKey: usize, lpSubKey: usize, ulOptions: u32, samDesired: u
     // Legacy: hardcoded CPU registry key
     if (isCpuRegKey(hKey, key)) {
         if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExA(0x{X}, '{s}') -> OK (CPU)\n", .{ hKey, key });
-        if (phkResult != 0) @as(*u32, @ptrFromInt(phkResult)).* = CPU_REG_HANDLE;
+        if (phkResult != 0) @as(*u32, @ptrFromInt(trace.addr(phkResult))).* = CPU_REG_HANDLE;
         return 0; // ERROR_SUCCESS
     }
 
     if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExA(0x{X}, '{s}') -> ERROR_FILE_NOT_FOUND\n", .{ hKey, key });
-    if (phkResult != 0) @as(*u32, @ptrFromInt(phkResult)).* = 0;
+    if (phkResult != 0) @as(*u32, @ptrFromInt(trace.addr(phkResult))).* = 0;
     return 2; // ERROR_FILE_NOT_FOUND
 }
 
@@ -436,12 +442,12 @@ pub fn RegOpenKeyExW(hKey: usize, lpSubKey: usize, ulOptions: u32, samDesired: u
 
     if (isCpuRegKey(hKey, key)) {
         if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExW(0x{X}, '{s}') -> OK (CPU)\n", .{ hKey, key });
-        if (phkResult != 0) @as(*u32, @ptrFromInt(phkResult)).* = CPU_REG_HANDLE;
+        if (phkResult != 0) @as(*u32, @ptrFromInt(trace.addr(phkResult))).* = CPU_REG_HANDLE;
         return 0;
     }
 
     if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExW(0x{X}, '{s}') -> ERROR_FILE_NOT_FOUND\n", .{ hKey, key });
-    if (phkResult != 0) @as(*u32, @ptrFromInt(phkResult)).* = 0;
+    if (phkResult != 0) @as(*u32, @ptrFromInt(trace.addr(phkResult))).* = 0;
     return 2; // ERROR_FILE_NOT_FOUND
 }
 
@@ -471,7 +477,7 @@ pub fn stub_RegOpenKeyW(hKey: usize, lpSubKey: usize, phkResult: usize) callconv
     _ = hKey;
     _ = lpSubKey;
     if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyW -> ERROR_FILE_NOT_FOUND\n", .{});
-    if (phkResult != 0) @as(*u32, @ptrFromInt(phkResult)).* = 0;
+    if (phkResult != 0) @as(*u32, @ptrFromInt(trace.addr(phkResult))).* = 0;
     return 2;
 }
 

@@ -28,8 +28,11 @@ pub const JitCpuState = extern struct {
     // Memory base adjustment: wasm_linear_offset - guest_va_base (offset 44).
     // Added to guest virtual addresses before WASM memory load/store ops.
     mem_base: i32 = 0,
-    // Padding to 64 bytes (offsets 48–63)
-    _pad: [4]u32 = .{0} ** 4,
+    // Guest FS segment base (offset 48) — TEB address. Needed for FS-relative
+    // memory ops (SEH chain install/read: mov fs:[0], esp).
+    fs_base: u32 = 0,
+    // Padding to 64 bytes (offsets 52–63)
+    _pad: [3]u32 = .{0} ** 3,
 
     // Field offsets for WASM code generation (used by compiler.zig prologue/epilogue)
     pub const OFF_EAX: u32 = 0;
@@ -44,6 +47,7 @@ pub const JitCpuState = extern struct {
     pub const OFF_EFLAGS: u32 = 36;
     pub const OFF_STATUS: u32 = 40;
     pub const OFF_MEM_BASE: u32 = 44;
+    pub const OFF_FS_BASE: u32 = 48;
     pub const SIZE: u32 = 64;
 
     // Status codes

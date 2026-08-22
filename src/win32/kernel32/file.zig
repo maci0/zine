@@ -2,6 +2,7 @@
 const std = @import("std");
 const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
+const builtin = @import("builtin");
 const kernel32_mem = @import("mem.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
@@ -39,7 +40,7 @@ pub fn GetFileSize(hFile: usize, lpFileSizeHigh: usize) callconv(w32cc.WINAPI) u
     if (trace.enable_tracing) trace.print("KERNEL32: GetFileSize(hFile={d})\n", .{fd});
 
     const file = host_io.fileFromFd(fd);
-    if (file.stat(runtime.io()) catch null) |stat| {
+    if (host_io.statFile(file)) |stat| {
         if (lpFileSizeHigh != 0) {
             const high = @as(*u32, @ptrFromInt(lpFileSizeHigh));
             high.* = @intCast(stat.size >> 32);
@@ -68,7 +69,7 @@ pub fn GetFileInformationByHandle(hFile: usize, file_info: *w32.BY_HANDLE_FILE_I
 
     {
         const file = host_io.fileFromFd(fd);
-        if (file.stat(runtime.io()) catch null) |stat| {
+        if (host_io.statFile(file)) |stat| {
             file_info.* = .{};
             file_info.dwFileAttributes = w32.FILE_ATTRIBUTE_NORMAL;
             file_info.nFileSizeHigh = @intCast(stat.size >> 32);
@@ -172,6 +173,17 @@ pub fn CreateFileA(lpFileName_ptr: usize, dwDesiredAccess: u32, dwShareMode: u32
 const MAX_MAPPINGS = 64;
 var mapping_fds: [MAX_MAPPINGS]i32 = [_]i32{-1} ** MAX_MAPPINGS;
 
+// Track mapped views created in guest memory (WASM) so UnmapViewOfFile can
+// write the guest's modifications back to the file. Without this, LINK.EXE
+// produced an all-zeros output: it writes the image into the mapped view and
+// relies on unmap to flush.
+const MAX_VIEWS = 64;
+var view_fds: [MAX_VIEWS]i32 = [_]i32{-1} ** MAX_VIEWS;
+var view_addrs: [MAX_VIEWS]usize = [_]usize{0} ** MAX_VIEWS;
+var view_sizes: [MAX_VIEWS]usize = [_]usize{0} ** MAX_VIEWS;
+var view_offsets: [MAX_VIEWS]u64 = [_]u64{0} ** MAX_VIEWS;
+var view_writable: [MAX_VIEWS]bool = [_]bool{false} ** MAX_VIEWS;
+
 fn alloc_mapping(fd: i32) ?usize {
     for (0..MAX_MAPPINGS) |i| {
         if (mapping_fds[i] == -1) {
@@ -195,10 +207,10 @@ pub fn CreateFileMappingA(hFile: usize, lpFileMappingAttributes: usize, flProtec
     if (hFile != 0xFFFFFFFF) {
         if (dwMaximumSizeLow > 0) {
             const file = host_io.fileFromFd(fd);
-            if (file.stat(runtime.io()) catch null) |stat| {
+            if (host_io.statFile(file)) |stat| {
                 if (stat.size < dwMaximumSizeLow) {
                     if (trace.enable_tracing) trace.print("KERNEL32: extending file to {d}\n", .{dwMaximumSizeLow});
-                    file.setLength(runtime.io(), @intCast(dwMaximumSizeLow)) catch |err| {
+                    host_io.setLength(file, @intCast(dwMaximumSizeLow)) catch |err| {
                         if (trace.enable_tracing) trace.print("KERNEL32: setEndPos failed: {}\n", .{err});
                     };
                 }
@@ -221,7 +233,7 @@ pub fn MapViewOfFileEx(hFileMappingObject: usize, dwDesiredAccess: u32, dwFileOf
             if (trace.enable_tracing) trace.print("KERNEL32: MapViewOfFileEx(mapping={x}, fd={d}, offsetHigh={d}, offsetLow={d}, bytes={d}, base={x})\n", .{ hFileMappingObject, fd, dwFileOffsetHigh, dwFileOffsetLow, dwNumberOfBytesToMap, lpBaseAddress });
 
             const file = host_io.fileFromFd(fd);
-            const stat = file.stat(runtime.io()) catch return 0;
+            const stat = host_io.statFile(file) orelse return 0;
 
             if (stat.size > 0 or dwNumberOfBytesToMap > 0) {
                 const offset = (@as(u64, dwFileOffsetHigh) << 32) | @as(u64, dwFileOffsetLow);
@@ -229,6 +241,35 @@ pub fn MapViewOfFileEx(hFileMappingObject: usize, dwDesiredAccess: u32, dwFileOf
 
                 // FILE_MAP_WRITE is 2, FILE_MAP_ALL_ACCESS includes 2
                 const is_write = (dwDesiredAccess & 2) != 0 or dwDesiredAccess == 0xF001F;
+
+                // On WASM the guest x86 interpreter can only read the combined
+                // buffer (guest memory). Mapping into the WASI heap would hand
+                // the guest a host pointer it cannot dereference — LINK.EXE
+                // read 0xCC-fill from the combined buffer and passed it to
+                // printf, trapping in vsnprintf. Allocate the view in guest
+                // memory and copy the file content in.
+                if (kernel32_mem.guest_memory()) |gmem| {
+                    const guest_size: u32 = @intCast(@min(map_size, 0xFFFFFFFF));
+                    const va = gmem.guestAlloc(guest_size);
+                    if (va == 0) return 0;
+                    const map_file = host_io.fileFromFd(fd);
+                    const slice = gmem.base[(va - gmem.base_addr)..][0..guest_size];
+                    const bytes_read = host_io.readPositional(map_file, slice, offset) catch 0;
+                    if (bytes_read < guest_size) @memset(slice[bytes_read..], 0);
+                    // Register the view so UnmapViewOfFile can flush writes back.
+                    for (0..MAX_VIEWS) |vi| {
+                        if (view_fds[vi] == -1) {
+                            view_fds[vi] = fd;
+                            view_addrs[vi] = va;
+                            view_sizes[vi] = guest_size;
+                            view_offsets[vi] = offset;
+                            view_writable[vi] = is_write;
+                            break;
+                        }
+                    }
+                    if (trace.enable_tracing) trace.print("KERNEL32: MapViewOfFileEx -> {x} (guest)\n", .{va});
+                    return va;
+                }
 
                 var memory: []align(4096) u8 = undefined;
                 if (lpBaseAddress != 0) {
@@ -289,9 +330,30 @@ pub fn DeviceIoControl(hDevice: usize, dwIoControlCode: u32, lpInBuffer: usize, 
 }
 
 /// Unmaps a mapped view of a file from the calling process's address space.
-/// Implementation status: Stub
+/// On WASM the view lives in guest memory; if it was mapped writable, flush the
+/// guest's changes back to the file (LINK.EXE writes its output image into the
+/// view and relies on unmap to persist it).
+/// Implementation status: Partially implemented
 pub fn UnmapViewOfFile(lpBaseAddress: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: UnmapViewOfFile({x})\n", .{lpBaseAddress});
+    for (0..MAX_VIEWS) |vi| {
+        if (view_fds[vi] != -1 and view_addrs[vi] == lpBaseAddress) {
+            if (view_writable[vi]) {
+                if (kernel32_mem.guest_memory()) |gmem| {
+                    const offset = lpBaseAddress - gmem.base_addr;
+                    if (offset < gmem.base.len) {
+                        const slice = gmem.base[offset..][0..@min(view_sizes[vi], gmem.base.len - offset)];
+                        const map_file = host_io.fileFromFd(view_fds[vi]);
+                        host_io.writePositional(map_file, slice, view_offsets[vi]) catch {};
+                    }
+                }
+            }
+            view_fds[vi] = -1;
+            view_addrs[vi] = 0;
+            view_sizes[vi] = 0;
+            break;
+        }
+    }
     return 1;
 }
 
@@ -309,7 +371,7 @@ pub fn CloseHandle(hObject: usize) callconv(w32cc.WINAPI) i32 {
     if (fd <= 2) return 1;
 
     const file = host_io.fileFromFd(fd);
-    file.close(runtime.io());
+    host_io.closeFile(file);
     return 1; // TRUE
 }
 
@@ -339,25 +401,19 @@ pub fn SetFilePointer(hFile: usize, lDistanceToMove: i32, lpDistanceToMoveHigh: 
 
 /// Reads data from the specified file or I/O device.
 /// Implementation status: Fully implemented
-pub fn ReadFile(hFile: usize, lpBuffer: usize, nNumberOfBytesToRead: u32, lpNumberOfBytesRead: usize, lpOverlapped: usize) callconv(w32cc.WINAPI) i32 {
+pub fn ReadFile(hFile: usize, lpBuffer: [*]u8, nNumberOfBytesToRead: u32, lpNumberOfBytesRead: ?*u32, lpOverlapped: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpOverlapped;
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
     if (trace.enable_tracing) trace.print("KERNEL32: ReadFile(hFile={d}, len={d})\n", .{ fd, nNumberOfBytesToRead });
 
     const file = host_io.fileFromFd(fd);
-    if (lpBuffer != 0) {
-        const buffer = @as([*]u8, @ptrFromInt(lpBuffer));
-        const bytes_read = @import("../host_io.zig").readFromFile(file, buffer[0..nNumberOfBytesToRead]) catch return 0;
+    const buffer = lpBuffer[0..nNumberOfBytesToRead];
+    const bytes_read = @import("../host_io.zig").readFromFile(file, buffer) catch return 0;
 
-        if (lpNumberOfBytesRead != 0) {
-            const read_ptr = @as(*u32, @ptrFromInt(lpNumberOfBytesRead));
-            read_ptr.* = @intCast(bytes_read);
-        }
+    if (lpNumberOfBytesRead) |p| p.* = @intCast(bytes_read);
 
-        if (trace.enable_tracing) trace.print("KERNEL32: ReadFile -> {d}\n", .{bytes_read});
-        return 1; // TRUE
-    }
-    return 0; // FALSE
+    if (trace.enable_tracing) trace.print("KERNEL32: ReadFile -> {d}\n", .{bytes_read});
+    return 1; // TRUE
 }
 
 /// Retrieves a handle for the specified standard device (standard input, standard output, or standard error).
@@ -381,7 +437,11 @@ pub fn GetTempPathA(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.WINAPI) 
     const temp_path = ".\\\x00";
     if (trace.enable_tracing) trace.print("KERNEL32: GetTempPathA(len={d})\n", .{nBufferLength});
     if (lpBuffer != 0 and nBufferLength > temp_path.len) {
-        const buf = @as([*]u8, @ptrFromInt(lpBuffer));
+        // lpBuffer is a guest VA (usize param — not auto-translated).
+        // Without translation the path landed at the raw guest VA in linear
+        // memory, leaving the guest's buffer garbage → GetTempFileNameA built
+        // a broken temp name → LINK: LNK1104 cannot open file ''.
+        const buf = @as([*]u8, @ptrFromInt(trace.addr(lpBuffer)));
         @memcpy(buf[0..temp_path.len], temp_path);
         return temp_path.len - 1;
     }
@@ -399,7 +459,8 @@ pub fn GetTempFileNameA(lpPathName: usize, lpPrefixString: usize, uUnique: u32, 
         trace.print("KERNEL32: GetTempFileNameA(path='{s}', prefix='{s}', unique={d})\n", .{ path, prefix, uUnique });
     }
     if (lpTempFileName != 0) {
-        const buf = @as([*]u8, @ptrFromInt(lpTempFileName));
+        // lpTempFileName is a guest VA (usize param) — translate before writing.
+        const buf = @as([*]u8, @ptrFromInt(trace.addr(lpTempFileName)));
         temp_counter += 1;
         const uniq = if (uUnique == 0) temp_counter else uUnique;
 
@@ -415,7 +476,7 @@ pub fn GetTempFileNameA(lpPathName: usize, lpPrefixString: usize, uUnique: u32, 
             const rc = posix_fs.open(fixed_slice.ptr, 64 | 2, 0o666);
             if (rc >= 0) {
                 const f = host_io.fileFromFd(@intCast(rc));
-                f.close(runtime.io());
+                host_io.closeFile(f);
             }
         }
         return uniq; // Unique ID
@@ -423,19 +484,75 @@ pub fn GetTempFileNameA(lpPathName: usize, lpPrefixString: usize, uUnique: u32, 
     return 0;
 }
 
+/// Moves/rename a file or directory.
+/// Implementation status: Fully implemented
+pub fn MoveFileA(lpExistingFileName: usize, lpNewFileName: usize) callconv(w32cc.WINAPI) i32 {
+    if (lpExistingFileName == 0 or lpNewFileName == 0) return 0;
+    const old_name = trace.c_span(lpExistingFileName);
+    const new_name = trace.c_span(lpNewFileName);
+    if (trace.enable_tracing) trace.print("KERNEL32: MoveFileA('{s}' -> '{s}')\n", .{ old_name, new_name });
+
+    const posix_fs = @import("../msvcrt/posix_fs.zig");
+    return if (posix_fs.renameWin32(old_name, new_name) == 0) 1 else 0;
+}
+
+/// Wide-char variant of MoveFileA (narrowed per the codebase W->A convention).
+pub fn MoveFileW(lpExistingFileName_ptr: usize, lpNewFileName_ptr: usize) callconv(w32cc.WINAPI) i32 {
+    if (lpExistingFileName_ptr == 0 or lpNewFileName_ptr == 0) return 0;
+    const wstr = trace.c_span_w(lpExistingFileName_ptr);
+    var old_buf: [1024]u8 = undefined;
+    const old_len = @min(wstr.len, old_buf.len - 1);
+    for (0..old_len) |i| old_buf[i] = @intCast(wstr[i] & 0xFF);
+
+    const wstr_new = trace.c_span_w(lpNewFileName_ptr);
+    var new_buf: [1024]u8 = undefined;
+    const new_len = @min(wstr_new.len, new_buf.len - 1);
+    for (0..new_len) |i| new_buf[i] = @intCast(wstr_new[i] & 0xFF);
+
+    if (trace.enable_tracing) trace.print("KERNEL32: MoveFileW(len={d} -> len={d})\n", .{ old_len, new_len });
+
+    const posix_fs = @import("../msvcrt/posix_fs.zig");
+    return if (posix_fs.renameWin32(old_buf[0..old_len], new_buf[0..new_len]) == 0) 1 else 0;
+}
+
+/// MoveFileExA/W: same as MoveFile; MOVEFILE_* flags only tune failure
+/// modes we don't model (delay-until-reboot, write-through), so they are
+/// accepted and ignored.
+pub fn MoveFileExA(lpExistingFileName: usize, lpNewFileName: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
+    _ = dwFlags;
+    return MoveFileA(lpExistingFileName, lpNewFileName);
+}
+
+pub fn MoveFileExW(lpExistingFileName_ptr: usize, lpNewFileName_ptr: usize, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
+    _ = dwFlags;
+    return MoveFileW(lpExistingFileName_ptr, lpNewFileName_ptr);
+}
+
 /// Deletes an existing file.
 /// Implementation status: Fully implemented
 pub fn DeleteFileA(lpFileName: usize) callconv(w32cc.WINAPI) i32 {
     if (lpFileName == 0) return 0;
-    const name = trace.c_span(lpFileName);
-    if (trace.enable_tracing) trace.print("KERNEL32: DeleteFileA('{s}')\n", .{name});
+    return deleteFileWin32(trace.c_span(lpFileName));
+}
+
+/// Wide-char variant of DeleteFileA (narrowed per the codebase W->A convention).
+pub fn DeleteFileW(lpFileName_ptr: usize) callconv(w32cc.WINAPI) i32 {
+    if (lpFileName_ptr == 0) return 0;
+    var narrow_buf: [1024]u8 = undefined;
+    const wstr = trace.c_span_w(lpFileName_ptr);
+    const len = @min(wstr.len, narrow_buf.len - 1);
+    for (0..len) |i| narrow_buf[i] = @intCast(wstr[i] & 0xFF);
+    return deleteFileWin32(narrow_buf[0..len]);
+}
+
+fn deleteFileWin32(name: []const u8) i32 {
+    if (trace.enable_tracing) trace.print("KERNEL32: DeleteFile('{s}')\n", .{name});
 
     const path_utils = @import("../../path_utils.zig");
     var fixed_path: [1024]u8 = undefined;
     const len = path_utils.win32ToPosix(name, &fixed_path) catch return 0;
 
-    const cwd = std.Io.Dir.cwd();
-    cwd.deleteFile(runtime.io(), fixed_path[0..len]) catch {
+    if (!host_io.deleteFilePosix(fixed_path[0..len])) {
         // Try case-insensitive: lowercase the filename portion
         var last_slash: usize = 0;
         for (0..len) |i| {
@@ -444,8 +561,8 @@ pub fn DeleteFileA(lpFileName: usize) callconv(w32cc.WINAPI) i32 {
         for (last_slash..len) |i| {
             fixed_path[i] = std.ascii.toLower(fixed_path[i]);
         }
-        cwd.deleteFile(runtime.io(), fixed_path[0..len]) catch return 0;
-    };
+        if (!host_io.deleteFilePosix(fixed_path[0..len])) return 0;
+    }
     return 1; // TRUE
 }
 
@@ -457,7 +574,7 @@ pub fn SetEndOfFile(hFile: usize) callconv(w32cc.WINAPI) i32 {
     const file = host_io.fileFromFd(fd);
     const pos = @import("../../platform.zig").lseek(file.handle, 0, 1); // SEEK_CUR
     if (pos < 0) return 0;
-    file.setLength(runtime.io(), @intCast(pos)) catch return 0;
+    host_io.setLength(file, @intCast(pos)) catch return 0;
     return 1; // TRUE
 }
 
@@ -515,7 +632,7 @@ pub fn SearchPathA(lpPath_ptr: usize, lpFileName_ptr: usize, lpExtension_ptr: us
         const msvcrt = @import("../msvcrt.zig");
         var env_i: usize = 0;
         while (msvcrt.global_envp[env_i]) |e_ptr| : (env_i += 1) {
-            const e_str = trace.c_span(@intFromPtr(e_ptr));
+            const e_str = trace.host_c_span(@intFromPtr(e_ptr));
             if (e_str.len > 5 and e_str[0] == 'P' and e_str[1] == 'A' and e_str[2] == 'T' and e_str[3] == 'H' and e_str[4] == '=') {
                 const paths = e_str[5..];
                 var path_start: usize = 0;
@@ -573,14 +690,26 @@ const FindHandleState = struct {
     in_use: bool = false,
     dir: ?std.Io.Dir = null,
     iter: ?std.Io.Dir.Iterator = null,
+    // Linux raw-syscall directory scan state (getdents64). std.Io.Dir
+    // iteration goes through Io.Threaded (TLS), which faults inside the
+    // compat-mode SIGSEGV dispatch handler (FS points at the guest TEB).
+    raw_dir_fd: i32 = -1,
+    raw_buf: [4096]u8 align(8) = undefined,
+    raw_buf_len: usize = 0,
+    raw_pos: usize = 0,
+    raw_done: bool = false,
     pattern: [256]u8 = undefined,
     pattern_len: usize = 0,
     dir_path: [1024]u8 = undefined,
     dir_path_len: usize = 0,
 
     fn close(self: *FindHandleState) void {
-        if (self.dir) |*d| {
-            d.close(runtime.io());
+        if (self.raw_dir_fd >= 0) {
+            if (comptime builtin.os.tag == .linux) _ = std.os.linux.close(self.raw_dir_fd);
+            self.raw_dir_fd = -1;
+        }
+        if (self.dir) |d| {
+            host_io.closeDir(d);
         }
         self.dir = null;
         self.iter = null;
@@ -673,24 +802,66 @@ pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: *align(1) w32.W
         var resolved_dir = dir_path;
         var ci_buf: [1024]u8 = undefined;
 
-        const d = std.Io.Dir.cwd().openDir(runtime.io(), dir_path, .{ .iterate = true }) catch blk: {
-            // Try case-insensitive resolution
-            resolved_dir = path_utils.tryCaseInsensitiveResolve(dir_path, &ci_buf) orelse {
-                if (trace.enable_tracing) trace.print("  -> FindFirstFileA: dir not found\n", .{});
+        if (comptime builtin.os.tag == .linux) {
+            // Raw open: std.Io.Dir.openDir touches TLS (see FindHandleState).
+            var nt_buf: [1025]u8 = undefined;
+            if (dir_path.len >= nt_buf.len) {
                 state.close();
                 return w32.INVALID_HANDLE_VALUE;
+            }
+            @memcpy(nt_buf[0..dir_path.len], dir_path);
+            nt_buf[dir_path.len] = 0;
+            const open_rc = std.os.linux.open(@ptrCast(&nt_buf), .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true }, 0);
+            const dir_fd: isize = @bitCast(open_rc);
+            if (dir_fd < 0) {
+                // Case-insensitive fallback
+                resolved_dir = path_utils.tryCaseInsensitiveResolve(dir_path, &ci_buf) orelse {
+                    if (trace.enable_tracing) trace.print("  -> FindFirstFileA: dir not found\n", .{});
+                    state.close();
+                    return w32.INVALID_HANDLE_VALUE;
+                };
+                if (resolved_dir.len >= nt_buf.len) {
+                    state.close();
+                    return w32.INVALID_HANDLE_VALUE;
+                }
+                @memcpy(nt_buf[0..resolved_dir.len], resolved_dir);
+                nt_buf[resolved_dir.len] = 0;
+                const rc2 = std.os.linux.open(@ptrCast(&nt_buf), .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true }, 0);
+                const fd2: isize = @bitCast(rc2);
+                if (fd2 < 0) {
+                    if (trace.enable_tracing) trace.print("  -> FindFirstFileA: resolved dir not found\n", .{});
+                    state.close();
+                    return w32.INVALID_HANDLE_VALUE;
+                }
+                state.raw_dir_fd = @intCast(fd2);
+            } else {
+                state.raw_dir_fd = @intCast(dir_fd);
+            }
+            @memcpy(state.dir_path[0..resolved_dir.len], resolved_dir);
+            state.dir_path_len = resolved_dir.len;
+            state.raw_buf_len = 0;
+            state.raw_pos = 0;
+            state.raw_done = false;
+        } else {
+            const d = std.Io.Dir.cwd().openDir(runtime.io(), dir_path, .{ .iterate = true }) catch blk: {
+                // Try case-insensitive resolution
+                resolved_dir = path_utils.tryCaseInsensitiveResolve(dir_path, &ci_buf) orelse {
+                    if (trace.enable_tracing) trace.print("  -> FindFirstFileA: dir not found\n", .{});
+                    state.close();
+                    return w32.INVALID_HANDLE_VALUE;
+                };
+                break :blk std.Io.Dir.cwd().openDir(runtime.io(), resolved_dir, .{ .iterate = true }) catch {
+                    if (trace.enable_tracing) trace.print("  -> FindFirstFileA: resolved dir not found\n", .{});
+                    state.close();
+                    return w32.INVALID_HANDLE_VALUE;
+                };
             };
-            break :blk std.Io.Dir.cwd().openDir(runtime.io(), resolved_dir, .{ .iterate = true }) catch {
-                if (trace.enable_tracing) trace.print("  -> FindFirstFileA: resolved dir not found\n", .{});
-                state.close();
-                return w32.INVALID_HANDLE_VALUE;
-            };
-        };
 
-        @memcpy(state.dir_path[0..resolved_dir.len], resolved_dir);
-        state.dir_path_len = resolved_dir.len;
-        state.dir = d;
-        state.iter = d.iterate();
+            @memcpy(state.dir_path[0..resolved_dir.len], resolved_dir);
+            state.dir_path_len = resolved_dir.len;
+            state.dir = d;
+            state.iter = d.iterate();
+        }
 
         // Find first matching entry
         const result = FindNextFileA(handle, lpFindFileData_ptr);
@@ -727,6 +898,38 @@ pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: *align(1) w32.W
 pub fn FindNextFileA(hFindFile: usize, lpFindFileData_ptr: *align(1) w32.WIN32_FIND_DATAA) callconv(w32cc.WINAPI) i32 {
 
     const state = getFindHandle(hFindFile) orelse return 0;
+
+    if (comptime builtin.os.tag == .linux) {
+        const linux = std.os.linux;
+        while (true) {
+            if (state.raw_pos >= state.raw_buf_len) {
+                if (state.raw_done) return 0;
+                const n_rc = linux.getdents64(state.raw_dir_fd, &state.raw_buf, state.raw_buf.len);
+                const n: isize = @bitCast(n_rc);
+                if (n <= 0) {
+                    state.raw_done = true;
+                    return 0;
+                }
+                state.raw_buf_len = @intCast(n);
+                state.raw_pos = 0;
+            }
+            const d = @as(*align(1) linux.dirent64, @ptrCast(state.raw_buf[state.raw_pos..].ptr));
+            const name_ptr: [*:0]const u8 = @ptrCast(&d.name);
+            const name = std.mem.sliceTo(name_ptr, 0);
+            state.raw_pos += d.reclen;
+            if (matchWildcard(name, state.pattern[0..state.pattern_len])) {
+                const find_data = lpFindFileData_ptr;
+                find_data.* = .{};
+                find_data.dwFileAttributes = if (d.type == linux.DT.DIR) w32.FILE_ATTRIBUTE_DIRECTORY else w32.FILE_ATTRIBUTE_NORMAL;
+                const copy_len = @min(name.len, 259);
+                @memcpy(find_data.cFileName[0..copy_len], name[0..copy_len]);
+                find_data.cFileName[copy_len] = 0;
+
+                if (trace.enable_tracing) trace.print("KERNEL32: FindNextFileA -> '{s}'\n", .{name});
+                return 1;
+            }
+        }
+    }
 
     if (state.iter) |*iter| {
         while (iter.next(runtime.io()) catch null) |entry| {
@@ -876,7 +1079,7 @@ pub fn GetFileSizeEx(hFile: usize, lpFileSize: usize) callconv(w32cc.WINAPI) i32
 
     if (lpFileSize == 0) return 0;
     const file = host_io.fileFromFd(fd);
-    if (file.stat(runtime.io()) catch null) |stat_result| {
+    if (host_io.statFile(file)) |stat_result| {
         // LARGE_INTEGER: 64-bit signed int
         @as(*i64, @ptrFromInt(lpFileSize)).* = @intCast(stat_result.size);
         return 1; // TRUE
@@ -941,7 +1144,11 @@ pub fn FlushFileBuffers(hFile: usize) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
         const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
         const file = host_io.fileFromFd(fd);
-        file.sync(runtime.io()) catch {};
+        if (comptime builtin.os.tag == .linux) {
+            _ = std.os.linux.fsync(file.handle);
+        } else {
+            file.sync(runtime.io()) catch {};
+        }
     }
     return 1; // TRUE
 }
@@ -963,7 +1170,7 @@ pub fn GetFileTime(hFile: usize, lpCreationTime: usize, lpLastAccessTime: usize,
     const file = host_io.fileFromFd(fd);
     var actual_low = low;
     var actual_high = high;
-    if (file.stat(runtime.io()) catch null) |st| {
+    if (host_io.statFile(file)) |st| {
         const mtime_ns: u128 = @intCast(st.mtime.nanoseconds);
         const mtime_ft: u64 = @intCast(mtime_ns / 100 + win_offset);
         actual_low = @intCast(mtime_ft & 0xFFFFFFFF);
@@ -1001,7 +1208,6 @@ pub fn stub_SetFileTime(hFile: usize, lpCreationTime: usize, lpLastAccessTime: u
 /// Copies an existing file to a new file.
 /// Implementation status: Fully implemented
 pub fn CopyFileA(lpExistingFileName: usize, lpNewFileName: usize, bFailIfExists: i32) callconv(w32cc.WINAPI) i32 {
-    _ = bFailIfExists;
     if (lpExistingFileName == 0 or lpNewFileName == 0) return 0;
     const src_name = trace.c_span(lpExistingFileName);
     const dst_name = trace.c_span(lpNewFileName);
@@ -1013,20 +1219,107 @@ pub fn CopyFileA(lpExistingFileName: usize, lpNewFileName: usize, bFailIfExists:
     var dst_buf: [1024]u8 = undefined;
     const dst_len = path_utils.win32ToPosix(dst_name, &dst_buf) catch return 0;
 
-    // Attempt actual copy via filesystem
+    // Win32 contract: fail when the destination exists and bFailIfExists is TRUE
+    if (bFailIfExists != 0 and fileExistsPosix(dst_buf[0..dst_len])) return 0;
+
+    return copyFileHost(src_buf[0..src_len], dst_buf[0..dst_len]);
+}
+
+/// Wide-char variant of CopyFileA (narrowed per the codebase W->A convention).
+pub fn CopyFileW(lpExistingFileName_ptr: usize, lpNewFileName_ptr: usize, bFailIfExists: i32) callconv(w32cc.WINAPI) i32 {
+    if (lpExistingFileName_ptr == 0 or lpNewFileName_ptr == 0) return 0;
+    var src_narrow: [1024]u8 = undefined;
+    var dst_narrow: [1024]u8 = undefined;
+    if (!narrowWide(trace.c_span_w(lpExistingFileName_ptr), &src_narrow)) return 0;
+    if (!narrowWide(trace.c_span_w(lpNewFileName_ptr), &dst_narrow)) return 0;
+    if (trace.enable_tracing) trace.print("KERNEL32: CopyFileW -> CopyFileA\n", .{});
+
+    const path_utils = @import("../../path_utils.zig");
+    var src_buf: [1024]u8 = undefined;
+    const src_len = path_utils.win32ToPosix(std.mem.span(@as([*:0]const u8, @ptrCast(&src_narrow))), &src_buf) catch return 0;
+    var dst_buf: [1024]u8 = undefined;
+    const dst_len = path_utils.win32ToPosix(std.mem.span(@as([*:0]const u8, @ptrCast(&dst_narrow))), &dst_buf) catch return 0;
+
+    // Win32 contract: fail when the destination exists and bFailIfExists is TRUE
+    if (bFailIfExists != 0 and fileExistsPosix(dst_buf[0..dst_len])) return 0;
+
+    return copyFileHost(src_buf[0..src_len], dst_buf[0..dst_len]);
+}
+
+/// Narrow a UTF-16 span into a caller-provided NUL-terminated buffer (truncating).
+fn narrowWide(wstr: []const u16, buf: []u8) bool {
+    if (buf.len < 1) return false;
+    const len = @min(wstr.len, buf.len - 1);
+    for (0..len) |i| buf[i] = @intCast(wstr[i] & 0xFF);
+    buf[len] = 0;
+    return true;
+}
+
+/// Check existence of a host POSIX path.
+fn fileExistsPosix(host_path: []const u8) bool {
+    if (comptime builtin.os.tag == .linux) {
+        var nt: [1025]u8 = undefined;
+        if (host_path.len >= nt.len) return false;
+        @memcpy(nt[0..host_path.len], host_path);
+        nt[host_path.len] = 0;
+        const rc = std.os.linux.faccessat(std.os.linux.AT.FDCWD, @ptrCast(&nt), 0, 0);
+        return @as(isize, @bitCast(rc)) == 0;
+    }
+    _ = std.Io.Dir.cwd().statFile(runtime.io(), host_path, .{}) catch return false;
+    return true;
+}
+
+/// Shared copy core given resolved POSIX paths.
+fn copyFileHost(src_buf: []const u8, dst_buf: []const u8) i32 {
+    if (comptime builtin.os.tag == .linux) {
+        // Raw syscalls: std.Io.Dir open/create touch TLS, which faults
+        // inside the compat-mode SIGSEGV dispatch handler.
+        var src_nt: [1025]u8 = undefined;
+        if (src_buf.len >= src_nt.len or dst_buf.len >= src_nt.len) return 0;
+        @memcpy(src_nt[0..src_buf.len], src_buf);
+        src_nt[src_buf.len] = 0;
+        const src_rc = std.os.linux.open(@ptrCast(&src_nt), .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+        const src_fd: isize = @bitCast(src_rc);
+        if (src_fd < 0) return 0;
+        defer _ = std.os.linux.close(@intCast(src_fd));
+
+        var dst_nt: [1025]u8 = undefined;
+        @memcpy(dst_nt[0..dst_buf.len], dst_buf);
+        dst_nt[dst_buf.len] = 0;
+        const dst_rc = std.os.linux.open(@ptrCast(&dst_nt), .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .CLOEXEC = true }, 0o666);
+        const dst_fd: isize = @bitCast(dst_rc);
+        if (dst_fd < 0) return 0;
+        defer _ = std.os.linux.close(@intCast(dst_fd));
+
+        var buf: [4096]u8 = undefined;
+        var offset: u64 = 0;
+        while (true) {
+            const n_rc = std.os.linux.pread(@intCast(src_fd), &buf, buf.len, @as(i64, @intCast(offset)));
+            const n: isize = @bitCast(n_rc);
+            if (n <= 0) break;
+            var woff: usize = 0;
+            while (woff < @as(usize, @intCast(n))) {
+                const w_rc = std.os.linux.pwrite(@intCast(dst_fd), buf[woff..].ptr, @as(usize, @intCast(n)) - woff, @as(i64, @intCast(offset + woff)));
+                const w: isize = @bitCast(w_rc);
+                if (w <= 0) return 0;
+                woff += @intCast(w);
+            }
+            offset += @intCast(n);
+        }
+        return 1;
+    }
     const cwd = std.Io.Dir.cwd();
-    const src_file = cwd.openFile(runtime.io(), src_buf[0..src_len], .{}) catch return 0;
-    defer src_file.close(runtime.io());
-    const dst_file = cwd.createFile(runtime.io(), dst_buf[0..dst_len], .{}) catch return 0;
-    defer dst_file.close(runtime.io());
+    const src_file = cwd.openFile(runtime.io(), src_buf, .{}) catch return 0;
+    defer host_io.closeFile(src_file);
+    const dst_file = cwd.createFile(runtime.io(), dst_buf, .{}) catch return 0;
+    defer host_io.closeFile(dst_file);
 
     var buf: [4096]u8 = undefined;
-    const rt_io = runtime.io();
     var offset: u64 = 0;
     while (true) {
-        const n = src_file.readPositionalAll(rt_io, &buf, offset) catch return 0;
+        const n = host_io.readPositional(src_file, &buf, offset) catch return 0;
         if (n == 0) break;
-        dst_file.writePositionalAll(rt_io, buf[0..n], offset) catch return 0;
+        host_io.writePositional(dst_file, buf[0..n], offset) catch return 0;
         offset += n;
     }
     return 1; // TRUE

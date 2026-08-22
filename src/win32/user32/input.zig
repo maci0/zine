@@ -61,10 +61,72 @@ pub const TimerEntry = struct {
 };
 
 pub var timers: [16]TimerEntry = [_]TimerEntry{.{ .hwnd = 0, .id = 0, .elapse_ms = 0, .callback = 0, .last_fire = 0, .active = false }} ** 16;
+var timers_mutex: runtime.Mutex = .{};
+var timer_thread_started: bool = false;
+
+/// Io-free millisecond timestamp (safe on the guest thread inside the signal
+/// dispatch context — runtime.milliTimestamp uses std.Io which reads TLS).
+fn safeMilliTs() i64 {
+    if (comptime @import("builtin").os.tag == .linux) {
+        const linux = std.os.linux;
+        var ts: linux.timespec = .{ .sec = 0, .nsec = 0 };
+        _ = linux.clock_gettime(linux.CLOCK.REALTIME, &ts);
+        return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    }
+    return @import("../../runtime.zig").milliTimestamp();
+}
+
+/// Spawn the WM_TIMER dispatcher thread on first SetTimer. It wakes every
+/// 10ms, posts WM_TIMER for expired timers, and needs no guest interaction.
+/// No-op on WASI (single-threaded; the TIMER suite runs are skipped there).
+fn ensureTimerThread() void {
+    if (comptime @import("builtin").os.tag == .wasi) return;
+    if (timer_thread_started) return;
+    timer_thread_started = true;
+    // This runs inside the SetTimer stub (compat-mode SIGSEGV dispatch), where
+    // FS points at the guest TEB. pthread_create → calloc reads per-thread
+    // libc state via %fs, so temporarily restore the host TLS for the spawn.
+    const platform = @import("../../platform.zig");
+    const saved_fs = platform.useHostFs();
+    const thread = std.Thread.spawn(.{}, timerThread, .{}) catch {
+        platform.restoreFs(saved_fs);
+        return;
+    };
+    platform.restoreFs(saved_fs);
+    thread.detach();
+}
+
+fn timerThread() void {
+    const builtin = @import("builtin");
+    while (true) {
+        const now = safeMilliTs();
+        timers_mutex.lock();
+        for (&timers) |*t| {
+            if (!t.active) continue;
+            const elapsed = now - t.last_fire;
+            if (elapsed >= t.elapse_ms) {
+                t.last_fire = now;
+                const hwnd = t.hwnd;
+                const id = t.id;
+                // Post outside the lock to avoid deadlock if the queue is full.
+                timers_mutex.unlock();
+                const msg_mod = @import("message.zig");
+                msg_mod.postMessageTo(hwnd, 0x0113, id, 0); // WM_TIMER
+                timers_mutex.lock();
+            }
+        }
+        timers_mutex.unlock();
+        if (comptime builtin.os.tag == .linux) {
+            var req = std.os.linux.timespec{ .sec = 0, .nsec = 10 * std.time.ns_per_ms };
+            _ = std.os.linux.nanosleep(&req, null);
+        }
+    }
+}
 
 pub fn SetTimer(hWnd: usize, nIDEvent: usize, uElapse: u32, lpTimerFunc: usize) callconv(w32cc.WINAPI) usize {
     _ = lpTimerFunc; // We don't call lpTimerFunc; we post WM_TIMER instead
     if (trace.enable_tracing) trace.print("USER32: SetTimer(hwnd={x}, id={d}, elapse={d}ms)\n", .{ hWnd, nIDEvent, uElapse });
+    ensureTimerThread();
 
     // Find existing timer with same id or a free slot
     var slot: ?usize = null;
@@ -84,26 +146,31 @@ pub fn SetTimer(hWnd: usize, nIDEvent: usize, uElapse: u32, lpTimerFunc: usize) 
     }
 
     if (slot) |s| {
+        timers_mutex.lock();
         timers[s] = .{
             .hwnd = hWnd,
             .id = nIDEvent,
             .elapse_ms = if (uElapse < 10) 10 else uElapse, // Win32 minimum is 10ms
             .callback = 0,
-            .last_fire = runtime.milliTimestamp(),
+            .last_fire = safeMilliTs(),
             .active = true,
         };
+        timers_mutex.unlock();
     }
     return nIDEvent;
 }
 
 pub fn KillTimer(hWnd: usize, uIDEvent: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: KillTimer(hwnd={x}, id={d})\n", .{ hWnd, uIDEvent });
+    timers_mutex.lock();
     for (&timers) |*t| {
         if (t.active and t.id == uIDEvent and t.hwnd == hWnd) {
             t.active = false;
+            timers_mutex.unlock();
             return 1;
         }
     }
+    timers_mutex.unlock();
     return 0; // Timer not found
 }
 

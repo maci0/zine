@@ -23,7 +23,12 @@ pub inline fn va_list_to_usize(ap: anytype) usize {
 pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: usize) usize {
     if (max == 0) return 0;
     // Guest args are always 32-bit values on the x86 stack, even on x86_64 hosts.
-    const args = @as([*]const u32, @ptrFromInt(trace.addr(args_ptr)));
+    // args_ptr is ALREADY a host pointer: variadic stubs receive it via
+    // addBuiltinExportComptimeVA (translated guest stack address) or via a typed
+    // pointer param (auto-translated). Do NOT run it through trace.addr again —
+    // host pointers fall inside the guest VA range on WASM, so a second
+    // translation turns them into garbage (e.g. printf %s reading 0xCCCCCCCC).
+    const args = @as([*]const u32, @ptrFromInt(args_ptr));
     var ai: usize = 0;
     var oi: usize = 0;
     var ii: usize = 0;
@@ -356,7 +361,10 @@ fn sscanf_impl(input: [*:0]const u8, fmt_str: [*:0]const u8, ap: usize) i32 {
     const fmt = std.mem.span(fmt_str);
     if (trace.enable_tracing) trace.print("MSVCRT: sscanf('{s}', '{s}')\n", .{ buf, fmt });
 
-    const args = @as([*]const u32, @ptrFromInt(trace.addr(ap)));
+    // ap is a HOST pointer (variadic stubs receive it via addBuiltinExportComptimeVA).
+    // Do NOT run it through trace.addr — a second translation turns it into
+    // garbage on WASM, corrupting the parsed output pointers.
+    const args = @as([*]const u32, @ptrFromInt(ap));
     var arg_idx: usize = 0;
     var buf_idx: usize = 0;
     var fmt_idx: usize = 0;

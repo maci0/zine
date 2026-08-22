@@ -360,10 +360,32 @@ fn dispatchNativeCall(cpu: *Cpu) void {
     const import_info = thunks.getImportInfo(target_addr);
     var result: u32 = 0;
 
+    // Stash the guest ESP/EBP so RaiseException can run WASM SEH handlers on
+    // the app's own stack.
+    if (comptime @import("../platform.zig").is_wasm) {
+        const except_mod = @import("../win32/msvcrt/except.zig");
+        except_mod.seh_current_guest_esp = cpu.esp;
+        except_mod.seh_current_guest_ebp = cpu.ebp;
+    }
+
     if (import_info.is_cdecl) {
         result = thunks.callNativeCdecl(target_addr, args);
     } else {
         result = thunks.callNativeByArity(target_addr, import_info.param_bytes, args);
+    }
+
+    // On WASM, an SEH handler that accepted sets a redirect — apply it to this
+    // CPU instead of resuming at the import's return address (the handler's
+    // catch block continues the app from there).
+    if (comptime @import("../platform.zig").is_wasm) {
+        const except_mod = @import("../win32/msvcrt/except.zig");
+        if (except_mod.wasm_seh_redirect) |rd| {
+            except_mod.wasm_seh_redirect = null;
+            cpu.eip = rd.eip;
+            cpu.esp = rd.esp;
+            cpu.ebp = rd.ebp;
+            return;
+        }
     }
 
     cpu.eax = result;

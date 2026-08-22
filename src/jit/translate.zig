@@ -5,6 +5,7 @@ const std = @import("std");
 const wasm = @import("wasm.zig");
 const emitter = @import("emitter.zig");
 const decoder = @import("../x86/decoder.zig");
+const cpu_mod = @import("../x86/cpu.zig");
 
 const Body = emitter.Buffer;
 
@@ -24,8 +25,14 @@ pub const LOCAL_DF: u32 = 13;
 pub const LOCAL_PF: u32 = 14;
 /// Memory base local variable index.
 pub const LOCAL_MEM_BASE: u32 = 15;
+/// FS segment base local variable index.
+pub const LOCAL_FS_BASE: u32 = 16;
+/// Scratch local 2 (ALU operand A for CF/OF computation).
+pub const LOCAL_SCRATCH2: u32 = 17;
+/// Scratch local 3 (ALU operand B for CF/OF computation).
+pub const LOCAL_SCRATCH3: u32 = 18;
 /// Total number of local variables.
-pub const LOCAL_COUNT: u32 = 16;
+pub const LOCAL_COUNT: u32 = 19;
 
 /// EAX register index.
 pub const REG_EAX: u32 = 0;
@@ -93,11 +100,46 @@ pub fn emitLoadOperand(body: *Body, insn: *const decoder.Instruction, idx: u1) !
     const reg = if (idx == 0) insn.op0_reg else insn.op1_reg;
     switch (kind) {
         .reg => {
-            try body.appendOpcode(.local_get);
-            try body.appendUleb128(reg);
+            if (insn.op_size == .byte and reg >= 4) {
+                // AH/CH/DH/BH: byte at offset 8 of the base register local
+                const base = reg - 4;
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(base);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(8);
+                try body.appendOpcode(.i32_shr_u);
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(0xFF);
+                try body.appendOpcode(.i32_and);
+            } else {
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(reg);
+                // Byte/word register operands read only the low 8/16 bits
+                // (e.g. `cmp al, [mem]` must not see the full EAX).
+                switch (insn.op_size) {
+                    .byte => {
+                        try body.appendOpcode(.i32_const);
+                        try body.appendIleb128(0xFF);
+                        try body.appendOpcode(.i32_and);
+                    },
+                    .word => {
+                        try body.appendOpcode(.i32_const);
+                        try body.appendIleb128(0xFFFF);
+                        try body.appendOpcode(.i32_and);
+                    },
+                    .dword => {},
+                }
+            }
         },
         .mem => {
             try emitEffectiveAddress(body, insn, idx);
+            // FS-relative operand: add guest FS base (TEB) to the address.
+            // Other segments are flat (base 0) in this emulator.
+            if (insn.mem_seg == .fs) {
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(LOCAL_FS_BASE);
+                try body.appendOpcode(.i32_add);
+            }
             // Translate guest VA to WASM linear memory address
             try body.appendOpcode(.local_get);
             try body.appendUleb128(LOCAL_MEM_BASE);
@@ -137,8 +179,60 @@ pub fn emitStoreOperand(body: *Body, insn: *const decoder.Instruction, idx: u1) 
     const reg = if (idx == 0) insn.op0_reg else insn.op1_reg;
     switch (kind) {
         .reg => {
-            try body.appendOpcode(.local_set);
-            try body.appendUleb128(reg);
+            // Byte/word register stores must preserve the untouched upper
+            // bits (x86: `mov al, x` leaves AH/upper EAX intact). Merge the
+            // low 8/16 bits into the 32-bit register local.
+            switch (insn.op_size) {
+                .byte => {
+                    // Mask value to 8 bits first
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(0xFF);
+                    try body.appendOpcode(.i32_and);
+                    if (reg < 4) {
+                        // AL/CL/DL/BL: replace low byte
+                        try body.appendOpcode(.local_get);
+                        try body.appendUleb128(reg);
+                        try body.appendOpcode(.i32_const);
+                        try body.appendIleb128(@as(i32, @bitCast(@as(u32, 0xFFFFFF00))));
+                        try body.appendOpcode(.i32_and);
+                        try body.appendOpcode(.i32_or);
+                        try body.appendOpcode(.local_set);
+                        try body.appendUleb128(reg);
+                    } else {
+                        // AH/CH/DH/BH: replace byte at offset 8 of base reg
+                        const base = reg - 4;
+                        try body.appendOpcode(.i32_const);
+                        try body.appendIleb128(8);
+                        try body.appendOpcode(.i32_shl);
+                        try body.appendOpcode(.local_get);
+                        try body.appendUleb128(base);
+                        try body.appendOpcode(.i32_const);
+                        try body.appendIleb128(@as(i32, @bitCast(@as(u32, 0xFFFF00FF))));
+                        try body.appendOpcode(.i32_and);
+                        try body.appendOpcode(.i32_or);
+                        try body.appendOpcode(.local_set);
+                        try body.appendUleb128(base);
+                    }
+                },
+                .word => {
+                    // Mask value to 16 bits, merge low 16, preserve upper 16
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(0xFFFF);
+                    try body.appendOpcode(.i32_and);
+                    try body.appendOpcode(.local_get);
+                    try body.appendUleb128(reg);
+                    try body.appendOpcode(.i32_const);
+                    try body.appendIleb128(@as(i32, @bitCast(@as(u32, 0xFFFF0000))));
+                    try body.appendOpcode(.i32_and);
+                    try body.appendOpcode(.i32_or);
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(reg);
+                },
+                .dword => {
+                    try body.appendOpcode(.local_set);
+                    try body.appendUleb128(reg);
+                },
+            }
         },
         .mem => {
             // Value is on stack. We need address below it.
@@ -146,6 +240,12 @@ pub fn emitStoreOperand(body: *Body, insn: *const decoder.Instruction, idx: u1) 
             try body.appendOpcode(.local_set);
             try body.appendUleb128(LOCAL_SCRATCH);
             try emitEffectiveAddress(body, insn, idx);
+            // FS-relative operand: add guest FS base (TEB) to the address.
+            if (insn.mem_seg == .fs) {
+                try body.appendOpcode(.local_get);
+                try body.appendUleb128(LOCAL_FS_BASE);
+                try body.appendOpcode(.i32_add);
+            }
             // Translate guest VA to WASM linear memory address
             try body.appendOpcode(.local_get);
             try body.appendUleb128(LOCAL_MEM_BASE);
@@ -176,20 +276,64 @@ pub fn emitStoreOperand(body: *Body, insn: *const decoder.Instruction, idx: u1) 
 
 /// Emit ZF and SF computation from the value currently on the Wasm stack.
 /// Consumes the value (drops it after computing flags).
-pub fn emitUpdateZfSf(body: *Body) !void {
+/// The value is truncated to `op_size` here (byte/word masked with
+/// `and 0xFF` / `and 0xFFFF`) so ZF/SF reflect the truncated result —
+/// e.g. `cmp bl, imm` sets SF from bit 7, not from the zero-extended
+/// 32-bit value (`0xAD` is +173 as u32 but bit 7 set => SF=1).
+pub fn emitUpdateZfSf(body: *Body, op_size: cpu_mod.OpSize) !void {
     // tee to scratch for reuse
     try body.appendOpcode(.local_tee);
     try body.appendUleb128(LOCAL_SCRATCH);
+    // Truncate to the operand size (dword is already full 32-bit).
+    switch (op_size) {
+        .byte => {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0xFF);
+            try body.appendOpcode(.i32_and);
+        },
+        .word => {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0xFFFF);
+            try body.appendOpcode(.i32_and);
+        },
+        .dword => {},
+    }
+    // Store the truncated result back so SF reads the masked value.
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(LOCAL_SCRATCH);
     // ZF = (result == 0)
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(LOCAL_SCRATCH);
     try body.appendOpcode(.i32_eqz);
     try body.appendOpcode(.local_set);
     try body.appendUleb128(LOCAL_ZF);
-    // SF = (result < 0)
-    try body.appendOpcode(.local_get);
-    try body.appendUleb128(LOCAL_SCRATCH);
-    try body.appendOpcode(.i32_const);
-    try body.appendIleb128(0);
-    try body.appendOpcode(.i32_lt_s);
+    // SF = sign bit of the truncated result
+    //   byte:  bit 7  -> value > 0x7F
+    //   word:  bit 15 -> value > 0x7FFF
+    //   dword: bit 31 -> value < 0 (signed)
+    switch (op_size) {
+        .byte => {
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_SCRATCH);
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0x7F);
+            try body.appendOpcode(.i32_gt_u);
+        },
+        .word => {
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_SCRATCH);
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0x7FFF);
+            try body.appendOpcode(.i32_gt_u);
+        },
+        .dword => {
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_SCRATCH);
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0);
+            try body.appendOpcode(.i32_lt_s);
+        },
+    }
     try body.appendOpcode(.local_set);
     try body.appendUleb128(LOCAL_SF);
 }
@@ -223,6 +367,101 @@ pub fn emitClearCfOf(body: *Body) !void {
     try body.appendUleb128(LOCAL_CF);
     try body.appendOpcode(.i32_const);
     try body.appendIleb128(0);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(LOCAL_OF);
+}
+
+/// Emit the sign bit (0 or 1) of a local, masked to the instruction's operand size.
+fn emitSignOfLocal(body: *Body, insn: *const decoder.Instruction, local: u32) !void {
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(local);
+    const bits: u6 = switch (insn.op_size) {
+        .byte => 8,
+        .word => 16,
+        .dword => 32,
+    };
+    if (bits == 8) {
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(0xFF);
+        try body.appendOpcode(.i32_and);
+    } else if (bits == 16) {
+        try body.appendOpcode(.i32_const);
+        try body.appendIleb128(0xFFFF);
+        try body.appendOpcode(.i32_and);
+    }
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(@as(i32, @intCast(bits - 1)));
+    try body.appendOpcode(.i32_shr_u);
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(1);
+    try body.appendOpcode(.i32_and);
+}
+
+/// Emit CF and OF for an add-style op (ADD, ADC).
+/// Operand A in dest_local, operand B in src_local; result in LOCAL_SCRATCH.
+/// CF = carry out; OF = (signA == signB) && (signR != signA).
+pub fn emitAddCfOf(body: *Body, insn: *const decoder.Instruction, dest_local: u32, src_local: u32) !void {
+    // CF: for dword, carry out = (result < A) unsigned. For byte/word the
+    // zero-extended operands make the wasm add exact, so CF = result > max.
+    switch (insn.op_size) {
+        .byte => {
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_SCRATCH);
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0xFF);
+            try body.appendOpcode(.i32_gt_u);
+        },
+        .word => {
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_SCRATCH);
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0xFFFF);
+            try body.appendOpcode(.i32_gt_u);
+        },
+        .dword => {
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(LOCAL_SCRATCH);
+            try body.appendOpcode(.local_get);
+            try body.appendUleb128(dest_local);
+            try body.appendOpcode(.i32_lt_u);
+        },
+    }
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(LOCAL_CF);
+
+    // OF = (signA == signB) && (signR != signA)
+    try emitSignOfLocal(body, insn, dest_local);
+    try emitSignOfLocal(body, insn, src_local);
+    try body.appendOpcode(.i32_eq);
+    try emitSignOfLocal(body, insn, LOCAL_SCRATCH);
+    try emitSignOfLocal(body, insn, dest_local);
+    try body.appendOpcode(.i32_ne);
+    try body.appendOpcode(.i32_and);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(LOCAL_OF);
+}
+
+/// Emit CF and OF for a subtract-style op (SUB, SBB, CMP).
+/// Operand A in dest_local, operand B in src_local; result in LOCAL_SCRATCH.
+/// CF = borrow (A < B unsigned); OF = (signA != signB) && (signR != signA).
+pub fn emitSubCfOf(body: *Body, insn: *const decoder.Instruction, dest_local: u32, src_local: u32) !void {
+    // CF = A < B (unsigned borrow)
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(dest_local);
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(src_local);
+    try body.appendOpcode(.i32_lt_u);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(LOCAL_CF);
+
+    // OF = (signA != signB) && (signR != signA)
+    try emitSignOfLocal(body, insn, dest_local);
+    try emitSignOfLocal(body, insn, src_local);
+    try body.appendOpcode(.i32_ne);
+    try emitSignOfLocal(body, insn, LOCAL_SCRATCH);
+    try emitSignOfLocal(body, insn, dest_local);
+    try body.appendOpcode(.i32_ne);
+    try body.appendOpcode(.i32_and);
     try body.appendOpcode(.local_set);
     try body.appendUleb128(LOCAL_OF);
 }

@@ -63,14 +63,28 @@ fn loadStringFromPE(hInst: usize, uID: u32, out_buf: [*]u8, max_len: usize) usiz
     const root_dir = @as(*const pe.IMAGE_RESOURCE_DIRECTORY, @ptrFromInt(res_base));
 
     const find_entry = struct {
-        fn find(dir: *const pe.IMAGE_RESOURCE_DIRECTORY, id: u32) ?u32 {
+        fn find(dir: *const pe.IMAGE_RESOURCE_DIRECTORY, id: u32, base: usize, size: u32) ?u32 {
             const num_named = dir.NumberOfNamedEntries;
             const num_id = dir.NumberOfIdEntries;
             const entries = @as([*]const pe.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrFromInt(@intFromPtr(dir) + @sizeOf(pe.IMAGE_RESOURCE_DIRECTORY)));
 
-            for (0..num_id) |i| {
-                const entry = entries[num_named + i];
-                if (entry.NameOrId == id) {
+            for (0..num_named + num_id) |i| {
+                const entry = entries[i];
+                // CVTRES under the emulator stores type/name entries as
+                // single-wchar string names holding the numeric value.
+                var resolved: ?u32 = null;
+                if (entry.NameOrId & 0x80000000 != 0) {
+                    const s_off = base + (entry.NameOrId & 0x7FFFFFFF);
+                    if (s_off + 4 <= base + size) {
+                        const slen = @as(*const u16, @ptrFromInt(s_off)).*;
+                        if (slen == 1) {
+                            resolved = @as(*const u16, @ptrFromInt(s_off + 2)).*;
+                        }
+                    }
+                } else {
+                    resolved = entry.NameOrId;
+                }
+                if (resolved != null and resolved.? == id) {
                     return entry.OffsetToData;
                 }
             }
@@ -78,7 +92,7 @@ fn loadStringFromPE(hInst: usize, uID: u32, out_buf: [*]u8, max_len: usize) usiz
         }
     }.find;
 
-    const type_offset = find_entry(root_dir, 6) orelse {
+    const type_offset = find_entry(root_dir, 6, res_base, res_dir_info.Size) orelse {
         if (trace.enable_tracing) trace.print("USER32: No RT_STRING\n", .{});
         return 0;
     };
@@ -87,7 +101,7 @@ fn loadStringFromPE(hInst: usize, uID: u32, out_buf: [*]u8, max_len: usize) usiz
     const name_dir = @as(*const pe.IMAGE_RESOURCE_DIRECTORY, @ptrFromInt(res_base + (type_offset & 0x7FFFFFFF)));
 
     const block_id = (uID >> 4) + 1;
-    const lang_offset = find_entry(name_dir, block_id) orelse {
+    const lang_offset = find_entry(name_dir, block_id, res_base, res_dir_info.Size) orelse {
         if (trace.enable_tracing) trace.print("USER32: No block ID {d}\n", .{block_id});
         return 0;
     };
@@ -102,7 +116,12 @@ fn loadStringFromPE(hInst: usize, uID: u32, out_buf: [*]u8, max_len: usize) usiz
 
     const data_entry = @as(*const pe.IMAGE_RESOURCE_DATA_ENTRY, @ptrFromInt(res_base + data_entry_offset));
 
-    var str_ptr = hInst + data_entry.OffsetToData;
+    var data_rva = data_entry.OffsetToData;
+    // CVTRES byte-swaps the data RVA's 16-bit halves in stale builds.
+    if (data_rva > res_dir_info.VirtualAddress + res_dir_info.Size) {
+        data_rva = ((data_rva & 0xFFFF) << 16) | (data_rva >> 16);
+    }
+    var str_ptr = hInst + data_rva;
 
     const string_index = uID & 0xF;
 

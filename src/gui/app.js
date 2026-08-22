@@ -17,6 +17,8 @@ let currentRenderWidth = 1;
 let currentRenderHeight = 1;
 const appIconUrl = van.state("");
 const hasEditControl = van.state(false);
+// Progress-bar state per control id: {value, min, max} -> fill width.
+const controlRanges = {};
 let currentMenuData = null;
 
 // --- Audio ---
@@ -504,6 +506,20 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
                 legend({style: 'font-size:11px; padding:0 4px; color:black;'}, item.text)
             );
         }
+        if (bsType === 2 || bsType === 3) {
+            // BS_CHECKBOX / BS_AUTOCHECKBOX
+            return label({style: absPos + ' display:flex; align-items:center; gap:4px; font-size:11px; overflow:hidden; white-space:nowrap;'},
+                input({type:'checkbox', class:'win2k-check', "data-id": item.id, style:'width:13px;height:13px;margin:0;flex:none;', onclick: (e) => { e.stopPropagation(); sendCommand(item.id); }}),
+                span({style:'overflow:hidden;text-overflow:ellipsis;'}, (item.text||'').replace(/&([^&])/g,'$1').replace(/&&/g,'&'))
+            );
+        }
+        if (bsType === 4 || bsType === 9) {
+            // BS_RADIOBUTTON / BS_AUTORADIOBUTTON
+            return label({style: absPos + ' display:flex; align-items:center; gap:4px; font-size:11px; overflow:hidden; white-space:nowrap;'},
+                input({type:'radio', class:'win2k-check', "data-id": item.id, name:'radio-'+item.id, style:'width:13px;height:13px;margin:0;flex:none;', onclick: (e) => { e.stopPropagation(); sendCommand(item.id); }}),
+                span({style:'overflow:hidden;text-overflow:ellipsis;'}, (item.text||'').replace(/&([^&])/g,'$1').replace(/&&/g,'&'))
+            );
+        }
         return button({class: 'win2k-button', style: absPos, "data-id": item.id, onclick: () => sendCommand(item.id)}, item.text);
     }
 
@@ -539,12 +555,17 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
 
     // ListBox
     if (cls === 'ListBox') {
-        return div({class: 'win2k-listbox', style: absPos});
+        return div({class: 'win2k-listbox', style: absPos + ' overflow-y:auto; border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); background:white;', "data-id": item.id});
     }
 
     // ComboBox
     if (cls === 'ComboBox') {
-        return select({class: 'win2k-edit', style: absPos});
+        return select({class: 'win2k-combo', style: absPos, "data-id": item.id});
+    }
+
+    // SysHeader32
+    if (cls === 'SysHeader32') {
+        return div({"data-id": item.id, class: 'win2k-header', style: absPos + ' display:flex; flex-direction:row; border-bottom:1px solid var(--sys-shadow); overflow:hidden;'});
     }
 
     // SysTabControl32
@@ -560,14 +581,35 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
 
     // msctls_statusbar32
     if (cls === 'msctls_statusbar32') {
+        const sbText = (item.text || '').replace(/&([^&])/g, '$1').replace(/&&/g, '&');
         return div({"data-id": item.id, class: 'win2k-statusbar',
-            style: `position:absolute; left:0; bottom:0; right:0; height:${pcy || 20}px;`});
+            style: `position:absolute; left:0; bottom:0; right:0; height:${pcy || 20}px;`},
+            div({class: 'win2k-statusbar-pane'}, sbText));
     }
 
     // msctls_progress32
     if (cls === 'msctls_progress32') {
         return div({"data-id": item.id, class: 'win2k-progress', style: absPos},
             div({class: 'win2k-progress-fill'}));
+    }
+
+    // msctls_trackbar32
+    if (cls === 'msctls_trackbar32') {
+        return div({"data-id": item.id, style: absPos + ' display:flex; align-items:center; gap:4px;'},
+            input({type: 'range', min: 0, max: 100, value: 0, style: 'flex:1; height:20px;', oninput: (e) => sendCommand(item.id)}),
+            span({class: 'win2k-trackbar-val', style: 'font-size:11px; min-width:24px; text-align:right;'}, '0'));
+    }
+
+    // msctls_updown32
+    if (cls === 'msctls_updown32') {
+        return div({"data-id": item.id, class: 'win2k-updown', style: absPos + ' display:flex; align-items:center; justify-content:center; border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); background:#fff;'},
+            span({class: 'win2k-updown-val', style: 'font-size:11px;'}, '0'));
+    }
+
+    // SysDateTimePick32
+    if (cls === 'SysDateTimePick32') {
+        return div({"data-id": item.id, class: 'win2k-dtp', style: absPos + ' display:flex; align-items:center; justify-content:center; border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); background:#fff;'},
+            span({style: 'font-size:11px;'}, item.text || '2000-01-01'));
     }
 
     // SysTreeView32
@@ -838,11 +880,158 @@ function connect() {
                     if (el) {
                         // Strip Win32 '&' accelerator prefix for display
                         const displayText = (msg.text || '').replace(/&([^&])/g, '$1').replace(/&&/g, '&');
-                        if (el.tagName === 'BUTTON' || el.tagName === 'INPUT') {
-                            el.textContent = displayText;
+                        // Status bar: text goes into its pane, not the container.
+                        const sbPane = el.querySelector('.win2k-statusbar-pane');
+                        if (sbPane) {
+                            sbPane.textContent = displayText;
                         } else {
                             el.textContent = displayText;
                         }
+                    }
+
+                } else if (msg.type === "show_color_dialog") {
+                    // Simple color picker overlay
+                    let ov = document.getElementById('color-dialog-overlay');
+                    if (!ov) {
+                        ov = document.createElement('div');
+                        ov.id = 'color-dialog-overlay';
+                        ov.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:9998;background:rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;';
+                        ov.innerHTML = '<div style="background:#c0c0c0;border:2px outset;padding:16px;font-family:Tahoma,sans-serif;font-size:12px;"><div style="margin-bottom:8px;">Choose Color</div><input type="color" id="color-dialog-input" value="#000000" style="width:180px;height:32px;border:none;"><div style="margin-top:12px;text-align:right;"><button id="color-dialog-ok" style="margin-right:6px;min-width:60px;">OK</button><button id="color-dialog-cancel" style="min-width:60px;">Cancel</button></div></div>';
+                        document.body.appendChild(ov);
+                    }
+                    const input = document.getElementById('color-dialog-input');
+                    const init = msg.initial >>> 0;
+                    const rr = ((init >> 16) & 0xFF).toString(16).padStart(2, '0');
+                    const gg = ((init >> 8) & 0xFF).toString(16).padStart(2, '0');
+                    const bb = (init & 0xFF).toString(16).padStart(2, '0');
+                    input.value = '#' + rr + gg + bb;
+                    ov.style.display = 'flex';
+                    const sendColor = () => {
+                        const v = input.value;
+                        const r = parseInt(v.substr(1, 2), 16), g = parseInt(v.substr(3, 2), 16), b = parseInt(v.substr(5, 2), 16);
+                        const rgb = (r << 16) | (g << 8) | b;
+                        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'color_selected', color: rgb}));
+                        ov.style.display = 'none';
+                    };
+                    document.getElementById('color-dialog-ok').onclick = sendColor;
+                    document.getElementById('color-dialog-cancel').onclick = () => {
+                        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'color_selected', color: -1}));
+                        ov.style.display = 'none';
+                    };
+
+                } else if (msg.type === "set_control_color") {
+                    // Background color from the parent's WM_CTLCOLOR handler.
+                    const el = Array.from(document.querySelectorAll('[data-id]')).find(e => e.dataset.id == msg.id);
+                    if (el) {
+                        const c = msg.color >>> 0;
+                        const r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+                        el.style.backgroundColor = 'rgb(' + r + ',' + g + ',' + b + ')';
+                    }
+
+                } else if (msg.type === "set_listbox_items") {
+                    // Fill a listbox control with items (newline-joined string).
+                    const el = Array.from(document.querySelectorAll('[data-id]')).find(e => e.dataset.id == msg.id);
+                    if (el && el.classList.contains('win2k-listbox')) {
+                        const items = (msg.items || '').split('\n');
+                        el.innerHTML = '';
+                        items.forEach((it, idx) => {
+                            const d = div({class: 'win2k-listbox-item', style: 'padding:1px 4px; font-size:11px; cursor:default; white-space:nowrap; overflow:hidden;', onclick: (e) => {
+                                e.stopPropagation();
+                                sendCommand(msg.id);
+                                if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
+                            }}, it);
+                            el.appendChild(d);
+                        });
+                    } else if (el && el.classList.contains('win2k-header')) {
+                        const items = (msg.items || '').split('\n');
+                        el.innerHTML = '';
+                        items.forEach((it) => {
+                            const d = div({class: 'win2k-header-item', style: 'padding:2px 8px; font-size:11px; font-weight:bold; border-right:1px solid var(--sys-shadow); white-space:nowrap; overflow:hidden;'}, it);
+                            el.appendChild(d);
+                        });
+                    } else if (el && el.classList.contains('win2k-treeview')) {
+                        const items = (msg.items || '').split('\n');
+                        el.innerHTML = '';
+                        items.forEach((it, idx) => {
+                            const d = div({class: 'win2k-treeview-row', style: 'padding:1px 4px; font-size:11px; cursor:default; white-space:nowrap; overflow:hidden;', onclick: (e) => {
+                                e.stopPropagation();
+                                sendCommand(msg.id);
+                                if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
+                            }}, it);
+                            el.appendChild(d);
+                        });
+                    } else if (el && el.classList.contains('win2k-listview')) {
+                        // ListView: render items as rows
+                        const items = (msg.items || '').split('\n');
+                        el.innerHTML = '';
+                        items.forEach((it, idx) => {
+                            const d = div({class: 'win2k-listview-row', style: 'padding:1px 4px; font-size:11px; cursor:default; white-space:nowrap; overflow:hidden; border-bottom:1px solid #ddd;', onclick: (e) => {
+                                e.stopPropagation();
+                                sendCommand(msg.id);
+                                if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
+                            }}, it);
+                            el.appendChild(d);
+                        });
+                    } else if (el && el.classList.contains('win2k-tab-control')) {
+                        // Tab control: fill the header row with tab labels
+                        const items = (msg.items || '').split('\n');
+                        const header = el.querySelector('.tab-header-row');
+                        if (header) {
+                            header.innerHTML = '';
+                            items.forEach((it, idx) => {
+                                const t = div({class: 'win2k-tab', style: 'display:inline-block; padding:2px 10px; border:1px solid; border-color:var(--sys-hilight) var(--sys-shadow) var(--sys-shadow) var(--sys-hilight); font-size:11px; margin-right:2px; cursor:default; background:var(--sys-face);', onclick: (e) => {
+                                    e.stopPropagation();
+                                    sendCommand(msg.id);
+                                    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
+                                }}, it);
+                                header.appendChild(t);
+                            });
+                        }
+                    } else if (el && el.tagName === 'SELECT') {
+                        // ComboBox: fill options
+                        const items = (msg.items || '').split('\n');
+                        el.innerHTML = '';
+                        items.forEach((it, idx) => {
+                            const o = document.createElement('option');
+                            o.value = String(idx);
+                            o.textContent = it;
+                            el.appendChild(o);
+                        });
+                        el.onchange = (e) => {
+                            sendCommand(msg.id);
+                            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: parseInt(el.value, 10) || 0}));
+                        };
+                    }
+
+                } else if (msg.type === "set_control_checked") {
+                    // Checkbox/radio checked state pushed from the backend.
+                    const el = Array.from(document.querySelectorAll('[data-id]')).find(e => e.dataset.id == msg.id);
+                    if (el && (el.type === 'checkbox' || el.type === 'radio')) {
+                        el.checked = !!msg.checked;
+                    }
+
+                } else if (msg.type === "update_control_value" || msg.type === "update_control_range") {
+                    // Progress-bar state: value (position) + range (min/max) per
+                    // control id; fill width = (value - min) / (max - min).
+                    const st = (controlRanges[msg.id] = controlRanges[msg.id] || {value: 0, min: 0, max: 100});
+                    if (msg.type === "update_control_value") st.value = msg.value;
+                    if (msg.type === "update_control_range") { st.min = msg.min; st.max = msg.max; }
+                    const el = Array.from(document.querySelectorAll('[data-id]')).find(e => e.dataset.id == msg.id);
+                    if (el) {
+                        const fill = el.querySelector('.win2k-progress-fill');
+                        if (fill) {
+                            const span = (st.max - st.min) > 0 ? (st.max - st.min) : 1;
+                            const pct = Math.max(0, Math.min(100, (st.value - st.min) * 100 / span));
+                            fill.style.width = pct + '%';
+                        }
+                        const rangeEl = el.querySelector('input[type=range]');
+                        if (rangeEl) {
+                            rangeEl.value = st.value;
+                            const valEl = el.querySelector('.win2k-trackbar-val');
+                            if (valEl) valEl.textContent = String(st.value);
+                        }
+                        const spinEl = el.querySelector('.win2k-updown-val');
+                        if (spinEl) spinEl.textContent = String(st.value);
                     }
 
                 } else if (msg.type === "open_file_dialog") {
@@ -1161,6 +1350,89 @@ function connect() {
                         selectListItem(styleListEl, styles[getStyleIdx()]);
                         selectListItem(sizeListEl, String(selSize));
                     }, 50);
+
+                } else if (msg.type === "show_print_dialog") {
+                    // --- Print Dialog ---
+                    let fromPage = msg.from || 1;
+                    let toPage = msg.to || 1;
+                    let copies = msg.copies || 1;
+                    const minPage = msg.min || 1;
+                    const maxPage = msg.max || 100;
+
+                    const fromInput = input({type: 'text', class: 'win2k-edit', value: String(fromPage), style: 'width:50px; height:21px;'});
+                    const toInput = input({type: 'text', class: 'win2k-edit', value: String(toPage), style: 'width:50px; height:21px;'});
+                    const copiesInput = input({type: 'text', class: 'win2k-edit', value: String(copies), style: 'width:50px; height:21px;'});
+
+                    function clampInt(v, lo, hi) {
+                        const n = parseInt(v);
+                        if (isNaN(n)) return lo;
+                        return Math.max(lo, Math.min(n, hi));
+                    }
+                    fromInput.addEventListener('change', () => { fromPage = clampInt(fromInput.value, minPage, maxPage); fromInput.value = String(fromPage); });
+                    toInput.addEventListener('change', () => { toPage = clampInt(toInput.value, minPage, maxPage); toInput.value = String(toPage); });
+                    copiesInput.addEventListener('change', () => { copies = clampInt(copiesInput.value, 1, 999); copiesInput.value = String(copies); });
+
+                    showDialog('Print',
+                        div({class: 'fontdlg-body'},
+                            div({class: 'fontdlg-col-row', style: 'align-items:flex-end; gap:10px; padding:8px 0;'},
+                                div({class: 'fontdlg-col'}, label('From:'), fromInput),
+                                div({class: 'fontdlg-col'}, label('To:'), toInput),
+                                div({class: 'fontdlg-col'}, label('Copies:'), copiesInput)),
+                            div({style: 'display:flex; justify-content:flex-end; gap:8px; margin-top:10px;'},
+                                button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => {
+                                    if (ws && ws.readyState === WebSocket.OPEN) {
+                                        ws.send(JSON.stringify({ type: 'print_chosen', from: fromPage, to: toPage, copies: copies }));
+                                    }
+                                }}, 'Print'),
+                                button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => closeDialog()}, 'Cancel')))
+                    );
+                    dialogOverlay.style.width = '360px';
+
+                } else if (msg.type === "show_page_setup_dialog") {
+                    // --- Page Setup Dialog ---
+                    let left = msg.left || 1000;
+                    let top = msg.top || 1000;
+                    let right = msg.right || 1000;
+                    let bottom = msg.bottom || 1000;
+                    let paperW = msg.paperW || 8500;
+                    let paperH = msg.paperH || 11000;
+                    let orientation = msg.orientation || 0;
+                    const units = msg.units || '0.001 in';
+
+                    const leftEl = input({type: 'text', class: 'win2k-edit', value: String(left), style: 'width:70px; height:21px;'});
+                    leftEl.addEventListener('change', () => { const n = parseInt(leftEl.value); if (!isNaN(n) && n >= 0) { left = n; } leftEl.value = String(left); });
+                    const topEl = input({type: 'text', class: 'win2k-edit', value: String(top), style: 'width:70px; height:21px;'});
+                    topEl.addEventListener('change', () => { const n = parseInt(topEl.value); if (!isNaN(n) && n >= 0) { top = n; } topEl.value = String(top); });
+                    const rightEl = input({type: 'text', class: 'win2k-edit', value: String(right), style: 'width:70px; height:21px;'});
+                    rightEl.addEventListener('change', () => { const n = parseInt(rightEl.value); if (!isNaN(n) && n >= 0) { right = n; } rightEl.value = String(right); });
+                    const bottomEl = input({type: 'text', class: 'win2k-edit', value: String(bottom), style: 'width:70px; height:21px;'});
+                    bottomEl.addEventListener('change', () => { const n = parseInt(bottomEl.value); if (!isNaN(n) && n >= 0) { bottom = n; } bottomEl.value = String(bottom); });
+
+                    const landscapeChk = input({type: 'checkbox', id: 'ps-landscape', style: 'margin-right:4px;',
+                        onchange: (e) => { orientation = e.target.checked ? 1 : 0; }});
+
+                    showDialog('Page Setup',
+                        div({class: 'fontdlg-body'},
+                            div({style: 'font-size:11px; margin-bottom:6px;'}, 'Margins (' + units + '):'),
+                            div({class: 'fontdlg-col-row', style: 'align-items:flex-end; gap:10px; margin-bottom:10px;'},
+                                div({class: 'fontdlg-col'}, label('Left:'), leftEl),
+                                div({class: 'fontdlg-col'}, label('Top:'), topEl),
+                                div({class: 'fontdlg-col'}, label('Right:'), rightEl),
+                                div({class: 'fontdlg-col'}, label('Bottom:'), bottomEl)),
+                            div({style: 'font-size:11px; margin-bottom:6px;'}, 'Orientation:'),
+                            div({style: 'display:flex; align-items:center; gap:6px; margin-bottom:10px;'},
+                                landscapeChk, label('Landscape')),
+                            div({style: 'display:flex; justify-content:flex-end; gap:8px;'},
+                                button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => {
+                                    if (ws && ws.readyState === WebSocket.OPEN) {
+                                        ws.send(JSON.stringify({ type: 'page_setup_chosen',
+                                            left: left, top: top, right: right, bottom: bottom,
+                                            paperW: paperW, paperH: paperH, orientation: orientation }));
+                                    }
+                                }}, 'OK'),
+                                button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => closeDialog()}, 'Cancel')))
+                    );
+                    dialogOverlay.style.width = '420px';
 
                 } else if (msg.type === "open_find_dialog") {
                     // --- Find/Replace Dialog (modeless) ---
@@ -1649,6 +1921,17 @@ canvas.addEventListener('mousemove', (e) => {
 });
 
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+canvas.addEventListener('wheel', (e) => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        // Normalize the delta to Win32 wheel units (120 per notch).
+        let delta = 0;
+        if (e.deltaY !== 0) delta = e.deltaY > 0 ? -120 : 120;
+        else if (e.deltaX !== 0) delta = e.deltaX > 0 ? 120 : -120;
+        ws.send(JSON.stringify({ type: 'wheel', delta }));
+    }
+    e.preventDefault();
+});
 
 // --- Touch Input (mapped to mouse events for mobile support) ---
 function getTouchCanvasCoords(touch) {

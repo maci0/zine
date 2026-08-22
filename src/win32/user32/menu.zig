@@ -1,3 +1,4 @@
+const std = @import("std");
 const trace = @import("../../trace.zig");
 const user32 = @import("../user32.zig");
 const w32cc = @import("../calling_convention.zig");
@@ -33,22 +34,193 @@ pub fn stub_GetSubMenu(hMenu: usize, nPos: i32) callconv(w32cc.WINAPI) usize {
 }
 
 pub fn stub_TrackPopupMenu(hMenu: usize, uFlags: u32, x: i32, y: i32, nReserved: i32, hWnd: usize, prcRect: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hMenu;
-    _ = uFlags;
-    _ = x;
-    _ = y;
-    _ = nReserved;
-    _ = hWnd;
-    _ = prcRect;
-    return 0;
+    return TrackPopupMenu(hMenu, uFlags, x, y, nReserved, hWnd, prcRect);
+}
+
+// --- Popup menu content tracking (CreatePopupMenu + AppendMenu* -> TrackPopupMenu) ---
+const PopupItem = struct {
+    id: i32,
+    text: [256]u8,
+    len: u16,
+    flags: u32, // MF_* flags (CHECKED/GRAYED/DISABLED/SEPARATOR)
+};
+const PopupMenu = struct {
+    hMenu: usize,
+    items: [48]PopupItem,
+    count: usize,
+};
+var popup_menus: [16]PopupMenu = undefined;
+var popup_menu_count: usize = 0;
+
+fn findPopupMenu(hMenu: usize) ?*PopupMenu {
+    var i: usize = popup_menu_count;
+    while (i > 0) {
+        i -= 1;
+        const pm = &popup_menus[i];
+        if (pm.hMenu == hMenu) return pm;
+    }
+    return null;
+}
+
+fn getOrCreatePopupMenu(hMenu: usize) *PopupMenu {
+    if (findPopupMenu(hMenu)) |pm| return pm;
+    if (popup_menu_count < popup_menus.len) {
+        const pm = &popup_menus[popup_menu_count];
+        popup_menu_count += 1;
+        pm.* = .{ .hMenu = hMenu, .items = undefined, .count = 0 };
+        return pm;
+    }
+    return &popup_menus[popup_menu_count - 1];
+}
+
+fn addPopupItem(hMenu: usize, id: i32, text: []const u8, flags: u32) void {
+    const pm = getOrCreatePopupMenu(hMenu);
+    if (pm.count >= pm.items.len) return;
+    const it = &pm.items[pm.count];
+    pm.count += 1;
+    it.* = .{ .id = id, .text = undefined, .len = 0, .flags = flags };
+    const n = @min(text.len, it.text.len);
+    @memcpy(it.text[0..n], text[0..n]);
+    it.len = @intCast(n);
 }
 
 pub fn stub_AppendMenuA(hMenu: usize, uFlags: u32, uIDNewItem: usize, lpNewItem: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hMenu;
-    _ = uFlags;
-    _ = uIDNewItem;
-    _ = lpNewItem;
+    const MF_SEPARATOR: u32 = 0x0800;
+    const MF_CHECKED: u32 = 0x0008;
+    const MF_GRAYED: u32 = 0x0001;
+    const MF_DISABLED: u32 = 0x0002;
+    if (trace.enable_tracing) trace.print("USER32: AppendMenuA(menu={X}, id={d}, flags={x})\n", .{ hMenu, uIDNewItem, uFlags });
+    if ((uFlags & MF_SEPARATOR) != 0) {
+        addPopupItem(hMenu, -1, "", uFlags);
+    } else if (lpNewItem != 0) {
+        addPopupItem(hMenu, @intCast(uIDNewItem & 0xFFFF), trace.c_span(lpNewItem), uFlags);
+        // Mirror CHECKED/GRAYED/DISABLED into the item-state table so
+        // GetMenuState reports them (like real Win32 menu construction).
+        const key = menuItemKey(hMenu, @as(u32, @intCast(uIDNewItem & 0xFFFF)));
+        const slot = findOrAllocMenuSlot(key);
+        slot.flags = (slot.flags & ~(MF_CHECKED | MF_GRAYED | MF_DISABLED)) | (uFlags & (MF_CHECKED | MF_GRAYED | MF_DISABLED));
+    }
     return 1;
+}
+
+pub fn AppendMenuW(hMenu: usize, uFlags: u32, uIDNewItem: usize, lpNewItem: usize) callconv(w32cc.WINAPI) i32 {
+    const MF_SEPARATOR: u32 = 0x0800;
+    const MF_CHECKED: u32 = 0x0008;
+    const MF_GRAYED: u32 = 0x0001;
+    const MF_DISABLED: u32 = 0x0002;
+    if ((uFlags & MF_SEPARATOR) != 0) {
+        addPopupItem(hMenu, -1, "", uFlags);
+    } else if (lpNewItem != 0) {
+        const w = trace.c_span_w(lpNewItem);
+        var buf: [256]u8 = undefined;
+        const n = std.unicode.utf16LeToUtf8(&buf, w) catch 0;
+        addPopupItem(hMenu, @intCast(uIDNewItem & 0xFFFF), buf[0..n], uFlags);
+        const key = menuItemKey(hMenu, @as(u32, @intCast(uIDNewItem & 0xFFFF)));
+        const slot = findOrAllocMenuSlot(key);
+        slot.flags = (slot.flags & ~(MF_CHECKED | MF_GRAYED | MF_DISABLED)) | (uFlags & (MF_CHECKED | MF_GRAYED | MF_DISABLED));
+    }
+    return 1;
+}
+
+/// TrackPopupMenu: show the popup menu in the web/FLTK UI and block modally
+/// until the user picks an item (context_menu_select) or dismisses it.
+pub fn TrackPopupMenu(hMenu: usize, uFlags: u32, x: i32, y: i32, nReserved: i32, hWnd: usize, prcRect: usize) callconv(w32cc.WINAPI) i32 {
+    _ = uFlags;
+    _ = nReserved;
+    _ = hWnd;
+    _ = prcRect;
+    const renderer = @import("../../gui/renderer.zig");
+    const platform = @import("../../platform.zig");
+    if (!platform.is_native or renderer.active_backend == .none) return 0; // no UI to show — don't block
+
+    const pm = findPopupMenu(hMenu) orelse return 0;
+
+    // Items JSON for the frontend: [{"id":N,"text":"...","separator":..,"disabled":..,"checked":..}]
+    var items_buf: [4096]u8 = undefined;
+    var items_len: usize = 0;
+    items_len = 1;
+    items_buf[0] = '[';
+    const MF_SEPARATOR: u32 = 0x0800;
+    const MF_CHECKED: u32 = 0x0008;
+    const MF_GRAYED: u32 = 0x0001;
+    const MF_DISABLED: u32 = 0x0002;
+    for (pm.items[0..pm.count], 0..) |it, idx| {
+        var item_json: [512]u8 = undefined;
+        var item_len: usize = 0;
+        if ((it.flags & MF_SEPARATOR) != 0) {
+            item_json[0] = '{'; item_json[1] = '"'; item_json[2] = 'i'; item_json[3] = 'd'; item_json[4] = '"'; item_json[5] = ':'; item_json[6] = '0'; item_json[7] = ','; item_json[8] = '"'; item_json[9] = 't'; item_json[10] = 'e'; item_json[11] = 'x'; item_json[12] = 't'; item_json[13] = '"'; item_json[14] = ':'; item_json[15] = '"'; item_json[16] = '"'; item_json[17] = ','; item_json[18] = '"'; item_json[19] = 's'; item_json[20] = 'e'; item_json[21] = 'p'; item_json[22] = 'a'; item_json[23] = 'r'; item_json[24] = 'a'; item_json[25] = 't'; item_json[26] = 'o'; item_json[27] = 'r'; item_json[28] = '"'; item_json[29] = ':'; item_json[30] = 't'; item_json[31] = 'r'; item_json[32] = 'u'; item_json[33] = 'e'; item_json[34] = '}';
+            item_len = 35;
+        } else {
+            const disabled = (it.flags & (MF_GRAYED | MF_DISABLED)) != 0;
+            const checked = (it.flags & MF_CHECKED) != 0;
+            const written = std.fmt.bufPrint(&item_json, "{{\"id\":{d},\"text\":\"", .{it.id}) catch return 0;
+            item_len = written.len;
+            // JSON-escape the item text
+            for (it.text[0..it.len]) |c| {
+                switch (c) {
+                    '"' => {
+                        if (item_len + 2 <= item_json.len) {
+                            item_json[item_len] = '\\'; item_json[item_len + 1] = '"';
+                            item_len += 2;
+                        }
+                    },
+                    '\\' => {
+                        if (item_len + 2 <= item_json.len) {
+                            item_json[item_len] = '\\'; item_json[item_len + 1] = '\\';
+                            item_len += 2;
+                        }
+                    },
+                    '\n' => {
+                        if (item_len + 2 <= item_json.len) {
+                            item_json[item_len] = '\\'; item_json[item_len + 1] = 'n';
+                            item_len += 2;
+                        }
+                    },
+                    '\r' => {},
+                    '\t' => {
+                        if (item_len + 2 <= item_json.len) {
+                            item_json[item_len] = '\\'; item_json[item_len + 1] = 't';
+                            item_len += 2;
+                        }
+                    },
+                    else => {
+                        if (item_len < item_json.len) {
+                            item_json[item_len] = c;
+                            item_len += 1;
+                        }
+                    },
+                }
+            }
+            const tail = std.fmt.bufPrint(item_json[item_len..], "\",\"disabled\":{s},\"checked\":{s}}}", .{ if (disabled) "true" else "false", if (checked) "true" else "false" }) catch return 0;
+            item_len += tail.len;
+        }
+        if (idx > 0) {
+            if (items_len < items_buf.len) {
+                items_buf[items_len] = ',';
+                items_len += 1;
+            }
+        }
+        if (items_len + item_len > items_buf.len) break;
+        @memcpy(items_buf[items_len .. items_len + item_len], item_json[0..item_len]);
+        items_len += item_len;
+    }
+    if (items_len < items_buf.len) {
+        items_buf[items_len] = ']';
+        items_len += 1;
+    }
+
+    if (trace.enable_tracing) trace.print("USER32: TrackPopupMenu({x}) -> show_context_menu({d},{d})\n", .{ hMenu, x, y });
+
+    renderer.showContextMenu(x, y, items_buf[0..items_len]);
+
+    // Block until the frontend reports a selection (context_menu_select).
+    renderer.context_menu_chosen = false;
+    renderer.context_menu_result = 0;
+    while (!renderer.context_menu_chosen) {
+        platform.sleep(10 * std.time.ns_per_ms);
+    }
+    if (trace.enable_tracing) trace.print("USER32: TrackPopupMenu -> {d}\n", .{renderer.context_menu_result});
+    return @intCast(renderer.context_menu_result);
 }
 
 // Menu item state tracking: key = (hMenu << 16) | uId, value = MF_* flags
@@ -155,6 +327,7 @@ pub fn stub_GetMenuItemCount(hMenu: usize) callconv(w32cc.WINAPI) i32 {
 pub fn GetMenuState(hMenu: usize, uId: u32, uFlags: u32) callconv(w32cc.WINAPI) u32 {
     _ = uFlags;
     const key = menuItemKey(hMenu, uId);
+    if (trace.enable_tracing) trace.print("USER32: GetMenuState(menu={X}, id={d})\n", .{ hMenu, uId });
     for (&menu_item_states) |*s| {
         if (s.used and s.key == key) return s.flags;
     }

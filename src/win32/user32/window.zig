@@ -188,7 +188,7 @@ fn ansiClassEql(class_ptr: usize, target: []const u8) bool {
 fn createWindowExInternal(
     dwExStyle: u32, class_name: []const u8, window_name: []const u8, dwStyle: u32,
     x: i32, y: i32, nWidth: i32, nHeight: i32,
-    hWndParent: usize, hMenu: usize, is_child: bool, is_edit: bool,
+    hWndParent: usize, hMenu: usize, is_child: bool, is_edit: bool, is_rich_edit: bool,
 ) usize {
     if (!is_child) {
         const is_first_or_main = (user32.global_hwnd == 0) or !user32.main_form_created;
@@ -205,7 +205,10 @@ fn createWindowExInternal(
         if (trace.enable_tracing) trace.print("USER32: CreateWindowEx(style={x}, exstyle={x}, {d}x{d}, menu={x}) -> client {d}x{d}\n", .{ dwStyle, dwExStyle, nWidth, nHeight, hMenu, user32.current_client_width, user32.current_client_height });
 
         if (is_first_or_main) {
-            if (window_name.len > 0) renderer.setTitle(window_name);
+            if (window_name.len > 0) {
+                user32.setMainWindowTitle(window_name);
+                renderer.setTitle(window_name);
+            }
             if (user32.window_width > 0 and user32.window_height > 0) {
                 renderer.setWindowPos(user32.window_width, user32.window_height, user32.current_client_width, user32.current_client_height);
             }
@@ -271,7 +274,7 @@ fn createWindowExInternal(
     const child_hwnd = next_child_hwnd;
     next_child_hwnd += 1;
 
-    if (trace.enable_tracing) trace.print("USER32: CreateWindowEx child(class={s}, style={x}, parent={x}, pos={d},{d},{d},{d}) -> {x}\n", .{ class_name, dwStyle, hWndParent, x, y, nWidth, nHeight, child_hwnd });
+    if (trace.enable_tracing) trace.print("USER32: CreateWindowEx child(class={s}, name='{s}', style={x}, parent={x}, pos={d},{d},{d},{d}) -> {x}\n", .{ class_name, window_name, dwStyle, hWndParent, x, y, nWidth, nHeight, child_hwnd });
 
     // Store window info so GetWindowLong works for child windows
     if (user32.getWindowInfo(child_hwnd)) |info| {
@@ -280,21 +283,63 @@ fn createWindowExInternal(
         info.parent = hWndParent;
     }
 
+    // Remember the control's initial text so GetWindowText / WM_GETTEXT read
+    // it back (the edit/rich-edit controls use their own buffer instead).
+    if (window_name.len > 0) {
+        user32.setHwndText(child_hwnd, window_name);
+    }
+
     if (is_edit) {
         // Multiline edit control → show native textarea in web UI
         const is_multiline = (dwStyle & w32.ES_MULTILINE) != 0;
         user32.edit_hwnd = child_hwnd;
         renderer.showEditControl(is_multiline);
+    } else if (is_rich_edit) {
+        // RichEdit 1.0/2.0 control — same text machinery as EDIT (it is a
+        // superset of the edit control) plus the EM_* rich messages.
+        const is_multiline = (dwStyle & w32.ES_MULTILINE) != 0;
+        user32.rich_edit_hwnd = child_hwnd;
+        renderer.showEditControl(is_multiline);
     } else if (class_name.len > 0 and class_name[0] != '?') {
-        // Check for common controls and render them
-        if (std.ascii.eqlIgnoreCase(class_name, "SysTabControl32") or
+        // Standard controls (BUTTON/STATIC) and common controls render as
+        // native widgets in the web UI / FLTK. For standard controls the
+        // command id reported back on click is the CONTROL ID (the hMenu
+        // argument of CreateWindowEx), matching real Win32 WM_COMMAND.
+        const is_std_control = std.ascii.eqlIgnoreCase(class_name, "Button") or
+            std.ascii.eqlIgnoreCase(class_name, "Static") or
+            std.ascii.eqlIgnoreCase(class_name, "ComboBox") or
+            std.ascii.eqlIgnoreCase(class_name, "ListBox") or
+            std.ascii.eqlIgnoreCase(class_name, "ScrollBar");
+        const is_common_control = std.ascii.eqlIgnoreCase(class_name, "SysTabControl32") or
             std.ascii.eqlIgnoreCase(class_name, "SysListView32") or
             std.ascii.eqlIgnoreCase(class_name, "msctls_statusbar32") or
             std.ascii.eqlIgnoreCase(class_name, "msctls_progress32") or
             std.ascii.eqlIgnoreCase(class_name, "SysTreeView32") or
-            std.ascii.eqlIgnoreCase(class_name, "SysHeader32"))
-        {
-            renderer.addControl(class_name, child_hwnd, x, y, nWidth, nHeight, dwStyle, window_name);
+            std.ascii.eqlIgnoreCase(class_name, "SysHeader32") or
+            std.ascii.eqlIgnoreCase(class_name, "msctls_trackbar32") or
+            std.ascii.eqlIgnoreCase(class_name, "msctls_updown32") or
+            std.ascii.eqlIgnoreCase(class_name, "SysDateTimePick32") or
+            std.ascii.eqlIgnoreCase(class_name, "SysMonthCal32") or
+            std.ascii.eqlIgnoreCase(class_name, "tooltips_class32") or
+            std.ascii.eqlIgnoreCase(class_name, "tooltips_class") or
+            std.ascii.eqlIgnoreCase(class_name, "SysAnimate32");
+        if (is_std_control or is_common_control) {
+            const control_id: usize = if (is_std_control and hMenu != 0) hMenu else child_hwnd;
+            // Store the control id so IsDialogMessage / GetDlgCtrlID can report
+            // the WM_COMMAND id for the default button / tab navigation.
+            if (user32.getWindowInfo(child_hwnd)) |info| {
+                info.id = @intCast(control_id);
+            }
+            renderer.addControl(class_name, control_id, x, y, nWidth, nHeight, dwStyle, window_name);
+            // Remember the class per-hwnd so SendMessage SB_*/PBM_* dispatch
+            // (which share WM_USER numbers) can tell status bars from progress bars.
+            const msg_mod = @import("message.zig");
+            msg_mod.setControlClass(child_hwnd, class_name);
+            // Ask the parent for the control's background color (WM_CTLCOLOR*)
+            // and apply it to the renderer if a brush was returned.
+            if (is_std_control) {
+                _ = msg_mod.applyCtlColor(child_hwnd, class_name);
+            }
         }
     }
 
@@ -326,10 +371,13 @@ pub fn CreateWindowExA(
 
     const is_child = (dwStyle & w32.WS_CHILD) != 0;
     const is_edit = ansiClassEql(lpClassName, "Edit");
+    const is_rich_edit = ansiClassEql(lpClassName, "RichEdit20A") or
+        ansiClassEql(lpClassName, "RICHEDIT") or
+        ansiClassEql(lpClassName, "RichEdit");
     const class_name = if (lpClassName > 0xFFFF) trace.c_span(lpClassName) else "?";
     const window_name = if (lpWindowName > 0xFFFF) trace.c_span(lpWindowName) else "";
 
-    return createWindowExInternal(dwExStyle, class_name, window_name, dwStyle, x, y, nWidth, nHeight, hWndParent, hMenu, is_child, is_edit);
+    return createWindowExInternal(dwExStyle, class_name, window_name, dwStyle, x, y, nWidth, nHeight, hWndParent, hMenu, is_child, is_edit, is_rich_edit);
 }
 
 pub fn CreateWindowExW(
@@ -342,10 +390,13 @@ pub fn CreateWindowExW(
 
     const is_child = (dwStyle & w32.WS_CHILD) != 0;
     const is_edit = wideClassEql(lpClassName, "Edit");
+    const is_rich_edit = wideClassEql(lpClassName, "RichEdit20A") or
+        wideClassEql(lpClassName, "RICHEDIT") or
+        wideClassEql(lpClassName, "RichEdit");
     const class_name = if (lpClassName > 0xFFFF) wideToUtf8(lpClassName) else "?";
     const window_name = if (lpWindowName > 0xFFFF) wideToUtf8(lpWindowName) else "";
 
-    return createWindowExInternal(dwExStyle, class_name, window_name, dwStyle, x, y, nWidth, nHeight, hWndParent, hMenu, is_child, is_edit);
+    return createWindowExInternal(dwExStyle, class_name, window_name, dwStyle, x, y, nWidth, nHeight, hWndParent, hMenu, is_child, is_edit, is_rich_edit);
 }
 
 fn fillFramebufWhite() void {
@@ -363,11 +414,24 @@ fn fillFramebufWhite() void {
 }
 
 pub fn stub_SetWindowTextA(hWnd: usize, lpString: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hWnd;
     if (lpString != 0) {
         const title = trace.c_span(lpString);
+        // EDIT/RichEdit control: WM_SETTEXT semantics — replace the text buffer.
+        if (hWnd == user32.edit_hwnd or hWnd == user32.rich_edit_hwnd) {
+            renderer.setEditTextFromSlice(title);
+            renderer.setEditText(title);
+            return 1;
+        }
         if (trace.enable_tracing) trace.print("USER32: SetWindowTextA('{s}')\n", .{title});
-        renderer.setTitle(title);
+        // Cache the title so GetWindowText on the main window reads it back.
+        if (hWnd == user32.global_hwnd or hWnd == 0) {
+            user32.setMainWindowTitle(title);
+            renderer.setTitle(title);
+        } else {
+            // Other child controls: store per-hwnd text (control-ization).
+            user32.setHwndText(hWnd, title);
+            renderer.updateControlText(@intCast(hWnd), title);
+        }
     }
 
     return 1;
@@ -425,12 +489,10 @@ pub fn stub_DefWindowProcA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) 
             var color: u32 = 0x00C0C0C0; // Default: button face gray (COLOR_BTNFACE)
             const hbr: u32 = user32.wndclass_bg_brush;
 
-            if (hbr != 0 and hbr <= 30) {
-                // System color brush (COLOR_xxx + 1)
+            if (hbr != 0 and hbr <= 21) {
+                // System color brush (COLOR_xxx + 1): hbr=N → index N-1.
                 color = switch (hbr) {
-                    1 => 0x00C0C0C0,  // COLOR_SCROLLBAR
-                    2 => 0x00C0C0C0,  // COLOR_BACKGROUND
-                    5 => 0x00FFFFFF,   // COLOR_WINDOW
+                    6 => 0x00FFFFFF, // COLOR_WINDOW
                     16 => 0x00C0C0C0, // COLOR_BTNFACE
                     else => 0x00C0C0C0,
                 };
@@ -454,6 +516,10 @@ pub fn stub_DefWindowProcA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) 
         0x000D => 0, // WM_GETTEXT: 0 chars copied
         0x000E => 0, // WM_GETTEXTLENGTH: 0 length
         0x0084 => 1, // WM_NCHITTEST: HTCLIENT
+        0x0010 => blk: { // WM_CLOSE: destroy the window (→ WM_DESTROY → PostQuitMessage)
+            _ = stub_DestroyWindow(hWnd);
+            break :blk 0;
+        },
         else => 0,
     };
 }
@@ -562,8 +628,8 @@ pub fn stub_SetWindowPos(hWnd: usize, hWndInsertAfter: usize, X: i32, Y: i32, cx
         const ch: u32 = @intCast(@as(u16, @truncate(@as(u32, @bitCast(user32.current_client_height)))));
         user32.postGenericMessage(w32.WM_SIZE, w32.SIZE_RESTORED, @as(isize, @intCast((ch << 16) | cw)));
     } else if (!is_main_window) {
-        // Child window — if it's the edit control, resize the edit control in the renderer
-        if (hWnd == user32.edit_hwnd and cx > 0 and cy > 0) {
+        // Child window — if it's the edit/rich-edit control, resize it in the renderer
+        if ((hWnd == user32.edit_hwnd or hWnd == user32.rich_edit_hwnd) and cx > 0 and cy > 0) {
             if (trace.enable_tracing) trace.print("  -> edit control resize to {d}x{d} at ({d},{d})\n", .{ cx, cy, X, Y });
             renderer.resizeEditControl(X, Y, cx, cy);
         }
@@ -637,13 +703,15 @@ pub fn stub_GetDesktopWindow() callconv(w32cc.WINAPI) usize {
 }
 
 pub fn stub_SetFocus(hWnd: usize) callconv(w32cc.WINAPI) usize {
-    _ = hWnd;
-    if (trace.enable_tracing) trace.print("USER32: SetFocus\n", .{});
-    return 0;
+    const prev = user32.focused_hwnd;
+    user32.focused_hwnd = hWnd;
+    if (trace.enable_tracing) trace.print("USER32: SetFocus({x}) prev={x}\n", .{ hWnd, prev });
+    return prev;
 }
 
 pub fn stub_GetFocus() callconv(w32cc.WINAPI) usize {
-    return user32.global_hwnd;
+    if (user32.focused_hwnd == 0) return user32.global_hwnd;
+    return user32.focused_hwnd;
 }
 
 pub fn stub_IsIconic(hWnd: usize) callconv(w32cc.WINAPI) i32 {
@@ -721,20 +789,33 @@ pub fn stub_FillRect(hDC: usize, lprc: usize, hbr: usize) callconv(w32cc.WINAPI)
         const rect = @as(*const w32.RECT, @ptrFromInt(lprc));
         var color: u32 = 0x00FFFFFF; // Default white
 
-        // hbr can be a real brush handle or a system color index + 1
-        if (hbr <= 30) {
-            // System color brush (COLOR_xxx + 1)
+        // hbr can be a real brush handle or a system color index + 1.
+        // System brush handles are (COLOR_xxx + 1), so hbr=N means system
+        // color index N-1. The previous mapping was off by one: hbr=6 was
+        // COLOR_WINDOWFRAME (black) but (COLOR_WINDOW+1) must be white.
+        if (hbr >= 1 and hbr <= 21) {
             color = switch (hbr) {
-                1 => 0x00C0C0C0,  // COLOR_SCROLLBAR (silver)
-                2 => 0x00C0C0C0,  // COLOR_BACKGROUND (silver)
-                4 => 0x00808080,  // COLOR_MENU
-                5 => 0x00FFFFFF,  // COLOR_WINDOW
-                6 => 0x00000000,  // COLOR_WINDOWFRAME
-                7 => 0x00000000,  // COLOR_MENUTEXT
-                8 => 0x00000000,  // COLOR_WINDOWTEXT
-                9 => 0x00FFFFFF,  // COLOR_CAPTIONTEXT
+                1 => 0x00C0C0C0, // COLOR_SCROLLBAR (silver)
+                2 => 0x00C0C0C0, // COLOR_BACKGROUND (silver)
+                3 => 0x00800000, // COLOR_ACTIVECAPTION (dark blue)
+                4 => 0x00808080, // COLOR_INACTIVECAPTION
+                5 => 0x00C0C0C0, // COLOR_MENU
+                6 => 0x00FFFFFF, // COLOR_WINDOW (white)
+                7 => 0x00000000, // COLOR_WINDOWFRAME (black)
+                8 => 0x00000000, // COLOR_MENUTEXT
+                9 => 0x00000000, // COLOR_WINDOWTEXT
+                10 => 0x00FFFFFF, // COLOR_CAPTIONTEXT
+                11 => 0x00C0C0C0, // COLOR_ACTIVEBORDER
+                12 => 0x00C0C0C0, // COLOR_INACTIVEBORDER
+                13 => 0x00808080, // COLOR_APPWORKSPACE
+                14 => 0x006A240A, // COLOR_HIGHLIGHT (Win2K selection blue)
+                15 => 0x00FFFFFF, // COLOR_HIGHLIGHTTEXT
                 16 => 0x00C0C0C0, // COLOR_BTNFACE
-                else => 0x00C0C0C0,
+                17 => 0x00808080, // COLOR_BTNSHADOW
+                18 => 0x00808080, // COLOR_GRAYTEXT
+                19 => 0x00000000, // COLOR_BTNTEXT
+                20 => 0x00C0C0C0, // COLOR_INACTIVECAPTIONTEXT
+                else => 0x00FFFFFF, // COLOR_BTNHIGHLIGHT
             };
         } else if (gdi32.findObject(hbr)) |obj| {
             if (obj.obj_type == .Brush) color = obj.data.brush.color;
@@ -768,6 +849,14 @@ pub fn stub_ReleaseDC(hWnd: usize, hDC: usize) callconv(w32cc.WINAPI) i32 {
 
 pub fn stub_BeginPaint(hWnd: usize, lpPaint: usize) callconv(w32cc.WINAPI) usize {
     const hdc: usize = 0xDC123;
+
+    // Register the window DC so SelectObject/drawing functions can resolve
+    // its selected pen/brush/font. GetDC does this; BeginPaint must too —
+    // without it every drawing call silently fell back to default colors.
+    if (!window_dc_registered) {
+        gdi32.registerDc(0xDC123);
+        window_dc_registered = true;
+    }
 
     // Fill the PAINTSTRUCT so Delphi knows the paint area
     if (lpPaint != 0) {
@@ -1044,7 +1133,14 @@ pub fn stub_GetClipboardData(uFormat: u32) callconv(w32cc.WINAPI) usize {
 }
 
 pub fn stub_SetClipboardData(uFormat: u32, hMem: usize) callconv(w32cc.WINAPI) usize {
-    _ = uFormat;
+    const CF_TEXT: u32 = 1;
+    if (uFormat == CF_TEXT and hMem != 0 and hMem > 0xFFFF) {
+        // Read the text out of the guest memory handle and push it to the
+        // renderer so the web UI / FLTK clipboard actually receives it.
+        const text = trace.c_span(hMem);
+        renderer.setClipboard(text);
+        if (trace.enable_tracing) trace.print("USER32: SetClipboardData(CF_TEXT, '{s}')\n", .{text});
+    }
     return hMem;
 }
 
@@ -1276,7 +1372,43 @@ pub fn stub_FindWindowA(lpClassName: usize, lpWindowName: usize) callconv(w32cc.
 }
 
 pub fn stub_GetWindowTextA(hWnd: usize, lpString: usize, nMaxCount: i32) callconv(w32cc.WINAPI) i32 {
-    _ = hWnd;
+    // EDIT/RichEdit control: return the shared edit buffer content (synced from
+    // the frontend textarea and WM_CHAR inserts).
+    if (hWnd == user32.edit_hwnd or hWnd == user32.rich_edit_hwnd) {
+        const text = renderer.editTextSlice();
+        if (lpString != 0 and nMaxCount > 0) {
+            const dst: [*]u8 = @ptrFromInt(trace.addr(lpString));
+            const n = @min(text.len, @as(usize, @intCast(nMaxCount)) - 1);
+            @memcpy(dst[0..n], text[0..n]);
+            dst[n] = 0;
+            return @intCast(n);
+        }
+        return 0;
+    }
+    // Main window: return the cached title (set via CreateWindowEx/SetWindowText).
+    if (hWnd == user32.global_hwnd or hWnd == 0) {
+        if (lpString != 0 and nMaxCount > 0) {
+            const dst: [*]u8 = @ptrFromInt(trace.addr(lpString));
+            const n = @min(user32.main_window_title_len, @as(usize, @intCast(nMaxCount)) - 1);
+            @memcpy(dst[0..n], user32.main_window_title[0..n]);
+            dst[n] = 0;
+            return @intCast(n);
+        }
+        return @intCast(user32.main_window_title_len);
+    }
+    // Other controls (control-ization): dialog children, ListBox/ComboBox
+    // selection text, and per-hwnd texts set via SetWindowTextA.
+    {
+        const msg_mod = @import("message.zig");
+        const text = msg_mod.getControlText(hWnd);
+        if (text.len > 0 and lpString != 0 and nMaxCount > 0) {
+            const dst: [*]u8 = @ptrFromInt(trace.addr(lpString));
+            const n = @min(text.len, @as(usize, @intCast(nMaxCount)) - 1);
+            @memcpy(dst[0..n], text[0..n]);
+            dst[n] = 0;
+            return @intCast(n);
+        }
+    }
     if (lpString != 0 and nMaxCount > 0) {
         @as([*]u8, @ptrFromInt(lpString))[0] = 0;
     }
@@ -1284,7 +1416,12 @@ pub fn stub_GetWindowTextA(hWnd: usize, lpString: usize, nMaxCount: i32) callcon
 }
 
 pub fn stub_GetWindowTextLengthA(hWnd: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hWnd;
+    if (hWnd == user32.edit_hwnd) {
+        return @intCast(renderer.editTextLen());
+    }
+    if (hWnd == user32.global_hwnd or hWnd == 0) {
+        return @intCast(user32.main_window_title_len);
+    }
     return 0;
 }
 

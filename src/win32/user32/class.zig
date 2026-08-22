@@ -43,10 +43,33 @@ pub fn RegisterClassExW(lpwcx: usize) callconv(w32cc.WINAPI) u16 {
 
 var next_registered_msg: u32 = 0xC000;
 
+/// Registered window message names → ids. Win32 guarantees identical strings
+/// map to a single id within a session (e.g. FINDMSGSTRING registered by both
+/// the app and the comdlg stub must match), so dedup by name.
+const RegMsg = struct { name: [64]u8, len: u8, id: u32 };
+var reg_msgs: [64]RegMsg = undefined;
+var reg_msg_count: usize = 0;
+
 pub fn RegisterWindowMessageA(lpString: usize) callconv(w32cc.WINAPI) u32 {
-    if (trace.enable_tracing) {
-        const name = if (lpString != 0) trace.c_span(lpString) else "(null)";
-        trace.print("USER32: RegisterWindowMessageA('{s}') -> 0x{X}\n", .{ name, next_registered_msg });
+    if (lpString != 0 and lpString > 0xFFFF) {
+        const name = trace.c_span(lpString);
+        for (reg_msgs[0..reg_msg_count]) |*e| {
+            if (e.len == name.len and std.mem.eql(u8, e.name[0..e.len], name)) {
+                if (trace.enable_tracing) trace.print("USER32: RegisterWindowMessageA('{s}') -> 0x{X} (cached)\n", .{ name, e.id });
+                return e.id;
+            }
+        }
+        if (reg_msg_count < reg_msgs.len) {
+            const e = &reg_msgs[reg_msg_count];
+            reg_msg_count += 1;
+            const n = @min(name.len, e.name.len);
+            @memcpy(e.name[0..n], name[0..n]);
+            e.len = @intCast(n);
+            e.id = next_registered_msg;
+            next_registered_msg += 1;
+            if (trace.enable_tracing) trace.print("USER32: RegisterWindowMessageA('{s}') -> 0x{X}\n", .{ name, e.id });
+            return e.id;
+        }
     }
     const id = next_registered_msg;
     next_registered_msg += 1;

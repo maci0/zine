@@ -124,6 +124,25 @@ pub fn raw_alloc(size: usize) ?*anyopaque {
     return @ptrCast(ptr + 8);
 }
 
+/// Convert a HOST pointer (as returned by raw_alloc on WASM) into the guest
+/// virtual address that x86 guest code should receive. This is the inverse of
+/// trace.addr(). On native, guest addresses ARE host addresses, so this is
+/// the identity function.
+///
+/// Use it for stubs whose return type is `usize`: the thunk layer only
+/// reverse-translates TYPED pointer returns, so a `usize`-returning stub must
+/// hand back a guest VA itself or the guest dereferences a host address.
+pub fn hostToGuest(host_addr: usize) usize {
+    if (guest_memory) |gmem| {
+        const base_ptr = @intFromPtr(gmem.base.ptr);
+        const base_end = base_ptr + gmem.base.len;
+        if (host_addr >= base_ptr and host_addr < base_end) {
+            return gmem.base_addr +% @as(u32, @intCast(host_addr - base_ptr));
+        }
+    }
+    return host_addr;
+}
+
 /// Reallocates memory from the shared guest heap.
 ///
 /// If `old_ptr` is null, this is equivalent to `raw_alloc`.

@@ -28,6 +28,7 @@ const stub_common = @import("win32/shared.zig");
 const runner = @import("runner.zig");
 const stubs_msvcrt = @import("win32/msvcrt.zig");
 const stubs_kernel32 = @import("win32/kernel32.zig");
+const x86_decoder = @import("x86/decoder.zig");
 
 // Re-export platform to ensure WASM imports are declared
 comptime {
@@ -62,6 +63,7 @@ pub fn main(init: std.process.Init) !void {
     var argv0_opt: ?[]const u8 = null;
     var app_args: std.ArrayListUnmanaged(?[*:0]u8) = .empty;
     var use_jit = false;
+    var jit_max_eip: u32 = 0xFFFFFFFF;
     var end_of_options = false;
 
     log.initFromEnv();
@@ -106,6 +108,11 @@ pub fn main(init: std.process.Init) !void {
             use_jit = true;
             continue;
         }
+        if (!end_of_options and std.mem.startsWith(u8, arg, "--jit-max-eip=")) {
+            const val = arg["--jit-max-eip=".len..];
+            jit_max_eip = std.fmt.parseInt(u32, val, 0) catch 0xFFFFFFFF;
+            continue;
+        }
         if (!end_of_options and std.mem.eql(u8, arg, "--profile")) {
             profiler.enabled = true;
             continue;
@@ -119,6 +126,7 @@ pub fn main(init: std.process.Init) !void {
                 \\Options:
                 \\  -i, --interpret     Use x86 software interpreter (default on WASM)
                 \\      --jit           Use JIT compiler (x86-to-WASM translation)
+                \\      --jit-max-eip=<hex>  Only JIT blocks below this EIP (debugging)
                 \\      --argv0 <name>  Override argv[0] passed to the target
                 \\
                 \\  -t, --trace         Enable all tracing (API + instructions)
@@ -188,9 +196,14 @@ pub fn main(init: std.process.Init) !void {
             }
         } else {
             // Convert absolute POSIX paths to Win32 for guest PE arguments.
-            // Distinguish paths from MSVC-style options: /Fo/tmp/x.obj is an
-            // option (first component "Fo" is <=2 chars), /tmp/hello.c is a
-            // real path (first component "tmp" is >=3 chars).
+            // Distinguish paths from MSVC-style options:
+            //  - /Fo/tmp/x.obj, /I/usr/include → short-name option (first
+            //    component "Fo"/"I" is <=2 chars), passed through as-is;
+            //  - /tmp/hello.c → real path (first component "tmp" is >=3 chars);
+            //  - /LIBPATH:/x/y, /OUT:e2e.exe → option carrying a ':'-separated
+            //    value. Only the value is converted when it is a POSIX path,
+            //    so LINK's /LIBPATH:Z:\...\Lib resolves instead of being
+            //    mistaken for an input file named "Lib.obj".
             const is_posix_path = blk: {
                 if (arg.len <= 2 or arg[0] != '/') break :blk false;
                 const rest = arg[1..];
@@ -199,7 +212,30 @@ pub fn main(init: std.process.Init) !void {
                 // MSVC options like /Fo, /Fe, /I, /O1, /Ob, /Od, /Zi, etc.
                 break :blk next_slash >= 3;
             };
-            if (is_posix_path) {
+            // Index of the ':' in "/NAME:value" when the option name part
+            // contains it before any path slash (i.e. "/LIBPATH:/x/y").
+            const opt_value_colon = blk: {
+                if (arg.len <= 2 or arg[0] != '/') break :blk null;
+                const rest = arg[1..];
+                const colon = std.mem.indexOfScalar(u8, rest, ':') orelse break :blk null;
+                const next_slash = std.mem.indexOfScalar(u8, rest, '/') orelse rest.len;
+                break :blk if (colon < next_slash) colon + 1 else null;
+            };
+            if (opt_value_colon) |colon_idx| {
+                // Convert the value after ':' if it is an absolute POSIX path;
+                // otherwise pass the option through unchanged.
+                const value = arg[colon_idx + 1 ..];
+                if (value.len > 0 and value[0] == '/') {
+                    var win_buf: [1024]u8 = undefined;
+                    const win_len = try path_utils.posixToWin32(value, &win_buf);
+                    if (win_len > 0) {
+                        const joined = try std.fmt.allocPrint(allocator, "{s}{s}", .{ arg[0 .. colon_idx + 1], win_buf[0..win_len] });
+                        try app_args.append(allocator, try allocator.dupeZ(u8, joined));
+                        continue;
+                    }
+                }
+                try app_args.append(allocator, try allocator.dupeZ(u8, arg));
+            } else if (is_posix_path) {
                 var win_buf: [1024]u8 = undefined;
                 const win_len = try path_utils.posixToWin32(arg, &win_buf);
                 if (win_len > 0) {
@@ -234,9 +270,19 @@ pub fn main(init: std.process.Init) !void {
     // --- Load the main executable via the registry ---
     const exe_name = std.fs.path.basename(target_exe);
     const main_module = try environment.registry.loadModule(exe_name);
+    // Per-application registry overrides (app:<MODULE>: sections).
+    @import("win32/advapi32/registry.zig").setAppModule(exe_name);
     // On WASM, the module handle must be the GUEST base VA (not a host pointer)
     // so the x86 interpreter's address translation works correctly.
     stubs_kernel32.main_module_handle = main_module.parser.getNtHeaders().OptionalHeader.ImageBase;
+
+    // WASI builds have no browser/FLTK backend — GUI apps (WinMain / windows
+    // subsystem) run headless like native `--no-gui`. The renderer stays
+    // uninitialized (g_allocator undefined); renderer cache paths check
+    // g_allocator_ready, and setResolution's backend switch skips the
+    // .web_ui/.fltk branches when active_backend is .none.
+    const renderer = @import("gui/renderer.zig");
+    renderer.active_backend = .none;
 
     // Set main_exe_dir so GetModuleFileNameA can return the correct path.
     // Convert to Windows-style path with backslashes and drive letter.
@@ -271,7 +317,11 @@ pub fn main(init: std.process.Init) !void {
 
     const STACK_SIZE: u32 = 64 * 1024;
     const THUNK_RESERVE: u32 = 32 * 1024;
-    const HEAP_RESERVE: u32 = 32 * 1024 * 1024; // 32 MB guest heap
+    // MSVC c1.dll's CHeap requests multi-MB arenas (its default limit is
+    // ~50MB); a small guest heap made those VirtualAlloc calls fail and the
+    // compiler reported C1076/C1063 "heap space exhausted". The WASM module
+    // allows up to 2GB, so reserve plenty of room for the compiler heap.
+    const HEAP_RESERVE: u32 = 512 * 1024 * 1024; // 512 MB guest heap
     const combined_size = image_size + STACK_SIZE + THUNK_RESERVE + HEAP_RESERVE;
     const combined_buf = try allocator.alloc(u8, combined_size);
 
@@ -403,11 +453,28 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    // Set virtual CWD so file opens resolve correctly
-    // On WASI, realpath is not available, so we just use \".\" as the CWD.
+    // Set virtual CWD so file opens resolve correctly.
+    // On WASI, realpath is not available, so we default to \".\". If the host
+    // provides ZINE_CWD (absolute POSIX path of the working directory), use it
+    // as \"Z:\\...\" so toHostPath turns every relative path into an absolute
+    // one. That is required on runtimes whose \".\" preopen lacks write rights
+    // (e.g. wasmer), where cwd()-relative file creation fails with
+    // PermissionDenied but absolute-path creation via the \"/\" preopen works.
     {
         const kernel32_path = @import("win32/kernel32/path.zig");
-        const cwd_str = ".";
+        var cwd_buf: [1024]u8 = undefined;
+        var cwd_str: []const u8 = ".";
+        if (init.environ_map.get("ZINE_CWD")) |cwd| {
+            if (cwd.len > 0 and cwd[0] == '/' and cwd.len + 3 <= cwd_buf.len) {
+                @memcpy(cwd_buf[0..3], "Z:\\");
+                var j: usize = 3;
+                for (cwd[1..]) |c| {
+                    cwd_buf[j] = if (c == '/') '\\' else c;
+                    j += 1;
+                }
+                cwd_str = cwd_buf[0..j];
+            }
+        }
         @memcpy(kernel32_path.current_directory[0..cwd_str.len], cwd_str);
         kernel32_path.current_directory_len = cwd_str.len;
     }
@@ -517,6 +584,9 @@ pub fn main(init: std.process.Init) !void {
 
     // Point FS at the TEB for interpreter FS-relative accesses
     cpu.fs_base = @truncate(@intFromPtr(thread_env));
+    // Record the TEB base so host stubs (e.g. RaiseException's SEH walk) can
+    // read the guest's FS:[0] exception chain via guest memory.
+    teb.teb_base_addr = @intFromPtr(thread_env);
 
     log.info("wasm: starting x86 interpreter at EIP=0x{X}, ESP=0x{X}, FS_BASE=0x{X}", .{
         cpu.eip,
@@ -529,7 +599,7 @@ pub fn main(init: std.process.Init) !void {
     if (use_jit) {
         if (comptime build_options.enable_jit_host) {
             log.info("JIT mode: compiling and executing x86 blocks via host runtime", .{});
-            runWithJitHost(&cpu, allocator);
+            runWithJitHost(&cpu, allocator, jit_max_eip);
         } else {
             log.info("JIT mode: compiling x86 blocks to WASM (compile-only, no host)", .{});
             runner.runWithJit(&cpu, allocator);
@@ -663,7 +733,11 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     const child_image_size: u32 = @truncate(child_module.mapped_memory.len);
     const CHILD_STACK: u32 = 64 * 1024;
     const CHILD_THUNK: u32 = 32 * 1024;
-    const CHILD_HEAP: u32 = 16 * 1024 * 1024;
+    // LINK.EXE (spawned by CL.EXE) needs tens of MB for symbol tables and the
+    // output image; a 16MB child heap produced LNK1102 "out of memory". 128MB
+    // keeps the combined linear memory (main heap + child heap) within the
+    // 2GB module max.
+    const CHILD_HEAP: u32 = 128 * 1024 * 1024;
     const child_combined_size = child_image_size + CHILD_STACK + CHILD_THUNK + CHILD_HEAP;
 
     const pe_preferred: u32 = child_module.parser.getNtHeaders().OptionalHeader.ImageBase;
@@ -783,7 +857,7 @@ fn flushJitCache() callconv(.c) void {
 /// When enable_jit_host is true (build option), compiled WASM blocks are
 /// sent to the host runtime (browser/zine-host) for actual execution.
 /// CPU state is transferred via JitCpuState in shared linear memory.
-fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
+fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: u32) void {
     const host_wasm = @import("jit/host_wasm.zig");
     const jit_host = host_wasm.wasmJitHost();
 
@@ -803,6 +877,9 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
     // Use a fixed 4096-entry ring buffer to bound memory
     var block_ids_keys = [_]u32{0xFFFFFFFF} ** 4096;
     var block_ids_vals = [_]jit_host_mod.BlockId{0} ** 4096;
+    // Per-block execution counters (hot-block detection): how many times each
+    // cached block ran. Mirrors the ring buffer layout.
+    var block_counts = [_]u32{0} ** 4096;
 
     // Register SMC invalidation hook globally
     global_jit_ptr = &jit;
@@ -816,17 +893,52 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
 
     var blocks_compiled: u32 = 0;
     var blocks_executed: u32 = 0;
+    // Linear continuation: the EIP the interpreter would land on after a
+    // straight-line instruction (start + length). A branch/call/ret changes
+    // EIP to something else, marking that target as a basic-block entry.
     var expected_next_eip: u32 = 0;
 
     while (!cpu.halted) {
         const eip = cpu.eip;
 
         // Only attempt JIT at basic block entries (discontinuous EIP changes)
-        if (eip != expected_next_eip) {
+        if (eip != expected_next_eip and eip < jit_max_eip) {
             // Try to execute a cached JIT block
             const cache_idx = eip & 4095;
+            var block_id: ?jit_host_mod.BlockId = null;
             if (block_ids_keys[cache_idx] == eip) {
-                const block_id = block_ids_vals[cache_idx];
+                block_id = block_ids_vals[cache_idx];
+            } else if (!jit.isCached(eip)) {
+                // Compile a new block if we haven't seen this EIP
+                if (cpu.memory.readSlice(eip, 256)) |code| {
+                    const block_len = runner.scanBlock(code);
+                    if (block_len > 0) {
+                        jit.module.deinit();
+                        jit.module = @import("jit/emitter.zig").WasmModule.init(allocator);
+
+                        if (jit.compile(eip, code[0..block_len])) |wasm_bin| {
+                            // Send to host for compilation
+                            if (jit_host.compile(wasm_bin)) |new_block_id| {
+                                const new_cache_idx = eip & 4095;
+                                block_ids_keys[new_cache_idx] = eip;
+                                block_ids_vals[new_cache_idx] = new_block_id;
+                                blocks_compiled += 1;
+                                if (blocks_compiled <= 10) {
+                                    log.info("JIT: compiled+loaded block at EIP=0x{X} ({d} x86 bytes -> {d} WASM bytes)", .{
+                                        eip, block_len, wasm_bin.len,
+                                    });
+                                } else if (blocks_compiled == 11) {
+                                    log.info("JIT: (suppressing further compilation logs)", .{});
+                                }
+                                block_id = new_block_id;
+                            }
+                            allocator.free(wasm_bin);
+                        } else |_| {}
+                    }
+                }
+            }
+
+            if (block_id) |bid| {
                 // Transfer CPU state to the shared struct
                 jit_state.eax = cpu.eax;
                 jit_state.ecx = cpu.ecx;
@@ -839,9 +951,10 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
                 jit_state.eip = eip;
                 jit_state.eflags = cpu.flags.toEflags();
                 jit_state.status = jit_host_mod.JitCpuState.STATUS_CONTINUE;
+                jit_state.fs_base = cpu.fs_base;
 
                 // Execute the compiled block via the host
-                jit_host.call(block_id);
+                jit_host.call(bid);
 
                 // Read state back
                 cpu.eax = jit_state.eax;
@@ -854,47 +967,67 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
                 cpu.edi = jit_state.edi;
                 cpu.eip = jit_state.eip;
                 cpu.flags.fromEflags(jit_state.eflags);
+                cpu.fs_base = jit_state.fs_base;
 
                 blocks_executed += 1;
+                block_counts[cache_idx] +|= 1;
+                // Live hot-block detection: log when a block crosses each
+                // order-of-magnitude execution milestone. The end-of-run
+                // report never fires for apps that call exit() (proc_exit
+                // unwinds WASM before runWithJitHost returns), so emit hot
+                // blocks as they warm up.
+                const c = block_counts[cache_idx];
+                if (c == 10 or c == 100 or c == 1000 or c == 10000) {
+                    log.info("JIT: hot block EIP=0x{X} reached {d} executions", .{ eip, c });
+                }
+                // The compiled block ends at the first control-flow
+                // instruction; the interpreter must handle it, and its target
+                // will be the next block entry.
                 expected_next_eip = cpu.eip;
                 continue;
             }
-
-            // Compile a new block if we haven't seen this EIP
-            if (!jit.isCached(eip)) {
-                if (cpu.memory.readSlice(eip, 256)) |code| {
-                    const block_len = runner.scanBlock(code);
-                    if (block_len > 0) {
-                        jit.module.deinit();
-                        jit.module = @import("jit/emitter.zig").WasmModule.init(allocator);
-
-                        if (jit.compile(eip, code[0..block_len])) |wasm_bin| {
-                            // Send to host for compilation
-                            if (jit_host.compile(wasm_bin)) |block_id| {
-                                const new_cache_idx = eip & 4095;
-                                block_ids_keys[new_cache_idx] = eip;
-                                block_ids_vals[new_cache_idx] = block_id;
-                                blocks_compiled += 1;
-                                if (blocks_compiled <= 10) {
-                                    log.info("JIT: compiled+loaded block at EIP=0x{X} ({d} x86 bytes -> {d} WASM bytes)", .{
-                                        eip, block_len, wasm_bin.len,
-                                    });
-                                } else if (blocks_compiled == 11) {
-                                    log.info("JIT: (suppressing further compilation logs)", .{});
-                                }
-                            }
-                            allocator.free(wasm_bin);
-                        } else |_| {}
-                    }
-                }
-            }
         }
 
-        // Fall back to interpreter for one instruction
+        // Fall back to interpreter for one instruction. Track the linear
+        // continuation so a branch (discontinuous EIP change) marks its target
+        // as a block entry on the next iteration.
+        const start_eip = cpu.eip;
+        var insn_len: u8 = 1;
+        if (cpu.memory.readSlice(start_eip, 16)) |code| {
+            if (cpu.decode_cache.lookup(start_eip, code)) |insn| {
+                insn_len = insn.length;
+            } else {
+                const decoded = x86_decoder.decode(code);
+                if (decoded.length > 0) insn_len = decoded.length;
+            }
+        }
         x86_execute.step(cpu);
-        expected_next_eip = cpu.eip;
+        expected_next_eip = start_eip +% insn_len;
     }
 
     log.info("JIT: compiled {d} blocks, executed {d} block calls", .{ blocks_compiled, blocks_executed });
+
+    // Hot-block report: find the most-executed cached blocks (top 8).
+    // These are the blocks worth pinning/pre-warming for future runs.
+    var hot_idx: [8]u32 = .{0} ** 8;
+    for (0..4096) |i| {
+        const cnt = block_counts[i];
+        if (cnt == 0) continue;
+        for (0..8) |j| {
+            if (cnt > block_counts[hot_idx[j]]) {
+                var k: usize = 7;
+                while (k > j) : (k -= 1) hot_idx[k] = hot_idx[k - 1];
+                hot_idx[j] = @intCast(i);
+                break;
+            }
+        }
+    }
+    for (hot_idx, 0..) |idx, j| {
+        if (block_counts[idx] == 0) break;
+        log.info("JIT: hot block #{d}: EIP=0x{X} executed {d} times ({d}% of block calls)", .{
+            j + 1, block_ids_keys[idx], block_counts[idx],
+            @as(u32, @intCast((@as(u64, block_counts[idx]) * 100) / @max(blocks_executed, 1))),
+        });
+    }
 }
 

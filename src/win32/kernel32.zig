@@ -89,7 +89,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "SetCommTimeouts", stub_args2);
     try environment.addBuiltinExportComptime(m, "GetOverlappedResult", stub_args4);
     try environment.addBuiltinExportComptime(m, "CreateFileMappingW", kernel32_file.CreateFileMappingA);
-    try environment.addBuiltinExportComptime(m, "DeleteFileW", kernel32_file.DeleteFileA);
+    try environment.addBuiltinExportComptime(m, "DeleteFileW", kernel32_file.DeleteFileW);
 
     // --- Memory (mem.zig) ---
     try environment.addBuiltinExportComptime(m, "HeapCreate", kernel32_mem.HeapCreate);
@@ -314,7 +314,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "AreFileApisANSI", kernel32_console.stub_ret_true_1); // Returns TRUE
     try environment.addBuiltinExportComptime(m, "LoadLibraryExA", kernel32_process.LoadLibraryExA);
     try environment.addBuiltinExportComptime(m, "GetDriveTypeA", kernel32_path.stub_GetDriveTypeA);
-    try environment.addBuiltinExportComptime(m, "MoveFileA", stub_args2); // stub: returns 0 (should return TRUE)
+    try environment.addBuiltinExportComptime(m, "MoveFileA", kernel32_file.MoveFileA);
     try environment.addBuiltinExportComptime(m, "FindFirstFileExA", kernel32_file.FindFirstFileExA);
     try environment.addBuiltinExportComptime(m, "SleepEx", kernel32_sysinfo.SleepEx);
     try environment.addBuiltinExportComptime(m, "GlobalMemoryStatusEx", kernel32_sysinfo.GlobalMemoryStatusEx);
@@ -371,7 +371,8 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "SetConsoleMode", kernel32_console.stub_ret_true_2);
     try environment.addBuiltinExportComptime(m, "GetVDMCurrentDirectories", stub_args2);
     try environment.addBuiltinExportComptime(m, "GetBinaryTypeW", stub_args2);
-    try environment.addBuiltinExportComptime(m, "MoveFileExW", stub_args3);
+    try environment.addBuiltinExportComptime(m, "MoveFileExW", kernel32_file.MoveFileExW);
+    try environment.addBuiltinExportComptime(m, "MoveFileExA", kernel32_file.MoveFileExA);
     try environment.addBuiltinExportComptime(m, "SearchPathW", stub_args6);
     try environment.addBuiltinExportComptime(m, "GetVolumeInformationW", stub_args8);
     try environment.addBuiltinExportComptime(m, "GetConsoleTitleW", stub_args2);
@@ -381,14 +382,14 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "SetConsoleTextAttribute", stub_args2);
     try environment.addBuiltinExportComptime(m, "FillConsoleOutputAttribute", stub_args5);
     try environment.addBuiltinExportComptime(m, "SetFileAttributesW", stub_args2);
-    try environment.addBuiltinExportComptime(m, "CopyFileW", stub_args3);
-    try environment.addBuiltinExportComptime(m, "RemoveDirectoryW", stub_args1);
-    try environment.addBuiltinExportComptime(m, "RemoveDirectoryA", stub_args1);
+    try environment.addBuiltinExportComptime(m, "CopyFileW", kernel32_file.CopyFileW);
+    try environment.addBuiltinExportComptime(m, "RemoveDirectoryW", kernel32_path.RemoveDirectoryA);
+    try environment.addBuiltinExportComptime(m, "RemoveDirectoryA", kernel32_path.RemoveDirectoryA);
     try environment.addBuiltinExportComptime(m, "CompareFileTime", kernel32_time.CompareFileTime);
     try environment.addBuiltinExportComptime(m, "GetConsoleOutputCP", kernel32_console.stub_GetConsoleOutputCP);
     try environment.addBuiltinExportComptime(m, "SetThreadLocale", kernel32_console.stub_ret_true_1);
     try environment.addBuiltinExportComptime(m, "CmdBatNotification", stub_args1);
-    try environment.addBuiltinExportComptime(m, "MoveFileW", stub_args2);
+    try environment.addBuiltinExportComptime(m, "MoveFileW", kernel32_file.MoveFileW);
     try environment.addBuiltinExportComptime(m, "GetDiskFreeSpaceExW", stub_args4);
     try environment.addBuiltinExportComptime(m, "GetTempPathW", kernel32_file.GetTempPathA);
     try environment.addBuiltinExportComptime(m, "GetTempFileNameW", stub_args4);

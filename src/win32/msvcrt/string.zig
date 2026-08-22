@@ -41,6 +41,16 @@ pub fn strcat(dest: [*]u8, src: [*:0]const u8) callconv(.c) [*]u8 {
     return dest;
 }
 
+/// strncat
+pub fn strncat(dest: [*]u8, src: [*:0]const u8, count: usize) callconv(.c) [*]u8 {
+    var dest_len: usize = 0;
+    while (dest[dest_len] != 0) : (dest_len += 1) {}
+    var i: usize = 0;
+    while (i < count and src[i] != 0) : (i += 1) dest[dest_len + i] = src[i];
+    dest[dest_len + i] = 0;
+    return dest;
+}
+
 /// strcmp
 /// Implementation status: Partially implemented
 pub fn strcmp(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) i32 {
