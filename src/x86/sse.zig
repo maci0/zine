@@ -11,6 +11,7 @@ const std = @import("std");
 const cpu_mod = @import("cpu.zig");
 const decoder = @import("decoder.zig");
 const flags_mod = @import("flags.zig");
+const fpu = @import("fpu.zig");
 const log = @import("../log.zig");
 
 const Cpu = cpu_mod.Cpu;
@@ -294,27 +295,27 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 const dst = getRegIdx(insn, 0);
                 const src_bits = readXmm32(cpu, insn, 1);
                 const f: f32 = @bitCast(src_bits);
-                cpu.setReg(@enumFromInt(dst), floatToI32(f32, f));
+                cpu.setReg(@enumFromInt(dst), floatToI32(f32, 0b11, f));
             },
             .pF2 => { // CVTTSD2SI
                 const dst = getRegIdx(insn, 0);
                 const src_bits = readXmm64(cpu, insn, 1);
                 const f: f64 = @bitCast(src_bits);
-                cpu.setReg(@enumFromInt(dst), floatToI32(f64, f));
+                cpu.setReg(@enumFromInt(dst), floatToI32(f64, 0b11, f));
             },
             else => {},
         },
 
-        0x0F2D => switch (pfx) { // CVTSS2SI/CVTSD2SI (round)
+        0x0F2D => switch (pfx) { // CVTSS2SI/CVTSD2SI (round per MXCSR)
             .pF3 => {
                 const dst = getRegIdx(insn, 0);
                 const f: f32 = @bitCast(readXmm32(cpu, insn, 1));
-                cpu.setReg(@enumFromInt(dst), floatToI32(f32, f));
+                cpu.setReg(@enumFromInt(dst), floatToI32(f32, mxcsrRc(cpu), f));
             },
             .pF2 => {
                 const dst = getRegIdx(insn, 0);
                 const f: f64 = @bitCast(readXmm64(cpu, insn, 1));
-                cpu.setReg(@enumFromInt(dst), floatToI32(f64, f));
+                cpu.setReg(@enumFromInt(dst), floatToI32(f64, mxcsrRc(cpu), f));
             },
             else => {},
         },
@@ -618,14 +619,23 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 // Float helpers
 // -----------------------------------------------------------------------
 
-fn floatToI32(comptime T: type, f: T) u32 {
-    if (std.math.isNan(f)) return 0x80000000;
-    const min_val: T = -2147483648.0;
-    const max_val: T = 2147483647.0;
-    if (f <= min_val) return 0x80000000;
-    if (f >= max_val) return 0x7FFFFFFF;
-    const i: i32 = @intFromFloat(f);
-    return @bitCast(i);
+/// SSE float→i32 conversion with hardware semantics: convert per the given
+/// rounding mode (MXCSR RC bits 13-14, same encoding as x87); NaN and
+/// out-of-range results produce the integer indefinite value (0x80000000)
+/// instead of saturating.
+fn floatToI32(comptime T: type, rc: u2, f: T) u32 {
+    const t = fpu.roundPerRc(rc, @as(f64, @floatCast(f)));
+    const min_f: f64 = @floatFromInt(@as(i64, std.math.minInt(i32)));
+    // Exact power-of-two bound above maxInt avoids f64 rounding ambiguity
+    // near maxInt.
+    const max_excl: f64 = 2147483648.0;
+    if (!std.math.isFinite(t) or t < min_f or t >= max_excl) return 0x8000_0000;
+    return @bitCast(@as(i32, @intFromFloat(t)));
+}
+
+/// Rounding-control field from MXCSR (bits 13-14), matching the x87 encoding.
+fn mxcsrRc(cpu: *const Cpu) u2 {
+    return @truncate(cpu.mxcsr >> 13);
 }
 
 const UnaryOp = enum { sqrt, rsqrt, rcp };
@@ -753,16 +763,16 @@ fn execConvertDqPs(cpu: *Cpu, insn: *const Instruction, pfx: SsePrefix) void {
             const ints: [4]i32 = @bitCast(src);
             cpu.xmm[dst] = @bitCast([4]f32{ @floatFromInt(ints[0]), @floatFromInt(ints[1]), @floatFromInt(ints[2]), @floatFromInt(ints[3]) });
         },
-        .p66 => { // CVTPS2DQ (round)
+        .p66 => { // CVTPS2DQ (round per MXCSR)
             const fs: [4]f32 = @bitCast(src);
             var r: [4]i32 = undefined;
-            for (0..4) |i| r[i] = @bitCast(floatToI32(f32, fs[i]));
+            for (0..4) |i| r[i] = @bitCast(floatToI32(f32, mxcsrRc(cpu), fs[i]));
             cpu.xmm[dst] = @bitCast(r);
         },
         .pF3 => { // CVTTPS2DQ (truncate)
             const fs: [4]f32 = @bitCast(src);
             var r: [4]i32 = undefined;
-            for (0..4) |i| r[i] = @bitCast(floatToI32(f32, fs[i]));
+            for (0..4) |i| r[i] = @bitCast(floatToI32(f32, 0b11, fs[i]));
             cpu.xmm[dst] = @bitCast(r);
         },
         else => {},
@@ -773,13 +783,13 @@ fn execConvertE6(cpu: *Cpu, insn: *const Instruction, pfx: SsePrefix) void {
     const dst = getRegIdx(insn, 0);
     const src = readXmm128(cpu, insn, 1);
     switch (pfx) {
-        .p66 => { // CVTTPD2DQ
+        .p66 => { // CVTPD2DQ (round per MXCSR)
             const d: [2]f64 = @bitCast(src);
-            cpu.xmm[dst] = @bitCast([4]i32{ @bitCast(floatToI32(f64, d[0])), @bitCast(floatToI32(f64, d[1])), 0, 0 });
+            cpu.xmm[dst] = @bitCast([4]i32{ @bitCast(floatToI32(f64, mxcsrRc(cpu), d[0])), @bitCast(floatToI32(f64, mxcsrRc(cpu), d[1])), 0, 0 });
         },
-        .pF2 => { // CVTPD2DQ
+        .pF2 => { // CVTTPD2DQ (truncate)
             const d: [2]f64 = @bitCast(src);
-            cpu.xmm[dst] = @bitCast([4]i32{ @bitCast(floatToI32(f64, d[0])), @bitCast(floatToI32(f64, d[1])), 0, 0 });
+            cpu.xmm[dst] = @bitCast([4]i32{ @bitCast(floatToI32(f64, 0b11, d[0])), @bitCast(floatToI32(f64, 0b11, d[1])), 0, 0 });
         },
         .pF3 => { // CVTDQ2PD
             const ints: [4]i32 = @bitCast(src);
@@ -1176,4 +1186,27 @@ fn execPsadbw(cpu: *Cpu, insn: *const Instruction, pfx: SsePrefix) void {
         for (0..8) |i| sum += if (a[i] > b[i]) a[i] - b[i] else b[i] - a[i];
         cpu.setMmx(dst, sum);
     }
+}
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
+
+const testing = std.testing;
+
+test "floatToI32: rounding modes" {
+    try testing.expectEqual(@as(u32, 2), floatToI32(f64, 0b00, 1.5)); // nearest-even
+    try testing.expectEqual(@as(u32, @bitCast(@as(i32, -3))), floatToI32(f64, 0b01, -2.1)); // down
+    try testing.expectEqual(@as(u32, 3), floatToI32(f64, 0b10, 2.1)); // up
+    try testing.expectEqual(@as(u32, 2), floatToI32(f64, 0b11, 2.9)); // truncate
+    try testing.expectEqual(@as(u32, @bitCast(@as(i32, -2))), floatToI32(f64, 0b11, -2.9));
+}
+
+test "floatToI32: NaN and out-of-range yield integer indefinite" {
+    const indefinite: u32 = 0x8000_0000;
+    try testing.expectEqual(indefinite, floatToI32(f64, 0b00, std.math.nan(f64)));
+    try testing.expectEqual(indefinite, floatToI32(f64, 0b00, std.math.inf(f64)));
+    try testing.expectEqual(indefinite, floatToI32(f64, 0b00, 2147483648.0));
+    try testing.expectEqual(indefinite, floatToI32(f64, 0b00, -2147483649.0));
+    try testing.expectEqual(indefinite, floatToI32(f32, 0b11, 3e9));
 }

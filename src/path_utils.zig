@@ -87,92 +87,43 @@ pub fn win32ToPosix(win_path: []const u8, out: []u8) !usize {
     }
 
     // Handle drive letter
-    if (src.len >= 2 and src[1] == ':' and std.ascii.isAlphabetic(src[0])) {
+    if (hasDriveLetter(src)) {
         const letter = std.ascii.toUpper(src[0]);
-        src = src[2..];
+        src = std.mem.trimStart(u8, src[2..], "\\/");
 
-        // Strip leading separators after drive letter
-        while (src.len > 0 and (src[0] == '\\' or src[0] == '/')) {
-            src = src[1..];
-        }
-
+        var pos: usize = 0;
         if (letter == 'Z') {
             // Z: drive = host filesystem root → /path
-            var pos: usize = 0;
-            if (pos < out.len) {
-                out[pos] = '/';
-                pos += 1;
-            }
-            for (src) |c| {
-                if (pos >= out.len) return error.BufferTooSmall;
-                out[pos] = if (c == '\\') '/' else c;
-                pos += 1;
-            }
-            if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
-            return pos;
+            pos = try appendBytes(out, pos, "/");
         } else {
             // C: (or any other) drive → drive_c/ prefix
-            var pos: usize = 0;
-            for (DRIVE_ROOT) |c| {
-                if (pos >= out.len) return error.BufferTooSmall;
-                out[pos] = c;
-                pos += 1;
-            }
-            for (src) |c| {
-                if (pos >= out.len) return error.BufferTooSmall;
-                out[pos] = if (c == '\\') '/' else c;
-                pos += 1;
-            }
-            if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
-            return pos;
+            pos = try appendBytes(out, pos, DRIVE_ROOT);
         }
+        pos = try appendConverted(out, pos, src, '\\', '/');
+        return terminate(out, pos);
     }
 
     // No drive letter — check if root-relative or truly relative
     if (src.len > 0 and src[0] == '/') {
         // Forward-slash path: this is a POSIX host path (e.g. from LIB env var).
         // Pass it through unchanged — it's a real filesystem path.
-        var pos: usize = 0;
-        for (src) |c| {
-            if (pos >= out.len) return error.BufferTooSmall;
-            out[pos] = c;
-            pos += 1;
-        }
-        if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
-        return pos;
+        const pos = try appendBytes(out, 0, src);
+        return terminate(out, pos);
     }
 
     if (src.len > 0 and src[0] == '\\') {
         // Backslash root-relative path: \project\game\... → drive_c/project/game/...
         // This is a Win32 convention for paths relative to the current drive root.
-        while (src.len > 0 and src[0] == '\\') {
-            src = src[1..];
-        }
-        var pos: usize = 0;
-        for (DRIVE_ROOT) |c| {
-            if (pos >= out.len) return error.BufferTooSmall;
-            out[pos] = c;
-            pos += 1;
-        }
-        for (src) |c| {
-            if (pos >= out.len) return error.BufferTooSmall;
-            out[pos] = if (c == '\\') '/' else c;
-            pos += 1;
-        }
-        if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
-        return pos;
+        src = std.mem.trimStart(u8, src, "\\");
+        const pos = try appendBytes(out, 0, DRIVE_ROOT);
+        const end = try appendConverted(out, pos, src, '\\', '/');
+        return terminate(out, end);
     }
 
     // Truly relative path: game.ini, project/data/... → just convert slashes.
     // The caller (toHostPath) resolves these against the virtual CWD.
-    var pos: usize = 0;
-    for (src) |c| {
-        if (pos >= out.len) return error.BufferTooSmall;
-        out[pos] = if (c == '\\') '/' else c;
-        pos += 1;
-    }
-    if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
-    return pos;
+    const pos = try appendConverted(out, 0, src, '\\', '/');
+    return terminate(out, pos);
 }
 
 /// Convert a POSIX path to a Win32 path.
@@ -183,34 +134,17 @@ pub fn win32ToPosix(win_path: []const u8, out: []u8) !usize {
 ///
 /// Returns the number of bytes written to `out`.
 pub fn posixToWin32(posix_path: []const u8, out: []u8) !usize {
-    var pos: usize = 0;
-
     // Already has a drive letter? Just normalize slashes.
     if (hasDriveLetter(posix_path)) {
-        for (posix_path) |c| {
-            if (pos >= out.len) return error.BufferTooSmall;
-            out[pos] = if (c == '/') '\\' else c;
-            pos += 1;
-        }
-        if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
-        return pos;
+        const pos = try appendConverted(out, 0, posix_path, '/', '\\');
+        return terminate(out, pos);
     }
 
     // Absolute POSIX path → Z:\...
     if (posix_path.len > 0 and posix_path[0] == '/') {
-        if (out.len >= 3) {
-            out[0] = 'Z';
-            out[1] = ':';
-            out[2] = '\\';
-            pos = 3;
-        }
-        for (posix_path[1..]) |c| {
-            if (pos >= out.len) return error.BufferTooSmall;
-            out[pos] = if (c == '/') '\\' else c;
-            pos += 1;
-        }
-        if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
-        return pos;
+        var pos = try appendBytes(out, 0, "Z:\\");
+        pos = try appendConverted(out, pos, posix_path[1..], '/', '\\');
+        return terminate(out, pos);
     }
 
     // Relative path: strip drive_c/ prefix if present, prepend C:\
@@ -218,22 +152,39 @@ pub fn posixToWin32(posix_path: []const u8, out: []u8) !usize {
     if (startsWithDriveC(src)) {
         src = src[drive_root_len..];
     }
+    var pos = try appendBytes(out, 0, "C:\\");
+    pos = try appendConverted(out, pos, src, '/', '\\');
+    return terminate(out, pos);
+}
 
-    if (out.len >= 3) {
-        out[0] = 'C';
-        out[1] = ':';
-        out[2] = '\\';
-        pos = 3;
-    }
+/// Append `bytes` to `out` starting at `pos`. Returns the new position,
+/// or error.BufferTooSmall if `out` cannot hold all of `bytes`.
+fn appendBytes(out: []u8, pos: usize, bytes: []const u8) !usize {
+    if (pos + bytes.len > out.len) return error.BufferTooSmall;
+    @memcpy(out[pos..][0..bytes.len], bytes);
+    return pos + bytes.len;
+}
 
+/// Append `src` to `out` starting at `pos`, mapping each `from` separator
+/// to `to`. Returns the new position, or error.BufferTooSmall.
+fn appendConverted(out: []u8, pos: usize, src: []const u8, comptime from: u8, comptime to: u8) !usize {
+    var end = pos;
     for (src) |c| {
-        if (pos >= out.len) return error.BufferTooSmall;
-        out[pos] = if (c == '/') '\\' else c;
-        pos += 1;
+        if (end >= out.len) return error.BufferTooSmall;
+        out[end] = if (c == from) to else c;
+        end += 1;
     }
+    return end;
+}
 
-    if (pos < out.len) out[pos] = 0 else return error.BufferTooSmall;
-    return pos;
+/// Write a NUL terminator at `out[pos]` and return `pos`.
+/// Returns error.BufferTooSmall if the terminator does not fit.
+fn terminate(out: []u8, pos: usize) !usize {
+    if (pos < out.len) {
+        out[pos] = 0;
+        return pos;
+    }
+    return error.BufferTooSmall;
 }
 
 /// Check if a path has a drive letter prefix (e.g. `C:` or `z:`).

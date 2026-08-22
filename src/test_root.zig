@@ -11,6 +11,7 @@ comptime {
     _ = @import("x86/decoder.zig");
     _ = @import("x86/decode_cache.zig");
     _ = @import("x86/execute.zig");
+    _ = @import("x86/sse.zig");
     _ = @import("x86/thunks.zig");
 
     // JIT compiler tests

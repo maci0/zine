@@ -506,7 +506,7 @@ pub fn main(init: std.process.Init) !void {
     if (stubs_msvcrt.global_env_initialized) {
         var i: usize = 0;
         while (stubs_msvcrt.global_envp[i]) |env_ptr| : (i += 1) {
-            const span = trace.c_span(@intFromPtr(env_ptr));
+            const span = trace.host_c_span(@intFromPtr(env_ptr));
             env_total_chars += span.len + 1;
         }
     }
@@ -529,7 +529,7 @@ pub fn main(init: std.process.Init) !void {
     if (stubs_msvcrt.global_env_initialized) {
         var i: usize = 0;
         while (stubs_msvcrt.global_envp[i]) |env_ptr| : (i += 1) {
-            const span = trace.c_span(@intFromPtr(env_ptr));
+            const span = trace.host_c_span(@intFromPtr(env_ptr));
             for (span) |c| {
                 env_block[env_pos] = c;
                 env_pos += 1;
@@ -597,7 +597,7 @@ pub fn main(init: std.process.Init) !void {
     if (stubs_msvcrt.global_env_initialized) {
         var i: usize = 0;
         while (stubs_msvcrt.global_envp[i]) |env_ptr| : (i += 1) {
-            const env_str = trace.c_span(@intFromPtr(env_ptr));
+            const env_str = trace.host_c_span(@intFromPtr(env_ptr));
             if (std.ascii.startsWithIgnoreCase(env_str, "LIB=")) {
                 if (trace.enable_tracing) trace.print("ENV LIB: {s}\n", .{env_str});
             }

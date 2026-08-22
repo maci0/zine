@@ -221,6 +221,7 @@ var win32_heap_pos: usize = 0;
 var win32_heap_cap: usize = 0;
 
 fn win32HeapAlloc(size: usize, zero: bool) ?*anyopaque {
+    _ = zero; // mmap'd chunks are already zeroed
     const actual = if (size == 0) @as(usize, 16) else size;
     const aligned = (actual + 15) & ~@as(usize, 15); // 16-byte align
     const total = aligned + 16; // 16 bytes header (size + padding)
@@ -253,11 +254,7 @@ fn win32HeapAlloc(size: usize, zero: bool) ?*anyopaque {
     const header = @as(*usize, @ptrCast(@alignCast(ptr)));
     header.* = actual;
     win32_heap_pos += total;
-    const result = ptr + 16;
-    if (!zero) {
-        // Don't zero — already zeroed from mmap
-    }
-    return @ptrCast(result);
+    return @ptrCast(ptr + 16);
 }
 
 /// Reallocates a block of memory from a heap.

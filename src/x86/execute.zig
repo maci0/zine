@@ -25,6 +25,7 @@ const decoder = @import("decoder.zig");
 const decode_cache = @import("decode_cache.zig");
 const flags_mod = @import("flags.zig");
 const thunks = @import("thunks.zig");
+const fpu = @import("fpu.zig");
 const trace = @import("../trace.zig");
 const log = @import("../log.zig");
 const profiler = @import("../profiler.zig");
@@ -774,33 +775,11 @@ pub fn safeFloatToInt(comptime T: type, val: f64) T {
     return @intFromFloat(t);
 }
 
-/// Round to integer per the x87 control-word RC field (bits 10..11):
-/// 00 nearest-even, 01 down, 10 up, 11 toward zero.
-fn roundPerControlWord(rc: u2, val: f64) f64 {
-    return switch (rc) {
-        0b00 => roundHalfEven(val),
-        0b01 => @floor(val),
-        0b10 => @ceil(val),
-        0b11 => @trunc(val),
-    };
-}
-
-fn roundHalfEven(x: f64) f64 {
-    const t = @trunc(x);
-    const diff = x - t;
-    const adiff = @abs(diff);
-    if (adiff < 0.5) return t;
-    if (adiff > 0.5) return t + std.math.sign(diff);
-    // Exact tie: choose the even neighbor.
-    if (@mod(t, 2.0) == 0) return t;
-    return t + std.math.sign(diff);
-}
-
 /// FIST/FISTP conversion: honors the rounding-control field, then applies
 /// the same NaN/out-of-range integer-indefinite rule as real hardware.
 pub fn fistToInt(comptime T: type, control_word: u16, val: f64) T {
     const rc: u2 = @truncate(control_word >> 10);
-    return safeFloatToInt(T, roundPerControlWord(rc, val));
+    return safeFloatToInt(T, fpu.roundPerRc(rc, val));
 }
 
 /// Helper: set x87 condition codes for comparison (C3,C0).
@@ -2313,6 +2292,26 @@ fn execStosd(cpu: *Cpu, insn: *const Instruction) void {
 
 const testing = std.testing;
 const GuestMemory = cpu_mod.GuestMemory;
+
+test "fistToInt: honors control-word rounding field" {
+    const cw_default: u16 = 0x037F; // RC=00 nearest-even
+    const cw_down: u16 = 0x077F; // RC=01 down
+    const cw_up: u16 = 0x0B7F; // RC=10 up
+    const cw_trunc: u16 = 0x0F7F; // RC=11 toward zero
+
+    try testing.expectEqual(@as(i32, 2), fistToInt(i32, cw_default, 1.5));
+    try testing.expectEqual(@as(i32, 2), fistToInt(i32, cw_default, 2.5)); // tie → even
+    try testing.expectEqual(@as(i32, 1), fistToInt(i32, cw_down, 1.9));
+    try testing.expectEqual(@as(i32, 2), fistToInt(i32, cw_up, 1.1));
+    try testing.expectEqual(@as(i32, 1), fistToInt(i32, cw_trunc, 1.9));
+    try testing.expectEqual(@as(i32, -1), fistToInt(i32, cw_trunc, -1.9));
+}
+
+test "fistToInt: NaN and out-of-range yield integer indefinite" {
+    try testing.expectEqual(@as(i32, std.math.minInt(i32)), fistToInt(i32, 0x037F, std.math.nan(f64)));
+    try testing.expectEqual(@as(i64, std.math.minInt(i64)), fistToInt(i64, 0x037F, 1e19));
+    try testing.expectEqual(@as(i16, std.math.minInt(i16)), fistToInt(i16, 0x037F, 40000.0));
+}
 
 fn makeCpu(mem: []u8) Cpu {
     return Cpu{ .memory = GuestMemory{ .base = mem } };
