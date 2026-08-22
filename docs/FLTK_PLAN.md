@@ -49,7 +49,7 @@ graph TD
 - **`renderer.zig`** owns all shared state: framebuffer, keyboard state, edit text buffer, clipboard, cached JSON for reconnection, and input callback function pointers.
 - **`web_ui.zig`** serializes everything to JSON and pushes over WebSocket.
 - **`fltk_ui.zig`** uses a thread-safe command queue to forward calls to the FLTK event loop thread.
-- **`fltk_bridge.cpp`** is a ~440-line C++ file providing C-callable wrappers around FLTK 1.3 widgets.
+- **`fltk_bridge.cpp`** is a C++ bridge (~1400 lines) providing C-callable wrappers around FLTK 1.3 widgets.
 - **Backend switching** is a `switch (active_backend)` in every output function (`.web_ui`, `.fltk`, `.none`).
 - **Input callbacks** (`on_command`, `on_resize`, `on_key_event`, `on_close`, etc.) are set by Win32 stubs at init time. Backends call these when user input arrives.
 
@@ -67,7 +67,7 @@ graph TD
 
 **Decision: Hand-rolled C++ bridge** instead of zfltk.
 
-Rationale: System has FLTK 1.3.11 shared libs, but zfltk requires cfltk (targeting FLTK 1.4) built via CMake. A ~440-line `fltk_bridge.cpp` compiled directly by Zig's build system is simpler and avoids the cfltk dependency chain.
+Rationale: System has FLTK 1.3.11 shared libs, but zfltk requires cfltk (targeting FLTK 1.4) built via CMake. A C++ bridge (`fltk_bridge.cpp`, ~1400 lines) compiled directly by Zig's build system is simpler and avoids the cfltk dependency chain.
 
 #### Files
 
@@ -118,17 +118,24 @@ zig-out/bin/zine --fltk -i path/to/gui_app.exe
 
 #### Remaining Stubs 🔲
 
+Status as of 2026-08: most of this table shipped (see `src/gui/fltk_bridge.h` and
+[`STATUS.md`](STATUS.md)); only audio remains a stub.
+
 | Feature | FLTK approach | Status |
 |---|---|---|
-| Edit control | `Fl_Text_Editor` + `Fl_Text_Buffer` | Stub |
-| Status bar | `Fl_Group` with N `Fl_Box` children | Stub |
-| File dialog | `Fl_Native_File_Chooser` | Stub |
-| Font dialog | Custom `Fl_Window` (FLTK has no built-in) | Stub |
-| Context menu | `Fl_Menu_Button` popup | Stub |
-| Custom dialogs | `Fl_Window` + parsed controls | Stub |
-| Clipboard | `Fl::copy()` / `Fl::paste()` | Stub |
-| Window icon | `Fl_Window::icon()` with `Fl_RGB_Image` | Stub |
-| Audio | Needs external lib (miniaudio, PortAudio) | Stub |
+| Edit control | `Fl_Text_Editor` + `Fl_Text_Buffer` | ✅ Done (`fltk_edit_*` bridge functions) |
+| Status bar | `Fl_Group` with N `Fl_Box` children | ✅ Done (`msctls_statusbar32` handling) |
+| File dialog | `Fl_Native_File_Chooser` | ✅ Done (`fltk_open_file_dialog`) |
+| Font dialog | Custom `Fl_Window` (FLTK has no built-in) | ✅ Done (`fltk_open_font_dialog`) |
+| Context menu | `Fl_Menu_Button` popup | ✅ Done (`fltk_show_context_menu`) |
+| Custom dialogs | `Fl_Window` + parsed controls | ✅ Done (`fltk_show_dialog`/`fltk_add_dialog_item`/...) |
+| Clipboard | `Fl::copy()` / `Fl::paste()` | ✅ Done (`fltk_set_clipboard`) |
+| Window icon | `Fl_Window::icon()` with `Fl_RGB_Image` | ✅ Done (`fltk_set_icon`) |
+| Print dialog | Custom `Fl_Window` form | ✅ Done (`fltk_open_print_dialog`) |
+| Find/Replace dialog | Custom modeless `Fl_Window` | ✅ Done (`fltk_open_find_dialog`) |
+| Page setup dialog | Custom `Fl_Window` form | ✅ Done (`fltk_open_page_setup_dialog`) |
+| Color chooser | `Fl_Color_Chooser` | ✅ Done (`fltk_open_color_dialog`) |
+| Audio | Needs external lib (miniaudio, PortAudio) | 🔲 Stub |
 
 ### Phase 4: Build System ✅ COMPLETE
 
@@ -185,7 +192,7 @@ Uses `Fl::scheme("none")` for the classic look closest to Win2K.
 | `zig build -Dfltk=true` | ✅ Clean build |
 | `zig build` (default x86, no FLTK) | ✅ No regressions |
 | `zig build test` | ✅ All tests pass |
-| Manual GUI test | ⏳ Pending — needs a GUI PE binary |
+| GUI smoke suite (`tests/fltk_smoke.sh`, 20 self-exiting apps under Xvfb) | ✅ 20 PASS / 0 FAIL (see [`STATUS.md`](STATUS.md)) |
 
 ### Collateral Fixes
 

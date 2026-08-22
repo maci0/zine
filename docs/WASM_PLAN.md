@@ -28,12 +28,17 @@ level, which is what CheerpX does with Linux syscalls but one layer higher.
 | Win32 stub registration for WASM | ✅ Complete (36+ DLLs) |
 | x87 FPU instructions | ⚠️ Partial |
 | SSE/SSE2 instructions | ⚠️ Partial (`src/x86/sse.zig`) |
-| x86-to-WASM JIT compiler | ⚠️ Compile-only (state-via-memory pipeline built) |
-| JIT host execution (browser/zine-host) | ⬚ Skeleton only |
+| x86-to-WASM JIT compiler | ✅ Working (`src/jit/`; blocks execute end-to-end via a host runtime) |
+| JIT host execution (zine-host) | ✅ Working (`--jit` via `zine-host`; SEH/nested-SEH/registry tests green) |
+| JIT host execution (browser) | ⬚ Not implemented |
 | Browser JS host frontend | ⬚ Not implemented |
-| Basic block caching | ✅ Complete (`decode_cache.zig`: 1024-entry hash-indexed) |
+| Basic block caching | ✅ Complete (`decode_cache.zig`: 1024-entry hash-indexed; JIT block ring: 4096-entry) |
 
 ### Test Results
+
+Current pass/fail counts per mode are tracked in [`STATUS.md`](STATUS.md)
+(last verified 2026-08-08: native 158/0, native64 158/0, wasmtime 128/0).
+The historical baseline at the time this plan was written:
 
 ```
 Mode          Pass  Total  Notes
@@ -77,7 +82,7 @@ DUMPBIN-exports.
 │  │  │  - In-process child PE execution        │  │  │
 │  │  └──────────────┬──────────────────────────┘  │  │
 │  │  ┌──────────────▼──────────────────────────┐  │  │
-│  │  │  Win32 API Stubs (31+ DLLs)             │  │  │
+│  │  │  Win32 API Stubs (36+ DLLs)             │  │  │
 │  │  │  kernel32, user32, gdi32, msvcrt, ...   │  │  │
 │  │  │  (platform-agnostic via platform layer) │  │  │
 │  │  └─────────────────────────────────────────┘  │  │
@@ -85,7 +90,7 @@ DUMPBIN-exports.
 └─────────────────────────────────────────────────────┘
 ```
 
-### JIT Pipeline (built, not yet executing)
+### JIT Pipeline (executing via zine-host)
 
 ```
 x86 PE  →  [zine JIT compiler]  →  WASM module bytes
@@ -250,12 +255,13 @@ which requires a host providing `jit_compile`/`jit_call` imports.
 
 | Limitation | Impact | Status |
 |-----------|--------|--------|
-| **CL.EXE child process** | CL.EXE spawns C1.DLL/C2.DLL as child processes; the interpreter hits OOB at the child code boundary | Investigating |
-| **Child PE argv** | DUMPBIN/LIB/EDITBIN spawn LINK.EXE via `_spawnvp`; child runs but doesn't see argv (CRT cache issue) | Investigating |
+| **CL.EXE child process** | CL.EXE spawns C1.DLL/C2.DLL as child processes | ✅ Fixed — CL boots C1.DLL, spawns LINK.EXE (see `CLI_STATUS.md`); only the zine-host wrapper still has a spawn gap |
+| **Child PE argv** | DUMPBIN/LIB/EDITBIN spawn LINK.EXE via `_spawnvp`; child needs argv | ✅ Fixed — in-process child execution passes argv; suite green on wasmtime |
 | **Partial x87 FPU** | FNINIT/FNSTCW/FLDCW + many ops decoded but not all executed | Blocks float-heavy apps |
 | **Partial SSE** | Basic SSE support in `sse.zig` | Sufficient for MSVC6 targets |
 | **64 KB stack** | Deeply recursive programs may overflow | Increase `STACK_SIZE` |
-| **No block caching** | Every instruction decoded from raw bytes every time | Major perf bottleneck |
+
+(Block caching is implemented — see `decode_cache.zig` and the status table above.)
 
 ### Platform
 
@@ -297,8 +303,8 @@ which requires a host providing `jit_compile`/`jit_call` imports.
 - [x] Fix _EH_prolog emulation in interpreter mode
 - [x] Fix DLL search path (host PATH fallback)
 - [x] Fix POSIX path heuristic for MSVC option args
-- [ ] Fix child PE argv passing (CRT __getmainargs cache)
-- [ ] Fix CL.EXE child process execution (C1.DLL/C2.DLL)
+- [x] Fix child PE argv passing (CRT __getmainargs cache)
+- [x] Fix CL.EXE child process execution (C1.DLL/C2.DLL)
 - [ ] Profile interpreter hot spots
 - [ ] Create browser demo page
 
@@ -314,9 +320,9 @@ which requires a host providing `jit_compile`/`jit_call` imports.
 - [x] JitHost interface + WASM guest implementation
 - [x] zine-host skeleton (wasmtime C API)
 - [x] Benchmark mode 8 (zine-host + JIT)
-- [ ] Implement zine-host wasmtime C API integration
+- [x] Implement zine-host wasmtime C API integration (WASI + JIT host in `src/host_main.zig`; end-to-end via `zine-host --jit`)
 - [ ] Browser JS JIT glue (WebAssembly.instantiate for compiled blocks)
-- [ ] Hot block detection and execution counting
-- [ ] JIT invalidation on code page writes
+- [x] Hot block detection and execution counting (per-block counters, 4096-entry ring; live milestone logs + end-of-run top-8 report)
+- [x] JIT invalidation on code page writes (SMC hook: `stub_common.smc_invalidate_cache` → `flushJitCache`)
 
 ### Phase 7: Optimization ⬚ NOT STARTED

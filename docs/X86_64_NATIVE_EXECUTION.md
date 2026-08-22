@@ -1,5 +1,12 @@
 # Executing Windows Applications Natively from a 64-bit Zine Process
 
+> **Status: Part 1 (32-bit PEs on x86_64) is implemented and green** via
+> signal-based `INT 0xFE` dispatch — see "Implementation Status" below and
+> [`STATUS.md`](STATUS.md) (`--native64` suite 158/0). The earlier sections
+> describe the original problem analysis and are kept for reference; items they
+> call "Missing" are done unless the checklist says otherwise. Part 2 (64-bit
+> PEs) remains unimplemented.
+
 Zine is currently designed to run 32-bit Windows executables. When Zine is compiled as a 64-bit application (`x86_64`), running PE files presents two distinct challenges depending on the target PE architecture:
 1. Running a **32-bit** Windows executable natively.
 2. Running a **64-bit** Windows executable natively.

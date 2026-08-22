@@ -416,42 +416,53 @@ When compiled as a real Windows DLL:
 - [ ] **Audit all `trace.addr()` call sites**: List every `trace.addr()` call in stub functions (not in loader/thunk code). These will ALL be removed in Phase 2.
 - [ ] **Audit all `@intFromPtr(&static)` returns**: List every stub that returns a host address to a static variable. These need WASM wrappers.
 - [ ] **Create `src/win32/host_io.zig`**: Empty module with the future API surface defined as function signatures (no implementations yet).
-- [ ] **Write regression test list**: Document current test results for native (42/42), interpret (42/42), WASM (22/38) as the baseline.
+- [ ] **Write regression test list**: Record current test results per mode as the baseline (counts live in [`STATUS.md`](STATUS.md); this plan's original 42-test baseline predates the current suite).
 
-### Phase 1: Create the host I/O abstraction layer [DONE]
+### Phase 1: Create the host I/O abstraction layer [PARTIAL]
 
 Goal: All file/path operations go through `host_io.zig`. Stubs stop calling `path_utils` or `std.fs` directly.
 
-- [x] Implement `host_io.openFile(win32_path: [*:0]const u8, flags: u32, mode: u32) i32`
+Status: `host_io.zig` exists with `open`, `access`, `stat`, `deleteFile`, `getCwd`,
+`getFullPath`, `searchPath`, `fileFromFd`. `findFirst`/`findNext` were not needed
+as separate APIs (`FindFirstFileA`/`FindNextFileA` keep their own handle pool in
+`kernel32/file.zig`). Current test counts live in [`STATUS.md`](STATUS.md).
+
+- [x] Implement `host_io.open(win32_path: []const u8, flags: u32, mode: u32) i32`
   - On Windows: pass-through to `CreateFileA` / `_open`
   - On Linux/WASM: `win32ToPosix()` then `posix_open()`
   - Includes case-insensitive filename retry
-- [ ] Implement `host_io.accessFile(win32_path: [*:0]const u8, mode: i32) i32`
+- [x] Implement `host_io.access(win32_path: []const u8, mode: i32) i32`
   - Same conversion pattern
-- [ ] Implement `host_io.getCwd(buf: [*]u8, max: usize) usize`
+- [x] Implement `host_io.getCwd(buf: []u8) usize`
   - On Windows: pass-through to `GetCurrentDirectoryA`
-  - On Linux/WASM: `std.process.getCwd()` then `posixToWin32()`
+  - On Linux/WASM: raw syscall `getcwd()` then `posixToWin32()` (TLS-safe)
   - Always returns Win32 format with drive letter
-- [ ] Implement `host_io.getFullPath(rel: [*:0]const u8, buf: [*]u8, max: usize) usize`
+- [x] Implement `host_io.getFullPath(rel_path: []const u8, buf: []u8) usize`
   - Actually resolves relative paths against CWD
   - Returns Win32 format
-- [ ] Implement `host_io.statFile(win32_path: [*:0]const u8) ?StatResult`
-- [ ] Implement `host_io.deleteFile(win32_path: [*:0]const u8) bool`
-- [ ] Implement `host_io.findFirst(win32_pattern: [*:0]const u8) FindHandle`
-- [ ] Implement `host_io.findNext(handle: FindHandle) ?FindData`
-- [ ] Migrate `_access` to use `host_io.accessFile` — verify native tests still pass
-- [ ] Migrate `fopen` to use `host_io.openFile` — verify
-- [ ] Migrate `CreateFileA` to use `host_io.openFile` — verify
-- [ ] Migrate `_getcwd` to use `host_io.getCwd` — verify
-- [ ] Migrate `_fullpath` to use `host_io.getFullPath` — verify
-- [ ] Migrate `_stat` to use `host_io.statFile` — verify
-- [ ] Migrate `_searchenv` to use `host_io.accessFile` for probing — verify
-- [ ] Migrate `_findfirst`/`_findnext` to use `host_io.findFirst`/`findNext` — verify
-- [ ] Run full test suite: native 42/42, interpret 42/42, WASM >= 22
+- [x] Implement `host_io.stat(win32_path: []const u8) ?Stat` (+ `statFile(file)`)
+- [x] Implement `host_io.deleteFile(win32_path: []const u8) bool`
+- [ ] Implement `host_io.findFirst` / `findNext` (superseded: find-handle pool lives in `kernel32/file.zig`)
+- [x] Migrate `_access` to use `host_io.access` (`msvcrt/file.zig`)
+- [x] Migrate `fopen` file opens to `host_io.open` (`msvcrt/file.zig`)
+- [ ] Migrate `CreateFileA` fully to `host_io.open` (currently uses `host_io.fileFromFd`/`statFile` around raw fds)
+- [x] Migrate `_getcwd` to use `host_io.getCwd` (`msvcrt/path.zig`)
+- [ ] Migrate `_fullpath` to use `host_io.getFullPath` (used by `kernel32/path.zig` GetFullPathNameA instead)
+- [x] Migrate `_stat` to use `host_io.stat` (`msvcrt/file.zig`)
+- [ ] Migrate `_searchenv` to use `host_io` for probing (`host_io.searchPath` exists but is unused by stubs so far)
+- [ ] Migrate `_findfirst`/`_findnext` to `host_io` helpers
+- [ ] Run full test suite (current counts tracked in [`STATUS.md`](STATUS.md))
 
-### Phase 2: Convert stub signatures from `usize` to pointer types [DONE]
+### Phase 2: Convert stub signatures from `usize` to pointer types [PARTIAL]
 
 Goal: Stubs use `[*]u8`, `*T`, `?[*:0]const u8` instead of `usize`. The comptime thunk handler auto-translates pointer types. All `trace.addr()` calls removed from stubs.
+
+Status: NOT fully done. 116 `trace.addr()` call sites remain across
+`src/win32/` (concentrated in `user32/message.zig`, `comdlg32/dialogs.zig`,
+`advapi32/registry.zig`, `kernel32/locale.zig`/`path.zig`/`mem.zig`, and the
+msvcrt modules below). `castArg` still passes `usize` through untranslated
+(stubs do their own `trace.addr()` translation), i.e. sub-phases 2a/2e never
+landed. Verify with: `rg -c "trace\.addr\(" src/win32`.
 
 **Sub-phase 2a: Re-enable `usize` auto-translation in `castArg`**
 - [ ] In `src/loader/env.zig` `castArg`, re-add `usize` translation: `if (T == usize and comptime !platform.is_native) break :blk translateGuestAddr(val, cpu);`
@@ -493,24 +504,31 @@ Goal: Stubs use `[*]u8`, `*T`, `?[*:0]const u8` instead of `usize`. The comptime
 - [ ] `kernel32/path.zig`: `GetCurrentDirectoryA`, `GetWindowsDirectoryA`, `GetFullPathNameA`
 - [ ] `kernel32/process.zig`: `GetModuleFileNameA`
 
-**Sub-phase 2d: Convert remaining DLL stubs**
-- [x] `advapi32/registry.zig`, `advapi32/security.zig`, `advapi32/services.zig`
-- [x] `user32/window.zig`, `user32/message.zig`, `user32/resource.zig`
-- [x] `gdi32/drawing.zig`, `gdi32/object.zig`
-- [x] `rpcrt4.zig`, `shell32.zig`, `ole32/*.zig`, `comdlg32/*.zig`
-- [x] All remaining DLL stubs
+**Sub-phase 2d: Convert remaining DLL stubs** [PARTIAL — several groups still contain `trace.addr()`]
+- [ ] `advapi32/registry.zig` (6 sites remain); `advapi32/security.zig`, `advapi32/services.zig` clean
+- [ ] `user32/message.zig` (29 sites), `user32/dialog.zig` (4), `user32/window.zig` (3) remain; `user32/resource.zig` clean
+- [ ] `gdi32/drawing.zig` (2 sites remain); `gdi32/object.zig` clean
+- [ ] `rpcrt4.zig` (4 sites), `ole32/com.zig` (1 site), `comdlg32/dialogs.zig` (11 sites) remain; `shell32.zig` clean
+- [x] All remaining DLL stubs registered through the comptime thunk handler where pointer-typed
 
 **Sub-phase 2e: Remove `usize` auto-translation**
 - [ ] In `castArg`, remove the `usize` → `translateGuestAddr` code added in 2a
 - [ ] Now ONLY pointer types are translated (the intended final state)
 - [ ] `usize` params that are truly integer values pass through unchanged
 - [ ] `usize` params that are HANDLE values pass through unchanged (correct — HANDLEs are opaque, not dereferenceable)
-- [ ] Run full test suite: verify native 42/42, interpret 42/42, WASM >= 22
+- [ ] Run full test suite (current counts tracked in [`STATUS.md`](STATUS.md))
 
-### Phase 3: Fix static data returns for WASM [DONE]
+### Phase 3: Fix static data returns for WASM [DONE via different mechanism]
 (COM/DirectX vtable guest allocation deferred to future feature — not needed for CLI tests)
 
 Goal: Functions that return `&host_static` work on WASM by pre-allocating guest memory.
+
+Status: Implemented, but NOT as a separate `guest_statics.zig` module. Guest
+slots are carved out of the guest globals block allocated by
+`ensureGuestGlobals()` in `msvcrt/process.zig`, and the affected stubs
+(`errno`, `setlocale`, ...) sync/return those slots inline. This keeps the
+guest-visible behavior but deviates from the "stub stays pure" structure below:
+the stubs do check `x86_memory.guest_memory`.
 
 - [ ] Create `src/win32/guest_statics.zig`: module that pre-allocates guest memory slots for all static return values during CRT init
 - [ ] Slots needed:
@@ -568,27 +586,32 @@ and interpreter need PE64 awareness.
 
 See also: [X86_64_NATIVE_EXECUTION.md](X86_64_NATIVE_EXECUTION.md) for native x86_64 execution design.
 
-### Phase 5: x86_64 compat mode thunks [TODO]
+### Phase 5: x86_64 compat mode thunks [DONE — different mechanism]
 
 Goal: Run 32-bit PEs natively on x86_64 Linux hosts using CPU compatibility mode
 (CS segment switching between 32-bit and 64-bit mode).
 
-**Status**: TODO. Requires implementing the mode-switching trampolines described
-in [X86_64_NATIVE_EXECUTION.md](X86_64_NATIVE_EXECUTION.md). This is independent
+**Status**: DONE, implemented differently from the sketch below. Instead of
+`lcall` trampolines in `x86/native_thunks_64.zig`, the shipped design reuses the
+WASM `INT 0xFE + thunk_id` mechanism: in 32-bit compat mode `INT 0xFE` raises
+SIGSEGV and a signal handler (`src/x86/compat_thunks.zig`) reads the 32-bit args
+from the guest stack and calls the 64-bit stub. See the "Implementation Status"
+section of [X86_64_NATIVE_EXECUTION.md](X86_64_NATIVE_EXECUTION.md); the
+`--native64` suite is fully green (see [`STATUS.md`](STATUS.md)). This is independent
 of PE64 support — it runs 32-bit PEs on a 64-bit host.
 
 **Design note**: The stub functions from Phases 1-3 already work for this case.
-The 32→64 thunk reads 32-bit args from the guest stack and zero-extends them to
-64-bit. Since stubs use pointer types (not usize), `@ptrFromInt` on zero-extended
-32-bit values works correctly (addresses are in low 4GB via MAP_32BIT).
+The 32→64 path zero-extends 32-bit guest values to 64-bit; since addresses are in
+low 4GB via MAP_32BIT, `@ptrFromInt` on zero-extended values works correctly.
+The original lcall-based sketch below is kept for reference:
 
 - [ ] Implement `x86/native_thunks_64.zig` — trampoline pool in low 4GB memory
 - [ ] 32→64 mode switch via `lcall $0x33, $ThunkDispatcher_64`
 - [ ] ThunkDispatcher reads 32-bit args, calls 64-bit Zig stubs
 - [ ] Return value truncated to 32-bit for EAX
 - [ ] 64→32 mode switch back via `lret` to resume guest code
-- [ ] Allocate guest stack/heap with MAP_32BIT
-- [ ] Test with a 32-bit PE on x86_64 Linux
+- [x] Allocate guest stack/heap with MAP_32BIT
+- [x] Test with a 32-bit PE on x86_64 Linux (full CLI suite green via signal-based dispatch)
 
 ### Phase 6: Real Windows DLL compilation [DONE]
 
@@ -730,7 +753,7 @@ Results of auditing every `src/win32/` file for code that violates the "stubs mu
 |------|-------------|-------------|
 | `src/win32/msvcrt/*.zig` | Stubs with `trace.addr()` workarounds | Pure C-callable stubs, no loader deps |
 | `src/win32/kernel32/*.zig` | Same | Same |
-| `src/win32/host_io.zig` | Does not exist | Path conversion + file I/O abstraction |
+| `src/win32/host_io.zig` | Implemented: file I/O + path conversion (`open`, `access`, `stat`, `getCwd`, `getFullPath`, `searchPath`, `fileFromFd`) | Single choke point for all stub file/path operations |
 | `src/loader/env.zig` | Thunk handler with `castArg` | Thunk handler translates ALL pointer params |
 | `src/trace.zig` | `addr()`, `c_span()` for manual translation | Deprecated for stubs; used only by loader internals |
 | `src/path_utils.zig` | Win32 <-> POSIX conversion | Called only from `host_io.zig` |
