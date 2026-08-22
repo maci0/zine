@@ -33,6 +33,8 @@
 #   that the 32-bit interpreter can't handle).
 #
 # Key constraints:
+# - Requires python3 with websocket-client (see tests/requirements.txt) for
+#   the WebSocket test helpers (ws_*.py)
 # - CL.EXE treats paths starting with / as options, so use relative paths
 # - NMAKE can't shell out (no cmd.exe), so skip shell-dependent tests
 # - All paths passed to Win32 tools should use backslashes or relative form

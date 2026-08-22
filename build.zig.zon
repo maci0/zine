@@ -33,7 +33,10 @@
     // internet connectivity.
     .dependencies = .{
         .toml = .{
-            .url = "https://github.com/sam701/zig-toml/archive/refs/heads/main.tar.gz",
+            // Pinned to upstream commit a73c9423d88ed413204b39638fab7e9bccdb83fd
+            // (2026-03-19). Never point this at a branch ref like refs/heads/main:
+            // a mutable URL silently changes what new builds download.
+            .url = "https://github.com/sam701/zig-toml/archive/a73c9423d88ed413204b39638fab7e9bccdb83fd.tar.gz",
             .hash = "toml-0.3.0-bV14Be6EAQDr0fkyURz4jYFyTAMPcwlNN0FEPVjDnXTR",
         },
     },
