@@ -180,10 +180,7 @@ pub fn dispatchFromSignal(uctx: *@import("../platform/native.zig").ucontext_t, t
     }
 
     if (trace.enable_tracing) {
-        trace.print("compat: thunk {d} ({s}) ret=0x{X} esp=0x{X} args=[{X},{X},{X},{X}] va={d}\n", .{
-            thunk_id, entry.name, ret_addr, guest_esp,
-            args[0], args[1], args[2], args[3], entry.native_va_fixed
-        });
+        trace.print("compat: thunk {d} ({s}) ret=0x{X} esp=0x{X} args=[{X},{X},{X},{X}] va={d}\n", .{ thunk_id, entry.name, ret_addr, guest_esp, args[0], args[1], args[2], args[3], entry.native_va_fixed });
     }
 
     if (args[1] == 0x10000) {
@@ -213,7 +210,7 @@ pub fn dispatchFromSignal(uctx: *@import("../platform/native.zig").ucontext_t, t
         const fpregs = uctx.mcontext.fpregs;
         var top: usize = 0;
         var result: i64 = 0;
-        
+
         // Scan the entire physical FPU stack to heuristically identify the parameter
         // This is necessary since Linux x86_64 FXSAVE state sync occasionally desyncs
         // logical FSW TOP values from their physical FPR0-FPR7 memory locations natively.
@@ -228,10 +225,10 @@ pub fn dispatchFromSignal(uctx: *@import("../platform/native.zig").ucontext_t, t
                 break;
             }
         }
-        
+
         // If we found nothing valid, fallback to 0
         // No explicit top overwrite if 0 because we didn't find the float.
-        
+
         // Emulate x87 FPU pop by brutally resetting the entire FPU stack.
         // C1.DLL finishes calculations before calling _ftol, so resetting is completely safe natively.
         fpregs.swd &= ~@as(u16, 0x3800); // TOP = 0
@@ -373,7 +370,7 @@ pub noinline fn callCompat32_4(target: u32, arg0: u32, arg1: u32, arg2: u32, arg
     // Use inline asm to: save callee-saved regs, do iretq into compat mode,
     // and provide a landing label for returnFromCompat to jump to.
     asm volatile (
-        // Save callee-saved registers on the current stack
+    // Save callee-saved registers on the current stack
         \\ pushq %%rbx
         \\ pushq %%r12
         \\ pushq %%r13
@@ -412,8 +409,7 @@ pub noinline fn callCompat32_4(target: u32, arg0: u32, arg1: u32, arg2: u32, arg
           [save_rip_ptr] "{rdi}" (&save_entry.rip),
           [guest_esp] "{rcx}" (@as(u64, esp)),
           [guest_eip] "{rdx}" (@as(u64, target)),
-        : .{ .rax = true, .memory = true }
-    );
+        : .{ .rax = true, .memory = true });
 
     // returnFromCompat wrote the result and restored RSP/RIP to land here
     const result = save_entry.result;
@@ -464,7 +460,6 @@ fn enterCompatModeImpl(entry_point: u64, guest_esp: u64) noreturn {
         :
         : [esp_val] "{rcx}" (guest_esp),
           [eip] "{rdx}" (entry_point),
-        : .{ .rax = true, .rbp = true, .memory = true }
-    );
+        : .{ .rax = true, .rbp = true, .memory = true });
     unreachable;
 }

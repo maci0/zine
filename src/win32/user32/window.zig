@@ -38,8 +38,8 @@ pub fn SystemParametersInfoA(uiAction: u32, uiParam: u32, pvParam: ?*anyopaque, 
         const rect = @as(*user32.RECT, @ptrCast(@alignCast(pvParam orelse return 0)));
         rect.left = 0;
         rect.top = 0;
-        rect.right = 1024;  // matches SM_CXSCREEN
-        rect.bottom = 738;  // screen height minus taskbar (768 - 30)
+        rect.right = 1024; // matches SM_CXSCREEN
+        rect.bottom = 738; // screen height minus taskbar (768 - 30)
     }
     if (uiAction == w32.SPI_GETNONCLIENTMETRICS) {
         const ncm = @as(*w32.NONCLIENTMETRICSA, @ptrCast(@alignCast(pvParam orelse return 0)));
@@ -49,8 +49,8 @@ pub fn SystemParametersInfoA(uiAction: u32, uiParam: u32, pvParam: ?*anyopaque, 
         ncm.iScrollHeight = 16;
         ncm.iCaptionWidth = 18;
         ncm.iCaptionHeight = 18;
-        ncm.lfCaptionFont.lfHeight = -11;  // 8pt @ 96dpi
-        ncm.lfCaptionFont.lfWeight = 700;  // FW_BOLD
+        ncm.lfCaptionFont.lfHeight = -11; // 8pt @ 96dpi
+        ncm.lfCaptionFont.lfWeight = 700; // FW_BOLD
     }
     return 1;
 }
@@ -59,60 +59,60 @@ pub fn GetSystemMetrics(nIndex: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: GetSystemMetrics({d})\n", .{nIndex});
     // Windows 2000 "Windows Standard" at 96 DPI
     return switch (nIndex) {
-        0 => 1024,  // SM_CXSCREEN
-        1 => 768,   // SM_CYSCREEN
-        2 => 16,    // SM_CXVSCROLL
-        3 => 16,    // SM_CYHSCROLL
-        4 => 19,    // SM_CYCAPTION
-        5 => 1,     // SM_CXBORDER
-        6 => 1,     // SM_CYBORDER
-        7 => 3,     // SM_CXDLGFRAME / SM_CXFIXEDFRAME
-        8 => 3,     // SM_CYDLGFRAME / SM_CYFIXEDFRAME
-        9 => 0,     // SM_CXHTHUMB (same as CXHSCROLL = 16, but index 9 is unused)
-        10 => 0,    // SM_CYVTHUMB (index 10 unused)
-        11 => 16,   // SM_CXHTHUMB
-        12 => 16,   // SM_CYVTHUMB
-        13 => 32,   // SM_CXICON
-        14 => 32,   // SM_CYICON
-        15 => 19,   // SM_CYMENU
+        0 => 1024, // SM_CXSCREEN
+        1 => 768, // SM_CYSCREEN
+        2 => 16, // SM_CXVSCROLL
+        3 => 16, // SM_CYHSCROLL
+        4 => 19, // SM_CYCAPTION
+        5 => 1, // SM_CXBORDER
+        6 => 1, // SM_CYBORDER
+        7 => 3, // SM_CXDLGFRAME / SM_CXFIXEDFRAME
+        8 => 3, // SM_CYDLGFRAME / SM_CYFIXEDFRAME
+        9 => 0, // SM_CXHTHUMB (same as CXHSCROLL = 16, but index 9 is unused)
+        10 => 0, // SM_CYVTHUMB (index 10 unused)
+        11 => 16, // SM_CXHTHUMB
+        12 => 16, // SM_CYVTHUMB
+        13 => 32, // SM_CXICON
+        14 => 32, // SM_CYICON
+        15 => 19, // SM_CYMENU
         16 => 1024, // SM_CXFULLSCREEN
-        17 => 741,  // SM_CYFULLSCREEN (768 - caption - menu)
-        20 => 112,  // SM_CXMINTRACK (min tracking width)
-        21 => 27,   // SM_CYMINTRACK (caption + frame top + frame bottom)
-        22 => 200,  // SM_CXDOUBLECLK
-        23 => 200,  // SM_CYDOUBLECLK
-        24 => 0,    // SM_CXICONSPACING (not relevant)
-        25 => 0,    // SM_CYICONSPACING
-        28 => 112,  // SM_CXMIN (minimum window width)
-        29 => 27,   // SM_CYMIN (minimum window height)
-        30 => 18,   // SM_CXSIZE (caption button width)
-        31 => 18,   // SM_CYSIZE (caption button height)
-        32 => 4,    // SM_CXFRAME / SM_CXSIZEFRAME
-        33 => 4,    // SM_CYFRAME / SM_CYSIZEFRAME
-        34 => 0,    // SM_CXMINTRACK (alias)
+        17 => 741, // SM_CYFULLSCREEN (768 - caption - menu)
+        20 => 112, // SM_CXMINTRACK (min tracking width)
+        21 => 27, // SM_CYMINTRACK (caption + frame top + frame bottom)
+        22 => 200, // SM_CXDOUBLECLK
+        23 => 200, // SM_CYDOUBLECLK
+        24 => 0, // SM_CXICONSPACING (not relevant)
+        25 => 0, // SM_CYICONSPACING
+        28 => 112, // SM_CXMIN (minimum window width)
+        29 => 27, // SM_CYMIN (minimum window height)
+        30 => 18, // SM_CXSIZE (caption button width)
+        31 => 18, // SM_CYSIZE (caption button height)
+        32 => 4, // SM_CXFRAME / SM_CXSIZEFRAME
+        33 => 4, // SM_CYFRAME / SM_CYSIZEFRAME
+        34 => 0, // SM_CXMINTRACK (alias)
         36 => 1032, // SM_CXMAXIMIZED (screen + 2*frame)
-        37 => 776,  // SM_CYMAXIMIZED (screen + 2*frame)
-        43 => 0,    // SM_NETWORK
-        45 => 2,    // SM_CXEDGE
-        46 => 2,    // SM_CYEDGE
-        49 => 16,   // SM_CXSMICON
-        50 => 16,   // SM_CYSMICON
-        51 => 15,   // SM_CYSMCAPTION
-        52 => 12,   // SM_CXSMSIZE
-        53 => 14,   // SM_CYSMSIZE
-        54 => 18,   // SM_CXMENUSIZE
-        55 => 18,   // SM_CYMENUSIZE
-        57 => 0,    // SM_ARRANGE
-        58 => 0,    // SM_CXMINIMIZED
-        59 => 0,    // SM_CYMINIMIZED
+        37 => 776, // SM_CYMAXIMIZED (screen + 2*frame)
+        43 => 0, // SM_NETWORK
+        45 => 2, // SM_CXEDGE
+        46 => 2, // SM_CYEDGE
+        49 => 16, // SM_CXSMICON
+        50 => 16, // SM_CYSMICON
+        51 => 15, // SM_CYSMCAPTION
+        52 => 12, // SM_CXSMSIZE
+        53 => 14, // SM_CYSMSIZE
+        54 => 18, // SM_CXMENUSIZE
+        55 => 18, // SM_CYMENUSIZE
+        57 => 0, // SM_ARRANGE
+        58 => 0, // SM_CXMINIMIZED
+        59 => 0, // SM_CYMINIMIZED
         61 => 1024, // SM_CXMAXTRACK
-        62 => 768,  // SM_CYMAXTRACK
-        67 => 1,    // SM_IMMENABLED
-        75 => 0,    // SM_CXFOCUSBORDER
-        76 => 0,    // SM_CYFOCUSBORDER
+        62 => 768, // SM_CYMAXTRACK
+        67 => 1, // SM_IMMENABLED
+        75 => 0, // SM_CXFOCUSBORDER
+        76 => 0, // SM_CYFOCUSBORDER
         78 => 1024, // SM_CXVIRTUALSCREEN (same as screen for single monitor)
-        79 => 768,  // SM_CYVIRTUALSCREEN
-        80 => 1,    // SM_CMONITORS (number of monitors)
+        79 => 768, // SM_CYVIRTUALSCREEN
+        80 => 1, // SM_CMONITORS (number of monitors)
         else => 0,
     };
 }
@@ -159,8 +159,8 @@ fn applyWindowSize(dwStyle: u32, dwExStyle: u32, nWidth: i32, nHeight: i32) void
 
     // CW_USEDEFAULT: Windows uses ~3/4 of the work area (1024x738)
     // This matches what real Win2K does for the first cascaded window
-    if (w == w32.CW_USEDEFAULT or w <= 0) w = 768;  // ~75% of 1024
-    if (h == w32.CW_USEDEFAULT or h <= 0) h = 554;  // ~75% of 738
+    if (w == w32.CW_USEDEFAULT or w <= 0) w = 768; // ~75% of 1024
+    if (h == w32.CW_USEDEFAULT or h <= 0) h = 554; // ~75% of 738
 
     user32.window_width = w;
     user32.window_height = h;
@@ -186,9 +186,19 @@ fn ansiClassEql(class_ptr: usize, target: []const u8) bool {
 }
 
 fn createWindowExInternal(
-    dwExStyle: u32, class_name: []const u8, window_name: []const u8, dwStyle: u32,
-    x: i32, y: i32, nWidth: i32, nHeight: i32,
-    hWndParent: usize, hMenu: usize, is_child: bool, is_edit: bool, is_rich_edit: bool,
+    dwExStyle: u32,
+    class_name: []const u8,
+    window_name: []const u8,
+    dwStyle: u32,
+    x: i32,
+    y: i32,
+    nWidth: i32,
+    nHeight: i32,
+    hWndParent: usize,
+    hMenu: usize,
+    is_child: bool,
+    is_edit: bool,
+    is_rich_edit: bool,
 ) usize {
     if (!is_child) {
         const is_first_or_main = (user32.global_hwnd == 0) or !user32.main_form_created;
@@ -237,11 +247,11 @@ fn createWindowExInternal(
             cs[1] = @truncate(kernel32.main_module_handle); // hInstance
             cs[2] = @truncate(hMenu); // hMenu
             cs[4] = @bitCast(nHeight); // cy
-            cs[5] = @bitCast(nWidth);  // cx
-            cs[6] = @bitCast(y);       // y
-            cs[7] = @bitCast(x);       // x
-            cs[8] = dwStyle;           // style
-            cs[11] = dwExStyle;        // dwExStyle
+            cs[5] = @bitCast(nWidth); // cx
+            cs[6] = @bitCast(y); // y
+            cs[7] = @bitCast(x); // x
+            cs[8] = dwStyle; // style
+            cs[11] = dwExStyle; // dwExStyle
             const lp: isize = @bitCast(@intFromPtr(&cs));
             const proc = @intFromPtr(wndproc);
             var err_flag: u32 = 0;
@@ -362,9 +372,18 @@ fn wideClassEql(class_ptr: usize, target: []const u8) bool {
 var next_child_hwnd: usize = 0x00001000;
 
 pub fn CreateWindowExA(
-    dwExStyle: u32, lpClassName: usize, lpWindowName: usize, dwStyle: u32,
-    x: i32, y: i32, nWidth: i32, nHeight: i32,
-    hWndParent: usize, hMenu: usize, hInstance: usize, lpParam: usize,
+    dwExStyle: u32,
+    lpClassName: usize,
+    lpWindowName: usize,
+    dwStyle: u32,
+    x: i32,
+    y: i32,
+    nWidth: i32,
+    nHeight: i32,
+    hWndParent: usize,
+    hMenu: usize,
+    hInstance: usize,
+    lpParam: usize,
 ) callconv(w32cc.WINAPI) usize {
     _ = hInstance;
     _ = lpParam;
@@ -381,9 +400,18 @@ pub fn CreateWindowExA(
 }
 
 pub fn CreateWindowExW(
-    dwExStyle: u32, lpClassName: usize, lpWindowName: usize, dwStyle: u32,
-    x: i32, y: i32, nWidth: i32, nHeight: i32,
-    hWndParent: usize, hMenu: usize, hInstance: usize, lpParam: usize,
+    dwExStyle: u32,
+    lpClassName: usize,
+    lpWindowName: usize,
+    dwStyle: u32,
+    x: i32,
+    y: i32,
+    nWidth: i32,
+    nHeight: i32,
+    hWndParent: usize,
+    hMenu: usize,
+    hInstance: usize,
+    lpParam: usize,
 ) callconv(w32cc.WINAPI) usize {
     _ = hInstance;
     _ = lpParam;
@@ -643,7 +671,6 @@ pub fn stub_MoveWindow(hWnd: usize, X: i32, Y: i32, nWidth: i32, nHeight: i32, b
     return stub_SetWindowPos(hWnd, 0, X, Y, nWidth, nHeight, 0);
 }
 
-
 pub fn stub_ShowWindow(hWnd: usize, nCmdShow: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: ShowWindow(hwnd={x}, nCmdShow={d})\n", .{ hWnd, nCmdShow });
 
@@ -652,9 +679,7 @@ pub fn stub_ShowWindow(hWnd: usize, nCmdShow: i32) callconv(w32cc.WINAPI) i32 {
     if (nCmdShow != 0 and (hWnd == user32.global_hwnd or hWnd == 0)) {
         user32.needs_paint = true;
         // Dispatch WM_SHOWWINDOW(TRUE) to the WndProc
-        const wndproc_addr: usize = if (user32.getWndProc(hWnd)) |p| p
-            else if (user32.global_wndproc) |p| @intFromPtr(p)
-            else 0;
+        const wndproc_addr: usize = if (user32.getWndProc(hWnd)) |p| p else if (user32.global_wndproc) |p| @intFromPtr(p) else 0;
         if (wndproc_addr != 0) {
             var err: u32 = 0;
             _ = user32.callWndProcSafe(wndproc_addr, hWnd, 0x0018, 1, 0, &err); // WM_SHOWWINDOW
@@ -734,7 +759,9 @@ pub fn stub_UpdateWindow(hWnd: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 pub fn stub_RedrawWindow(hWnd: usize, lprcUpdate: usize, hrgnUpdate: usize, flags: u32) callconv(w32cc.WINAPI) i32 {
-    _ = hWnd; _ = lprcUpdate; _ = hrgnUpdate;
+    _ = hWnd;
+    _ = lprcUpdate;
+    _ = hrgnUpdate;
     if (trace.enable_tracing) trace.print("USER32: RedrawWindow(flags={x})\n", .{flags});
     const RDW_INVALIDATE: u32 = 0x0001;
     const RDW_ERASE: u32 = 0x0004;
@@ -843,7 +870,8 @@ pub fn stub_GetDC(hWnd: usize) callconv(w32cc.WINAPI) usize {
 }
 
 pub fn stub_ReleaseDC(hWnd: usize, hDC: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hWnd; _ = hDC;
+    _ = hWnd;
+    _ = hDC;
     return 1;
 }
 
@@ -877,9 +905,7 @@ pub fn stub_BeginPaint(hWnd: usize, lpPaint: usize) callconv(w32cc.WINAPI) usize
     if (user32.bg_needs_erase) {
         user32.bg_needs_erase = false;
 
-        const wndproc_addr: usize = if (user32.getWndProc(hWnd)) |p| p
-            else if (user32.global_wndproc) |p| @intFromPtr(p)
-            else 0;
+        const wndproc_addr: usize = if (user32.getWndProc(hWnd)) |p| p else if (user32.global_wndproc) |p| @intFromPtr(p) else 0;
 
         if (wndproc_addr != 0) {
             var err_flag: u32 = 0;
@@ -891,7 +917,8 @@ pub fn stub_BeginPaint(hWnd: usize, lpPaint: usize) callconv(w32cc.WINAPI) usize
 }
 
 pub fn stub_EndPaint(hWnd: usize, lpPaint: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hWnd; _ = lpPaint;
+    _ = hWnd;
+    _ = lpPaint;
     // Flush any batched screen updates accumulated during BeginPaint..EndPaint
     const rend = @import("../../gui/renderer.zig");
     rend.flushScreenIfDirty();
@@ -956,11 +983,11 @@ pub fn stub_DrawEdge(hdc: usize, qrc: usize, edge: u32, grfFlags: u32) callconv(
     const BF_ADJUST: u32 = 0x2000;
 
     // Win2k system colors for 3D effects (COLORREF = 0x00BBGGRR)
-    const highlight = display.GetSysColor(20);     // COLOR_BTNHIGHLIGHT (#FFFFFF)
-    const light = display.GetSysColor(22);           // COLOR_3DLIGHT (#D4D0C8)
-    const shadow = display.GetSysColor(16);          // COLOR_BTNSHADOW (#808080)
-    const dkshadow = display.GetSysColor(21);        // COLOR_3DDKSHADOW (#404040)
-    const face = display.GetSysColor(15);            // COLOR_BTNFACE (#D4D0C8)
+    const highlight = display.GetSysColor(20); // COLOR_BTNHIGHLIGHT (#FFFFFF)
+    const light = display.GetSysColor(22); // COLOR_3DLIGHT (#D4D0C8)
+    const shadow = display.GetSysColor(16); // COLOR_BTNSHADOW (#808080)
+    const dkshadow = display.GetSysColor(21); // COLOR_3DDKSHADOW (#404040)
+    const face = display.GetSysColor(15); // COLOR_BTNFACE (#D4D0C8)
 
     // Determine outer and inner edge colors
     var outer_tl: u32 = face; // top-left color
@@ -1066,10 +1093,10 @@ pub fn stub_FrameRect(hDC: usize, lprc: usize, hbr: usize) callconv(w32cc.WINAPI
     const bottom = rc.bottom;
 
     // Draw 1-pixel border on each side
-    fb.fillRect(left, top, right - left, 1, color);            // Top
-    fb.fillRect(left, bottom - 1, right - left, 1, color);     // Bottom
-    fb.fillRect(left, top, 1, bottom - top, color);            // Left
-    fb.fillRect(right - 1, top, 1, bottom - top, color);       // Right
+    fb.fillRect(left, top, right - left, 1, color); // Top
+    fb.fillRect(left, bottom - 1, right - left, 1, color); // Bottom
+    fb.fillRect(left, top, 1, bottom - top, color); // Left
+    fb.fillRect(right - 1, top, 1, bottom - top, color); // Right
 
     if (fb.is_screen) rend.markScreenDirty();
     return 1;
@@ -1524,4 +1551,3 @@ pub fn IsWindowUnicode(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: IsWindowUnicode(0x{X}) -> 0\n", .{hWnd});
     return 0;
 }
-

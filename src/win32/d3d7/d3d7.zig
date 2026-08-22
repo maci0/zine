@@ -932,7 +932,6 @@ fn n8(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: u
 }
 
 /// ===== Pipeline State Implementations =====
-
 /// 4×4 matrix multiply using @Vector(4, f32) SIMD intrinsics.
 /// result = a × b (row-major, matching D3D convention).
 pub fn mat4x4Multiply(a: [16]f32, b: [16]f32) [16]f32 {

@@ -340,7 +340,10 @@ fn dsbuffer_Lock(this: usize, dwOffset: u32, dwBytes: u32, ppvAudioPtr1: usize, 
     if (buf.size == 0) return 0;
 
     if (dwFlags & w32.DSBLOCK_FROMWRITECURSOR != 0) offset = getWriteCursorFor(buf);
-    if (dwFlags & w32.DSBLOCK_ENTIREBUFFER != 0) { offset = 0; bytes = buf.size; }
+    if (dwFlags & w32.DSBLOCK_ENTIREBUFFER != 0) {
+        offset = 0;
+        bytes = buf.size;
+    }
     if (offset >= buf.size) offset = 0;
     if (bytes > buf.size) bytes = buf.size;
 

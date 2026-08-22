@@ -23,19 +23,18 @@ pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_gro
 
     if (group_data) |data| {
         if (data.len < 6) return null;
-        
+
         var reader = std.Io.Reader.fixed(data);
-        
-        
+
         const idReserved = try reader.takeInt(u16, .little);
         const idType = try reader.takeInt(u16, .little);
         const idCount = try reader.takeInt(u16, .little);
-        
+
         if (idReserved != 0 or idType != 1 or idCount == 0) return null;
-        
+
         // Use the first icon entry from the group
         if (data.len < 6 + 14) return null;
-        
+
         const bWidth = try reader.takeByte();
         const bHeight = try reader.takeByte();
         const bColorCount = try reader.takeByte();
@@ -44,14 +43,14 @@ pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_gro
         const wBitCount = try reader.takeInt(u16, .little);
         const dwBytesInRes = try reader.takeInt(u32, .little);
         const nId = try reader.takeInt(u16, .little);
-        
+
         const icon_data = module.getResource(res.RT_ICON, nId) orelse return null;
-        
+
         if (icon_data.len != dwBytesInRes) {
-            log.warn("Icon data length mismatch: expected {}, got {}", .{dwBytesInRes, icon_data.len});
+            log.warn("Icon data length mismatch: expected {}, got {}", .{ dwBytesInRes, icon_data.len });
             // Size mismatch is common with compressed icons; proceed with actual data length
         }
-        
+
         // Build ICO buffer
         var ico_alloc: std.Io.Writer.Allocating = .init(allocator);
         defer ico_alloc.deinit();
@@ -80,13 +79,13 @@ pub fn parseIconResource(allocator: std.mem.Allocator, module: *Module, icon_gro
         const b64_buf = try allocator.alloc(u8, b64_len);
         defer allocator.free(b64_buf);
         _ = b64_encoder.encode(b64_buf, ico_bytes);
-        
+
         const json_str = try std.fmt.allocPrint(allocator, "{{\"type\":\"set_icon\",\"base64\":\"{s}\"}}", .{b64_buf});
 
         if (trace.enable_tracing) trace.print("ICON PARSER: Successfully extracted icon and encoded to base64\n", .{});
         return json_str;
     }
-    
+
     if (trace.enable_tracing) trace.print("ICON PARSER: Failed to extract icon\n", .{});
     return null;
 }

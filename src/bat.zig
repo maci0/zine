@@ -83,7 +83,7 @@ pub const BatEnv = struct {
                 if (std.mem.indexOfScalarPos(u8, input, i + 1, '%')) |end_idx| {
                     const var_name = input[i + 1 .. end_idx];
                     var found = false;
-                    
+
                     // Case insensitive matching for environment variables
                     var env_it = self.env.iterator();
                     while (env_it.next()) |entry| {
@@ -132,14 +132,14 @@ pub const BatEnv = struct {
         defer self.allocator.free(abs_path);
 
         const parent_dir = std.fs.path.dirname(abs_path) orelse ".";
-        
+
         // Convert to Windows style path
         const win_parent_dir = try self.allocator.dupe(u8, parent_dir);
         defer self.allocator.free(win_parent_dir);
         std.mem.replaceScalar(u8, win_parent_dir, '/', '\\');
 
         var line_it = std.mem.splitScalar(u8, file_content, '\n');
-        
+
         const win_parent_dir_c = try std.fmt.allocPrint(self.allocator, "C:{s}", .{win_parent_dir});
         defer self.allocator.free(win_parent_dir_c);
 
@@ -193,7 +193,7 @@ pub const BatEnv = struct {
                 if (std.mem.indexOfScalar(u8, assign, '=')) |eq_idx| {
                     const key = std.mem.trim(u8, assign[0..eq_idx], " \t");
                     const val = std.mem.trim(u8, assign[eq_idx + 1 ..], " \t");
-                    
+
                     // Windows SET can just unset variable if value is empty
                     if (val.len == 0) {
                         _ = self.env.remove(key);
@@ -246,7 +246,7 @@ pub const BatEnv = struct {
         var envp_list: std.ArrayList(?[*:0]u8) = .empty;
         var it = self.env.iterator();
         while (it.next()) |entry| {
-            const str = try std.fmt.allocPrint(self.allocator, "{s}={s}", .{entry.key_ptr.*, entry.value_ptr.*});
+            const str = try std.fmt.allocPrint(self.allocator, "{s}={s}", .{ entry.key_ptr.*, entry.value_ptr.* });
             defer self.allocator.free(str);
             const strZ = try self.allocator.dupeZ(u8, str);
             try envp_list.append(self.allocator, strZ.ptr);

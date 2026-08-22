@@ -348,14 +348,16 @@ pub fn RegQueryValueExW(hKey: usize, lpValueName: usize, lpReserved: usize, lpTy
                 if (lpType != 0) @as(?*u32, @ptrFromInt(lpType)) else null,
                 if (lpData != 0) @as(?*align(1) u32, @ptrFromInt(lpData)) else null,
                 if (lpcbData != 0) @as(?*u32, @ptrFromInt(lpcbData)) else null,
-                REG_DWORD, 1000,
+                REG_DWORD,
+                1000,
             );
         } else if (std.ascii.eqlIgnoreCase(name, "FeatureSet")) {
             return writeRegDword(
                 if (lpType != 0) @as(?*u32, @ptrFromInt(lpType)) else null,
                 if (lpData != 0) @as(?*align(1) u32, @ptrFromInt(lpData)) else null,
                 if (lpcbData != 0) @as(?*u32, @ptrFromInt(lpcbData)) else null,
-                REG_DWORD, 0x2FFF,
+                REG_DWORD,
+                0x2FFF,
             );
         }
         if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExW(CPU, '{s}') -> NOT_FOUND\n", .{name});

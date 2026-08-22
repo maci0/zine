@@ -20,19 +20,19 @@ pub const MenuItem = struct {
 /// Parses a binary menu resource and returns a JSON string representing the menu.
 pub fn parseMenuResource(allocator: std.mem.Allocator, data: []const u8) ![]const u8 {
     var offset: usize = 0;
-    
+
     // MENUITEMTEMPLATEHEADER
     if (offset + 4 > data.len) return error.InvalidMenuResource;
     _ = std.mem.readInt(u16, data[offset..][0..2], .little); // version
-    _ = std.mem.readInt(u16, data[offset+2..][0..2], .little); // cbHeader
+    _ = std.mem.readInt(u16, data[offset + 2 ..][0..2], .little); // cbHeader
     offset += 4;
-    
+
     var root_items: std.ArrayListUnmanaged(MenuItem) = .empty;
     defer {
         for (root_items.items) |*item| freeMenuItem(allocator, item);
         root_items.deinit(allocator);
     }
-    
+
     while (offset < data.len) {
         const item = try parseItem(allocator, data, &offset);
         try root_items.append(allocator, item);
@@ -40,7 +40,7 @@ pub fn parseMenuResource(allocator: std.mem.Allocator, data: []const u8) ![]cons
             break;
         }
     }
-    
+
     var aw: std.Io.Writer.Allocating = .init(allocator);
     errdefer aw.deinit();
     const writer = &aw.writer;
@@ -59,20 +59,20 @@ fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize) !Me
     if (offset.* + 2 > data.len) return error.InvalidMenuResource;
     const flags = std.mem.readInt(u16, data[offset.*..][0..2], .little);
     offset.* += 2;
-    
+
     const is_popup = (flags & 0x0010) != 0;
-    
+
     var id: u16 = 0;
     if (!is_popup) {
         if (offset.* + 2 > data.len) return error.InvalidMenuResource;
         id = std.mem.readInt(u16, data[offset.*..][0..2], .little);
         offset.* += 2;
     }
-    
+
     // Read null-terminated UTF-16 string
     var name_bytes: std.ArrayListUnmanaged(u8) = .empty;
     errdefer name_bytes.deinit(allocator);
-    
+
     while (offset.* + 2 <= data.len) {
         const c = std.mem.readInt(u16, data[offset.*..][0..2], .little);
         offset.* += 2;
@@ -85,7 +85,7 @@ fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize) !Me
             try name_bytes.append(allocator, '?');
         }
     }
-    
+
     // Simplify tabs (like "\t" to "   ")
     var clean_name: std.ArrayListUnmanaged(u8) = .empty;
     for (name_bytes.items) |c| {
@@ -96,21 +96,21 @@ fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize) !Me
         }
     }
     name_bytes.deinit(allocator);
-    
+
     var item = MenuItem{
         .id = id,
         .name = try clean_name.toOwnedSlice(allocator),
         .flags = flags,
         .popup = null,
     };
-    
+
     if (is_popup) {
         var children: std.ArrayListUnmanaged(MenuItem) = .empty;
         errdefer {
             for (children.items) |*child| freeMenuItem(allocator, child);
             children.deinit(allocator);
         }
-        
+
         while (offset.* < data.len) {
             const child = try parseItem(allocator, data, offset);
             try children.append(allocator, child);
@@ -120,13 +120,13 @@ fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize) !Me
         }
         item.popup = try children.toOwnedSlice(allocator);
     }
-    
+
     return item;
 }
 
 fn writeMenuItemJson(writer: anytype, item: MenuItem) !void {
     try writer.print("{{\"id\":{d},\"name\":\"", .{item.id});
-    
+
     // simple json string escape
     for (item.name) |c| {
         if (c == '"') {
@@ -137,9 +137,9 @@ fn writeMenuItemJson(writer: anytype, item: MenuItem) !void {
             try writer.writeByte(c);
         }
     }
-    
+
     try writer.print("\",\"flags\":{d}", .{item.flags});
-    
+
     if (item.popup) |popup| {
         try writer.writeAll(",\"popup\":[");
         for (popup, 0..) |child, i| {
@@ -148,7 +148,7 @@ fn writeMenuItemJson(writer: anytype, item: MenuItem) !void {
         }
         try writer.writeAll("]");
     }
-    
+
     try writer.writeAll("}");
 }
 

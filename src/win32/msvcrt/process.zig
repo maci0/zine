@@ -65,18 +65,18 @@ pub fn ensureGuestGlobals() u32 {
         gmem.write32(addr + g_doserrno, 0); // doserrno = 0
         gmem.base[addr - gmem.base_addr + g_setlocale] = 'C';
         gmem.base[addr - gmem.base_addr + g_setlocale + 1] = 0;
-        
+
         gmem.write32(addr + g_timezone, @bitCast(msvcrt.msvcrt_timezone));
         gmem.write32(addr + g_daylight, @bitCast(msvcrt.msvcrt_daylight));
         gmem.write32(addr + g_tzname, 0); // null ptrs for now
         gmem.write32(addr + g_tzname + 4, 0);
-        
+
         gmem.write32(addr + g_adjust_fdiv, @bitCast(msvcrt.msvcrt_adjust_fdiv));
         gmem.write32(addr + g_mb_cur_max, @bitCast(msvcrt.msvcrt_mb_cur_max));
         gmem.write32(addr + g_nhandle, @bitCast(io.nhandle));
         gmem.write32(addr + g_pctype_ptr, addr + g_pctype_array + 2); // points to [1]
         gmem.write32(addr + g_mbctype_ptr, addr + g_mbctype_array + 1); // points to [1]
-        
+
         // arrays
         const pct = gmem.base[addr - gmem.base_addr + g_pctype_array .. addr - gmem.base_addr + g_pctype_array + 514];
         @memcpy(pct, std.mem.sliceAsBytes(&msvcrt.msvcrt_pctype));
@@ -137,27 +137,27 @@ pub fn ensureGuestGlobals() u32 {
         writeU32(ptr, g_pgmptr, if (pgmptr_off != 0) addr + pgmptr_off else 0);
         writeU32(ptr, g_acmdln, if (acmdln_off != 0) addr + acmdln_off else 0);
         writeU32(ptr, g_wcmdln, 0); // wcmdln uninitialized strings not handled natively yet
-        
+
         writeU32(ptr, g_errno, 0);
         writeU32(ptr, g_doserrno, 0);
         ptr[g_setlocale] = 'C';
         ptr[g_setlocale + 1] = 0;
-        
+
         writeU32(ptr, g_timezone, @bitCast(msvcrt.msvcrt_timezone));
         writeU32(ptr, g_daylight, @bitCast(msvcrt.msvcrt_daylight));
         // The strings PST and PDT could be copied, but for now just zeros.
         writeU32(ptr, g_tzname, 0);
         writeU32(ptr, g_tzname + 4, 0);
-        
+
         writeU32(ptr, g_adjust_fdiv, @bitCast(msvcrt.msvcrt_adjust_fdiv));
         writeU32(ptr, g_mb_cur_max, @bitCast(msvcrt.msvcrt_mb_cur_max));
         writeU32(ptr, g_nhandle, @bitCast(io.nhandle));
         writeU32(ptr, g_pctype_ptr, addr + g_pctype_array + 2); // pointer to index 1
         writeU32(ptr, g_mbctype_ptr, addr + g_mbctype_array + 1); // pointer to index 1
-        
+
         const pct = ptr[g_pctype_array .. g_pctype_array + 514];
         @memcpy(pct, std.mem.sliceAsBytes(&msvcrt.msvcrt_pctype));
-        
+
         const mbc = ptr[g_mbctype_array .. g_mbctype_array + 257];
         @memcpy(mbc, &msvcrt.msvcrt_mbctype);
 
@@ -586,7 +586,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         new_env_map.put(v.key, v.val) catch {};
     }
 
-        if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.os.tag == .linux) {
         // Raw fork/execve/waitpid: std.process.spawn goes through std.Io
         // (TLS), which faults inside the compat-mode SIGSEGV dispatch handler.
         // All allocations happen before fork; the child only calls execve.
@@ -724,7 +724,7 @@ pub fn p_pgmptr() callconv(.c) usize {
             if (guest_argv_addr != 0) {
                 const first_arg = gmem.read32(guest_argv_addr);
                 gmem.write32(g + g_pgmptr, first_arg);
-                if (trace.enable_tracing) trace.print("MSVCRT: __p__pgmptr -> 0x{X} (points to string: '{s}')\n", .{g + g_pgmptr, trace.c_span(first_arg)});
+                if (trace.enable_tracing) trace.print("MSVCRT: __p__pgmptr -> 0x{X} (points to string: '{s}')\n", .{ g + g_pgmptr, trace.c_span(first_arg) });
             }
         } else if (guest_argv_addr != 0) {
             // Native x86_64: guest_argv_addr points to the low-4GB argv array.
@@ -918,7 +918,6 @@ pub fn wgetmainargs(
 }
 
 pub fn abort() callconv(.c) void {
-    
     platform.exitProcess(3);
 }
 

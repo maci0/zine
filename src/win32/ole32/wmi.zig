@@ -22,22 +22,47 @@ fn comQueryInterface(this: usize, riid: usize, ppv: usize) callconv(w32cc.WINAPI
     if (ppv != 0) @as(*usize, @ptrFromInt(ppv)).* = this; // return self
     return 0; // S_OK
 }
-fn comAddRef(_: usize) callconv(w32cc.WINAPI) u32 { return 1; }
-fn comRelease(_: usize) callconv(w32cc.WINAPI) u32 { return 1; }
-fn comStub0(_: usize) callconv(w32cc.WINAPI) i32 { return 0; }
-fn comStub1(_: usize, _: usize) callconv(w32cc.WINAPI) i32 { return 0; }
-fn comStub2(_: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 { return 0; }
-fn comStub3(_: usize, _: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 { return 0; }
-fn comStub4(_: usize, _: usize, _: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 { return 0; }
-fn comStub5(_: usize, _: usize, _: usize, _: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 { return 0; }
-fn comStub7(_: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 { return 0; }
+fn comAddRef(_: usize) callconv(w32cc.WINAPI) u32 {
+    return 1;
+}
+fn comRelease(_: usize) callconv(w32cc.WINAPI) u32 {
+    return 1;
+}
+fn comStub0(_: usize) callconv(w32cc.WINAPI) i32 {
+    return 0;
+}
+fn comStub1(_: usize, _: usize) callconv(w32cc.WINAPI) i32 {
+    return 0;
+}
+fn comStub2(_: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 {
+    return 0;
+}
+fn comStub3(_: usize, _: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 {
+    return 0;
+}
+fn comStub4(_: usize, _: usize, _: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 {
+    return 0;
+}
+fn comStub5(_: usize, _: usize, _: usize, _: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 {
+    return 0;
+}
+fn comStub7(_: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 {
+    return 0;
+}
 
 // --- IWbemLocator ---
 // vtable[3] = ConnectServer
 
 fn wbemLocatorConnectServer(
-    this: usize, strNetworkResource: usize, strUser: usize, strPassword: usize,
-    strLocale: usize, lSecurityFlags: i32, strAuthority: usize, pCtx: usize, ppNamespace: usize,
+    this: usize,
+    strNetworkResource: usize,
+    strUser: usize,
+    strPassword: usize,
+    strLocale: usize,
+    lSecurityFlags: i32,
+    strAuthority: usize,
+    pCtx: usize,
+    ppNamespace: usize,
 ) callconv(w32cc.WINAPI) i32 {
     _ = .{ this, strNetworkResource, strUser, strPassword, strLocale, lSecurityFlags, strAuthority, pCtx };
     if (trace.enable_tracing) trace.print("WMI: IWbemLocator::ConnectServer\n", .{});
@@ -56,7 +81,11 @@ pub var wbem_locator_obj: [1]usize = undefined;
 // vtable[20] = ExecQuery
 
 fn wbemServicesCreateInstanceEnum(
-    this: usize, strFilter: usize, lFlags: i32, pCtx: usize, ppEnum: usize,
+    this: usize,
+    strFilter: usize,
+    lFlags: i32,
+    pCtx: usize,
+    ppEnum: usize,
 ) callconv(w32cc.WINAPI) i32 {
     _ = .{ this, strFilter, lFlags, pCtx };
     if (trace.enable_tracing) trace.print("WMI: IWbemServices::CreateInstanceEnum\n", .{});
@@ -69,8 +98,12 @@ fn wbemServicesCreateInstanceEnum(
 }
 
 fn wbemServicesExecQuery(
-    this: usize, strQueryLanguage: usize, strQuery: usize,
-    lFlags: i32, pCtx: usize, ppEnum: usize,
+    this: usize,
+    strQueryLanguage: usize,
+    strQuery: usize,
+    lFlags: i32,
+    pCtx: usize,
+    ppEnum: usize,
 ) callconv(w32cc.WINAPI) i32 {
     _ = .{ this, strQueryLanguage, lFlags, pCtx };
     if (trace.enable_tracing) {
@@ -100,7 +133,11 @@ var wbem_services_obj: [1]usize = undefined;
 var enum_returned: bool = false;
 
 fn wbemEnumNext(
-    this: usize, lTimeout: i32, uCount: u32, apObjects: usize, puReturned: usize,
+    this: usize,
+    lTimeout: i32,
+    uCount: u32,
+    apObjects: usize,
+    puReturned: usize,
 ) callconv(w32cc.WINAPI) i32 {
     _ = .{ this, lTimeout };
     if (trace.enable_tracing) trace.print("WMI: IEnumWbemClassObject::Next(count={d})\n", .{uCount});
@@ -122,7 +159,12 @@ var wbem_enum_obj: [1]usize = undefined;
 // vtable[4] = Get(name, flags, pVal, pType, pFlavor)
 
 fn wbemClassGet(
-    this: usize, wszName: usize, lFlags: i32, pVal: usize, pType: usize, plFlavor: usize,
+    this: usize,
+    wszName: usize,
+    lFlags: i32,
+    pVal: usize,
+    pType: usize,
+    plFlavor: usize,
 ) callconv(w32cc.WINAPI) i32 {
     _ = .{ this, lFlags };
     if (plFlavor != 0) @as(*u32, @ptrFromInt(plFlavor)).* = 0;
@@ -211,50 +253,87 @@ fn setVariantSmbios(pVal: usize) void {
     var smbios_data: [128]u8 = [_]u8{0} ** 128;
     var pos: usize = 0;
     // Type 4 header
-    smbios_data[pos] = 4; pos += 1; // Type
-    smbios_data[pos] = 0x2A; pos += 1; // Length (42 bytes)
-    smbios_data[pos] = 0x01; pos += 1; // Handle low
-    smbios_data[pos] = 0x00; pos += 1; // Handle high
-    smbios_data[pos] = 1; pos += 1; // Socket Designation (string index 1)
-    smbios_data[pos] = 3; pos += 1; // Processor Type: Central Processor
-    smbios_data[pos] = 0xFE; pos += 1; // Processor Family: see Family2
-    smbios_data[pos] = 2; pos += 1; // Processor Manufacturer (string index 2)
+    smbios_data[pos] = 4;
+    pos += 1; // Type
+    smbios_data[pos] = 0x2A;
+    pos += 1; // Length (42 bytes)
+    smbios_data[pos] = 0x01;
+    pos += 1; // Handle low
+    smbios_data[pos] = 0x00;
+    pos += 1; // Handle high
+    smbios_data[pos] = 1;
+    pos += 1; // Socket Designation (string index 1)
+    smbios_data[pos] = 3;
+    pos += 1; // Processor Type: Central Processor
+    smbios_data[pos] = 0xFE;
+    pos += 1; // Processor Family: see Family2
+    smbios_data[pos] = 2;
+    pos += 1; // Processor Manufacturer (string index 2)
     // Processor ID (8 bytes) — CPUID(1) result
-    smbios_data[pos] = 0x33; pos += 1; // EAX: Family 6, Model 8, Stepping 3
-    smbios_data[pos] = 0x06; pos += 1;
-    smbios_data[pos] = 0x00; pos += 1;
-    smbios_data[pos] = 0x00; pos += 1;
-    smbios_data[pos] = 0xFF; pos += 1; // EDX feature flags
-    smbios_data[pos] = 0xFB; pos += 1;
-    smbios_data[pos] = 0x8B; pos += 1;
-    smbios_data[pos] = 0x07; pos += 1;
-    smbios_data[pos] = 3; pos += 1; // Processor Version (string index 3)
-    smbios_data[pos] = 0x80; pos += 1; // Voltage: 3.3V
-    smbios_data[pos] = 0x64; pos += 1; // External Clock: 100 MHz (low)
-    smbios_data[pos] = 0x00; pos += 1; // External Clock: (high)
-    smbios_data[pos] = 0xB8; pos += 1; // Max Speed: 3000 MHz (low)
-    smbios_data[pos] = 0x0B; pos += 1; // Max Speed: (high)
-    smbios_data[pos] = 0xB8; pos += 1; // Current Speed: 3000 MHz (low)
-    smbios_data[pos] = 0x0B; pos += 1; // Current Speed: (high)
+    smbios_data[pos] = 0x33;
+    pos += 1; // EAX: Family 6, Model 8, Stepping 3
+    smbios_data[pos] = 0x06;
+    pos += 1;
+    smbios_data[pos] = 0x00;
+    pos += 1;
+    smbios_data[pos] = 0x00;
+    pos += 1;
+    smbios_data[pos] = 0xFF;
+    pos += 1; // EDX feature flags
+    smbios_data[pos] = 0xFB;
+    pos += 1;
+    smbios_data[pos] = 0x8B;
+    pos += 1;
+    smbios_data[pos] = 0x07;
+    pos += 1;
+    smbios_data[pos] = 3;
+    pos += 1; // Processor Version (string index 3)
+    smbios_data[pos] = 0x80;
+    pos += 1; // Voltage: 3.3V
+    smbios_data[pos] = 0x64;
+    pos += 1; // External Clock: 100 MHz (low)
+    smbios_data[pos] = 0x00;
+    pos += 1; // External Clock: (high)
+    smbios_data[pos] = 0xB8;
+    pos += 1; // Max Speed: 3000 MHz (low)
+    smbios_data[pos] = 0x0B;
+    pos += 1; // Max Speed: (high)
+    smbios_data[pos] = 0xB8;
+    pos += 1; // Current Speed: 3000 MHz (low)
+    smbios_data[pos] = 0x0B;
+    pos += 1; // Current Speed: (high)
     // Fill remaining bytes to reach length 0x2A
     while (pos < 4 + 0x2A) : (pos += 1) smbios_data[pos] = 0;
     pos = 4 + 0x2A;
     // Strings section: string1\0string2\0string3\0\0
-    @memcpy(smbios_data[pos..pos + 7], "Socket0"); pos += 7;
-    smbios_data[pos] = 0; pos += 1;
-    @memcpy(smbios_data[pos..pos + 12], "GenuineIntel"); pos += 12;
-    smbios_data[pos] = 0; pos += 1;
-    @memcpy(smbios_data[pos..pos + proc_name.len], proc_name); pos += proc_name.len;
-    smbios_data[pos] = 0; pos += 1;
-    smbios_data[pos] = 0; pos += 1; // double-null terminator
+    @memcpy(smbios_data[pos .. pos + 7], "Socket0");
+    pos += 7;
+    smbios_data[pos] = 0;
+    pos += 1;
+    @memcpy(smbios_data[pos .. pos + 12], "GenuineIntel");
+    pos += 12;
+    smbios_data[pos] = 0;
+    pos += 1;
+    @memcpy(smbios_data[pos .. pos + proc_name.len], proc_name);
+    pos += proc_name.len;
+    smbios_data[pos] = 0;
+    pos += 1;
+    smbios_data[pos] = 0;
+    pos += 1; // double-null terminator
 
     // End-of-table marker (Type 127)
-    smbios_data[pos] = 127; pos += 1; // Type
-    smbios_data[pos] = 4; pos += 1; // Length
-    smbios_data[pos] = 0xFF; pos += 1; // Handle
-    smbios_data[pos] = 0xFF; pos += 1;
-    smbios_data[pos] = 0; pos += 1; // no strings
-    smbios_data[pos] = 0; pos += 1; // double-null
+    smbios_data[pos] = 127;
+    pos += 1; // Type
+    smbios_data[pos] = 4;
+    pos += 1; // Length
+    smbios_data[pos] = 0xFF;
+    pos += 1; // Handle
+    smbios_data[pos] = 0xFF;
+    pos += 1;
+    smbios_data[pos] = 0;
+    pos += 1; // no strings
+    smbios_data[pos] = 0;
+    pos += 1; // double-null
 
     // Create a SAFEARRAY(VT_UI1) containing the SMBIOS data
     // SAFEARRAY: cDims(2), fFeatures(2), cbElements(4), cLocks(4),

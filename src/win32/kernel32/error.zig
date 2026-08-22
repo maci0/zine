@@ -255,7 +255,7 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
                 const old_base = teb_ptr.NtTib.StackBase;
                 teb_ptr.NtTib.StackBase = 0xFFFFFFFF;
                 teb_ptr.NtTib.StackLimit = 0;
-                
+
                 const disp_res = compat_thunks.callCompat32_4(
                     handler,
                     @truncate(@intFromPtr(rec)),
@@ -263,7 +263,7 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
                     @truncate(@intFromPtr(ctx)),
                     0, // dispatcherContext
                 );
-                
+
                 teb_ptr.NtTib.StackBase = old_base;
                 teb_ptr.NtTib.StackLimit = old_limit;
                 break :blk disp_res;

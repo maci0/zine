@@ -46,30 +46,76 @@ pub fn WSAStartup(wVersionRequired: u16, lpWSAData: usize) callconv(w32cc.WINAPI
     if (lpWSAData != 0) {
         const data = @as([*]u8, @ptrFromInt(lpWSAData));
         @memset(data[0..400], 0);
-        data[0] = 2; data[1] = 2; // wVersion = 2.2
-        data[2] = 2; data[3] = 2; // wHighVersion = 2.2
+        data[0] = 2;
+        data[1] = 2; // wVersion = 2.2
+        data[2] = 2;
+        data[3] = 2; // wHighVersion = 2.2
     }
     return 0;
 }
-pub fn WSACleanup() callconv(w32cc.WINAPI) i32 { return 0; }
-pub fn stub_WSAGetLastError() callconv(w32cc.WINAPI) i32 { return 0; }
-pub fn stub_WSASetLastError(iError: i32) callconv(w32cc.WINAPI) void { _ = iError; }
+pub fn WSACleanup() callconv(w32cc.WINAPI) i32 {
+    return 0;
+}
+pub fn stub_WSAGetLastError() callconv(w32cc.WINAPI) i32 {
+    return 0;
+}
+pub fn stub_WSASetLastError(iError: i32) callconv(w32cc.WINAPI) void {
+    _ = iError;
+}
 
-pub fn stub1_ret(a: usize) callconv(w32cc.WINAPI) i32 { _ = a; return SOCKET_ERROR; }
-pub fn stub1_ret_usize(a: usize) callconv(w32cc.WINAPI) usize { _ = a; return 0; }
-pub fn stub2_ret(a: usize, b: usize) callconv(w32cc.WINAPI) i32 { _ = .{ a, b }; return SOCKET_ERROR; }
-pub fn stub3_ret(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) i32 { _ = .{ a, b, c }; return SOCKET_ERROR; }
-pub fn stub3_ret_usize(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize { _ = .{ a, b, c }; return INVALID_SOCKET; }
-pub fn stub3_socket(af: i32, sock_type: i32, protocol: i32) callconv(w32cc.WINAPI) usize { _ = .{ af, sock_type, protocol }; return INVALID_SOCKET; }
-pub fn stub4_ret(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) i32 { _ = .{ a, b, c, d }; return SOCKET_ERROR; }
-pub fn stub5_ret(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) i32 { _ = .{ a, b, c, d, e }; return SOCKET_ERROR; }
-pub fn stub6_ret(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) i32 { _ = .{ a, b, c, d, e, f }; return SOCKET_ERROR; }
-pub fn stub6_ret_usize(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) usize { _ = .{ a, b, c, d, e, f }; return 0; }
+pub fn stub1_ret(a: usize) callconv(w32cc.WINAPI) i32 {
+    _ = a;
+    return SOCKET_ERROR;
+}
+pub fn stub1_ret_usize(a: usize) callconv(w32cc.WINAPI) usize {
+    _ = a;
+    return 0;
+}
+pub fn stub2_ret(a: usize, b: usize) callconv(w32cc.WINAPI) i32 {
+    _ = .{ a, b };
+    return SOCKET_ERROR;
+}
+pub fn stub3_ret(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) i32 {
+    _ = .{ a, b, c };
+    return SOCKET_ERROR;
+}
+pub fn stub3_ret_usize(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize {
+    _ = .{ a, b, c };
+    return INVALID_SOCKET;
+}
+pub fn stub3_socket(af: i32, sock_type: i32, protocol: i32) callconv(w32cc.WINAPI) usize {
+    _ = .{ af, sock_type, protocol };
+    return INVALID_SOCKET;
+}
+pub fn stub4_ret(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) i32 {
+    _ = .{ a, b, c, d };
+    return SOCKET_ERROR;
+}
+pub fn stub5_ret(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) i32 {
+    _ = .{ a, b, c, d, e };
+    return SOCKET_ERROR;
+}
+pub fn stub6_ret(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) i32 {
+    _ = .{ a, b, c, d, e, f };
+    return SOCKET_ERROR;
+}
+pub fn stub6_ret_usize(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) usize {
+    _ = .{ a, b, c, d, e, f };
+    return 0;
+}
 
-pub fn htonl(hostlong: u32) callconv(w32cc.WINAPI) u32 { return @byteSwap(hostlong); }
-pub fn htons(hostshort: u16) callconv(w32cc.WINAPI) u16 { return @byteSwap(hostshort); }
-pub fn ntohl(netlong: u32) callconv(w32cc.WINAPI) u32 { return @byteSwap(netlong); }
-pub fn ntohs(netshort: u16) callconv(w32cc.WINAPI) u16 { return @byteSwap(netshort); }
+pub fn htonl(hostlong: u32) callconv(w32cc.WINAPI) u32 {
+    return @byteSwap(hostlong);
+}
+pub fn htons(hostshort: u16) callconv(w32cc.WINAPI) u16 {
+    return @byteSwap(hostshort);
+}
+pub fn ntohl(netlong: u32) callconv(w32cc.WINAPI) u32 {
+    return @byteSwap(netlong);
+}
+pub fn ntohs(netshort: u16) callconv(w32cc.WINAPI) u16 {
+    return @byteSwap(netshort);
+}
 
 pub fn inet_addr(cp: usize) callconv(w32cc.WINAPI) u32 {
     if (cp == 0) return 0xFFFFFFFF; // INADDR_NONE

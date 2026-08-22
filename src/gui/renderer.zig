@@ -485,7 +485,8 @@ pub fn setEditFont(hwnd: usize, face: []const u8, pt_size: i32, bold: bool, ital
     switch (active_backend) {
         .web_ui => {
             var buf: [512]u8 = undefined;
-            const json = std.fmt.bufPrint(&buf,
+            const json = std.fmt.bufPrint(
+                &buf,
                 "{{\"type\":\"set_edit_font\",\"hwnd\":{d},\"face\":\"{s}\",\"size\":{d},\"bold\":{},\"italic\":{}}}",
                 .{ hwnd, face, pt_size, bold, italic },
             ) catch return;
@@ -503,7 +504,8 @@ pub fn setEditSelection(start: i32, end: i32) void {
     switch (active_backend) {
         .web_ui => {
             var buf: [128]u8 = undefined;
-            const json = std.fmt.bufPrint(&buf,
+            const json = std.fmt.bufPrint(
+                &buf,
                 "{{\"type\":\"edit_setsel\",\"start\":{d},\"end\":{d}}}",
                 .{ start, end },
             ) catch return;
@@ -523,7 +525,8 @@ pub fn replaceEditSelection(text: []const u8) void {
             const escaped = escaped_buf[0..esc_len];
 
             var buf: [8192]u8 = undefined;
-            const json = std.fmt.bufPrint(&buf,
+            const json = std.fmt.bufPrint(
+                &buf,
                 "{{\"type\":\"edit_replacesel\",\"text\":\"{s}\"}}",
                 .{escaped},
             ) catch return;
@@ -722,7 +725,8 @@ pub fn addControl(class: []const u8, hwnd_id: usize, x: i32, y: i32, w: i32, h: 
             var escaped: [512]u8 = undefined;
             const esc_len = jsonEscape(text, &escaped);
             var buf: [2048]u8 = undefined;
-            const json = std.fmt.bufPrint(&buf,
+            const json = std.fmt.bufPrint(
+                &buf,
                 "{{\"type\":\"add_control\",\"class\":\"{s}\",\"id\":{d},\"x\":{d},\"y\":{d},\"cx\":{d},\"cy\":{d},\"style\":{d},\"text\":\"{s}\"}}",
                 .{ class, hwnd_id, x, y, w, h, style, escaped[0..esc_len] },
             ) catch return;
@@ -1000,7 +1004,8 @@ pub fn openFontDialog(face_name: []const u8, point_size: i32, bold: bool, italic
     switch (active_backend) {
         .web_ui => {
             var buf: [512]u8 = undefined;
-            const json = std.fmt.bufPrint(&buf,
+            const json = std.fmt.bufPrint(
+                &buf,
                 "{{\"type\":\"open_font_dialog\",\"face\":\"{s}\",\"size\":{d},\"bold\":{},\"italic\":{}}}",
                 .{ face_name, point_size, bold, italic },
             ) catch return;
@@ -1018,7 +1023,8 @@ pub fn openPrintDialog(from_page: i32, to_page: i32, min_page: i32, max_page: i3
     switch (active_backend) {
         .web_ui => {
             var buf: [256]u8 = undefined;
-            const json = std.fmt.bufPrint(&buf,
+            const json = std.fmt.bufPrint(
+                &buf,
                 "{{\"type\":\"show_print_dialog\",\"from\":{d},\"to\":{d},\"min\":{d},\"max\":{d},\"copies\":{d}}}",
                 .{ from_page, to_page, min_page, max_page, copies },
             ) catch return;
@@ -1040,7 +1046,8 @@ pub fn openFindDialog(find_text: []const u8, replace_text: []const u8, is_replac
             var esc_repl: [512]u8 = undefined;
             const r_len = jsonEscape(replace_text, &esc_repl);
             var buf: [1536]u8 = undefined;
-            const json = std.fmt.bufPrint(&buf,
+            const json = std.fmt.bufPrint(
+                &buf,
                 "{{\"type\":\"open_find_dialog\",\"mode\":\"{s}\",\"findText\":\"{s}\",\"replaceText\":\"{s}\"}}",
                 .{ if (is_replace) "replace" else "find", esc_find[0..f_len], esc_repl[0..r_len] },
             ) catch return;
@@ -1062,7 +1069,8 @@ pub fn openPageSetupDialog(left: i32, top: i32, right: i32, bottom: i32, paper_w
             var esc_label: [64]u8 = undefined;
             const l_len = jsonEscape(units_label, &esc_label);
             var buf: [512]u8 = undefined;
-            const json = std.fmt.bufPrint(&buf,
+            const json = std.fmt.bufPrint(
+                &buf,
                 "{{\"type\":\"show_page_setup_dialog\",\"left\":{d},\"top\":{d},\"right\":{d},\"bottom\":{d},\"paperW\":{d},\"paperH\":{d},\"orientation\":{d},\"units\":\"{s}\"}}",
                 .{ left, top, right, bottom, paper_w, paper_h, orientation, esc_label[0..l_len] },
             ) catch return;

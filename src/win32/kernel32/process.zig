@@ -178,21 +178,25 @@ pub fn LoadLibraryA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
                                 if (shared.child_cpu) |child| {
                                     temp_cpu.fs_base = child.fs_base;
                                 }
-                                
+
                                 temp_cpu.memory.write8(stack_base, 0xF4); // HLT
-                                
+
                                 temp_cpu.esp = stack_base + 64;
-                                temp_cpu.esp -= 4; temp_cpu.memory.write32(temp_cpu.esp, 0); // lpReserved
-                                temp_cpu.esp -= 4; temp_cpu.memory.write32(temp_cpu.esp, 1); // DLL_PROCESS_ATTACH
-                                temp_cpu.esp -= 4; temp_cpu.memory.write32(temp_cpu.esp, @truncate(mod.image_base)); // hModule
-                                temp_cpu.esp -= 4; temp_cpu.memory.write32(temp_cpu.esp, stack_base); // Return to HLT
-                                
+                                temp_cpu.esp -= 4;
+                                temp_cpu.memory.write32(temp_cpu.esp, 0); // lpReserved
+                                temp_cpu.esp -= 4;
+                                temp_cpu.memory.write32(temp_cpu.esp, 1); // DLL_PROCESS_ATTACH
+                                temp_cpu.esp -= 4;
+                                temp_cpu.memory.write32(temp_cpu.esp, @truncate(mod.image_base)); // hModule
+                                temp_cpu.esp -= 4;
+                                temp_cpu.memory.write32(temp_cpu.esp, stack_base); // Return to HLT
+
                                 temp_cpu.eip = @truncate(mod.image_base + opt_header.AddressOfEntryPoint);
-                                
+
                                 if (trace.enable_tracing) trace.print("KERNEL32: Executing DllMain for {s} at guest {x} (WASM emulator)\n", .{ load_name, temp_cpu.eip });
-                                
+
                                 x86_execute.run(&temp_cpu);
-                                
+
                                 if (trace.enable_tracing) trace.print("KERNEL32: DllMain (WASM) returned {d}\n", .{temp_cpu.eax});
                             }
                         }
@@ -426,7 +430,7 @@ pub fn GetCommandLineA() callconv(w32cc.WINAPI) usize {
             cmdline_host_addr = @intFromPtr(raw);
             cmdline_guest_addr = @import("../shared.zig").hostToGuest(cmdline_host_addr);
         }
-        
+
         const host_ptr = @as([*]u8, @ptrFromInt(cmdline_host_addr));
         var buf: []u8 = host_ptr[0..4096];
 
@@ -1187,14 +1191,14 @@ pub fn GetCommandLineW() callconv(w32cc.WINAPI) usize {
         // Get narrow command line and widen it
         const narrow_ptr = GetCommandLineA();
         const narrow = trace.c_span(narrow_ptr);
-        
+
         const kernel32_mem_mod = @import("mem.zig");
         if (cmdline_w_host_addr == 0) {
             const raw = kernel32_mem_mod.raw_alloc(8192) orelse return 0;
             cmdline_w_host_addr = @intFromPtr(raw);
             cmdline_w_guest_addr = @import("../shared.zig").hostToGuest(cmdline_w_host_addr);
         }
-        
+
         const wbuf = @as([*]u16, @ptrFromInt(cmdline_w_host_addr));
         const copy_len = @min(narrow.len, 4095);
         for (0..copy_len) |i| {

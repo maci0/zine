@@ -56,7 +56,7 @@ pub fn mktemp(template: ?*anyopaque) callconv(.c) ?*anyopaque {
 /// Implementation status: Partially implemented
 pub fn splitpath(path: [*:0]const u8, drv_out: ?[*]u8, dir_out: ?[*]u8, fname_out: ?[*]u8, ext_out: ?[*]u8) callconv(.c) void {
     const s = std.mem.span(path);
-    if (trace.enable_tracing) trace.print("MSVCRT: _splitpath('{s}')\n", .{ s });
+    if (trace.enable_tracing) trace.print("MSVCRT: _splitpath('{s}')\n", .{s});
     var drive_len: usize = 0;
     if (s.len >= 2 and s[1] == ':') drive_len = 2;
 
@@ -101,7 +101,7 @@ pub fn makepath(out: [*]u8, drv: ?[*:0]const u8, dir: ?[*:0]const u8, fname: ?[*
         const dir_str = if (dir) |d| std.mem.span(d) else "null";
         const f_str = if (fname) |d| std.mem.span(d) else "null";
         const e_str = if (ext) |d| std.mem.span(d) else "null";
-        trace.print("MSVCRT: _makepath(drv='{s}', dir='{s}', fname='{s}', ext='{s}')\n", .{d_str, dir_str, f_str, e_str});
+        trace.print("MSVCRT: _makepath(drv='{s}', dir='{s}', fname='{s}', ext='{s}')\n", .{ d_str, dir_str, f_str, e_str });
     }
     var len: usize = 0;
     if (drv) |d| {
@@ -109,7 +109,10 @@ pub fn makepath(out: [*]u8, drv: ?[*:0]const u8, dir: ?[*:0]const u8, fname: ?[*
         if (s.len > 0) {
             @memcpy(out[len..][0..s.len], s);
             len += s.len;
-            if (s[s.len - 1] != ':') { out[len] = ':'; len += 1; }
+            if (s[s.len - 1] != ':') {
+                out[len] = ':';
+                len += 1;
+            }
         }
     }
     if (dir) |d| {
@@ -117,7 +120,10 @@ pub fn makepath(out: [*]u8, drv: ?[*:0]const u8, dir: ?[*:0]const u8, fname: ?[*
         if (s.len > 0) {
             @memcpy(out[len..][0..s.len], s);
             len += s.len;
-            if (s[s.len - 1] != '/' and s[s.len - 1] != '\\') { out[len] = '\\'; len += 1; }
+            if (s[s.len - 1] != '/' and s[s.len - 1] != '\\') {
+                out[len] = '\\';
+                len += 1;
+            }
         }
     }
     if (fname) |d| {
@@ -128,7 +134,10 @@ pub fn makepath(out: [*]u8, drv: ?[*:0]const u8, dir: ?[*:0]const u8, fname: ?[*
     if (ext) |d| {
         const s = std.mem.span(d);
         if (s.len > 0) {
-            if (s[0] != '.') { out[len] = '.'; len += 1; }
+            if (s[0] != '.') {
+                out[len] = '.';
+                len += 1;
+            }
             @memcpy(out[len..][0..s.len], s);
             len += s.len;
         }

@@ -698,14 +698,40 @@ pub fn decode(bytes: []const u8) Instruction {
         },
 
         // LES (C4) / LDS (C5) — have ModR/M
-        0xC4 => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); },
-        0xC5 => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); },
+        0xC4 => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
+        0xC5 => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
 
         // IN/OUT (E4-E7): imm8 port
-        0xE4 => { insn.op_size = .byte; if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; } },
-        0xE5 => { if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; } },
-        0xE6 => { insn.op_size = .byte; if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; } },
-        0xE7 => { if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; } },
+        0xE4 => {
+            insn.op_size = .byte;
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
+        },
+        0xE5 => {
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
+        },
+        0xE6 => {
+            insn.op_size = .byte;
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
+        },
+        0xE7 => {
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
+        },
         // IN/OUT DX (EC-EF): single-byte
         0xEC, 0xED, 0xEE, 0xEF => {},
 
@@ -719,7 +745,10 @@ pub fn decode(bytes: []const u8) Instruction {
 
         // AAM (D4 ib) / AAD (D5 ib)
         0xD4, 0xD5 => {
-            if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; }
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
         },
 
         // --- Two-byte opcodes that appear in real binaries ---
@@ -734,12 +763,22 @@ pub fn decode(bytes: []const u8) Instruction {
         },
 
         // XADD (0F C0/C1)
-        0x0FC0 => { insn.op_size = .byte; pos = decodeModRM(bytes, pos, &insn, .rm_reg); },
-        0x0FC1 => { pos = decodeModRM(bytes, pos, &insn, .rm_reg); },
+        0x0FC0 => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
+        0x0FC1 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
 
         // CMPXCHG (0F B0/B1)
-        0x0FB0 => { insn.op_size = .byte; pos = decodeModRM(bytes, pos, &insn, .rm_reg); },
-        0x0FB1 => { pos = decodeModRM(bytes, pos, &insn, .rm_reg); },
+        0x0FB0 => {
+            insn.op_size = .byte;
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
+        0x0FB1 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        },
 
         // BT/BTS/BTR/BTC imm8 form (0F BA /4..7)
         0x0FBA => {
@@ -760,95 +799,216 @@ pub fn decode(bytes: []const u8) Instruction {
         // ============================================================
 
         // --- SSE/SSE2 data movement (0F 10-17) --- ModR/M reg_rm
-        0x0F10 => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); }, // MOVUPS/MOVUPD/MOVSS/MOVSD
-        0x0F11 => { pos = decodeModRM(bytes, pos, &insn, .rm_reg); }, // MOVUPS/MOVUPD/MOVSS/MOVSD store
-        0x0F12 => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); }, // MOVLPS/MOVHLPS/MOVSLDUP/MOVDDUP
-        0x0F13 => { pos = decodeModRM(bytes, pos, &insn, .rm_reg); }, // MOVLPS store
-        0x0F14 => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); }, // UNPCKLPS/UNPCKLPD
-        0x0F15 => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); }, // UNPCKHPS/UNPCKHPD
-        0x0F16 => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); }, // MOVHPS/MOVLHPS/MOVSHDUP
-        0x0F17 => { pos = decodeModRM(bytes, pos, &insn, .rm_reg); }, // MOVHPS store
+        0x0F10 => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        }, // MOVUPS/MOVUPD/MOVSS/MOVSD
+        0x0F11 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        }, // MOVUPS/MOVUPD/MOVSS/MOVSD store
+        0x0F12 => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        }, // MOVLPS/MOVHLPS/MOVSLDUP/MOVDDUP
+        0x0F13 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        }, // MOVLPS store
+        0x0F14 => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        }, // UNPCKLPS/UNPCKLPD
+        0x0F15 => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        }, // UNPCKHPS/UNPCKHPD
+        0x0F16 => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        }, // MOVHPS/MOVLHPS/MOVSHDUP
+        0x0F17 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        }, // MOVHPS store
 
         // --- SSE/SSE2 data movement (0F 28-2F) ---
-        0x0F28 => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); }, // MOVAPS/MOVAPD
-        0x0F29 => { pos = decodeModRM(bytes, pos, &insn, .rm_reg); }, // MOVAPS/MOVAPD store
-        0x0F2A => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); }, // CVTPI2PS/CVTSI2SS/CVTSI2SD
-        0x0F2B => { pos = decodeModRM(bytes, pos, &insn, .rm_reg); }, // MOVNTPS/MOVNTPD
-        0x0F2C => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); }, // CVTTPS2PI/CVTTSS2SI/CVTTSD2SI
-        0x0F2D => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); }, // CVTPS2PI/CVTSS2SI/CVTSD2SI
-        0x0F2E => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); }, // UCOMISS/UCOMISD
-        0x0F2F => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); }, // COMISS/COMISD
+        0x0F28 => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        }, // MOVAPS/MOVAPD
+        0x0F29 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        }, // MOVAPS/MOVAPD store
+        0x0F2A => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        }, // CVTPI2PS/CVTSI2SS/CVTSI2SD
+        0x0F2B => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        }, // MOVNTPS/MOVNTPD
+        0x0F2C => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        }, // CVTTPS2PI/CVTTSS2SI/CVTTSD2SI
+        0x0F2D => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        }, // CVTPS2PI/CVTSS2SI/CVTSD2SI
+        0x0F2E => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        }, // UCOMISS/UCOMISD
+        0x0F2F => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        }, // COMISS/COMISD
 
         // --- SSE/SSE2 arithmetic + logic (0F 50-6F) ---
-        0x0F50 => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); }, // MOVMSKPS/MOVMSKPD
-        0x0F51, 0x0F52, 0x0F53, // SQRTPS/SS/PD/SD, RSQRTPS/SS, RCPPS/SS
-        0x0F54, 0x0F55, 0x0F56, 0x0F57, // ANDPS/PD, ANDNPS/PD, ORPS/PD, XORPS/PD
-        0x0F58, 0x0F59, 0x0F5A, 0x0F5B, // ADDPS/SS/PD/SD, MULPS/SS/PD/SD, CVT...
-        0x0F5C, 0x0F5D, 0x0F5E, 0x0F5F, // SUBPS/SS/PD/SD, MINPS/SS/PD/SD, DIVPS/SS/PD/SD, MAXPS/SS/PD/SD
-        => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); },
+        0x0F50 => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        }, // MOVMSKPS/MOVMSKPD
+        0x0F51,
+        0x0F52,
+        0x0F53, // SQRTPS/SS/PD/SD, RSQRTPS/SS, RCPPS/SS
+        0x0F54,
+        0x0F55,
+        0x0F56,
+        0x0F57, // ANDPS/PD, ANDNPS/PD, ORPS/PD, XORPS/PD
+        0x0F58,
+        0x0F59,
+        0x0F5A,
+        0x0F5B, // ADDPS/SS/PD/SD, MULPS/SS/PD/SD, CVT...
+        0x0F5C,
+        0x0F5D,
+        0x0F5E,
+        0x0F5F, // SUBPS/SS/PD/SD, MINPS/SS/PD/SD, DIVPS/SS/PD/SD, MAXPS/SS/PD/SD
+        => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
 
         // --- SSE/SSE2 integer SIMD (0F 60-6F) ---
-        0x0F60, 0x0F61, 0x0F62, 0x0F63, // PUNPCKLBW/WD/DQ, PACKSSWB
-        0x0F64, 0x0F65, 0x0F66, 0x0F67, // PCMPGTB/W/D, PACKUSWB
-        0x0F68, 0x0F69, 0x0F6A, 0x0F6B, // PUNPCKHBW/WD/DQ, PACKSSDW
-        0x0F6C, 0x0F6D, // PUNPCKLQDQ, PUNPCKHQDQ
-        0x0F6E, 0x0F6F, // MOVD, MOVQ/MOVDQA/MOVDQU
-        => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); },
+        0x0F60,
+        0x0F61,
+        0x0F62,
+        0x0F63, // PUNPCKLBW/WD/DQ, PACKSSWB
+        0x0F64,
+        0x0F65,
+        0x0F66,
+        0x0F67, // PCMPGTB/W/D, PACKUSWB
+        0x0F68,
+        0x0F69,
+        0x0F6A,
+        0x0F6B, // PUNPCKHBW/WD/DQ, PACKSSDW
+        0x0F6C,
+        0x0F6D, // PUNPCKLQDQ, PUNPCKHQDQ
+        0x0F6E,
+        0x0F6F, // MOVD, MOVQ/MOVDQA/MOVDQU
+        => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
 
         // --- SSE/SSE2 integer SIMD + more (0F 70-7F) ---
         0x0F70 => { // PSHUFD/PSHUF[LH]W — ModR/M + imm8
             pos = decodeModRM(bytes, pos, &insn, .reg_rm);
-            if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; }
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
         },
         0x0F71, 0x0F72, 0x0F73 => { // Group shifts (PSxxW/D/Q imm8) — ModR/M rm_only + imm8
             pos = decodeModRM(bytes, pos, &insn, .rm_only);
-            if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; }
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
         },
         0x0F74, 0x0F75, 0x0F76 => { // PCMPEQB/W/D — ModR/M reg_rm
             pos = decodeModRM(bytes, pos, &insn, .reg_rm);
         },
         0x0F77 => {}, // EMMS — no operands
-        0x0F7E => { pos = decodeModRM(bytes, pos, &insn, .rm_reg); }, // MOVD/MOVQ store
-        0x0F7F => { pos = decodeModRM(bytes, pos, &insn, .rm_reg); }, // MOVQ/MOVDQA/MOVDQU store
+        0x0F7E => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        }, // MOVD/MOVQ store
+        0x0F7F => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        }, // MOVQ/MOVDQA/MOVDQU store
 
         // --- SSE/SSE2 compare + misc (0F C2-C6) ---
         0x0FC2 => { // CMPPS/SS/PD/SD — ModR/M reg_rm + imm8
             pos = decodeModRM(bytes, pos, &insn, .reg_rm);
-            if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; }
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
         },
-        0x0FC3 => { pos = decodeModRM(bytes, pos, &insn, .rm_reg); }, // MOVNTI
+        0x0FC3 => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_reg);
+        }, // MOVNTI
         0x0FC4 => { // PINSRW — ModR/M reg_rm + imm8
             pos = decodeModRM(bytes, pos, &insn, .reg_rm);
-            if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; }
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
         },
         0x0FC5 => { // PEXTRW — ModR/M reg_rm + imm8
             pos = decodeModRM(bytes, pos, &insn, .reg_rm);
-            if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; }
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
         },
         0x0FC6 => { // SHUFPS/SHUFPD — ModR/M reg_rm + imm8
             pos = decodeModRM(bytes, pos, &insn, .reg_rm);
-            if (pos < bytes.len) { insn.imm = bytes[pos]; pos += 1; }
+            if (pos < bytes.len) {
+                insn.imm = bytes[pos];
+                pos += 1;
+            }
         },
 
         // --- SSE/SSE2 integer ops (0F D0-FF) ---
         0x0FD0, // ADDSUBPD/ADDSUBPS (SSE3 stub)
-        0x0FD1, 0x0FD2, 0x0FD3, 0x0FD4, 0x0FD5, // PSRLW, PSRLD, PSRLQ, PADDQ, PMULLW
+        0x0FD1,
+        0x0FD2,
+        0x0FD3,
+        0x0FD4,
+        0x0FD5, // PSRLW, PSRLD, PSRLQ, PADDQ, PMULLW
         0x0FD6, // MOVQ store (66 prefix)
         0x0FD7, // PMOVMSKB
-        0x0FD8, 0x0FD9, 0x0FDA, 0x0FDB, // PSUBUSB/W, PMINUB, PAND
-        0x0FDC, 0x0FDD, 0x0FDE, 0x0FDF, // PADDUSB/W, PMAXUB, PANDN
-        0x0FE0, 0x0FE1, 0x0FE2, 0x0FE3, // PAVGB, PSRAW, PSRAD, PAVGW
-        0x0FE4, 0x0FE5, 0x0FE6, 0x0FE7, // PMULHUW, PMULHW, CVT..., MOVNTDQ
-        0x0FE8, 0x0FE9, 0x0FEA, 0x0FEB, // PSUBSB/W, PMINSW, POR
-        0x0FEC, 0x0FED, 0x0FEE, 0x0FEF, // PADDSB/W, PMAXSW, PXOR
+        0x0FD8,
+        0x0FD9,
+        0x0FDA,
+        0x0FDB, // PSUBUSB/W, PMINUB, PAND
+        0x0FDC,
+        0x0FDD,
+        0x0FDE,
+        0x0FDF, // PADDUSB/W, PMAXUB, PANDN
+        0x0FE0,
+        0x0FE1,
+        0x0FE2,
+        0x0FE3, // PAVGB, PSRAW, PSRAD, PAVGW
+        0x0FE4,
+        0x0FE5,
+        0x0FE6,
+        0x0FE7, // PMULHUW, PMULHW, CVT..., MOVNTDQ
+        0x0FE8,
+        0x0FE9,
+        0x0FEA,
+        0x0FEB, // PSUBSB/W, PMINSW, POR
+        0x0FEC,
+        0x0FED,
+        0x0FEE,
+        0x0FEF, // PADDSB/W, PMAXSW, PXOR
         0x0FF0, // LDDQU (SSE3 stub)
-        0x0FF1, 0x0FF2, 0x0FF3, 0x0FF4, 0x0FF5, 0x0FF6, 0x0FF7, // PSLLW-MASKMOVDQU
-        0x0FF8, 0x0FF9, 0x0FFA, 0x0FFB, // PSUBB/W/D/Q
-        0x0FFC, 0x0FFD, 0x0FFE, // PADDB/W/D
-        => { pos = decodeModRM(bytes, pos, &insn, .reg_rm); },
+        0x0FF1,
+        0x0FF2,
+        0x0FF3,
+        0x0FF4,
+        0x0FF5,
+        0x0FF6,
+        0x0FF7, // PSLLW-MASKMOVDQU
+        0x0FF8,
+        0x0FF9,
+        0x0FFA,
+        0x0FFB, // PSUBB/W/D/Q
+        0x0FFC,
+        0x0FFD,
+        0x0FFE, // PADDB/W/D
+        => {
+            pos = decodeModRM(bytes, pos, &insn, .reg_rm);
+        },
 
         // --- Group 15 (0F AE) — LDMXCSR, STMXCSR, LFENCE, MFENCE, SFENCE ---
-        0x0FAE => { pos = decodeModRM(bytes, pos, &insn, .rm_only); },
+        0x0FAE => {
+            pos = decodeModRM(bytes, pos, &insn, .rm_only);
+        },
 
         // Catch-all for unrecognized opcodes — we still record the length
         else => {},

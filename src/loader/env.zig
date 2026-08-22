@@ -531,7 +531,7 @@ pub const Environment = struct {
         if (comptime platform.is_native) {
             const info = @typeInfo(VTableType);
             if (info != .@"struct") @compileError("VTableType must be a struct");
-            
+
             inline for (info.@"struct".fields) |field| {
                 const func_ptr = @field(vtable, field.name);
                 const FuncType = @TypeOf(func_ptr);

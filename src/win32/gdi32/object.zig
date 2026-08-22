@@ -10,7 +10,7 @@ const w32cc = @import("../calling_convention.zig");
 pub fn GetStockObject(fnObject: i32) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("GDI32: GetStockObject({d})\n", .{fnObject});
     const handle = 0x0B0B0000 | @as(usize, @intCast(@as(u32, @bitCast(fnObject)) & 0xFF));
-    
+
     // Lazy registration of stock objects
     if (gdi32.findObject(handle) == null) {
         switch (fnObject) {
@@ -35,7 +35,7 @@ pub fn GetStockObject(fnObject: i32) callconv(w32cc.WINAPI) usize {
 pub fn SelectObject(hdc: usize, h: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("GDI32: SelectObject(dc=0x{x}, obj=0x{x})\n", .{ hdc, h });
     var old_obj: usize = 0;
-    
+
     if (gdi32.findObject(h)) |obj| {
         if (gdi32.getDc(hdc)) |dc_entry| {
             switch (obj.obj_type) {
@@ -223,8 +223,8 @@ pub fn GetObjectA(h: usize, c: i32, pv: usize) callconv(w32cc.WINAPI) i32 {
         }
         return switch (obj.obj_type) {
             .Brush => 12, // sizeof(LOGBRUSH)
-            .Pen => 16,   // sizeof(LOGPEN)
-            .Font => 60,  // sizeof(LOGFONT)
+            .Pen => 16, // sizeof(LOGPEN)
+            .Font => 60, // sizeof(LOGFONT)
             else => 0,
         };
     }
@@ -240,10 +240,10 @@ pub fn GetObjectA(h: usize, c: i32, pv: usize) callconv(w32cc.WINAPI) i32 {
 pub fn GetCurrentObject(hdc: usize, tp: u32) callconv(w32cc.WINAPI) usize {
     if (gdi32.getDc(hdc)) |dc| {
         return switch (tp) {
-            1 => dc.pen,       // OBJ_PEN
-            2 => dc.brush,     // OBJ_BRUSH
-            6 => dc.font,      // OBJ_FONT
-            7 => dc.bitmap,    // OBJ_BITMAP
+            1 => dc.pen, // OBJ_PEN
+            2 => dc.brush, // OBJ_BRUSH
+            6 => dc.font, // OBJ_FONT
+            7 => dc.bitmap, // OBJ_BITMAP
             else => 0,
         };
     }
@@ -337,9 +337,13 @@ pub fn CreatePenIndirect(lplgpn: usize) callconv(w32cc.WINAPI) usize {
 /// Create a logical font with the specified characteristics.
 /// Implementation status: Partially implemented (stores height, weight, face for metrics)
 pub fn CreateFontA(nHeight: i32, nWidth: i32, nEscapement: i32, nOrientation: i32, fnWeight: i32, fdwItalic: u32, fdwUnderline: u32, fdwStrikeOut: u32, fdwCharSet: u32, fdwOutputPrecision: u32, fdwClipPrecision: u32, fdwQuality: u32, fdwPitchAndFamily: u32, lpszFace: usize) callconv(w32cc.WINAPI) usize {
-    _ = nEscapement; _ = nOrientation;
-    _ = fdwUnderline; _ = fdwStrikeOut;
-    _ = fdwOutputPrecision; _ = fdwClipPrecision; _ = fdwQuality;
+    _ = nEscapement;
+    _ = nOrientation;
+    _ = fdwUnderline;
+    _ = fdwStrikeOut;
+    _ = fdwOutputPrecision;
+    _ = fdwClipPrecision;
+    _ = fdwQuality;
     _ = fdwPitchAndFamily;
     var fd = gdi32.FontData{};
     fd.height = nHeight;

@@ -403,13 +403,13 @@ pub const Module = struct {
         const res_dir_rva = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
 
         if (res_dir_rva == 0) return null;
-        
+
         const pe_res = @import("../pe_resources.zig");
         const root_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva])));
-        
+
         const num_type_entries = root_dir.NumberOfNamedEntries + root_dir.NumberOfIdEntries;
         const type_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
-        
+
         var type_offset: ?u32 = null;
         for (0..num_type_entries) |i| {
             if ((entryNameValue(self, res_dir_rva, type_entries[i].NameOrId) orelse continue) == resource_type) {
@@ -454,13 +454,13 @@ pub const Module = struct {
         const res_dir_rva = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
 
         if (res_dir_rva == 0) return null;
-        
+
         const pe_res = @import("../pe_resources.zig");
         const root_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva])));
-        
+
         const num_type_entries = root_dir.NumberOfNamedEntries + root_dir.NumberOfIdEntries;
         const type_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
-        
+
         var type_offset: ?u32 = null;
         for (0..num_type_entries) |i| {
             if ((entryNameValue(self, res_dir_rva, type_entries[i].NameOrId) orelse continue) == resource_type) {
@@ -542,7 +542,10 @@ pub const Module = struct {
                     // Case-insensitive compare
                     const wl = if (wc >= 'A' and wc <= 'Z') wc + 32 else wc;
                     const nl = if (nc >= 'A' and nc <= 'Z') nc + 32 else nc;
-                    if (wl != nl) { matches = false; break; }
+                    if (wl != nl) {
+                        matches = false;
+                        break;
+                    }
                 }
                 if (matches) {
                     name_offset = entry.OffsetToData & RESOURCE_OFFSET_MASK;

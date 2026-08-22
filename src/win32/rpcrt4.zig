@@ -35,10 +35,9 @@ fn stub_UuidToStringA(uuid_ptr: usize, string_ptr: usize) callconv(w32cc.WINAPI)
         const uuid = @as([*]const u8, @ptrFromInt(trace.addr(uuid_ptr)));
         _ = std.fmt.bufPrint(&uuid_buf, "{x:0>2}{x:0>2}{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{
             uuid[0],  uuid[1],  uuid[2],  uuid[3],
-            uuid[4],  uuid[5],
-            uuid[6],  uuid[7],
-            uuid[8],  uuid[9],
-            uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15],
+            uuid[4],  uuid[5],  uuid[6],  uuid[7],
+            uuid[8],  uuid[9],  uuid[10], uuid[11],
+            uuid[12], uuid[13], uuid[14], uuid[15],
         }) catch return 14; // RPC_S_OUT_OF_MEMORY-ish; treat as failure
     } else {
         const dummy = "42424242-4242-4242-4242-424242424242";

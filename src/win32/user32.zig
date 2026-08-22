@@ -860,8 +860,8 @@ fn handleMouseEvent(msg_id: u32, x: i32, y: i32) void {
     rend.mouse_dy += dy;
 
     // Push deltas into DirectInput mouse event buffer for GetDeviceData
-    if (dx != 0) dinput.pushMouseEvent(0, @bitCast(dx));  // DIMOFS_X = 0
-    if (dy != 0) dinput.pushMouseEvent(4, @bitCast(dy));  // DIMOFS_Y = 4
+    if (dx != 0) dinput.pushMouseEvent(0, @bitCast(dx)); // DIMOFS_X = 0
+    if (dy != 0) dinput.pushMouseEvent(4, @bitCast(dy)); // DIMOFS_Y = 4
 
     rend.last_mouse_x = x;
     rend.last_mouse_y = y;
@@ -922,7 +922,8 @@ const SEH_Frame = extern struct {
 };
 
 export fn user32_seh_handler(record: *anyopaque, frame_ptr: *SEH_Frame, context: *@import("teb.zig").CONTEXT, dispatch: usize) callconv(.c) u32 {
-    _ = record; _ = dispatch;
+    _ = record;
+    _ = dispatch;
     if (trace.enable_tracing) trace.print("USER32: Swallowing exception in WindowProc, jumping to catch handler.\n", .{});
     context.Eip = frame_ptr.catch_eip;
     context.Esp = frame_ptr.catch_esp;
@@ -1047,19 +1048,23 @@ const FAKE_HMONITOR: usize = 0xD0000001;
 // --- Monitor functions ---
 // All return a valid HMONITOR since we have a single virtual monitor
 fn stub_MonitorFromWindow(hwnd: usize, dwFlags: u32) callconv(w32cc.WINAPI) usize {
-    _ = hwnd; _ = dwFlags;
+    _ = hwnd;
+    _ = dwFlags;
     if (trace.enable_tracing) trace.print("USER32: MonitorFromWindow -> 0x{x}\n", .{FAKE_HMONITOR});
     return FAKE_HMONITOR;
 }
 
 fn stub_MonitorFromPoint(ptX: i32, ptY: i32, dwFlags: u32) callconv(w32cc.WINAPI) usize {
-    _ = ptX; _ = ptY; _ = dwFlags;
+    _ = ptX;
+    _ = ptY;
+    _ = dwFlags;
     if (trace.enable_tracing) trace.print("USER32: MonitorFromPoint -> 0x{x}\n", .{FAKE_HMONITOR});
     return FAKE_HMONITOR;
 }
 
 fn stub_MonitorFromRect(lprc: usize, dwFlags: u32) callconv(w32cc.WINAPI) usize {
-    _ = lprc; _ = dwFlags;
+    _ = lprc;
+    _ = dwFlags;
     if (trace.enable_tracing) trace.print("USER32: MonitorFromRect -> 0x{x}\n", .{FAKE_HMONITOR});
     return FAKE_HMONITOR;
 }
@@ -1102,9 +1107,9 @@ fn stub_CallWindowProcW(lpPrevWndFunc: usize, hWnd: usize, msg: u32, wParam: usi
         const message_mod = @import("user32/message.zig");
         return message_mod.handleCommonControlMsg(hWnd, msg, wParam, lParam);
     }
-    
+
     if (trace.enable_tracing) trace.print("USER32: CallWindowProcW(proc={x}, msg={x})\n", .{ lpPrevWndFunc, msg });
-    
+
     // Safety check - use callWndProcSafe to prevent SEH crashes if the old proc faults
     var err_flag: u32 = 0;
     return callWndProcSafe(lpPrevWndFunc, hWnd, msg, wParam, lParam, &err_flag);
@@ -1162,7 +1167,13 @@ fn stub_BeginDeferWindowPos(nNumWindows: i32) callconv(w32cc.WINAPI) usize {
 }
 
 fn stub_DeferWindowPos(hWinPosInfo: usize, hWnd: usize, hWndInsertAfter: usize, x: i32, y: i32, cx: i32, cy: i32, uFlags: u32) callconv(w32cc.WINAPI) usize {
-    _ = hWnd; _ = hWndInsertAfter; _ = x; _ = y; _ = cx; _ = cy; _ = uFlags;
+    _ = hWnd;
+    _ = hWndInsertAfter;
+    _ = x;
+    _ = y;
+    _ = cx;
+    _ = cy;
+    _ = uFlags;
     return hWinPosInfo; // Return same handle (success)
 }
 

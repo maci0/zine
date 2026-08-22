@@ -126,7 +126,7 @@ pub const PEB = extern struct {
     /// TlsBitmap
     TlsBitmap: u32 = 0,
     /// TlsBitmapBits
-    TlsBitmapBits: [2]u32 = .{0, 0},
+    TlsBitmapBits: [2]u32 = .{ 0, 0 },
     /// ReadOnlySharedMemoryBase
     ReadOnlySharedMemoryBase: u32 = 0,
     /// SharedData

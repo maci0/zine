@@ -43,35 +43,35 @@ pub fn GetSysColor(nIndex: i32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("USER32: GetSysColor({d})\n", .{nIndex});
     // Windows 2000 "Windows Standard" scheme — COLORREF is 0x00BBGGRR
     return switch (nIndex) {
-        0 => 0x00C8D0D4,   // COLOR_SCROLLBAR          #D4D0C8
-        1 => 0x00A56E3A,   // COLOR_BACKGROUND          #3A6EA5
-        2 => 0x006A240A,   // COLOR_ACTIVECAPTION        #0A246A
-        3 => 0x00808080,   // COLOR_INACTIVECAPTION      #808080
-        4 => 0x00C8D0D4,   // COLOR_MENU                 #D4D0C8
-        5 => 0x00FFFFFF,   // COLOR_WINDOW               #FFFFFF
-        6 => 0x00000000,   // COLOR_WINDOWFRAME          #000000
-        7 => 0x00000000,   // COLOR_MENUTEXT             #000000
-        8 => 0x00000000,   // COLOR_WINDOWTEXT           #000000
-        9 => 0x00FFFFFF,   // COLOR_CAPTIONTEXT          #FFFFFF
-        10 => 0x00C8D0D4,  // COLOR_ACTIVEBORDER         #D4D0C8
-        11 => 0x00C8D0D4,  // COLOR_INACTIVEBORDER       #D4D0C8
-        12 => 0x00808080,  // COLOR_APPWORKSPACE          #808080
-        13 => 0x006A240A,  // COLOR_HIGHLIGHT             #0A246A
-        14 => 0x00FFFFFF,  // COLOR_HIGHLIGHTTEXT         #FFFFFF
-        15 => 0x00C8D0D4,  // COLOR_BTNFACE               #D4D0C8
-        16 => 0x00808080,  // COLOR_BTNSHADOW             #808080
-        17 => 0x00808080,  // COLOR_GRAYTEXT              #808080
-        18 => 0x00000000,  // COLOR_BTNTEXT               #000000
-        19 => 0x00C8D0D4,  // COLOR_INACTIVECAPTIONTEXT   #D4D0C8
-        20 => 0x00FFFFFF,  // COLOR_BTNHIGHLIGHT          #FFFFFF
-        21 => 0x00404040,  // COLOR_3DDKSHADOW            #404040
-        22 => 0x00C8D0D4,  // COLOR_3DLIGHT               #D4D0C8
-        23 => 0x00000000,  // COLOR_INFOTEXT              #000000
-        24 => 0x00E1FFFF,  // COLOR_INFOBK                #FFFFE1
-        25 => 0x00000000,  // (unused)
-        26 => 0x00800000,  // COLOR_HOTLIGHT              #000080
-        27 => 0x00F0CAA6,  // COLOR_GRADIENTACTIVECAPTION #A6CAF0
-        28 => 0x00C0C0C0,  // COLOR_GRADIENTINACTIVECAPTION #C0C0C0
+        0 => 0x00C8D0D4, // COLOR_SCROLLBAR          #D4D0C8
+        1 => 0x00A56E3A, // COLOR_BACKGROUND          #3A6EA5
+        2 => 0x006A240A, // COLOR_ACTIVECAPTION        #0A246A
+        3 => 0x00808080, // COLOR_INACTIVECAPTION      #808080
+        4 => 0x00C8D0D4, // COLOR_MENU                 #D4D0C8
+        5 => 0x00FFFFFF, // COLOR_WINDOW               #FFFFFF
+        6 => 0x00000000, // COLOR_WINDOWFRAME          #000000
+        7 => 0x00000000, // COLOR_MENUTEXT             #000000
+        8 => 0x00000000, // COLOR_WINDOWTEXT           #000000
+        9 => 0x00FFFFFF, // COLOR_CAPTIONTEXT          #FFFFFF
+        10 => 0x00C8D0D4, // COLOR_ACTIVEBORDER         #D4D0C8
+        11 => 0x00C8D0D4, // COLOR_INACTIVEBORDER       #D4D0C8
+        12 => 0x00808080, // COLOR_APPWORKSPACE          #808080
+        13 => 0x006A240A, // COLOR_HIGHLIGHT             #0A246A
+        14 => 0x00FFFFFF, // COLOR_HIGHLIGHTTEXT         #FFFFFF
+        15 => 0x00C8D0D4, // COLOR_BTNFACE               #D4D0C8
+        16 => 0x00808080, // COLOR_BTNSHADOW             #808080
+        17 => 0x00808080, // COLOR_GRAYTEXT              #808080
+        18 => 0x00000000, // COLOR_BTNTEXT               #000000
+        19 => 0x00C8D0D4, // COLOR_INACTIVECAPTIONTEXT   #D4D0C8
+        20 => 0x00FFFFFF, // COLOR_BTNHIGHLIGHT          #FFFFFF
+        21 => 0x00404040, // COLOR_3DDKSHADOW            #404040
+        22 => 0x00C8D0D4, // COLOR_3DLIGHT               #D4D0C8
+        23 => 0x00000000, // COLOR_INFOTEXT              #000000
+        24 => 0x00E1FFFF, // COLOR_INFOBK                #FFFFE1
+        25 => 0x00000000, // (unused)
+        26 => 0x00800000, // COLOR_HOTLIGHT              #000080
+        27 => 0x00F0CAA6, // COLOR_GRADIENTACTIVECAPTION #A6CAF0
+        28 => 0x00C0C0C0, // COLOR_GRADIENTINACTIVECAPTION #C0C0C0
         else => 0x00000000,
     };
 }

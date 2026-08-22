@@ -1,4 +1,3 @@
-
 const std = @import("std");
 const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
@@ -896,7 +895,6 @@ pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: *align(1) w32.W
 /// Continues a file search from a previous call to the FindFirstFileA function.
 /// Implementation status: Partially implemented
 pub fn FindNextFileA(hFindFile: usize, lpFindFileData_ptr: *align(1) w32.WIN32_FIND_DATAA) callconv(w32cc.WINAPI) i32 {
-
     const state = getFindHandle(hFindFile) orelse return 0;
 
     if (comptime builtin.os.tag == .linux) {

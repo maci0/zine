@@ -25,7 +25,7 @@ pub fn VirtualAlloc(lpAddress: usize, dwSize: usize, flAllocationType: u32, flPr
         if (trace.enable_tracing) trace.print("\n\n>>> CAUGHT 64KB VIRTUALALLOC REQUEST <<<\n", .{});
         if (trace.enable_tracing) trace.print("Caller address: {x}\n\n", .{@returnAddress()});
     }
-    
+
     // VirtualAlloc implementation starts here...
     if (trace.enable_tracing) trace.print("KERNEL32: VirtualAlloc(addr={x}, size={x}, type={x}, prot={x}) (caller={X})\n", .{ lpAddress, dwSize, flAllocationType, flProtect, @returnAddress() });
 
@@ -415,9 +415,9 @@ pub fn GlobalReAlloc(hMem: usize, dwBytes: usize, uFlags: u32) callconv(w32cc.WI
 pub fn VirtualProtect(lpAddress: usize, dwSize: usize, flNewProtect: u32, lpflOldProtect: usize) callconv(w32cc.WINAPI) i32 {
     _ = dwSize;
     if (trace.enable_tracing) trace.print("KERNEL32: VirtualProtect(addr={x}, prot={x})\n", .{ lpAddress, flNewProtect });
-    
+
     // SMC Check: Detect elevation to EXECUTE protection tiers mimicking hardware trapping
-    const needs_exec = (flNewProtect & 0xF0) != 0; 
+    const needs_exec = (flNewProtect & 0xF0) != 0;
     if (needs_exec) {
         if (stub_common.smc_invalidate_cache) |cb| cb();
     }

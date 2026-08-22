@@ -12,8 +12,22 @@ comptime {
     @export(&stub8, .{ .name = "cdtDrawExt" });
 }
 
-fn stub0() callconv(w32cc.WINAPI) usize { return 0; }
-fn stub2(a: usize, b: usize) callconv(w32cc.WINAPI) usize { _ = .{ a, b }; return 0; }
-fn stub4(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize { _ = .{ a, b, c, d }; return 0; }
-fn stub6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) usize { _ = .{ a, b, c, d, e, f }; return 0; }
-fn stub8(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize) callconv(w32cc.WINAPI) usize { _ = .{ a, b, c, d, e, f, g, h }; return 0; }
+fn stub0() callconv(w32cc.WINAPI) usize {
+    return 0;
+}
+fn stub2(a: usize, b: usize) callconv(w32cc.WINAPI) usize {
+    _ = .{ a, b };
+    return 0;
+}
+fn stub4(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize {
+    _ = .{ a, b, c, d };
+    return 0;
+}
+fn stub6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) usize {
+    _ = .{ a, b, c, d, e, f };
+    return 0;
+}
+fn stub8(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize) callconv(w32cc.WINAPI) usize {
+    _ = .{ a, b, c, d, e, f, g, h };
+    return 0;
+}

@@ -384,8 +384,14 @@ pub const JitCompiler = struct {
             // ===== ALU reg, r/m (32-bit: 03,0B,13,1B,23,2B,33,3B) =====
             // ===== ALU AL, imm8 (04,0C,14,1C,24,2C,34,3C) =====
             // ===== ALU EAX, imm32 (05,0D,15,1D,25,2D,35,3D) =====
-            0x00...0x05, 0x08...0x0D, 0x10...0x15, 0x18...0x1D,
-            0x20...0x25, 0x28...0x2D, 0x30...0x35, 0x38...0x3D,
+            0x00...0x05,
+            0x08...0x0D,
+            0x10...0x15,
+            0x18...0x1D,
+            0x20...0x25,
+            0x28...0x2D,
+            0x30...0x35,
+            0x38...0x3D,
             => {
                 try translateAlu(body, insn);
             },
@@ -802,10 +808,30 @@ pub const JitCompiler = struct {
             },
 
             // ===== Flag manipulation =====
-            0xF8 => { try body.appendOpcode(.i32_const); try body.appendIleb128(0); try body.appendOpcode(.local_set); try body.appendUleb128(t.LOCAL_CF); }, // CLC
-            0xF9 => { try body.appendOpcode(.i32_const); try body.appendIleb128(1); try body.appendOpcode(.local_set); try body.appendUleb128(t.LOCAL_CF); }, // STC
-            0xFC => { try body.appendOpcode(.i32_const); try body.appendIleb128(0); try body.appendOpcode(.local_set); try body.appendUleb128(t.LOCAL_DF); }, // CLD
-            0xFD => { try body.appendOpcode(.i32_const); try body.appendIleb128(1); try body.appendOpcode(.local_set); try body.appendUleb128(t.LOCAL_DF); }, // STD
+            0xF8 => {
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(0);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.LOCAL_CF);
+            }, // CLC
+            0xF9 => {
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(1);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.LOCAL_CF);
+            }, // STC
+            0xFC => {
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(0);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.LOCAL_DF);
+            }, // CLD
+            0xFD => {
+                try body.appendOpcode(.i32_const);
+                try body.appendIleb128(1);
+                try body.appendOpcode(.local_set);
+                try body.appendUleb128(t.LOCAL_DF);
+            }, // STD
             0xFA, 0xFB => {}, // CLI/STI — nop in usermode
             0xF5 => { // CMC: toggle CF
                 try body.appendOpcode(.local_get);

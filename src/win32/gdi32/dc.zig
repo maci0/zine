@@ -10,7 +10,7 @@ pub fn GetDeviceCaps(hdc: usize, nIndex: i32) callconv(w32cc.WINAPI) i32 {
     _ = hdc;
     if (trace.enable_tracing) trace.print("GDI32: GetDeviceCaps({d})\n", .{nIndex});
     return switch (nIndex) {
-        w32.TECHNOLOGY => 1,  // DT_RASDISPLAY
+        w32.TECHNOLOGY => 1, // DT_RASDISPLAY
         w32.HORZRES => 1024,
         w32.VERTRES => 768,
         w32.BITSPIXEL => 32,
@@ -47,7 +47,7 @@ pub fn stub_DeleteDC(hdc: usize) callconv(w32cc.WINAPI) i32 {
 var saved_dc_stack: [32]gdi32.DeviceContext = undefined;
 var saved_dc_count: usize = 0;
 
-/// Saves the current state of the specified device context (DC) by copying 
+/// Saves the current state of the specified device context (DC) by copying
 /// its attributes to a stack.
 /// Implementation status: Partially implemented (uses a fixed-size global stack of 32 states)
 pub fn SaveDC(hdc: usize) callconv(w32cc.WINAPI) i32 {
@@ -368,7 +368,8 @@ pub fn SetViewportExtEx(hdc: usize, x: i32, y: i32, lpSize: usize) callconv(w32c
 /// Determines whether any part of the specified rectangle is within the clipping region of a DC.
 /// Implementation status: Stub (always returns 1)
 pub fn stub_RectVisible(hdc: usize, lprc: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hdc; _ = lprc;
+    _ = hdc;
+    _ = lprc;
     return 1; // TRUE — rect is visible
 }
 
@@ -396,8 +397,8 @@ pub fn GetCurrentPositionEx(hdc: usize, lppt: usize) callconv(w32cc.WINAPI) i32 
     _ = hdc;
     if (trace.enable_tracing) trace.print("GDI32: GetCurrentPositionEx\n", .{});
     if (lppt != 0) {
-        @as(*align(1) i32, @ptrFromInt(lppt)).* = 0;     // x
-        @as(*align(1) i32, @ptrFromInt(lppt + 4)).* = 0;  // y
+        @as(*align(1) i32, @ptrFromInt(lppt)).* = 0; // x
+        @as(*align(1) i32, @ptrFromInt(lppt + 4)).* = 0; // y
     }
     return 1;
 }
@@ -408,8 +409,8 @@ pub fn SetViewportOrgEx(hdc: usize, x: i32, y: i32, lppt: usize) callconv(w32cc.
     _ = hdc;
     if (trace.enable_tracing) trace.print("GDI32: SetViewportOrgEx(x={d}, y={d})\n", .{ x, y });
     if (lppt != 0) {
-        @as(*align(1) i32, @ptrFromInt(lppt)).* = 0;     // previous x
-        @as(*align(1) i32, @ptrFromInt(lppt + 4)).* = 0;  // previous y
+        @as(*align(1) i32, @ptrFromInt(lppt)).* = 0; // previous x
+        @as(*align(1) i32, @ptrFromInt(lppt + 4)).* = 0; // previous y
     }
     return 1;
 }

@@ -20,8 +20,23 @@ comptime {
     @export(&stub4, .{ .name = "NDdeTrustedShareEnumW" });
 }
 
-fn stub1(a: usize) callconv(w32cc.WINAPI) usize { _ = a; return 0; }
-fn stub2(a: usize, b: usize) callconv(w32cc.WINAPI) usize { _ = .{ a, b }; return 0; }
-fn stub3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize { _ = .{ a, b, c }; return 0; }
-fn stub4(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize { _ = .{ a, b, c, d }; return 0; }
-fn stub5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) usize { _ = .{ a, b, c, d, e }; return 0; }
+fn stub1(a: usize) callconv(w32cc.WINAPI) usize {
+    _ = a;
+    return 0;
+}
+fn stub2(a: usize, b: usize) callconv(w32cc.WINAPI) usize {
+    _ = .{ a, b };
+    return 0;
+}
+fn stub3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize {
+    _ = .{ a, b, c };
+    return 0;
+}
+fn stub4(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize {
+    _ = .{ a, b, c, d };
+    return 0;
+}
+fn stub5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) usize {
+    _ = .{ a, b, c, d, e };
+    return 0;
+}

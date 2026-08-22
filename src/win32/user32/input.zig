@@ -56,7 +56,7 @@ pub const TimerEntry = struct {
     id: usize,
     elapse_ms: u32,
     callback: usize, // lpTimerFunc (0 = post WM_TIMER)
-    last_fire: i64,  // millisecond timestamp of last fire
+    last_fire: i64, // millisecond timestamp of last fire
     active: bool,
 };
 

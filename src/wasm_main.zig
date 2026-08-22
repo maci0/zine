@@ -633,7 +633,7 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     // CL.EXE passes empty cmdname when it can't construct the C1.DLL path,
     // but argv[0] still contains the bare name (e.g. "c1").
     var argv_name_buf: [256]u8 = undefined;
-    log.info("wasmSpawnHandler: initial exe_path '{s}', argv_ptr=0x{X}", .{exe_path, argv_ptr});
+    log.info("wasmSpawnHandler: initial exe_path '{s}', argv_ptr=0x{X}", .{ exe_path, argv_ptr });
     if (exe_path.len == 0 and argv_ptr != 0) {
         if (argv_ptr >= 0x10000) {
             const host_argv = trace.addr(argv_ptr);
@@ -642,12 +642,12 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
                 const arg_va = @as(*const u32, @ptrFromInt(host_argv + i * 4)).*;
                 if (arg_va == 0) break;
                 const arg_str = trace.c_span(arg_va);
-                log.info("wasmSpawnHandler: argv[{d}] = '{s}'", .{i, arg_str});
+                log.info("wasmSpawnHandler: argv[{d}] = '{s}'", .{ i, arg_str });
                 if (exe_path.len == 0 and arg_str.len > 0) {
                     if (arg_str.len < argv_name_buf.len) {
                         @memcpy(argv_name_buf[0..arg_str.len], arg_str);
                         exe_path = argv_name_buf[0..arg_str.len];
-                        log.info("wasmSpawnHandler: extracted exe_path from argv[{d}]: '{s}'", .{i, exe_path});
+                        log.info("wasmSpawnHandler: extracted exe_path from argv[{d}]: '{s}'", .{ i, exe_path });
                     }
                 }
                 i += 1;
@@ -1025,9 +1025,8 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: 
     for (hot_idx, 0..) |idx, j| {
         if (block_counts[idx] == 0) break;
         log.info("JIT: hot block #{d}: EIP=0x{X} executed {d} times ({d}% of block calls)", .{
-            j + 1, block_ids_keys[idx], block_counts[idx],
+            j + 1,                                                                              block_ids_keys[idx], block_counts[idx],
             @as(u32, @intCast((@as(u64, block_counts[idx]) * 100) / @max(blocks_executed, 1))),
         });
     }
 }
-

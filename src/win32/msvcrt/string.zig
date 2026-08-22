@@ -79,7 +79,10 @@ pub fn stricmp(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) i32 {
     while (i < sp1.len and i < sp2.len) : (i += 1) {
         const c1 = std.ascii.toLower(sp1[i]);
         const c2 = std.ascii.toLower(sp2[i]);
-        if (c1 != c2) { ret = @as(i32, c1) - @as(i32, c2); break; }
+        if (c1 != c2) {
+            ret = @as(i32, c1) - @as(i32, c2);
+            break;
+        }
     }
     if (ret == 0) {
         if (sp1.len < sp2.len) ret = -1 else if (sp1.len > sp2.len) ret = 1;
@@ -374,10 +377,19 @@ pub fn wcstol(str: [*]const u16, end_ptr: usize, radix: i32) callconv(.c) i32 {
     var i: usize = 0;
     while (str[i] != 0 and std.ascii.isWhitespace(@intCast(str[i] & 0xFF))) i += 1;
     var sign: i32 = 1;
-    if (str[i] == '-') { sign = -1; i += 1; } else if (str[i] == '+') i += 1;
+    if (str[i] == '-') {
+        sign = -1;
+        i += 1;
+    } else if (str[i] == '+') i += 1;
     var r = radix;
     if (r == 0) {
-        if (str[i] == '0' and (str[i + 1] == 'x' or str[i + 1] == 'X')) { r = 16; i += 2; } else if (str[i] == '0') { r = 8; i += 1; } else r = 10;
+        if (str[i] == '0' and (str[i + 1] == 'x' or str[i + 1] == 'X')) {
+            r = 16;
+            i += 2;
+        } else if (str[i] == '0') {
+            r = 8;
+            i += 1;
+        } else r = 10;
     } else if (r == 16 and str[i] == '0' and (str[i + 1] == 'x' or str[i + 1] == 'X')) i += 2;
     var val: i32 = 0;
     var parsed = false;
@@ -720,7 +732,7 @@ pub fn strtok(str: ?[*:0]u8, delim: ?[*:0]const u8) callconv(.c) ?[*:0]u8 {
     const s_ptr = str orelse strtok_state orelse return null;
     const d_ptr = delim orelse return null;
     if (trace.enable_tracing) trace.print("MSVCRT: _strtok('{s}', '{s}')\n", .{ std.mem.span(s_ptr), std.mem.span(d_ptr) });
-    
+
     var s = std.mem.span(s_ptr);
     const d = std.mem.span(d_ptr);
 

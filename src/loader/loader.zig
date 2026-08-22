@@ -267,7 +267,7 @@ fn patchImport(
 
 /// Recursively resolves all imports for a given module, patching its Import
 /// Address Table (IAT) with either host stub addresses (on native) or guest
-/// thunk addresses (on WASM). 
+/// thunk addresses (on WASM).
 ///
 /// For each imported DLL, it:
 /// 1. Loads the dependency DLL if it is not already loaded.

@@ -29,7 +29,6 @@ const trace = @import("../trace.zig");
 const log = @import("../log.zig");
 const profiler = @import("../profiler.zig");
 
-
 const Cpu = cpu_mod.Cpu;
 const Instruction = decoder.Instruction;
 const OpKind = decoder.OpKind;
@@ -196,7 +195,7 @@ noinline fn callWithGuestStack(target: u32, guest_esp: u32) NativeCallResult {
     var new_esp: u32 = 0;
     if (comptime @import("../platform.zig").is_x86) {
         asm volatile (
-            // Save callee-saved regs on host stack
+        // Save callee-saved regs on host stack
             \\pushl %%ebp
             \\pushl %%ebx
             \\pushl %%esi
@@ -217,9 +216,8 @@ noinline fn callWithGuestStack(target: u32, guest_esp: u32) NativeCallResult {
             : [out_eax] "={eax}" (result_eax),
               [out_esp] "=m" (new_esp),
             : [in_esp] "{eax}" (guest_esp),
-              [in_target] "{ecx}" (target)
-            : .{ .memory = true, .cc = true }
-        );
+              [in_target] "{ecx}" (target),
+            : .{ .memory = true, .cc = true });
     } else {
         _ = .{ target, guest_esp };
         // This path is never reached on non-x86 because callDllNative is guarded
@@ -471,7 +469,7 @@ pub fn buildInittermTrampoline(cpu: *Cpu) void {
 
 /// Executes an x87 FPU instruction.
 /// This acts as a secondary dispatcher for opcodes D8 through DF, decoding the
-/// ModRM byte to determine the specific FPU operation. It interacts with the 
+/// ModRM byte to determine the specific FPU operation. It interacts with the
 /// 8-register FPU stack and handles both register-to-register and memory-to-register operations.
 fn executeFpu(cpu: anytype, insn: anytype) void {
     if (!insn.has_modrm) return;
@@ -487,11 +485,18 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     switch (reg) {
                         0 => cpu.fpu.setSt(0, cpu.fpu.st(0) + fval),
                         1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * fval),
-                        2, 3 => { fpuCompare(cpu, cpu.fpu.st(0), fval); if (reg == 3) _ = cpu.fpu.pop(); },
+                        2, 3 => {
+                            fpuCompare(cpu, cpu.fpu.st(0), fval);
+                            if (reg == 3) _ = cpu.fpu.pop();
+                        },
                         4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - fval),
                         5 => cpu.fpu.setSt(0, fval - cpu.fpu.st(0)),
-                        6 => if (fval != 0) { cpu.fpu.setSt(0, cpu.fpu.st(0) / fval); },
-                        7 => if (cpu.fpu.st(0) != 0) { cpu.fpu.setSt(0, fval / cpu.fpu.st(0)); },
+                        6 => if (fval != 0) {
+                            cpu.fpu.setSt(0, cpu.fpu.st(0) / fval);
+                        },
+                        7 => if (cpu.fpu.st(0) != 0) {
+                            cpu.fpu.setSt(0, fval / cpu.fpu.st(0));
+                        },
                         else => {},
                     }
                 }
@@ -500,11 +505,18 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                 switch (reg) {
                     0 => cpu.fpu.setSt(0, cpu.fpu.st(0) + sti),
                     1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * sti),
-                    2, 3 => { fpuCompare(cpu, cpu.fpu.st(0), sti); if (reg == 3) _ = cpu.fpu.pop(); },
+                    2, 3 => {
+                        fpuCompare(cpu, cpu.fpu.st(0), sti);
+                        if (reg == 3) _ = cpu.fpu.pop();
+                    },
                     4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - sti),
                     5 => cpu.fpu.setSt(0, sti - cpu.fpu.st(0)),
-                    6 => if (sti != 0) { cpu.fpu.setSt(0, cpu.fpu.st(0) / sti); },
-                    7 => if (cpu.fpu.st(0) != 0) { cpu.fpu.setSt(0, sti / cpu.fpu.st(0)); },
+                    6 => if (sti != 0) {
+                        cpu.fpu.setSt(0, cpu.fpu.st(0) / sti);
+                    },
+                    7 => if (cpu.fpu.st(0) != 0) {
+                        cpu.fpu.setSt(0, sti / cpu.fpu.st(0));
+                    },
                     else => {},
                 }
             }
@@ -515,7 +527,10 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     switch (reg) {
                         0 => cpu.fpu.push(@floatCast(@as(f32, @bitCast(cpu.memory.read32(addr))))), // FLD m32
                         2 => cpu.memory.write32(addr, @bitCast(@as(f32, @floatCast(cpu.fpu.st(0))))), // FST m32
-                        3 => { cpu.memory.write32(addr, @bitCast(@as(f32, @floatCast(cpu.fpu.st(0))))); _ = cpu.fpu.pop(); }, // FSTP
+                        3 => {
+                            cpu.memory.write32(addr, @bitCast(@as(f32, @floatCast(cpu.fpu.st(0)))));
+                            _ = cpu.fpu.pop();
+                        }, // FSTP
                         5 => cpu.fpu.control_word = cpu.memory.read16(addr), // FLDCW
                         7 => cpu.memory.write16(addr, cpu.fpu.control_word), // FNSTCW
                         else => {},
@@ -525,9 +540,21 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                 const rm3: u3 = insn.op0_reg;
                 switch (reg) {
                     0 => cpu.fpu.push(cpu.fpu.st(rm3)), // FLD ST(i)
-                    1 => { const t = cpu.fpu.st(0); cpu.fpu.setSt(0, cpu.fpu.st(rm3)); cpu.fpu.setSt(rm3, t); }, // FXCH
-                    4 => switch (insn.op0_reg) { 0 => cpu.fpu.setSt(0, -cpu.fpu.st(0)), 1 => cpu.fpu.setSt(0, @abs(cpu.fpu.st(0))), else => {} }, // FCHS/FABS
-                    5 => switch (insn.op0_reg) { 6 => cpu.fpu.push(0.0), 0 => cpu.fpu.push(1.0), else => {} }, // FLDZ/FLD1
+                    1 => {
+                        const t = cpu.fpu.st(0);
+                        cpu.fpu.setSt(0, cpu.fpu.st(rm3));
+                        cpu.fpu.setSt(rm3, t);
+                    }, // FXCH
+                    4 => switch (insn.op0_reg) {
+                        0 => cpu.fpu.setSt(0, -cpu.fpu.st(0)),
+                        1 => cpu.fpu.setSt(0, @abs(cpu.fpu.st(0))),
+                        else => {},
+                    }, // FCHS/FABS
+                    5 => switch (insn.op0_reg) {
+                        6 => cpu.fpu.push(0.0),
+                        0 => cpu.fpu.push(1.0),
+                        else => {},
+                    }, // FLDZ/FLD1
                     else => {},
                 }
             }
@@ -539,11 +566,18 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     switch (reg) {
                         0 => cpu.fpu.setSt(0, cpu.fpu.st(0) + ival),
                         1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * ival),
-                        2, 3 => { fpuCompare(cpu, cpu.fpu.st(0), ival); if (reg == 3) _ = cpu.fpu.pop(); },
+                        2, 3 => {
+                            fpuCompare(cpu, cpu.fpu.st(0), ival);
+                            if (reg == 3) _ = cpu.fpu.pop();
+                        },
                         4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - ival),
                         5 => cpu.fpu.setSt(0, ival - cpu.fpu.st(0)),
-                        6 => if (ival != 0) { cpu.fpu.setSt(0, cpu.fpu.st(0) / ival); },
-                        7 => if (cpu.fpu.st(0) != 0) { cpu.fpu.setSt(0, ival / cpu.fpu.st(0)); },
+                        6 => if (ival != 0) {
+                            cpu.fpu.setSt(0, cpu.fpu.st(0) / ival);
+                        },
+                        7 => if (cpu.fpu.st(0) != 0) {
+                            cpu.fpu.setSt(0, ival / cpu.fpu.st(0));
+                        },
                         else => {},
                     }
                 }
@@ -555,7 +589,10 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     switch (reg) {
                         0 => cpu.fpu.push(@floatFromInt(@as(i32, @bitCast(cpu.memory.read32(addr))))), // FILD m32
                         2 => cpu.memory.write32(addr, @bitCast(safeFloatToInt(i32, cpu.fpu.st(0)))), // FIST m32
-                        3 => { cpu.memory.write32(addr, @bitCast(safeFloatToInt(i32, cpu.fpu.st(0)))); _ = cpu.fpu.pop(); }, // FISTP
+                        3 => {
+                            cpu.memory.write32(addr, @bitCast(safeFloatToInt(i32, cpu.fpu.st(0))));
+                            _ = cpu.fpu.pop();
+                        }, // FISTP
                         5 => { // FLD m80 (approx as f64)
                             const lo = cpu.memory.read32(addr);
                             const hi = cpu.memory.read32(addr +% 4);
@@ -584,11 +621,18 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     switch (reg) {
                         0 => cpu.fpu.setSt(0, cpu.fpu.st(0) + fval),
                         1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * fval),
-                        2, 3 => { fpuCompare(cpu, cpu.fpu.st(0), fval); if (reg == 3) _ = cpu.fpu.pop(); },
+                        2, 3 => {
+                            fpuCompare(cpu, cpu.fpu.st(0), fval);
+                            if (reg == 3) _ = cpu.fpu.pop();
+                        },
                         4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - fval),
                         5 => cpu.fpu.setSt(0, fval - cpu.fpu.st(0)),
-                        6 => if (fval != 0) { cpu.fpu.setSt(0, cpu.fpu.st(0) / fval); },
-                        7 => if (cpu.fpu.st(0) != 0) { cpu.fpu.setSt(0, fval / cpu.fpu.st(0)); },
+                        6 => if (fval != 0) {
+                            cpu.fpu.setSt(0, cpu.fpu.st(0) / fval);
+                        },
+                        7 => if (cpu.fpu.st(0) != 0) {
+                            cpu.fpu.setSt(0, fval / cpu.fpu.st(0));
+                        },
                         else => {},
                     }
                 }
@@ -599,8 +643,14 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     1 => cpu.fpu.setSt(i, cpu.fpu.st(i) * cpu.fpu.st(0)),
                     4 => cpu.fpu.setSt(i, cpu.fpu.st(i) - cpu.fpu.st(0)),
                     5 => cpu.fpu.setSt(i, cpu.fpu.st(0) - cpu.fpu.st(i)),
-                    6 => { const s = cpu.fpu.st(0); if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(i) / s); },
-                    7 => { const s = cpu.fpu.st(i); if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(0) / s); },
+                    6 => {
+                        const s = cpu.fpu.st(0);
+                        if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(i) / s);
+                    },
+                    7 => {
+                        const s = cpu.fpu.st(i);
+                        if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(0) / s);
+                    },
                     else => {},
                 }
             }
@@ -609,9 +659,22 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
             if (is_mem) {
                 if (mem_addr) |addr| {
                     switch (reg) {
-                        0 => { const lo = cpu.memory.read32(addr); const hi = cpu.memory.read32(addr +% 4); cpu.fpu.push(@bitCast(@as(u64, hi) << 32 | lo)); }, // FLD m64
-                        2 => { const b: u64 = @bitCast(cpu.fpu.st(0)); cpu.memory.write32(addr, @truncate(b)); cpu.memory.write32(addr +% 4, @truncate(b >> 32)); }, // FST
-                        3 => { const b: u64 = @bitCast(cpu.fpu.st(0)); cpu.memory.write32(addr, @truncate(b)); cpu.memory.write32(addr +% 4, @truncate(b >> 32)); _ = cpu.fpu.pop(); }, // FSTP
+                        0 => {
+                            const lo = cpu.memory.read32(addr);
+                            const hi = cpu.memory.read32(addr +% 4);
+                            cpu.fpu.push(@bitCast(@as(u64, hi) << 32 | lo));
+                        }, // FLD m64
+                        2 => {
+                            const b: u64 = @bitCast(cpu.fpu.st(0));
+                            cpu.memory.write32(addr, @truncate(b));
+                            cpu.memory.write32(addr +% 4, @truncate(b >> 32));
+                        }, // FST
+                        3 => {
+                            const b: u64 = @bitCast(cpu.fpu.st(0));
+                            cpu.memory.write32(addr, @truncate(b));
+                            cpu.memory.write32(addr +% 4, @truncate(b >> 32));
+                            _ = cpu.fpu.pop();
+                        }, // FSTP
                         7 => cpu.memory.write16(addr, cpu.fpu.getStatusWord()), // FNSTSW [mem]
                         else => {},
                     }
@@ -621,7 +684,10 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                 switch (reg) {
                     0 => cpu.fpu.setSt(i, 0), // FFREE
                     2 => cpu.fpu.setSt(i, cpu.fpu.st(0)), // FST ST(i)
-                    3 => { cpu.fpu.setSt(i, cpu.fpu.st(0)); _ = cpu.fpu.pop(); }, // FSTP ST(i)
+                    3 => {
+                        cpu.fpu.setSt(i, cpu.fpu.st(0));
+                        _ = cpu.fpu.pop();
+                    }, // FSTP ST(i)
                     else => {},
                 }
             }
@@ -635,20 +701,44 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                         1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * ival),
                         4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - ival),
                         5 => cpu.fpu.setSt(0, ival - cpu.fpu.st(0)),
-                        6 => if (ival != 0) { cpu.fpu.setSt(0, cpu.fpu.st(0) / ival); },
-                        7 => if (cpu.fpu.st(0) != 0) { cpu.fpu.setSt(0, ival / cpu.fpu.st(0)); },
+                        6 => if (ival != 0) {
+                            cpu.fpu.setSt(0, cpu.fpu.st(0) / ival);
+                        },
+                        7 => if (cpu.fpu.st(0) != 0) {
+                            cpu.fpu.setSt(0, ival / cpu.fpu.st(0));
+                        },
                         else => {},
                     }
                 }
             } else {
                 const i: u3 = insn.op0_reg;
                 switch (reg) {
-                    0 => { cpu.fpu.setSt(i, cpu.fpu.st(i) + cpu.fpu.st(0)); _ = cpu.fpu.pop(); },
-                    1 => { cpu.fpu.setSt(i, cpu.fpu.st(i) * cpu.fpu.st(0)); _ = cpu.fpu.pop(); },
-                    4 => { cpu.fpu.setSt(i, cpu.fpu.st(i) - cpu.fpu.st(0)); _ = cpu.fpu.pop(); },
-                    5 => { cpu.fpu.setSt(i, cpu.fpu.st(0) - cpu.fpu.st(i)); _ = cpu.fpu.pop(); },
-                    6 => { const s = cpu.fpu.st(0); if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(i) / s); _ = cpu.fpu.pop(); },
-                    7 => { const s = cpu.fpu.st(i); if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(0) / s); _ = cpu.fpu.pop(); },
+                    0 => {
+                        cpu.fpu.setSt(i, cpu.fpu.st(i) + cpu.fpu.st(0));
+                        _ = cpu.fpu.pop();
+                    },
+                    1 => {
+                        cpu.fpu.setSt(i, cpu.fpu.st(i) * cpu.fpu.st(0));
+                        _ = cpu.fpu.pop();
+                    },
+                    4 => {
+                        cpu.fpu.setSt(i, cpu.fpu.st(i) - cpu.fpu.st(0));
+                        _ = cpu.fpu.pop();
+                    },
+                    5 => {
+                        cpu.fpu.setSt(i, cpu.fpu.st(0) - cpu.fpu.st(i));
+                        _ = cpu.fpu.pop();
+                    },
+                    6 => {
+                        const s = cpu.fpu.st(0);
+                        if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(i) / s);
+                        _ = cpu.fpu.pop();
+                    },
+                    7 => {
+                        const s = cpu.fpu.st(i);
+                        if (s != 0) cpu.fpu.setSt(i, cpu.fpu.st(0) / s);
+                        _ = cpu.fpu.pop();
+                    },
                     else => {},
                 }
             }
@@ -659,7 +749,10 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     switch (reg) {
                         0 => cpu.fpu.push(@floatFromInt(@as(i16, @bitCast(cpu.memory.read16(addr))))), // FILD m16
                         2 => cpu.memory.write16(addr, @bitCast(safeFloatToInt(i16, cpu.fpu.st(0)))), // FIST m16
-                        3 => { cpu.memory.write16(addr, @bitCast(safeFloatToInt(i16, cpu.fpu.st(0)))); _ = cpu.fpu.pop(); }, // FISTP
+                        3 => {
+                            cpu.memory.write16(addr, @bitCast(safeFloatToInt(i16, cpu.fpu.st(0))));
+                            _ = cpu.fpu.pop();
+                        }, // FISTP
                         5 => { // FILD m64
                             const lo = cpu.memory.read32(addr);
                             const hi = cpu.memory.read32(addr +% 4);
@@ -1010,7 +1103,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                         cpu.edi +%= sz;
                     }
                     const zf = cpu.flags.getZF();
-                    if (stop_on_zf and zf) break;  // REPNZ: stop when equal
+                    if (stop_on_zf and zf) break; // REPNZ: stop when equal
                     if (!stop_on_zf and !zf) break; // REPZ: stop when not equal
                 }
             } else {
@@ -1041,7 +1134,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                     cpu.ecx -= 1;
                     if (df) cpu.edi -%= sz else cpu.edi +%= sz;
                     const zf = cpu.flags.getZF();
-                    if (stop_on_zf and zf) break;  // REPNZ: found match
+                    if (stop_on_zf and zf) break; // REPNZ: found match
                     if (!stop_on_zf and !zf) break; // REPZ: found mismatch
                 }
             } else {
@@ -1322,14 +1415,14 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
                 const byte_offset: i32 = @divFloor(bit_index, 8);
                 const bit_in_byte: u3 = @intCast(@mod(bit_index, 8));
-                
+
                 const target_addr = orig_addr +% @as(u32, @bitCast(byte_offset));
                 const val = cpu.memory.read8(target_addr);
-                
+
                 var ef = cpu.flags.toEflags();
                 if ((val >> bit_in_byte) & 1 != 0) ef |= flags_mod.FLAG_CF else ef &= ~flags_mod.FLAG_CF;
                 cpu.flags.fromEflags(ef);
-                
+
                 const new_val: u8 = switch (insn.opcode) {
                     0x0FA3 => val,
                     0x0FAB => val | (@as(u8, 1) << bit_in_byte),
@@ -1565,21 +1658,116 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         // ============================================================
         // SSE / SSE2 / MMX — dispatch to sse.zig
         // ============================================================
-        0x0F10, 0x0F11, 0x0F12, 0x0F13, 0x0F14, 0x0F15, 0x0F16, 0x0F17, // MOV* / UNPCK*
-        0x0F28, 0x0F29, 0x0F2A, 0x0F2B, 0x0F2C, 0x0F2D, 0x0F2E, 0x0F2F, // MOV* / CVT* / UCOMI*
-        0x0F50, 0x0F51, 0x0F52, 0x0F53, 0x0F54, 0x0F55, 0x0F56, 0x0F57, // MOVMSK / SQRT / AND / OR / XOR
-        0x0F58, 0x0F59, 0x0F5A, 0x0F5B, 0x0F5C, 0x0F5D, 0x0F5E, 0x0F5F, // ADD / MUL / CVT / SUB / MIN / DIV / MAX
-        0x0F60, 0x0F61, 0x0F62, 0x0F63, 0x0F64, 0x0F65, 0x0F66, 0x0F67, // PUNPCK / PACK / PCMPGT
-        0x0F68, 0x0F69, 0x0F6A, 0x0F6B, 0x0F6C, 0x0F6D, 0x0F6E, 0x0F6F, // PUNPCK / PACK / MOVD / MOVQ
-        0x0F70, 0x0F71, 0x0F72, 0x0F73, 0x0F74, 0x0F75, 0x0F76, 0x0F77, // PSHUF / PSxx / PCMPEQ / EMMS
-        0x0F7E, 0x0F7F, // MOVD/MOVQ store / MOVDQA/MOVDQU store
-        0x0FC2, 0x0FC3, 0x0FC4, 0x0FC5, 0x0FC6, // CMP* / MOVNTI / PINSRW / PEXTRW / SHUF*
-        0x0FD0, 0x0FD1, 0x0FD2, 0x0FD3, 0x0FD4, 0x0FD5, 0x0FD6, 0x0FD7, // PSRL / PADDQ / PMULL / MOVQ / PMOVMSKB
-        0x0FD8, 0x0FD9, 0x0FDA, 0x0FDB, 0x0FDC, 0x0FDD, 0x0FDE, 0x0FDF, // PSUBUS / PMIN / PAND / PADDUS / PMAX / PANDN
-        0x0FE0, 0x0FE1, 0x0FE2, 0x0FE3, 0x0FE4, 0x0FE5, 0x0FE6, 0x0FE7, // PAVG / PSRA / PMULH / CVT / MOVNTDQ
-        0x0FE8, 0x0FE9, 0x0FEA, 0x0FEB, 0x0FEC, 0x0FED, 0x0FEE, 0x0FEF, // PSUBS / PMIN / POR / PADDS / PMAX / PXOR
-        0x0FF0, 0x0FF1, 0x0FF2, 0x0FF3, 0x0FF4, 0x0FF5, 0x0FF6, 0x0FF7, // PSLL / PMULUDQ / PMADDWD / PSADBW
-        0x0FF8, 0x0FF9, 0x0FFA, 0x0FFB, 0x0FFC, 0x0FFD, 0x0FFE, // PSUB / PADD
+        0x0F10,
+        0x0F11,
+        0x0F12,
+        0x0F13,
+        0x0F14,
+        0x0F15,
+        0x0F16,
+        0x0F17, // MOV* / UNPCK*
+        0x0F28,
+        0x0F29,
+        0x0F2A,
+        0x0F2B,
+        0x0F2C,
+        0x0F2D,
+        0x0F2E,
+        0x0F2F, // MOV* / CVT* / UCOMI*
+        0x0F50,
+        0x0F51,
+        0x0F52,
+        0x0F53,
+        0x0F54,
+        0x0F55,
+        0x0F56,
+        0x0F57, // MOVMSK / SQRT / AND / OR / XOR
+        0x0F58,
+        0x0F59,
+        0x0F5A,
+        0x0F5B,
+        0x0F5C,
+        0x0F5D,
+        0x0F5E,
+        0x0F5F, // ADD / MUL / CVT / SUB / MIN / DIV / MAX
+        0x0F60,
+        0x0F61,
+        0x0F62,
+        0x0F63,
+        0x0F64,
+        0x0F65,
+        0x0F66,
+        0x0F67, // PUNPCK / PACK / PCMPGT
+        0x0F68,
+        0x0F69,
+        0x0F6A,
+        0x0F6B,
+        0x0F6C,
+        0x0F6D,
+        0x0F6E,
+        0x0F6F, // PUNPCK / PACK / MOVD / MOVQ
+        0x0F70,
+        0x0F71,
+        0x0F72,
+        0x0F73,
+        0x0F74,
+        0x0F75,
+        0x0F76,
+        0x0F77, // PSHUF / PSxx / PCMPEQ / EMMS
+        0x0F7E,
+        0x0F7F, // MOVD/MOVQ store / MOVDQA/MOVDQU store
+        0x0FC2,
+        0x0FC3,
+        0x0FC4,
+        0x0FC5,
+        0x0FC6, // CMP* / MOVNTI / PINSRW / PEXTRW / SHUF*
+        0x0FD0,
+        0x0FD1,
+        0x0FD2,
+        0x0FD3,
+        0x0FD4,
+        0x0FD5,
+        0x0FD6,
+        0x0FD7, // PSRL / PADDQ / PMULL / MOVQ / PMOVMSKB
+        0x0FD8,
+        0x0FD9,
+        0x0FDA,
+        0x0FDB,
+        0x0FDC,
+        0x0FDD,
+        0x0FDE,
+        0x0FDF, // PSUBUS / PMIN / PAND / PADDUS / PMAX / PANDN
+        0x0FE0,
+        0x0FE1,
+        0x0FE2,
+        0x0FE3,
+        0x0FE4,
+        0x0FE5,
+        0x0FE6,
+        0x0FE7, // PAVG / PSRA / PMULH / CVT / MOVNTDQ
+        0x0FE8,
+        0x0FE9,
+        0x0FEA,
+        0x0FEB,
+        0x0FEC,
+        0x0FED,
+        0x0FEE,
+        0x0FEF, // PSUBS / PMIN / POR / PADDS / PMAX / PXOR
+        0x0FF0,
+        0x0FF1,
+        0x0FF2,
+        0x0FF3,
+        0x0FF4,
+        0x0FF5,
+        0x0FF6,
+        0x0FF7, // PSLL / PMULUDQ / PMADDWD / PSADBW
+        0x0FF8,
+        0x0FF9,
+        0x0FFA,
+        0x0FFB,
+        0x0FFC,
+        0x0FFD,
+        0x0FFE, // PSUB / PADD
         0x0FAE, // LDMXCSR / STMXCSR / LFENCE / MFENCE / SFENCE
         => @import("sse.zig").execute(cpu, insn, eip),
 

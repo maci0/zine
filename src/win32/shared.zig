@@ -193,8 +193,6 @@ pub fn raw_realloc(old_ptr: ?*anyopaque, new_size: usize) ?*anyopaque {
     return @ptrCast(new_data);
 }
 
-
-
 /// Shared tracing logic for all stubs. Must be `inline` so that
 /// `@returnAddress()` resolves to the caller of the stub, not this helper.
 inline fn traceStub(comptime n: comptime_int) void {
@@ -246,18 +244,82 @@ fn StubType(comptime argc: usize) type {
 /// Generates a no-op Win32 API stub taking `argc` arguments returning 0.
 pub fn stub_args(comptime argc: usize) StubType(argc) {
     return switch (argc) {
-        0 => struct { pub fn f() callconv(w32cc.WINAPI) usize { traceStub(0); return 0; } }.f,
-        1 => struct { pub fn f(a: usize) callconv(w32cc.WINAPI) usize { _ = a; traceStub(1); return 0; } }.f,
-        2 => struct { pub fn f(a: usize, b: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b}; traceStub(2); return 0; } }.f,
-        3 => struct { pub fn f(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c}; traceStub(3); return 0; } }.f,
-        4 => struct { pub fn f(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c, d}; traceStub(4); return 0; } }.f,
-        5 => struct { pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c, d, e}; traceStub(5); return 0; } }.f,
-        6 => struct { pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c, d, e, f_arg}; traceStub(6); return 0; } }.f,
-        7 => struct { pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize, g: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c, d, e, f_arg, g}; traceStub(7); return 0; } }.f,
-        8 => struct { pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize, g: usize, h: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c, d, e, f_arg, g, h}; traceStub(8); return 0; } }.f,
-        9 => struct { pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize, g: usize, h: usize, i: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c, d, e, f_arg, g, h, i}; traceStub(9); return 0; } }.f,
-        10 => struct { pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize, g: usize, h: usize, i: usize, j: usize) callconv(w32cc.WINAPI) usize { _ = .{a, b, c, d, e, f_arg, g, h, i, j}; traceStub(10); return 0; } }.f,
+        0 => struct {
+            pub fn f() callconv(w32cc.WINAPI) usize {
+                traceStub(0);
+                return 0;
+            }
+        }.f,
+        1 => struct {
+            pub fn f(a: usize) callconv(w32cc.WINAPI) usize {
+                _ = a;
+                traceStub(1);
+                return 0;
+            }
+        }.f,
+        2 => struct {
+            pub fn f(a: usize, b: usize) callconv(w32cc.WINAPI) usize {
+                _ = .{ a, b };
+                traceStub(2);
+                return 0;
+            }
+        }.f,
+        3 => struct {
+            pub fn f(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize {
+                _ = .{ a, b, c };
+                traceStub(3);
+                return 0;
+            }
+        }.f,
+        4 => struct {
+            pub fn f(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) usize {
+                _ = .{ a, b, c, d };
+                traceStub(4);
+                return 0;
+            }
+        }.f,
+        5 => struct {
+            pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.WINAPI) usize {
+                _ = .{ a, b, c, d, e };
+                traceStub(5);
+                return 0;
+            }
+        }.f,
+        6 => struct {
+            pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize) callconv(w32cc.WINAPI) usize {
+                _ = .{ a, b, c, d, e, f_arg };
+                traceStub(6);
+                return 0;
+            }
+        }.f,
+        7 => struct {
+            pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize, g: usize) callconv(w32cc.WINAPI) usize {
+                _ = .{ a, b, c, d, e, f_arg, g };
+                traceStub(7);
+                return 0;
+            }
+        }.f,
+        8 => struct {
+            pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize, g: usize, h: usize) callconv(w32cc.WINAPI) usize {
+                _ = .{ a, b, c, d, e, f_arg, g, h };
+                traceStub(8);
+                return 0;
+            }
+        }.f,
+        9 => struct {
+            pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize, g: usize, h: usize, i: usize) callconv(w32cc.WINAPI) usize {
+                _ = .{ a, b, c, d, e, f_arg, g, h, i };
+                traceStub(9);
+                return 0;
+            }
+        }.f,
+        10 => struct {
+            pub fn f(a: usize, b: usize, c: usize, d: usize, e: usize, f_arg: usize, g: usize, h: usize, i: usize, j: usize) callconv(w32cc.WINAPI) usize {
+                _ = .{ a, b, c, d, e, f_arg, g, h, i, j };
+                traceStub(10);
+                return 0;
+            }
+        }.f,
         else => @compileError("max stub unsupported"),
     };
 }
-

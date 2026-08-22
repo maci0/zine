@@ -90,7 +90,10 @@ fn addNativeExe(
     if (use_fltk) {
         exe.root_module.addCSourceFile(.{
             .file = b.path("src/gui/fltk_bridge.cpp"),
-            .flags = &.{ "-std=c++11", "-fno-exceptions", "-I/usr/include/fltk1.3" },
+            // Warnings are errors: the bridge is clean under -Wall -Wextra and
+            // should stay that way. System FLTK headers stay non-fatal via the
+            // -isystem include added below.
+            .flags = &.{ "-std=c++11", "-fno-exceptions", "-Wall", "-Wextra", "-Werror", "-I/usr/include/fltk1.3" },
         });
         exe.root_module.addIncludePath(b.path("src/gui"));
         exe.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/fltk1.3" });
@@ -332,6 +335,18 @@ pub fn build(b: *std.Build) void {
     // Using a single test root under src/ ensures that ../foo imports
     // resolve correctly (individual files as module roots can't reach
     // parent directories).
+    // -----------------------------------------------------------------------
+    // Format check: fails any build/test while the tree deviates from
+    // canonical zig fmt output. zig fmt is the language's de-facto formatter;
+    // wiring its --check mode into install + test keeps unformatted code from
+    // compiling anywhere (there is no other CI gate for this).
+    // -----------------------------------------------------------------------
+    const fmt_check = b.addFmt(.{
+        .paths = &.{ "src", "build.zig" },
+        .check = true,
+    });
+    b.getInstallStep().dependOn(&fmt_check.step);
+
     const test_step = b.step("test", "Run x86 interpreter unit tests");
     const t = b.addTest(.{
         .root_module = b.createModule(.{
@@ -347,5 +362,6 @@ pub fn build(b: *std.Build) void {
     test_options.addOption(bool, "embed_stubs", true);
     test_options.addOption(bool, "enable_jit_host", false);
     t.root_module.addOptions("build_options", test_options);
+    test_step.dependOn(&fmt_check.step);
     test_step.dependOn(&b.addRunArtifact(t).step);
 }

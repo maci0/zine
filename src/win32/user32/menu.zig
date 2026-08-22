@@ -148,7 +148,41 @@ pub fn TrackPopupMenu(hMenu: usize, uFlags: u32, x: i32, y: i32, nReserved: i32,
         var item_json: [512]u8 = undefined;
         var item_len: usize = 0;
         if ((it.flags & MF_SEPARATOR) != 0) {
-            item_json[0] = '{'; item_json[1] = '"'; item_json[2] = 'i'; item_json[3] = 'd'; item_json[4] = '"'; item_json[5] = ':'; item_json[6] = '0'; item_json[7] = ','; item_json[8] = '"'; item_json[9] = 't'; item_json[10] = 'e'; item_json[11] = 'x'; item_json[12] = 't'; item_json[13] = '"'; item_json[14] = ':'; item_json[15] = '"'; item_json[16] = '"'; item_json[17] = ','; item_json[18] = '"'; item_json[19] = 's'; item_json[20] = 'e'; item_json[21] = 'p'; item_json[22] = 'a'; item_json[23] = 'r'; item_json[24] = 'a'; item_json[25] = 't'; item_json[26] = 'o'; item_json[27] = 'r'; item_json[28] = '"'; item_json[29] = ':'; item_json[30] = 't'; item_json[31] = 'r'; item_json[32] = 'u'; item_json[33] = 'e'; item_json[34] = '}';
+            item_json[0] = '{';
+            item_json[1] = '"';
+            item_json[2] = 'i';
+            item_json[3] = 'd';
+            item_json[4] = '"';
+            item_json[5] = ':';
+            item_json[6] = '0';
+            item_json[7] = ',';
+            item_json[8] = '"';
+            item_json[9] = 't';
+            item_json[10] = 'e';
+            item_json[11] = 'x';
+            item_json[12] = 't';
+            item_json[13] = '"';
+            item_json[14] = ':';
+            item_json[15] = '"';
+            item_json[16] = '"';
+            item_json[17] = ',';
+            item_json[18] = '"';
+            item_json[19] = 's';
+            item_json[20] = 'e';
+            item_json[21] = 'p';
+            item_json[22] = 'a';
+            item_json[23] = 'r';
+            item_json[24] = 'a';
+            item_json[25] = 't';
+            item_json[26] = 'o';
+            item_json[27] = 'r';
+            item_json[28] = '"';
+            item_json[29] = ':';
+            item_json[30] = 't';
+            item_json[31] = 'r';
+            item_json[32] = 'u';
+            item_json[33] = 'e';
+            item_json[34] = '}';
             item_len = 35;
         } else {
             const disabled = (it.flags & (MF_GRAYED | MF_DISABLED)) != 0;
@@ -160,26 +194,30 @@ pub fn TrackPopupMenu(hMenu: usize, uFlags: u32, x: i32, y: i32, nReserved: i32,
                 switch (c) {
                     '"' => {
                         if (item_len + 2 <= item_json.len) {
-                            item_json[item_len] = '\\'; item_json[item_len + 1] = '"';
+                            item_json[item_len] = '\\';
+                            item_json[item_len + 1] = '"';
                             item_len += 2;
                         }
                     },
                     '\\' => {
                         if (item_len + 2 <= item_json.len) {
-                            item_json[item_len] = '\\'; item_json[item_len + 1] = '\\';
+                            item_json[item_len] = '\\';
+                            item_json[item_len + 1] = '\\';
                             item_len += 2;
                         }
                     },
                     '\n' => {
                         if (item_len + 2 <= item_json.len) {
-                            item_json[item_len] = '\\'; item_json[item_len + 1] = 'n';
+                            item_json[item_len] = '\\';
+                            item_json[item_len + 1] = 'n';
                             item_len += 2;
                         }
                     },
                     '\r' => {},
                     '\t' => {
                         if (item_len + 2 <= item_json.len) {
-                            item_json[item_len] = '\\'; item_json[item_len + 1] = 't';
+                            item_json[item_len] = '\\';
+                            item_json[item_len + 1] = 't';
                             item_len += 2;
                         }
                     },

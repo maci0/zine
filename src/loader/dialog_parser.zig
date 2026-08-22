@@ -48,12 +48,11 @@ pub const DialogData = struct {
 /// Parses a binary dialog resource from a PE module and returns its JSON representation.
 pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog_id: u32) !?[]const u8 {
     const data = module.getResource(5, dialog_id) orelse return null; // RT_DIALOG = 5
-    
+
     if (data.len < 18) return null;
-    
+
     var reader = std.Io.Reader.fixed(data);
-    
-    
+
     // Detect DIALOGEX vs DIALOG
     // DIALOGEX starts with: dlgVer(u16)=1, signature(u16)=0xFFFF
     // DIALOG starts with: style(u32) which does NOT start with 0x0001FFFF
@@ -90,7 +89,7 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
         dlg_cx = try reader.takeInt(u16, .little);
         dlg_cy = try reader.takeInt(u16, .little);
     }
-    
+
     var c = try reader.takeInt(u16, .little);
     if (c == 0xFFFF) {
         _ = try reader.takeInt(u16, .little);
@@ -99,7 +98,7 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
             c = try reader.takeInt(u16, .little);
         }
     }
-    
+
     c = try reader.takeInt(u16, .little);
     if (c == 0xFFFF) {
         _ = try reader.takeInt(u16, .little);
@@ -108,7 +107,7 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
             c = try reader.takeInt(u16, .little);
         }
     }
-    
+
     var title_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer title_buf.deinit(allocator);
     while (true) {
@@ -116,7 +115,7 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
         if (c == 0) break;
         try title_buf.append(allocator, @intCast(c & 0xFF));
     }
-    
+
     // DS_SETFONT = 0x40
     if ((style & 0x40) != 0) {
         _ = try reader.takeInt(u16, .little); // pointsize
@@ -130,7 +129,7 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
             if (c == 0) break;
         }
     }
-    
+
     // Parse items
     var items = std.ArrayListUnmanaged(DialogItem).empty;
     defer {
@@ -139,7 +138,7 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
         }
         items.deinit(allocator);
     }
-    
+
     var i: usize = 0;
     while (i < cdit) : (i += 1) {
         // align to DWORD
@@ -147,7 +146,7 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
         if ((pos % 4) != 0) {
             try reader.discardAll(4 - (pos % 4));
         }
-        
+
         var item_style: u32 = undefined;
         var item_x: u16 = undefined;
         var item_y: u16 = undefined;
@@ -211,7 +210,7 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
                 class_buf.deinit(allocator);
             }
         }
-        
+
         // Title array
         var text_buf: std.ArrayListUnmanaged(u8) = .empty;
         defer text_buf.deinit(allocator);
@@ -230,12 +229,12 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
                 c = try reader.takeInt(u16, .little);
             }
         }
-        
+
         const creation_data_len = try reader.takeInt(u16, .little);
         if (creation_data_len > 0) {
             try reader.discardAll(creation_data_len);
         }
-        
+
         try items.append(allocator, .{
             .id = id,
             .x = item_x,
@@ -254,20 +253,15 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
 
     try w.writeAll("{\"type\": \"custom_dialog\", \"title\": \"");
     for (title_buf.items) |char| {
-        if (char == '"') try w.writeAll("\\\"")
-        else if (char == '\\') try w.writeAll("\\\\")
-        else try w.writeByte(char);
+        if (char == '"') try w.writeAll("\\\"") else if (char == '\\') try w.writeAll("\\\\") else try w.writeByte(char);
     }
-    try w.print("\", \"x\": {d}, \"y\": {d}, \"cx\": {d}, \"cy\": {d}, \"items\": [", .{dlg_x, dlg_y, dlg_cx, dlg_cy});
+    try w.print("\", \"x\": {d}, \"y\": {d}, \"cx\": {d}, \"cy\": {d}, \"items\": [", .{ dlg_x, dlg_y, dlg_cx, dlg_cy });
 
     for (items.items, 0..) |item, idx| {
         if (idx > 0) try w.writeAll(", ");
         try w.print("{{\"id\": {d}, \"x\": {d}, \"y\": {d}, \"cx\": {d}, \"cy\": {d}, \"style\": {d}, \"class\": \"{s}\", \"text\": \"", .{ item.id, item.x, item.y, item.cx, item.cy, item.style, item.class });
         for (item.text) |char| {
-            if (char == '\n') try w.writeAll("\\n")
-            else if (char == '"') try w.writeAll("\\\"")
-            else if (char == '\\') try w.writeAll("\\\\")
-            else try w.writeByte(char);
+            if (char == '\n') try w.writeAll("\\n") else if (char == '"') try w.writeAll("\\\"") else if (char == '\\') try w.writeAll("\\\\") else try w.writeByte(char);
         }
         try w.writeAll("\"}");
     }

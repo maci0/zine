@@ -46,7 +46,6 @@ pub fn stub_ignore_ptr() callconv(.c) ?*anyopaque {
 
 /// --- qsort / bsearch ---
 /// Implementation status: Partially implemented
-
 /// Call a guest comparator function (int (*)(const void*, const void*)).
 /// On native x86 the guest code lives at the host address and can be called
 /// directly; on x86_64 it runs via the compat dispatcher; on WASM it must be

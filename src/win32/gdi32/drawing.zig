@@ -5,7 +5,7 @@ const gdi32 = @import("../gdi32.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
 
-/// Performs a bit-block transfer of the color data corresponding to a rectangle of pixels 
+/// Performs a bit-block transfer of the color data corresponding to a rectangle of pixels
 /// from the specified source device context into a destination device context.
 /// Implementation status: Partially implemented (supports basic raster operations: SRCCOPY, SRCPAINT, SRCAND, SRCINVERT)
 pub fn BitBlt(hdcDest: usize, x: i32, y: i32, cx: i32, cy: i32, hdcSrc: usize, x1: i32, y1: i32, rop: u32) callconv(w32cc.WINAPI) i32 {
@@ -16,7 +16,7 @@ pub fn BitBlt(hdcDest: usize, x: i32, y: i32, cx: i32, cy: i32, hdcSrc: usize, x
     const src = src_dib.?;
 
     const dest_dib = gdi32.getDcDib(hdcDest);
-    const dest_buf = if (dest_dib) |dib| 
+    const dest_buf = if (dest_dib) |dib|
         @as([*]u8, @ptrFromInt(dib.buffer))[0 .. dib.width * dib.height * 4]
     else
         renderer.global_framebuf;
@@ -27,7 +27,7 @@ pub fn BitBlt(hdcDest: usize, x: i32, y: i32, cx: i32, cy: i32, hdcSrc: usize, x
     const src_ptr = @as([*]const u8, @ptrFromInt(src.buffer));
     const src_w = src.width;
     const src_h = src.height;
-    
+
     const blit_w: u32 = if (cx > 0) @intCast(cx) else 0;
     const blit_h: u32 = if (cy > 0) @intCast(cy) else 0;
 
@@ -47,7 +47,7 @@ pub fn BitBlt(hdcDest: usize, x: i32, y: i32, cx: i32, cy: i32, hdcSrc: usize, x
             const src_bpp: u32 = @as(u32, src.bpp) / 8;
             const si_px: u32 = (@as(u32, @intCast(sy_i)) * src_w + @as(u32, @intCast(sx_i))) * src_bpp;
             const di_px: u32 = (@as(u32, @intCast(dy_i)) * dest_w + @as(u32, @intCast(dx_i))) * 4;
-            
+
             if (si_px + 3 >= src_w * src_h * src_bpp) continue;
             if (di_px + 3 >= dest_buf.len) continue;
 
@@ -79,11 +79,11 @@ pub fn BitBlt(hdcDest: usize, x: i32, y: i32, cx: i32, cy: i32, hdcSrc: usize, x
             }
         }
     }
-    
+
     if (dest_dib == null) {
         renderer.markScreenDirty();
     }
-    
+
     return 1;
 }
 
@@ -150,7 +150,7 @@ pub fn blitDIBToBufferAt(lpBits: usize, lpbmi: usize, dest_buf: []u8, dest_w: u3
     if (bi_width <= 0) return;
     const w: u32 = @intCast(bi_width);
     const bottom_up = bi_height_raw > 0;
-    
+
     // If cLines is provided, the buffer only contains that many scan lines.
     const h: u32 = if (cLines) |cl| cl else @intCast(if (bottom_up) bi_height_raw else -bi_height_raw);
 
@@ -182,12 +182,7 @@ pub fn blitDIBToBufferAt(lpBits: usize, lpbmi: usize, dest_buf: []u8, dest_w: u3
         row_stride;
 
     if (bi_bitcount == 4 and trace.enable_tracing) {
-        trace.print("GDI32: 4bpp blit, first 4 colors: [{X:0>2}{X:0>2}{X:0>2}, {X:0>2}{X:0>2}{X:0>2}, {X:0>2}{X:0>2}{X:0>2}, {X:0>2}{X:0>2}{X:0>2}]\n", .{
-            palette_ptr[2], palette_ptr[1], palette_ptr[0],
-            palette_ptr[6], palette_ptr[5], palette_ptr[4],
-            palette_ptr[10], palette_ptr[9], palette_ptr[8],
-            palette_ptr[14], palette_ptr[13], palette_ptr[12]
-        });
+        trace.print("GDI32: 4bpp blit, first 4 colors: [{X:0>2}{X:0>2}{X:0>2}, {X:0>2}{X:0>2}{X:0>2}, {X:0>2}{X:0>2}{X:0>2}, {X:0>2}{X:0>2}{X:0>2}]\n", .{ palette_ptr[2], palette_ptr[1], palette_ptr[0], palette_ptr[6], palette_ptr[5], palette_ptr[4], palette_ptr[10], palette_ptr[9], palette_ptr[8], palette_ptr[14], palette_ptr[13], palette_ptr[12] });
     }
 
     for (0..blitH) |dy| {
@@ -195,11 +190,11 @@ pub fn blitDIBToBufferAt(lpBits: usize, lpbmi: usize, dest_buf: []u8, dest_w: u3
         if (src_y_logical < 0 or src_y_logical >= @as(i32, @intCast(h))) continue;
 
         // True physical row in the DIB bits (handles bottom-up vs top-down)
-        const src_y_physical: u32 = if (bottom_up) 
-            h - 1 - @as(u32, @intCast(src_y_logical)) 
-        else 
+        const src_y_physical: u32 = if (bottom_up)
+            h - 1 - @as(u32, @intCast(src_y_logical))
+        else
             @as(u32, @intCast(src_y_logical));
-        
+
         const src_row = src + src_y_physical * actual_row_stride;
 
         const screen_y: i32 = dstY + @as(i32, @intCast(dy));
@@ -280,9 +275,9 @@ pub fn blitDIBToBufferAt(lpBits: usize, lpbmi: usize, dest_buf: []u8, dest_w: u3
 pub fn StretchDIBits(hdc: usize, xDest: i32, yDest: i32, DestWidth: i32, DestHeight: i32, xSrc: i32, ySrc: i32, SrcWidth: i32, SrcHeight: i32, lpBits: usize, lpbmi: usize, iUsage: u32, rop: u32) callconv(w32cc.WINAPI) i32 {
     _ = iUsage;
     if (trace.enable_tracing) trace.print("GDI32: StretchDIBits({d}x{d} -> {d}x{d})\n", .{ SrcWidth, SrcHeight, DestWidth, DestHeight });
-    
+
     const dest_dib = gdi32.getDcDib(hdc);
-    const dest_buf = if (dest_dib) |dib| 
+    const dest_buf = if (dest_dib) |dib|
         @as([*]u8, @ptrFromInt(dib.buffer))[0 .. dib.width * dib.height * 4]
     else
         renderer.global_framebuf;
@@ -291,11 +286,11 @@ pub fn StretchDIBits(hdc: usize, xDest: i32, yDest: i32, DestWidth: i32, DestHei
     const dest_h = if (dest_dib) |dib| dib.height else renderer.global_height;
 
     blitDIBToBufferAt(lpBits, lpbmi, dest_buf, dest_w, dest_h, xDest, yDest, xSrc, ySrc, @intCast(SrcWidth), @intCast(SrcHeight), null, rop);
-    
+
     if (dest_dib == null) {
         renderer.markScreenDirty();
     }
-    
+
     return if (DestHeight > 0) DestHeight else -DestHeight;
 }
 
@@ -329,7 +324,7 @@ pub const FramebufferInfo = struct {
         const r = @as(u32, self.buf[di + 2]);
         return (b << 16) | (g << 8) | r;
     }
-    
+
     pub fn drawLine(self: *const FramebufferInfo, x0: i32, y0: i32, x1: i32, y1: i32, color: u32) void {
         var cx = x0;
         var cy = y0;
@@ -346,8 +341,14 @@ pub const FramebufferInfo = struct {
             self.setPixel(cx, cy, color);
             if (cx == x1 and cy == y1) break;
             const e2 = 2 * err;
-            if (e2 >= dy) { err += dy; cx += sx; }
-            if (e2 <= dx) { err += dx; cy += sy; }
+            if (e2 >= dy) {
+                err += dy;
+                cx += sx;
+            }
+            if (e2 <= dx) {
+                err += dx;
+                cy += sy;
+            }
         }
     }
 
@@ -455,7 +456,7 @@ var current_pos_x: i32 = 0;
 var current_pos_y: i32 = 0;
 
 pub fn MoveToEx(hdc: usize, x: i32, y: i32, lppt: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hdc; 
+    _ = hdc;
     if (lppt != 0) {
         const pt = @as(*w32.POINT, @ptrFromInt(lppt));
         pt.x = current_pos_x;
@@ -488,7 +489,7 @@ pub fn Rectangle(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callc
         var pen_style: i32 = 0; // Solid
         var brush_color: u32 = 0x00FFFFFF; // White
         var brush_style: i32 = 0; // Solid
-        
+
         if (gdi32.getDc(hdc)) |dc| {
             if (gdi32.findObject(dc.pen)) |obj| {
                 if (obj.obj_type == .Pen) {
@@ -503,10 +504,10 @@ pub fn Rectangle(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callc
                 }
             }
         }
-        
+
         const w = if (right > left) right - left else 0;
         const h = if (bottom > top) bottom - top else 0;
-        
+
         // Fill rect (if brush not NULL (5))
         if (brush_style != 5) { // Assuming 5 is NULL/HOLLOW_BRUSH or 1 (some systems use 1)
             // Need to correctly map NULL_BRUSH. I registered it with style=1 earlier.
@@ -514,7 +515,7 @@ pub fn Rectangle(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callc
                 fb.fillRect(left + 1, top + 1, w - 2, h - 2, brush_color);
             }
         }
-        
+
         // Draw Outline (if pen not NULL)
         if (pen_style != 5) {
             fb.drawLine(left, top, right - 1, top, pen_color); // Top
@@ -522,7 +523,7 @@ pub fn Rectangle(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callc
             fb.drawLine(right - 1, bottom - 1, left, bottom - 1, pen_color); // Bottom
             fb.drawLine(left, bottom - 1, left, top, pen_color); // Left
         }
-        
+
         if (fb.is_screen) renderer.markScreenDirty();
     }
     return 1;
@@ -532,9 +533,9 @@ pub fn SetDIBitsToDevice(hdc: usize, xDest: i32, yDest: i32, w: u32, h: u32, xSr
     _ = ColorUse;
     const hdr = @as(*const w32.BITMAPINFOHEADER, @ptrFromInt(lpbmi));
     if (trace.enable_tracing) trace.print("GDI32: SetDIBitsToDevice(dst={d},{d} slice={d}x{d} @ {d},{d} start={d} lines={d} bits={x} biW={d} biH={d})\n", .{ xDest, yDest, w, h, xSrc, ySrc, StartScan, cLines, lpvBits, hdr.biWidth, hdr.biHeight });
-    
+
     const dest_dib = gdi32.getDcDib(hdc);
-    const dest_buf = if (dest_dib) |dib| 
+    const dest_buf = if (dest_dib) |dib|
         @as([*]u8, @ptrFromInt(dib.buffer))[0 .. dib.width * dib.height * 4]
     else
         renderer.global_framebuf;
@@ -543,16 +544,22 @@ pub fn SetDIBitsToDevice(hdc: usize, xDest: i32, yDest: i32, w: u32, h: u32, xSr
     const dest_h = if (dest_dib) |dib| dib.height else renderer.global_height;
 
     blitDIBToBufferAt(lpvBits, lpbmi, dest_buf, dest_w, dest_h, xDest, yDest, xSrc, ySrc, w, h, cLines, 0x00CC0020); // SRCCOPY
-    
+
     if (dest_dib == null) {
         renderer.markScreenDirty();
     }
-    
+
     return @intCast(cLines);
 }
 
 pub fn stub_GetDIBits(hdc: usize, hbm: usize, start: u32, cLines: u32, lpvBits: usize, lpbmi: usize, usage: u32) callconv(w32cc.WINAPI) i32 {
-    _ = hdc; _ = hbm; _ = start; _ = cLines; _ = lpvBits; _ = lpbmi; _ = usage;
+    _ = hdc;
+    _ = hbm;
+    _ = start;
+    _ = cLines;
+    _ = lpvBits;
+    _ = lpbmi;
+    _ = usage;
     return 0;
 }
 
@@ -606,17 +613,28 @@ pub fn ExtTextOutW(hdc: usize, x: i32, y: i32, options: u32, lprect: usize, lpSt
 }
 
 pub fn stub_IntersectClipRect(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callconv(w32cc.WINAPI) i32 {
-    _ = hdc; _ = left; _ = top; _ = right; _ = bottom;
+    _ = hdc;
+    _ = left;
+    _ = top;
+    _ = right;
+    _ = bottom;
     return 1; // SIMPLEREGION
 }
 
 pub fn stub_ExcludeClipRect(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callconv(w32cc.WINAPI) i32 {
-    _ = hdc; _ = left; _ = top; _ = right; _ = bottom;
+    _ = hdc;
+    _ = left;
+    _ = top;
+    _ = right;
+    _ = bottom;
     return 1;
 }
 
 pub fn stub_CombineRgn(hrgnDst: usize, hrgnSrc1: usize, hrgnSrc2: usize, iMode: i32) callconv(w32cc.WINAPI) i32 {
-    _ = hrgnDst; _ = hrgnSrc1; _ = hrgnSrc2; _ = iMode;
+    _ = hrgnDst;
+    _ = hrgnSrc1;
+    _ = hrgnSrc2;
+    _ = iMode;
     return 1;
 }
 
@@ -680,7 +698,8 @@ pub fn Ellipse(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callcon
 
 pub fn RoundRect(hdc: usize, left: i32, top: i32, right: i32, bottom: i32, width: i32, height: i32) callconv(w32cc.WINAPI) i32 {
     // Simplified: draw as a plain rectangle (corner rounding is cosmetic)
-    _ = width; _ = height;
+    _ = width;
+    _ = height;
     return Rectangle(hdc, left, top, right, bottom);
 }
 

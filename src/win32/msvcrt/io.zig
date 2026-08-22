@@ -114,7 +114,7 @@ pub fn get_pioinfo_guest_addr() usize {
                     const table0_addr = @intFromPtr(table0_ptr);
                     const t0_ptr = @as(*@TypeOf(ioinfo_table0), @ptrCast(@alignCast(table0_ptr)));
                     t0_ptr.* = ioinfo_table0;
-                    
+
                     const ptr = @as(*[64]usize, @ptrCast(@alignCast(addr_ptr)));
                     ptr.* = [_]usize{0} ** 64;
                     ptr[0] = table0_addr;
@@ -328,7 +328,7 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
 
     if (allocateFileSlot()) |idx| {
         file_handles[idx] = file;
-        
+
         const shared = @import("../shared.zig");
         const ptr_opaque = shared.raw_alloc(@sizeOf(MSVCRT_FILE)) orelse {
             @import("../host_io.zig").closeFile(file);

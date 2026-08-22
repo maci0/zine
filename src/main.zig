@@ -94,7 +94,6 @@ pub fn main(init: std.process.Init) !void {
     var use_jit = false;
     var no_gui = false;
 
-
     if (init.minimal.environ.containsConstant("ZINE_TRACE")) {
         trace.enable_tracing = true;
     }
@@ -104,7 +103,7 @@ pub fn main(init: std.process.Init) !void {
     if (init.minimal.environ.containsConstant("ZINE_PROFILE")) {
         profiler.enabled = true;
     }
-    
+
     var end_of_options = false;
     while (args.next()) |arg| {
         if (!end_of_options and std.mem.eql(u8, arg, "--")) {
@@ -502,7 +501,7 @@ pub fn main(init: std.process.Init) !void {
         thread_env.NtTib.StackBase = 0x7FFF0000; // near top of 32-bit range
         thread_env.NtTib.StackLimit = 0x00100000; // 1MB above null page
     }
-    
+
     // Build PEB Environment block (Must be UTF-16 on NT)
     var env_total_chars: usize = 1; // Final null
     if (stubs_msvcrt.global_env_initialized) {
@@ -541,7 +540,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
     env_block[env_pos] = 0;
-    
+
     const peb = @as(*teb.PEB, @ptrFromInt(thread_env.ProcessEnvironmentBlock));
     const params = @as(*teb.RTL_USER_PROCESS_PARAMETERS, @ptrFromInt(peb.ProcessParameters));
     params.Environment = @truncate(@intFromPtr(env_block));
@@ -620,7 +619,7 @@ pub fn main(init: std.process.Init) !void {
             const guest_stack_size = 16 * 1024 * 1024; // 16MB
             const guest_stack_mem = try platform.mmap(@ptrFromInt(0x05000000), guest_stack_size, true, -1, 0, false, true);
             const guest_esp_top: u32 = @intCast(@intFromPtr(guest_stack_mem.ptr) + guest_stack_size - 64);
-            
+
             // Set proper TEB stack bounds for MSVC compiler pass stack checks
             // C1.DLL mathematically verifies the StackBase - StackLimit native span.
             // If the span exceeds ~1MB, C1.DLL natively panics resulting in C1063 during deep recursion.
@@ -677,4 +676,3 @@ pub fn main(init: std.process.Init) !void {
 // ---------------------------------------------------------------------------
 // JIT-integrated execution loop
 // ---------------------------------------------------------------------------
-

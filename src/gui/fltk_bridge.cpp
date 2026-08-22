@@ -262,8 +262,6 @@ void fltk_set_menu_json(const char* json, int len) {
     char parent_labels[8][128];  /* up to 8 levels deep */
     memset(parent_labels, 0, sizeof(parent_labels));
 
-    int brace_depth = 0;
-    int bracket_depth = 0;
     int in_children = 0;
 
     /* State for current object being parsed */
@@ -274,14 +272,12 @@ void fltk_set_menu_json(const char* json, int len) {
     int i = 0;
     while (i < len) {
         if (json[i] == '{') {
-            brace_depth++;
             /* Reset current object state */
             cur_label[0] = 0;
             cur_id = -1;
             has_children = 0;
             i++;
         } else if (json[i] == '}') {
-            brace_depth--;
 
             /* When closing an object that has a label, add it to the menu */
             if (cur_label[0] != 0) {
@@ -323,7 +319,6 @@ void fltk_set_menu_json(const char* json, int len) {
             }
             i++;
         } else if (json[i] == '[') {
-            bracket_depth++;
             /* If we just saw "children", push the current label as parent */
             if (in_children) {
                 if (path_depth < 8 && cur_label[0] != 0) {
@@ -340,7 +335,6 @@ void fltk_set_menu_json(const char* json, int len) {
             }
             i++;
         } else if (json[i] == ']') {
-            bracket_depth--;
             if (path_depth > 0) path_depth--;
             i++;
         } else if (json[i] == '"') {
@@ -669,8 +663,11 @@ void fltk_open_color_dialog(unsigned initial) {
     Fl_Button* cancel = new Fl_Button(230, 180, 70, 26, "Cancel");
     ok->callback([](Fl_Widget* w, void* d) {
         Fl_Color_Chooser* ch = (Fl_Color_Chooser*)d;
-        unsigned char r, g, b;
-        ch->rgb(r, g, b);
+        /* r()/g()/b() return 0..1 doubles; round back to 0..255 the same
+           way fl_color_chooser() does for uchar outputs. */
+        unsigned char r = (unsigned char)(ch->r() * 255.0 + 0.5);
+        unsigned char g = (unsigned char)(ch->g() * 255.0 + 0.5);
+        unsigned char b = (unsigned char)(ch->b() * 255.0 + 0.5);
         unsigned rgb = ((unsigned)r << 16) | ((unsigned)g << 8) | b;
         if (g_event_cb) g_event_cb(FLTK_EVT_COLOR_SEL, (int)rgb, 0);
         Fl_Window* ww = w->window();

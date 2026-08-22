@@ -6,7 +6,9 @@ const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
 
 pub fn PeekMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32, wRemoveMsg: u32) callconv(w32cc.WINAPI) i32 {
-    _ = hWnd; _ = wMsgFilterMin; _ = wMsgFilterMax;
+    _ = hWnd;
+    _ = wMsgFilterMin;
+    _ = wMsgFilterMax;
 
     // Scope the mutex to just the message queue checks
     {
@@ -34,7 +36,9 @@ pub fn PeekMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFil
 
         // WM_ACTIVATEAPP tells the app it's now the foreground application.
         // Many fullscreen games (esp. DirectX) skip rendering without this.
-        const AA = struct { var sent: bool = false; };
+        const AA = struct {
+            var sent: bool = false;
+        };
         if (!AA.sent) {
             {
                 const msg = lpMsg;
@@ -232,7 +236,7 @@ fn charFromVk(vk: u8) ?usize {
 pub fn DispatchMessageA(lpMsg: *user32.MSG) callconv(w32cc.WINAPI) isize {
     {
         const msg = lpMsg;
-        if (trace.enable_tracing) trace.print("USER32: DispatchMessageA(hwnd={x} Msg={x}, wParam={x}) edit_hwnd={x}\n", .{msg.hwnd, msg.message, msg.wParam, user32.edit_hwnd});
+        if (trace.enable_tracing) trace.print("USER32: DispatchMessageA(hwnd={x} Msg={x}, wParam={x}) edit_hwnd={x}\n", .{ msg.hwnd, msg.message, msg.wParam, user32.edit_hwnd });
 
         // Delphi CM_ACTIVATE (0xB000): skip if the main form doesn't exist yet.
         // Dispatching CM_ACTIVATE before Application.CreateForm completes
@@ -869,7 +873,6 @@ pub fn toggleAutoButton(ctrl_id: u32) void {
     }
 }
 
-
 // ListBox state per hwnd (items + cursor) so LB_* messages round-trip.
 const MAX_LB_ITEMS = 128;
 const MAX_LB_ITEM_LEN = 64;
@@ -1288,7 +1291,6 @@ pub fn setListboxCursor(ctrl_id: u32, index: i32) void {
     }
 }
 
-
 const ProgressState = struct { hwnd: usize, min: i32, max: i32, pos: i32 };
 var progress_states: [32]ProgressState = [_]ProgressState{.{ .hwnd = 0, .min = 0, .max = 100, .pos = 0 }} ** 32;
 var progress_state_count: usize = 0;
@@ -1326,9 +1328,9 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
                 }
                 return 1;
             },
-            0x0404 => 1,   // SB_SETPARTS: TRUE
-            0x0409 => 0,   // SB_GETPARTS: 0 parts
-            0x040D => 0,   // SB_GETTEXTLENGTHW: 0
+            0x0404 => 1, // SB_SETPARTS: TRUE
+            0x0409 => 0, // SB_GETPARTS: 0 parts
+            0x040D => 0, // SB_GETTEXTLENGTHW: 0
             else => 0,
         };
     }
@@ -1357,8 +1359,8 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
                 renderer.updateControlValue(@intCast(hWnd), st.pos);
                 return 1;
             },
-            0x0404 => 1,   // PBM_SETSTEP
-            0x0405 => 1,   // PBM_STEPIT
+            0x0404 => 1, // PBM_SETSTEP
+            0x0405 => 1, // PBM_STEPIT
             0x0406 => { // PBM_SETRANGE32: wParam = min, lParam = max
                 st.min = @intCast(wParam);
                 st.max = @intCast(lParam);
@@ -1366,8 +1368,8 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
                 return 1;
             },
             0x0408 => st.pos, // PBM_GETPOS: current position
-            0x0409 => 1,   // PBM_SETBARCOLOR
-            0x040D => 1,   // PBM_SETBKCOLOR
+            0x0409 => 1, // PBM_SETBARCOLOR
+            0x040D => 1, // PBM_SETBKCOLOR
             else => 0,
         };
     }
@@ -1538,29 +1540,29 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
     // ListView messages: LVM_FIRST = 0x1000
     if (Msg >= 0x1000 and Msg < 0x1100) {
         return switch (Msg) {
-            0x1004 => 0,   // LVM_GETITEMCOUNT: 0 items
-            0x1005 => 0,   // LVM_GETITEMA: FALSE (not found)
-            0x1006 => 1,   // LVM_SETITEMA: TRUE (success)
-            0x1007 => 0,   // LVM_INSERTITEMA: index 0
-            0x1008 => 1,   // LVM_DELETEITEM: TRUE
-            0x1009 => 1,   // LVM_DELETEALLITEMS: TRUE
-            0x101B => 0,   // LVM_INSERTCOLUMNA: column index 0
-            0x101C => 0,   // LVM_DELETECOLUMN: FALSE (no columns to delete)
-            0x101D => 60,  // LVM_GETCOLUMNWIDTH: 60 pixels
-            0x102F => 1,   // LVM_SETITEMCOUNT: TRUE
-            0x1036 => 0,   // LVM_GETSELECTEDCOUNT: 0
-            0x103F => 0,   // LVM_GETEXTENDEDLISTVIEWSTYLE: 0
-            0x1040 => 0,   // LVM_GETSUBITEMRECT: FALSE
-            0x1041 => 0,   // LVM_SUBITEMHITTEST: -1 miss
-            0x1042 => 0,   // LVM_SETCOLUMNORDERARRAY
-            0x104B => 0,   // LVM_GETCOLUMNORDERARRAY
-            0x104D => 0,   // LVM_SETEXTENDEDLISTVIEWSTYLE
-            0x104E => 0,   // LVM_GETEXTENDEDLISTVIEWSTYLE (alias)
-            0x1061 => 0,   // LVM_INSERTCOLUMNW
-            0x1019 => 0,   // LVM_GETCOLUMNA: FALSE (prevents infinite loop deleting columns)
-            0x105F => 0,   // LVM_GETCOLUMNW: FALSE
-            0x1013 => 1,   // LVM_ENSUREVISIBLE: TRUE
-            0x1015 => 1,   // LVM_REDRAWITEMS: TRUE
+            0x1004 => 0, // LVM_GETITEMCOUNT: 0 items
+            0x1005 => 0, // LVM_GETITEMA: FALSE (not found)
+            0x1006 => 1, // LVM_SETITEMA: TRUE (success)
+            0x1007 => 0, // LVM_INSERTITEMA: index 0
+            0x1008 => 1, // LVM_DELETEITEM: TRUE
+            0x1009 => 1, // LVM_DELETEALLITEMS: TRUE
+            0x101B => 0, // LVM_INSERTCOLUMNA: column index 0
+            0x101C => 0, // LVM_DELETECOLUMN: FALSE (no columns to delete)
+            0x101D => 60, // LVM_GETCOLUMNWIDTH: 60 pixels
+            0x102F => 1, // LVM_SETITEMCOUNT: TRUE
+            0x1036 => 0, // LVM_GETSELECTEDCOUNT: 0
+            0x103F => 0, // LVM_GETEXTENDEDLISTVIEWSTYLE: 0
+            0x1040 => 0, // LVM_GETSUBITEMRECT: FALSE
+            0x1041 => 0, // LVM_SUBITEMHITTEST: -1 miss
+            0x1042 => 0, // LVM_SETCOLUMNORDERARRAY
+            0x104B => 0, // LVM_GETCOLUMNORDERARRAY
+            0x104D => 0, // LVM_SETEXTENDEDLISTVIEWSTYLE
+            0x104E => 0, // LVM_GETEXTENDEDLISTVIEWSTYLE (alias)
+            0x1061 => 0, // LVM_INSERTCOLUMNW
+            0x1019 => 0, // LVM_GETCOLUMNA: FALSE (prevents infinite loop deleting columns)
+            0x105F => 0, // LVM_GETCOLUMNW: FALSE
+            0x1013 => 1, // LVM_ENSUREVISIBLE: TRUE
+            0x1015 => 1, // LVM_REDRAWITEMS: TRUE
             else => 0,
         };
     }
@@ -1568,11 +1570,11 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
     // TabControl messages: TCM_FIRST = 0x1300
     if (Msg >= 0x1300 and Msg < 0x1400) {
         return switch (Msg) {
-            0x1304 => 0,   // TCM_GETITEMCOUNT: 0 items
-            0x1307 => 0,   // TCM_INSERTITEMA: index 0
-            0x133E => 0,   // TCM_INSERTITEMW: index 0
-            0x130B => -1,  // TCM_GETCURSEL: -1 (no selection)
-            0x130C => -1,  // TCM_SETCURSEL: -1
+            0x1304 => 0, // TCM_GETITEMCOUNT: 0 items
+            0x1307 => 0, // TCM_INSERTITEMA: index 0
+            0x133E => 0, // TCM_INSERTITEMW: index 0
+            0x130B => -1, // TCM_GETCURSEL: -1 (no selection)
+            0x130C => -1, // TCM_SETCURSEL: -1
             else => 0,
         };
     }
@@ -1580,11 +1582,11 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
     // StatusBar messages: SB_* use WM_USER range 0x0400+
     if (Msg >= 0x0400 and Msg < 0x0500) {
         return switch (Msg) {
-            0x0404 => 1,   // SB_SETPARTS: TRUE
-            0x0401 => 1,   // SB_SETTEXTA: TRUE
-            0x0409 => 0,   // SB_GETPARTS: 0 parts
-            0x040B => 1,   // SB_SETTEXTW: TRUE
-            0x040D => 0,   // SB_GETTEXTLENGTHW: 0
+            0x0404 => 1, // SB_SETPARTS: TRUE
+            0x0401 => 1, // SB_SETTEXTA: TRUE
+            0x0409 => 0, // SB_GETPARTS: 0 parts
+            0x040B => 1, // SB_SETTEXTW: TRUE
+            0x040D => 0, // SB_GETTEXTLENGTHW: 0
             else => 0,
         };
     }
@@ -1592,7 +1594,7 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
     // Header control: HDM_FIRST = 0x1200
     if (Msg >= 0x1200 and Msg < 0x1300) {
         return switch (Msg) {
-            0x1200 => 0,   // HDM_GETITEMCOUNT: 0 items
+            0x1200 => 0, // HDM_GETITEMCOUNT: 0 items
             else => 0,
         };
     }

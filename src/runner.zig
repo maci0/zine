@@ -256,7 +256,7 @@ pub fn applyReverseRelocations(
             const imp_name = @as(*align(1) const u32, @ptrCast(buf[imp_off + 12 ..].ptr)).*;
             if (imp_name == 0) break;
             const first_thunk_rva = @as(*align(1) const u32, @ptrCast(buf[imp_off + 16 ..].ptr)).*;
-            const orig_thunk_rva_raw = @as(*align(1) const u32, @ptrCast(buf[imp_off ..].ptr)).*;
+            const orig_thunk_rva_raw = @as(*align(1) const u32, @ptrCast(buf[imp_off..].ptr)).*;
             const ilt_rva = if (orig_thunk_rva_raw == 0) first_thunk_rva else orig_thunk_rva_raw;
             var count: u32 = 0;
             while (ilt_rva + (count + 1) * 4 <= image_size) {
@@ -290,7 +290,7 @@ pub fn applyReverseRelocations(
             for (0..entries_count) |e| {
                 const entry = @as(*align(1) const u16, @ptrCast(buf[reloc_offset + 8 + e * 2 ..].ptr)).*;
                 const IMAGE_REL_BASED_HIGHLOW = 3;
-                    if (entry >> 12 == IMAGE_REL_BASED_HIGHLOW) {
+                if (entry >> 12 == IMAGE_REL_BASED_HIGHLOW) {
                     const patch_addr = block_va + (entry & 0x0FFF);
                     var in_iat = false;
                     for (iat_ranges[0..iat_range_count]) |range| {
@@ -370,9 +370,12 @@ pub fn scanBlock(code: []const u8) usize {
         offset += insn.length;
 
         switch (insn.opcode) {
-            0xC3, 0xC2, // RET, RET imm16
-            0xCB, 0xCA, // RETF
-            0xE9, 0xEB, // JMP rel32, JMP rel8
+            0xC3,
+            0xC2, // RET, RET imm16
+            0xCB,
+            0xCA, // RETF
+            0xE9,
+            0xEB, // JMP rel32, JMP rel8
             0xF4, // HLT
             0xCC, // INT3
             => break,

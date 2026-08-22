@@ -375,7 +375,7 @@ fn sscanf_impl(input: [*:0]const u8, fmt_str: [*:0]const u8, ap: usize) i32 {
         if (fc == '%') {
             fmt_idx += 1;
             if (fmt_idx >= fmt.len) break;
-            
+
             // Skip whitespaces in buf before parsing formatted types
             while (buf_idx < buf.len and std.ascii.isWhitespace(buf[buf_idx])) {
                 buf_idx += 1;
@@ -388,7 +388,7 @@ fn sscanf_impl(input: [*:0]const u8, fmt_str: [*:0]const u8, ap: usize) i32 {
 
             if (specifier == 'd' or specifier == 'i' or (specifier == 'l' and fmt_idx + 1 < fmt.len and fmt[fmt_idx + 1] == 'd')) {
                 if (specifier == 'l') fmt_idx += 1;
-                
+
                 var sign: i32 = 1;
                 if (buf_idx < buf.len and (buf[buf_idx] == '-' or buf[buf_idx] == '+')) {
                     if (buf[buf_idx] == '-') sign = -1;
@@ -401,7 +401,7 @@ fn sscanf_impl(input: [*:0]const u8, fmt_str: [*:0]const u8, ap: usize) i32 {
                     parsed = true;
                     buf_idx += 1;
                 }
-                
+
                 if (parsed) {
                     if (out_addr != 0) {
                         @as(*i32, @ptrFromInt(out_addr)).* = val * sign;
@@ -413,12 +413,12 @@ fn sscanf_impl(input: [*:0]const u8, fmt_str: [*:0]const u8, ap: usize) i32 {
             } else if (specifier == 'x' or specifier == 'X') {
                 var parsed = false;
                 var val: u32 = 0;
-                
+
                 // skip optional 0x
-                if (buf_idx + 1 < buf.len and buf[buf_idx] == '0' and (buf[buf_idx+1] == 'x' or buf[buf_idx+1] == 'X')) {
+                if (buf_idx + 1 < buf.len and buf[buf_idx] == '0' and (buf[buf_idx + 1] == 'x' or buf[buf_idx + 1] == 'X')) {
                     buf_idx += 2;
                 }
-                
+
                 while (buf_idx < buf.len) {
                     const c = buf[buf_idx];
                     var digit: u32 = 0;
@@ -435,7 +435,7 @@ fn sscanf_impl(input: [*:0]const u8, fmt_str: [*:0]const u8, ap: usize) i32 {
                     parsed = true;
                     buf_idx += 1;
                 }
-                
+
                 if (parsed) {
                     if (out_addr != 0) {
                         @as(*u32, @ptrFromInt(out_addr)).* = val;

@@ -9,5 +9,11 @@ comptime {
     @export(&stub3, .{ .name = "VDMEnumTaskWOWEx" });
 }
 
-fn stub2(a: usize, b: usize) callconv(w32cc.WINAPI) usize { _ = .{ a, b }; return 0; }
-fn stub3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize { _ = .{ a, b, c }; return 0; }
+fn stub2(a: usize, b: usize) callconv(w32cc.WINAPI) usize {
+    _ = .{ a, b };
+    return 0;
+}
+fn stub3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) usize {
+    _ = .{ a, b, c };
+    return 0;
+}

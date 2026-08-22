@@ -141,7 +141,6 @@ fn rc_main(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(
     // Minimal preprocessor: collect `#define NAME value` numeric defines so
     // dialog/control IDs can use symbolic names (as real .rc files do).
     {
-
         var di: usize = 0;
         while (di < rc_text.len) {
             // find lines starting with #define
@@ -935,7 +934,6 @@ fn rc_main(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(
             if (ii < rc_text.len) ii += 1;
         }
     }
-
 
     if (block_count == 0 and dlg_count == 0 and menu_count == 0 and icon_count == 0) {
         if (trace.enable_tracing) trace.print("RCDLL: no resource data\n", .{});

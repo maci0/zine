@@ -68,8 +68,13 @@ pub fn saveHostFsBase() void {
 pub fn useHostFs() u16 {
     if (comptime is_x86_64) {
         var sel: u16 = undefined;
-        asm volatile ("mov %%fs, %[s]" : [s] "=r" (sel));
-        asm volatile ("mov %[z], %%fs" :: [z] "r" (@as(u16, 0)));
+        asm volatile ("mov %%fs, %[s]"
+            : [s] "=r" (sel),
+        );
+        asm volatile ("mov %[z], %%fs"
+            :
+            : [z] "r" (@as(u16, 0)),
+        );
         _ = std.os.linux.syscall2(std.os.linux.SYS.arch_prctl, 0x1002, host_fs_base); // ARCH_SET_FS
         return sel;
     }
@@ -80,7 +85,10 @@ pub fn useHostFs() u16 {
 pub fn restoreFs(sel: u16) void {
     if (comptime is_x86_64) {
         if (sel != 0) {
-            asm volatile ("mov %[s], %%fs" :: [s] "r" (sel));
+            asm volatile ("mov %[s], %%fs"
+                :
+                : [s] "r" (sel),
+            );
         }
     }
 }
@@ -95,7 +103,9 @@ pub fn spawnThread(func: anytype, args: anytype) bool {
 /// On other native architectures, SEH is not supported.
 pub fn readExceptionList() u32 {
     if (comptime is_x86) {
-        return asm volatile ("movl %%fs:0, %[out]" : [out] "=r" (-> u32));
+        return asm volatile ("movl %%fs:0, %[out]"
+            : [out] "=r" (-> u32),
+        );
     } else {
         return 0xFFFFFFFF; // No SEH on this architecture
     }
@@ -194,8 +204,7 @@ pub fn exitProcess(code: u8) noreturn {
             :
             : [num] "{rax}" (@as(usize, 231)), // __NR_exit_group
               [arg1] "{rdi}" (@as(usize, code)),
-            : .{ .rcx = true, .r11 = true }
-        );
+            : .{ .rcx = true, .r11 = true });
         unreachable;
     }
     std.process.exit(code);
@@ -302,8 +311,7 @@ pub fn setupFS(teb_ptr: *anyopaque) !void {
             : [ret] "={eax}" (rc),
             : [num] "{eax}" (SYS_set_thread_area),
               [arg1] "{ebx}" (@intFromPtr(&desc)),
-            : .{ .memory = true, .cc = true }
-        );
+            : .{ .memory = true, .cc = true });
 
         if (rc > 0xfffff000) {
             log.err("set_thread_area failed: {d}", .{rc});
@@ -335,8 +343,7 @@ pub fn setupFS(teb_ptr: *anyopaque) !void {
             : [num] "{rax}" (SYS_arch_prctl),
               [arg1] "{rdi}" (ARCH_SET_FS),
               [arg2] "{rsi}" (@intFromPtr(teb_ptr)),
-            : .{ .rcx = true, .r11 = true, .memory = true }
-        );
+            : .{ .rcx = true, .r11 = true, .memory = true });
 
         if (rc > 0xfffffffffffff000) {
             log.err("arch_prctl(ARCH_SET_FS) failed: {d}", .{rc});
@@ -371,8 +378,7 @@ pub fn setupFS(teb_ptr: *anyopaque) !void {
               [arg1] "{rdi}" (@as(usize, 1)), // write
               [arg2] "{rsi}" (@intFromPtr(&ldt_entry)),
               [arg3] "{rdx}" (@as(usize, @sizeOf(@TypeOf(ldt_entry)))),
-            : .{ .rcx = true, .r11 = true, .memory = true }
-        );
+            : .{ .rcx = true, .r11 = true, .memory = true });
 
         if (rc2 > 0xfffffffffffff000) {
             log.warn("modify_ldt failed on x86_64: {d} (compat mode FS won't work)", .{rc2});
@@ -664,9 +670,7 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
             const code = @as([*]const u8, @ptrFromInt(ip));
             var inst_len: usize = 2;
             if (code[0] == 0x0F) {
-                if (code[1] == 0x3F) inst_len = 4
-                else if (code[1] == 0x37) inst_len = 2
-                else if (code[1] == 0x01) inst_len = 3;
+                if (code[1] == 0x3F) inst_len = 4 else if (code[1] == 0x37) inst_len = 2 else if (code[1] == 0x01) inst_len = 3;
             }
             log.info("AppCompat: SIGILL at 0x{X}, no SEH, skipping {d} bytes", .{ ip, inst_len });
             uctx.mcontext.gregs[reg_ip] = @bitCast(ip + inst_len);
@@ -685,9 +689,9 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
             const modrm = code[1];
             const mod = (modrm >> 6) & 3;
             const rm = modrm & 7;
-            if (mod == 0 and rm == 5) inst_len += 4  // [disp32]
-            else if (mod == 1) inst_len += 1         // [reg+disp8]
-            else if (mod == 2) inst_len += 4;        // [reg+disp32]
+            if (mod == 0 and rm == 5) inst_len += 4 // [disp32]
+            else if (mod == 1) inst_len += 1 // [reg+disp8]
+            else if (mod == 2) inst_len += 4; // [reg+disp32]
             if (rm == 4 and mod != 3) inst_len += 1; // SIB byte
         }
         log.info("AppCompat: SIGFPE at 0x{X}, skipping {d} bytes", .{ ip, inst_len });
@@ -900,14 +904,14 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
                         found_idx = si;
                     }
                     if (si < 10 or found_ret != null) {
-                        log.warn("  stack[{d}] = 0x{X} <app>", .{si, val});
+                        log.warn("  stack[{d}] = 0x{X} <app>", .{ si, val });
                     }
                 } else if (si < 10) {
-                    log.warn("  stack[{d}] = 0x{X}", .{si, val});
+                    log.warn("  stack[{d}] = 0x{X}", .{ si, val });
                 }
             }
             if (found_ret) |ret| {
-                log.info("AppCompat: Recovering to app code 0x{X} (stack[{d}])", .{ret, found_idx});
+                log.info("AppCompat: Recovering to app code 0x{X} (stack[{d}])", .{ ret, found_idx });
                 uctx.mcontext.gregs[reg_ip] = ret;
                 uctx.mcontext.gregs[reg_sp] = @bitCast(esp + (found_idx + 1) * 4);
                 uctx.mcontext.gregs[reg_ax] = 0;
@@ -955,7 +959,9 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
         {
             const reg3 = (ptr3[1] >> 3) & 7;
             const dest: usize = switch (reg3) {
-                0 => reg_ax, 2 => reg_dx, else => reg_ax,
+                0 => reg_ax,
+                2 => reg_dx,
+                else => reg_ax,
             };
             uctx.mcontext.gregs[dest] = 0;
             uctx.mcontext.gregs[reg_ip] += 3;
@@ -979,9 +985,7 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
                 return;
             }
         }
-
     }
-
 
     // Track repeated faults at the same IP to detect infinite loops.
     const S = struct {
@@ -1010,107 +1014,103 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
     };
 
     if (!skip_appcompat_null) {
-
-    if (fault_addr < 0x1000 and ip != 0) {
-        if (S.null_repeat_count > 50) {
-            const msg = "NULL read loop, aborting.\n";
-            _ = std.os.linux.write(2, msg.ptr, msg.len);
-            exitProcess(1);
-        }
-    }
-    if (fault_addr < 0x1000 and ip != 0) {
-
-        const ptr = @as([*]u8, @ptrFromInt(ip));
-
-        // F2 AE = repnz scasb (strlen pattern: ecx=-1, al=0, scan es:[edi])
-        // When EDI is in the NULL page, simulate scanning an empty string:
-        // one iteration finds the null terminator, so ecx goes -1 → -2.
-        if (ptr[0] == 0xF2 and ptr[1] == 0xAE) {
-            log.info("AppCompat: Skipped NULL repnz scasb at 0x{X} (edi=0x{X})", .{ ip, @as(usize, @bitCast(uctx.mcontext.gregs[reg_di])) });
-            uctx.mcontext.gregs[reg_cx] = @bitCast(@as(isize, -2)); // as if one byte scanned
-            uctx.mcontext.gregs[reg_di] = 1; // edi advanced past the "null terminator"
-            uctx.mcontext.gregs[reg_ip] += 2; // skip F2 AE
-            return;
-        }
-
-        // ff 51 XX (call [ecx+disp8]) or ff 52 XX (call [edx+disp8])
-        if ((ptr[0] == 0xFF and (ptr[1] & 0xF8) == 0x50)) {
-            log.info("AppCompat: Skipped NULL pointer call at 0x{X} ({X} {X} {X})", .{ip, ptr[0], ptr[1], ptr[2]});
-            uctx.mcontext.gregs[reg_ip] += 3;
-            uctx.mcontext.gregs[reg_sp] += if (native_arch == .x86) 4 else 8;
-            return;
-        }
-
-        // Generic x86 NULL-pointer read/write skip.  We decode the ModR/M
-        // (and optional SIB) byte to figure out how many bytes to skip.
-        //
-        // Reads:  8A (mov r8, [r/m])   8B (mov r32, [r/m])
-        //         3B (cmp r32, [r/m])
-        // Writes: 88/89 (mov [r/m], reg)  C6/C7 (mov [r/m], imm)
-        //         01/09/21/29/31 (alu [r/m], reg)
-        const maybe_opcode = ptr[0];
-
-        const is_read = switch (maybe_opcode) {
-            0x8A, 0x8B => true, // mov reg, [r/m] (8/32 bit)
-            0x3B => true,       // cmp reg, [r/m]
-            else => false,
-        };
-        const is_store = switch (maybe_opcode) {
-            0x88, 0x89 => true, // mov [r/m], reg8/32
-            0xC6, 0xC7 => true, // mov [r/m], imm8/imm32
-            0x01 => true,       // add [r/m], reg
-            0x29 => true,       // sub [r/m], reg
-            0x09 => true,       // or  [r/m], reg
-            0x21 => true,       // and [r/m], reg
-            0x31 => true,       // xor [r/m], reg
-            else => false,
-        };
-
-        if ((is_read or is_store) and ptr[1] & 0xC0 != 0xC0) { // Not reg-to-reg (mod != 11)
-            const modrm = ptr[1];
-            const mod_field = (modrm >> 6) & 3;
-            const rm_field = modrm & 7;
-            const reg_field = (modrm >> 3) & 7;
-            // Base instruction length: opcode(1) + modrm(1)
-            var skip: usize = 2;
-            // SIB byte present when rm == 4 and mod != 3
-            if (rm_field == 4 and mod_field != 3) skip += 1;
-            // Displacement
-            if (mod_field == 0 and rm_field == 5) {
-                skip += 4; // [disp32]
-            } else if (mod_field == 1) {
-                skip += 1; // [reg+disp8]
-            } else if (mod_field == 2) {
-                skip += 4; // [reg+disp32]
+        if (fault_addr < 0x1000 and ip != 0) {
+            if (S.null_repeat_count > 50) {
+                const msg = "NULL read loop, aborting.\n";
+                _ = std.os.linux.write(2, msg.ptr, msg.len);
+                exitProcess(1);
             }
-            // Immediate (for C6/C7)
-            if (maybe_opcode == 0xC6) skip += 1;
-            if (maybe_opcode == 0xC7) skip += 4;
-
-            if (is_read) {
-                // Zero the destination register (from reg field of ModR/M)
-                const dest_reg_idx: usize = switch (reg_field) {
-                    0 => reg_ax,
-                    1 => reg_cx,
-                    2 => reg_dx,
-                    3 => reg_bx,
-                    4 => reg_sp,
-                    5 => reg_bp,
-                    6 => reg_si,
-                    7 => reg_di,
-                    else => unreachable,
-                };
-                uctx.mcontext.gregs[dest_reg_idx] = 0;
-                log.info("AppCompat: Skipped NULL pointer read at 0x{X} (reg={d})", .{ip, reg_field});
-            } else {
-                log.info("AppCompat: Skipped NULL pointer write at 0x{X}", .{ip});
-            }
-            uctx.mcontext.gregs[reg_ip] += @intCast(skip);
-            return;
         }
+        if (fault_addr < 0x1000 and ip != 0) {
+            const ptr = @as([*]u8, @ptrFromInt(ip));
 
-    }
+            // F2 AE = repnz scasb (strlen pattern: ecx=-1, al=0, scan es:[edi])
+            // When EDI is in the NULL page, simulate scanning an empty string:
+            // one iteration finds the null terminator, so ecx goes -1 → -2.
+            if (ptr[0] == 0xF2 and ptr[1] == 0xAE) {
+                log.info("AppCompat: Skipped NULL repnz scasb at 0x{X} (edi=0x{X})", .{ ip, @as(usize, @bitCast(uctx.mcontext.gregs[reg_di])) });
+                uctx.mcontext.gregs[reg_cx] = @bitCast(@as(isize, -2)); // as if one byte scanned
+                uctx.mcontext.gregs[reg_di] = 1; // edi advanced past the "null terminator"
+                uctx.mcontext.gregs[reg_ip] += 2; // skip F2 AE
+                return;
+            }
 
+            // ff 51 XX (call [ecx+disp8]) or ff 52 XX (call [edx+disp8])
+            if ((ptr[0] == 0xFF and (ptr[1] & 0xF8) == 0x50)) {
+                log.info("AppCompat: Skipped NULL pointer call at 0x{X} ({X} {X} {X})", .{ ip, ptr[0], ptr[1], ptr[2] });
+                uctx.mcontext.gregs[reg_ip] += 3;
+                uctx.mcontext.gregs[reg_sp] += if (native_arch == .x86) 4 else 8;
+                return;
+            }
+
+            // Generic x86 NULL-pointer read/write skip.  We decode the ModR/M
+            // (and optional SIB) byte to figure out how many bytes to skip.
+            //
+            // Reads:  8A (mov r8, [r/m])   8B (mov r32, [r/m])
+            //         3B (cmp r32, [r/m])
+            // Writes: 88/89 (mov [r/m], reg)  C6/C7 (mov [r/m], imm)
+            //         01/09/21/29/31 (alu [r/m], reg)
+            const maybe_opcode = ptr[0];
+
+            const is_read = switch (maybe_opcode) {
+                0x8A, 0x8B => true, // mov reg, [r/m] (8/32 bit)
+                0x3B => true, // cmp reg, [r/m]
+                else => false,
+            };
+            const is_store = switch (maybe_opcode) {
+                0x88, 0x89 => true, // mov [r/m], reg8/32
+                0xC6, 0xC7 => true, // mov [r/m], imm8/imm32
+                0x01 => true, // add [r/m], reg
+                0x29 => true, // sub [r/m], reg
+                0x09 => true, // or  [r/m], reg
+                0x21 => true, // and [r/m], reg
+                0x31 => true, // xor [r/m], reg
+                else => false,
+            };
+
+            if ((is_read or is_store) and ptr[1] & 0xC0 != 0xC0) { // Not reg-to-reg (mod != 11)
+                const modrm = ptr[1];
+                const mod_field = (modrm >> 6) & 3;
+                const rm_field = modrm & 7;
+                const reg_field = (modrm >> 3) & 7;
+                // Base instruction length: opcode(1) + modrm(1)
+                var skip: usize = 2;
+                // SIB byte present when rm == 4 and mod != 3
+                if (rm_field == 4 and mod_field != 3) skip += 1;
+                // Displacement
+                if (mod_field == 0 and rm_field == 5) {
+                    skip += 4; // [disp32]
+                } else if (mod_field == 1) {
+                    skip += 1; // [reg+disp8]
+                } else if (mod_field == 2) {
+                    skip += 4; // [reg+disp32]
+                }
+                // Immediate (for C6/C7)
+                if (maybe_opcode == 0xC6) skip += 1;
+                if (maybe_opcode == 0xC7) skip += 4;
+
+                if (is_read) {
+                    // Zero the destination register (from reg field of ModR/M)
+                    const dest_reg_idx: usize = switch (reg_field) {
+                        0 => reg_ax,
+                        1 => reg_cx,
+                        2 => reg_dx,
+                        3 => reg_bx,
+                        4 => reg_sp,
+                        5 => reg_bp,
+                        6 => reg_si,
+                        7 => reg_di,
+                        else => unreachable,
+                    };
+                    uctx.mcontext.gregs[dest_reg_idx] = 0;
+                    log.info("AppCompat: Skipped NULL pointer read at 0x{X} (reg={d})", .{ ip, reg_field });
+                } else {
+                    log.info("AppCompat: Skipped NULL pointer write at 0x{X}", .{ip});
+                }
+                uctx.mcontext.gregs[reg_ip] += @intCast(skip);
+                return;
+            }
+        }
     } // end if (!skip_appcompat_null)
 
     const exc_code: u32 = if (sig == std.posix.SIG.ILL)
@@ -1125,7 +1125,9 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
     const raise_addr = @intFromPtr(&k32_error.RaiseException);
 
     // Fill a static CONTEXT with the faulting register state
-    const hw_ctx = &(struct { var ctx: teb.CONTEXT = undefined; }).ctx;
+    const hw_ctx = &(struct {
+        var ctx: teb.CONTEXT = undefined;
+    }).ctx;
     @memset(std.mem.asBytes(hw_ctx), 0);
     hw_ctx.ContextFlags = 0x10007;
     hw_ctx.Eax = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_ax])));
@@ -1150,11 +1152,16 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
     }
     // Align ESP to 4 bytes (compat mode may have misaligned ESP)
     esp &= ~@as(u32, 3);
-    esp -= 4; @as(*align(1) u32, @ptrFromInt(esp)).* = 0; // lpArguments = NULL
-    esp -= 4; @as(*align(1) u32, @ptrFromInt(esp)).* = 0; // nNumberOfArguments = 0
-    esp -= 4; @as(*align(1) u32, @ptrFromInt(esp)).* = 0; // dwExceptionFlags = 0
-    esp -= 4; @as(*align(1) u32, @ptrFromInt(esp)).* = exc_code; // dwExceptionCode
-    esp -= 4; @as(*align(1) u32, @ptrFromInt(esp)).* = @truncate(ip); // fake return address
+    esp -= 4;
+    @as(*align(1) u32, @ptrFromInt(esp)).* = 0; // lpArguments = NULL
+    esp -= 4;
+    @as(*align(1) u32, @ptrFromInt(esp)).* = 0; // nNumberOfArguments = 0
+    esp -= 4;
+    @as(*align(1) u32, @ptrFromInt(esp)).* = 0; // dwExceptionFlags = 0
+    esp -= 4;
+    @as(*align(1) u32, @ptrFromInt(esp)).* = exc_code; // dwExceptionCode
+    esp -= 4;
+    @as(*align(1) u32, @ptrFromInt(esp)).* = @truncate(ip); // fake return address
 
     // Set signal context to call RaiseException when signal handler returns.
     // On x86_64, set CS=0x33 since RaiseException is 64-bit Zig code and
@@ -1167,18 +1174,12 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
     }
 
     if (trace.enable_tracing) trace.print("SEH: Redirecting to RaiseException(code={x}) for exception at 0x{X}, fault_addr=0x{X}, EAX=0x{X} EBX=0x{X} ECX=0x{X} EDX=0x{X} ESI=0x{X} EDI=0x{X} ESP=0x{X} EBP=0x{X}\n", .{
-        exc_code, ip, fault_addr,
-        @as(usize, @bitCast(uctx.mcontext.gregs[reg_ax])),
-        @as(usize, @bitCast(uctx.mcontext.gregs[reg_bx])),
-        @as(usize, @bitCast(uctx.mcontext.gregs[reg_cx])),
-        @as(usize, @bitCast(uctx.mcontext.gregs[reg_dx])),
-        @as(usize, @bitCast(uctx.mcontext.gregs[reg_si])),
-        @as(usize, @bitCast(uctx.mcontext.gregs[reg_di])),
-        @as(usize, @bitCast(uctx.mcontext.gregs[reg_sp])),
-        @as(usize, @bitCast(uctx.mcontext.gregs[reg_bp])),
+        exc_code,                                          ip,                                                fault_addr,
+        @as(usize, @bitCast(uctx.mcontext.gregs[reg_ax])), @as(usize, @bitCast(uctx.mcontext.gregs[reg_bx])), @as(usize, @bitCast(uctx.mcontext.gregs[reg_cx])),
+        @as(usize, @bitCast(uctx.mcontext.gregs[reg_dx])), @as(usize, @bitCast(uctx.mcontext.gregs[reg_si])), @as(usize, @bitCast(uctx.mcontext.gregs[reg_di])),
+        @as(usize, @bitCast(uctx.mcontext.gregs[reg_sp])), @as(usize, @bitCast(uctx.mcontext.gregs[reg_bp])),
     });
     return;
-
 }
 
 /// Install the SIGSEGV/SIGFPE handler.

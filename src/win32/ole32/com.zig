@@ -109,9 +109,9 @@ pub fn stub_CoCreateInstance(rclsid: usize, pUnkOuter: usize, dwClsContext: u32,
         if (rclsid != 0) {
             const clsid = @as([*]const u8, @ptrFromInt(rclsid));
             trace.print("OLE32: CoCreateInstance({x:0>2}{x:0>2}{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}) -> E_NOINTERFACE\n", .{
-                clsid[3], clsid[2], clsid[1], clsid[0],
-                clsid[5], clsid[4], clsid[7], clsid[6],
-                clsid[8], clsid[9], clsid[10], clsid[11],
+                clsid[3],  clsid[2],  clsid[1],  clsid[0],
+                clsid[5],  clsid[4],  clsid[7],  clsid[6],
+                clsid[8],  clsid[9],  clsid[10], clsid[11],
                 clsid[12], clsid[13], clsid[14], clsid[15],
             });
         } else {

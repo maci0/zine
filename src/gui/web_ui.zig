@@ -345,20 +345,17 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                             const left_val = root.object.get("left");
                             const top_val = root.object.get("top");
                             if (left_val != null and left_val.? == .integer and top_val != null and top_val.? == .integer) {
-                                const gv = struct { fn get(o: std.json.ObjectMap, k: []const u8, dflt: i32) i32 {
-                                    const v = o.get(k);
-                                    if (v != null and v.? == .integer) return std.math.cast(i32, v.?.integer) orelse dflt;
-                                    return dflt;
-                                } }.get;
+                                const gv = struct {
+                                    fn get(o: std.json.ObjectMap, k: []const u8, dflt: i32) i32 {
+                                        const v = o.get(k);
+                                        if (v != null and v.? == .integer) return std.math.cast(i32, v.?.integer) orelse dflt;
+                                        return dflt;
+                                    }
+                                }.get;
                                 if (renderer.on_page_setup_chosen) |cb| {
                                     const left = std.math.cast(i32, left_val.?.integer) orelse 0;
                                     const top = std.math.cast(i32, top_val.?.integer) orelse 0;
-                                    cb(left, top,
-                                        gv(root.object, "right", 0),
-                                        gv(root.object, "bottom", 0),
-                                        gv(root.object, "paperW", 8500),
-                                        gv(root.object, "paperH", 11000),
-                                        gv(root.object, "orientation", 0));
+                                    cb(left, top, gv(root.object, "right", 0), gv(root.object, "bottom", 0), gv(root.object, "paperW", 8500), gv(root.object, "paperH", 11000), gv(root.object, "orientation", 0));
                                 }
                             }
                         } else if (std.mem.eql(u8, type_val.?.string, "cancel_dialog")) {
@@ -458,8 +455,9 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                                 }
                             }
                         } else if (std.mem.eql(u8, type_val.?.string, "mousedown") or
-                                   std.mem.eql(u8, type_val.?.string, "mouseup") or
-                                   std.mem.eql(u8, type_val.?.string, "mousemove")) {
+                            std.mem.eql(u8, type_val.?.string, "mouseup") or
+                            std.mem.eql(u8, type_val.?.string, "mousemove"))
+                        {
                             const x_val = root.object.get("x");
                             const y_val = root.object.get("y");
                             const btn_val = root.object.get("button");
@@ -482,7 +480,7 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
             }
         }
         stream.close(runtime.io());
-        
+
         clients_mutex.lock();
         for (clients.items, 0..) |client_stream, i| {
             if (client_stream.socket.handle == stream.socket.handle) {
@@ -545,12 +543,12 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
 
         const file_size = try file.length(runtime.io());
         if (file_size > 10 * 1024 * 1024) {
-             try req.respond("File too large", .{ .status = .internal_server_error });
-             return stream.close(runtime.io());
+            try req.respond("File too large", .{ .status = .internal_server_error });
+            return stream.close(runtime.io());
         }
         const content = allocator.alloc(u8, @intCast(file_size)) catch {
-             try req.respond("Out of memory", .{ .status = .internal_server_error });
-             return stream.close(runtime.io());
+            try req.respond("Out of memory", .{ .status = .internal_server_error });
+            return stream.close(runtime.io());
         };
         const bytes_read = try file.readPositionalAll(runtime.io(), content, 0);
         try req.respond(content[0..bytes_read], .{ .extra_headers = &.{

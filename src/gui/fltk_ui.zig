@@ -281,8 +281,12 @@ fn processDialogJson(json: []const u8) void {
             title_len = n;
         }
     }
-    if (root.object.get("cx")) |v| { if (v == .integer) cx = @intCast(v.integer); }
-    if (root.object.get("cy")) |v| { if (v == .integer) cy = @intCast(v.integer); }
+    if (root.object.get("cx")) |v| {
+        if (v == .integer) cx = @intCast(v.integer);
+    }
+    if (root.object.get("cy")) |v| {
+        if (v == .integer) cy = @intCast(v.integer);
+    }
 
     if (root.object.get("items")) |arr| {
         if (arr == .array) {
@@ -290,11 +294,21 @@ fn processDialogJson(json: []const u8) void {
                 if (item_count >= items.len or it != .object) continue;
                 const itm = &items[item_count];
                 itm.* = .{ .id = 0, .x = 0, .y = 0, .cx = 10, .cy = 10, .class = undefined, .text = undefined };
-                if (it.object.get("id")) |v| { if (v == .integer) itm.id = @intCast(v.integer); }
-                if (it.object.get("x")) |v| { if (v == .integer) itm.x = @intCast(v.integer); }
-                if (it.object.get("y")) |v| { if (v == .integer) itm.y = @intCast(v.integer); }
-                if (it.object.get("cx")) |v| { if (v == .integer) itm.cx = @intCast(v.integer); }
-                if (it.object.get("cy")) |v| { if (v == .integer) itm.cy = @intCast(v.integer); }
+                if (it.object.get("id")) |v| {
+                    if (v == .integer) itm.id = @intCast(v.integer);
+                }
+                if (it.object.get("x")) |v| {
+                    if (v == .integer) itm.x = @intCast(v.integer);
+                }
+                if (it.object.get("y")) |v| {
+                    if (v == .integer) itm.y = @intCast(v.integer);
+                }
+                if (it.object.get("cx")) |v| {
+                    if (v == .integer) itm.cx = @intCast(v.integer);
+                }
+                if (it.object.get("cy")) |v| {
+                    if (v == .integer) itm.cy = @intCast(v.integer);
+                }
                 if (it.object.get("class")) |v| {
                     if (v == .string) {
                         const n = @min(v.string.len, itm.class.len - 1);
@@ -341,18 +355,33 @@ fn processControlsJson(json: []const u8) void {
             for (arr.array.items) |it| {
                 if (it != .object) continue;
                 var id: i32 = 0;
-                var x: i32 = 0; var y: i32 = 0; var cx: i32 = 40; var cy: i32 = 14;
+                var x: i32 = 0;
+                var y: i32 = 0;
+                var cx: i32 = 40;
+                var cy: i32 = 14;
                 var style: u32 = 0;
                 var cls: [64]u8 = undefined;
                 var text: [512]u8 = undefined;
                 var clen: usize = 0;
                 var tlen: usize = 0;
-                if (it.object.get("id")) |v| { if (v == .integer) id = @intCast(v.integer); }
-                if (it.object.get("x")) |v| { if (v == .integer) x = @intCast(v.integer); }
-                if (it.object.get("y")) |v| { if (v == .integer) y = @intCast(v.integer); }
-                if (it.object.get("cx")) |v| { if (v == .integer) cx = @intCast(v.integer); }
-                if (it.object.get("cy")) |v| { if (v == .integer) cy = @intCast(v.integer); }
-                if (it.object.get("style")) |v| { if (v == .integer) style = @intCast(v.integer); }
+                if (it.object.get("id")) |v| {
+                    if (v == .integer) id = @intCast(v.integer);
+                }
+                if (it.object.get("x")) |v| {
+                    if (v == .integer) x = @intCast(v.integer);
+                }
+                if (it.object.get("y")) |v| {
+                    if (v == .integer) y = @intCast(v.integer);
+                }
+                if (it.object.get("cx")) |v| {
+                    if (v == .integer) cx = @intCast(v.integer);
+                }
+                if (it.object.get("cy")) |v| {
+                    if (v == .integer) cy = @intCast(v.integer);
+                }
+                if (it.object.get("style")) |v| {
+                    if (v == .integer) style = @intCast(v.integer);
+                }
                 if (it.object.get("class")) |v| {
                     if (v == .string) {
                         clen = @min(v.string.len, cls.len - 1);
@@ -643,8 +672,7 @@ pub fn resizeEditControl(x: i32, y: i32, w: i32, h: i32) void {
 }
 
 /// Sets the font for the native edit control.
-pub fn setEditFont(_: usize, _: []const u8, _: i32, _: bool, _: bool) void {
-}
+pub fn setEditFont(_: usize, _: []const u8, _: i32, _: bool, _: bool) void {}
 
 /// Sets the text selection in the native edit control.
 pub fn setEditSelection(start: i32, end: i32) void {
@@ -687,12 +715,10 @@ fn editTextCallback(text: [*c]const u8) callconv(.c) void {
 // --- Status Bar ---
 
 /// Configures the number of parts in the status bar.
-pub fn setStatusBarParts(_: usize) void {
-}
+pub fn setStatusBarParts(_: usize) void {}
 
 /// Sets the text for a specific part of the status bar.
-pub fn setStatusBarText(_: usize, _: []const u8) void {
-}
+pub fn setStatusBarText(_: usize, _: []const u8) void {}
 
 // --- Clipboard ---
 
@@ -738,8 +764,14 @@ pub fn addControl(class: []const u8, hwnd_id: usize, x: i32, y: i32, w: i32, h: 
     const owned_class = g_allocator.dupe(u8, class) catch return;
     const owned_text = g_allocator.dupe(u8, text) catch return;
     enqueue(.{ .add_control = .{
-        .class = owned_class, .id = hwnd_id, .x = x, .y = y,
-        .w = w, .h = h, .style = style, .text = owned_text,
+        .class = owned_class,
+        .id = hwnd_id,
+        .x = x,
+        .y = y,
+        .w = w,
+        .h = h,
+        .style = style,
+        .text = owned_text,
     } });
 }
 
@@ -822,13 +854,10 @@ pub fn closeDialog() void {
 // --- Audio ---
 
 /// Sets the global audio playback volume.
-pub fn setVolume(_: f32) void {
-}
+pub fn setVolume(_: f32) void {}
 
 /// Sets the audio format for subsequent PCM playback.
-pub fn setAudioFormat(_: u32, _: u16, _: u16) void {
-}
+pub fn setAudioFormat(_: u32, _: u16, _: u16) void {}
 
 /// Pushes PCM audio data to the output buffer.
-pub fn pushAudio(_: []const u8) void {
-}
+pub fn pushAudio(_: []const u8) void {}

@@ -19,7 +19,7 @@ pub fn MessageBoxA(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32) cal
     const text = if (lpText != 0) trace.c_span(lpText) else "(null)";
     const caption = if (lpCaption != 0) trace.c_span(lpCaption) else "(null)";
 
-    if (trace.enable_tracing) trace.print("USER32: MessageBoxA(caption='{s}', text='{s}')\n", .{caption, text});
+    if (trace.enable_tracing) trace.print("USER32: MessageBoxA(caption='{s}', text='{s}')\n", .{ caption, text });
 
     renderer.showMessageBox(caption, text);
 

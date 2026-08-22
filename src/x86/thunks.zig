@@ -111,7 +111,7 @@ pub fn dispatch(cpu: *Cpu) void {
 
     if (thunk_entries[thunk_id]) |entry| {
         profiler.tickThunk(thunk_id);
-        
+
         if (@import("../trace.zig").enable_tracing) {
             @import("../trace.zig").print("THUNK EXEC: {s}\n", .{entry.name});
         }
@@ -123,7 +123,7 @@ pub fn dispatch(cpu: *Cpu) void {
             except_mod.seh_current_guest_esp = cpu.esp;
             except_mod.seh_current_guest_ebp = cpu.ebp;
         }
-        
+
         entry.handler(cpu);
 
         // On WASM, a host-side _except_handler3 that accepted sets a redirect —
@@ -353,7 +353,7 @@ const MAX_IMPORTS = 2048;
 const ImportEntry = struct {
     addr: usize,
     param_bytes: u32, // stdcall bytes to pop (n_params * 4)
-    is_cdecl: bool,   // true if this is a cdecl import (e.g. MSVCRT)
+    is_cdecl: bool, // true if this is a cdecl import (e.g. MSVCRT)
 };
 
 var import_registry: [MAX_IMPORTS]ImportEntry = undefined;
@@ -383,7 +383,7 @@ pub fn comPtr(comptime func: anytype, comptime name: []const u8) u32 {
 pub fn registerNativeImport(addr: usize, dll_name: []const u8, func_name: []const u8, param_bytes: u32) void {
     if (import_count >= MAX_IMPORTS) return;
     const is_msvcrt = std.ascii.eqlIgnoreCase(dll_name, "MSVCRT.dll") or std.ascii.eqlIgnoreCase(dll_name, "MSVCP60.dll");
-    
+
     // Check for @N suffix (decorated stdcall names)
     var resolved_bytes = param_bytes;
     if (std.mem.lastIndexOfScalar(u8, func_name, '@')) |at_pos| {
@@ -392,7 +392,7 @@ pub fn registerNativeImport(addr: usize, dll_name: []const u8, func_name: []cons
             if (std.fmt.parseInt(u32, suffix, 10)) |n| resolved_bytes = n else |_| {}
         }
     }
-    
+
     import_registry[import_count] = .{
         .addr = addr,
         .param_bytes = resolved_bytes,

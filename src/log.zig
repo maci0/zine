@@ -17,7 +17,6 @@
 ///
 /// The `trace` level is gated by the existing `trace.enable_tracing` flag
 /// so it only emits output when `--trace` / `--trace-api` is active.
-
 const std = @import("std");
 const builtin = @import("builtin");
 const trace_mod = @import("trace.zig");

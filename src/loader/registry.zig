@@ -226,7 +226,6 @@ fn openDirPortable(path: []const u8, args: std.Io.Dir.OpenOptions) !std.Io.Dir {
     return std.Io.Dir.cwd().openDir(runtime.io(), path, args);
 }
 
-
 /// The module registry manages loaded PE modules and search paths.
 pub const Registry = struct {
     /// The allocator used for registry metadata.

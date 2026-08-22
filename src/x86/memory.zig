@@ -59,7 +59,10 @@ pub const GuestMemory = struct {
 
     /// Reads an 8-bit value from guest memory at `addr`.
     pub inline fn read8(self: *const GuestMemory, addr: u32) u8 {
-        if (self.native_linear) { if (addr < 4096) return 0; return @as(*const u8, @ptrFromInt(addr)).*; }
+        if (self.native_linear) {
+            if (addr < 4096) return 0;
+            return @as(*const u8, @ptrFromInt(addr)).*;
+        }
         const a = self.translate(addr);
         if (a >= self.base.len) return 0;
         return self.base[a];
@@ -67,7 +70,10 @@ pub const GuestMemory = struct {
 
     /// Reads a 16-bit little-endian value from guest memory at `addr`.
     pub inline fn read16(self: *const GuestMemory, addr: u32) u16 {
-        if (self.native_linear) { if (addr < 4096) return 0; return @as(*align(1) const u16, @ptrFromInt(addr)).*; }
+        if (self.native_linear) {
+            if (addr < 4096) return 0;
+            return @as(*align(1) const u16, @ptrFromInt(addr)).*;
+        }
         const a = self.translate(addr);
         if (self.base.len < 2 or a > self.base.len - 2) return 0;
         return @as(u16, self.base[a]) | (@as(u16, self.base[a + 1]) << 8);
@@ -75,7 +81,10 @@ pub const GuestMemory = struct {
 
     /// Reads a 32-bit little-endian value from guest memory at `addr`.
     pub inline fn read32(self: *const GuestMemory, addr: u32) u32 {
-        if (self.native_linear) { if (addr < 4096) return 0; return @as(*align(1) const u32, @ptrFromInt(addr)).*; }
+        if (self.native_linear) {
+            if (addr < 4096) return 0;
+            return @as(*align(1) const u32, @ptrFromInt(addr)).*;
+        }
         const a = self.translate(addr);
         if (self.base.len < 4 or a > self.base.len - 4) return 0;
         return @as(u32, self.base[a]) |
@@ -88,7 +97,10 @@ pub const GuestMemory = struct {
 
     /// Writes an 8-bit value to guest memory at `addr`.
     pub inline fn write8(self: *GuestMemory, addr: u32, val: u8) void {
-        if (self.native_linear) { if (addr >= 4096) @as(*u8, @ptrFromInt(addr)).* = val; return; }
+        if (self.native_linear) {
+            if (addr >= 4096) @as(*u8, @ptrFromInt(addr)).* = val;
+            return;
+        }
         if (self.isWriteProtected(addr)) return;
         const a = self.translate(addr);
         if (a >= self.base.len) return;
@@ -97,7 +109,10 @@ pub const GuestMemory = struct {
 
     /// Writes a 16-bit little-endian value to guest memory at `addr`.
     pub inline fn write16(self: *GuestMemory, addr: u32, val: u16) void {
-        if (self.native_linear) { if (addr >= 4096) @as(*align(1) u16, @ptrFromInt(addr)).* = val; return; }
+        if (self.native_linear) {
+            if (addr >= 4096) @as(*align(1) u16, @ptrFromInt(addr)).* = val;
+            return;
+        }
         if (self.isWriteProtected(addr)) return;
         const a = self.translate(addr);
         if (self.base.len < 2 or a > self.base.len - 2) return;
@@ -107,7 +122,10 @@ pub const GuestMemory = struct {
 
     /// Writes a 32-bit little-endian value to guest memory at `addr`.
     pub inline fn write32(self: *GuestMemory, addr: u32, val: u32) void {
-        if (self.native_linear) { if (addr >= 4096) @as(*align(1) u32, @ptrFromInt(addr)).* = val; return; }
+        if (self.native_linear) {
+            if (addr >= 4096) @as(*align(1) u32, @ptrFromInt(addr)).* = val;
+            return;
+        }
         if (self.isWriteProtected(addr)) return;
         const a = self.translate(addr);
         if (self.base.len < 4 or a > self.base.len - 4) return;

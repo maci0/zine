@@ -354,14 +354,14 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         0x0F51 => execUnaryFloat(cpu, insn, pfx, .sqrt),
         0x0F52 => execUnaryFloat(cpu, insn, pfx, .rsqrt),
         0x0F53 => execUnaryFloat(cpu, insn, pfx, .rcp),
-        0x0F54 => execBitwise128(cpu, insn, .@"and"),  // ANDPS/ANDPD
-        0x0F55 => execBitwise128(cpu, insn, .andn),     // ANDNPS/ANDNPD
-        0x0F56 => execBitwise128(cpu, insn, .@"or"),   // ORPS/ORPD
-        0x0F57 => execBitwise128(cpu, insn, .xor),      // XORPS/XORPD
+        0x0F54 => execBitwise128(cpu, insn, .@"and"), // ANDPS/ANDPD
+        0x0F55 => execBitwise128(cpu, insn, .andn), // ANDNPS/ANDNPD
+        0x0F56 => execBitwise128(cpu, insn, .@"or"), // ORPS/ORPD
+        0x0F57 => execBitwise128(cpu, insn, .xor), // XORPS/XORPD
         0x0F58 => execBinFloat(cpu, insn, pfx, .add),
         0x0F59 => execBinFloat(cpu, insn, pfx, .mul),
-        0x0F5A => execConvertFloat(cpu, insn, pfx),     // CVT*2*
-        0x0F5B => execConvertDqPs(cpu, insn, pfx),      // CVTDQ2PS/CVTPS2DQ/CVTTPS2DQ
+        0x0F5A => execConvertFloat(cpu, insn, pfx), // CVT*2*
+        0x0F5B => execConvertDqPs(cpu, insn, pfx), // CVTDQ2PS/CVTPS2DQ/CVTTPS2DQ
         0x0F5C => execBinFloat(cpu, insn, pfx, .sub),
         0x0F5D => execBinFloat(cpu, insn, pfx, .min),
         0x0F5E => execBinFloat(cpu, insn, pfx, .div),
@@ -527,8 +527,8 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         0x0FD1 => execShiftReg(cpu, insn, pfx, 2, .srl), // PSRLW
         0x0FD2 => execShiftReg(cpu, insn, pfx, 4, .srl), // PSRLD
         0x0FD3 => execShiftReg(cpu, insn, pfx, 8, .srl), // PSRLQ
-        0x0FD4 => execIntBin(cpu, insn, pfx, 8, .add),    // PADDQ
-        0x0FD5 => execIntBin(cpu, insn, pfx, 2, .mullo),  // PMULLW
+        0x0FD4 => execIntBin(cpu, insn, pfx, 8, .add), // PADDQ
+        0x0FD5 => execIntBin(cpu, insn, pfx, 2, .mullo), // PMULLW
         0x0FD6 => { // MOVQ store (66 prefix: xmm/m64, xmm)
             writeXmm64(cpu, insn, 0, @truncate(cpu.xmm[getRegIdx(insn, 1)]));
         },
@@ -547,47 +547,46 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 cpu.setReg(@enumFromInt(dst), mask);
             }
         },
-        0x0FD8 => execIntBin(cpu, insn, pfx, 1, .subus),  // PSUBUSB
-        0x0FD9 => execIntBin(cpu, insn, pfx, 2, .subus),  // PSUBUSW
-        0x0FDA => execIntBin(cpu, insn, pfx, 1, .minu),    // PMINUB
-        0x0FDB => execBitwise128(cpu, insn, .@"and"),       // PAND
-        0x0FDC => execIntBin(cpu, insn, pfx, 1, .addus),   // PADDUSB
-        0x0FDD => execIntBin(cpu, insn, pfx, 2, .addus),   // PADDUSW
-        0x0FDE => execIntBin(cpu, insn, pfx, 1, .maxu),    // PMAXUB
-        0x0FDF => execBitwise128(cpu, insn, .andn),         // PANDN
-        0x0FE0 => execIntBin(cpu, insn, pfx, 1, .avg),     // PAVGB
-        0x0FE1 => execShiftReg(cpu, insn, pfx, 2, .sra),   // PSRAW
-        0x0FE2 => execShiftReg(cpu, insn, pfx, 4, .sra),   // PSRAD
-        0x0FE3 => execIntBin(cpu, insn, pfx, 2, .avg),     // PAVGW
-        0x0FE4 => execIntBin(cpu, insn, pfx, 2, .mulhu),   // PMULHUW
-        0x0FE5 => execIntBin(cpu, insn, pfx, 2, .mulhi),   // PMULHW
-        0x0FE6 => execConvertE6(cpu, insn, pfx),            // CVT*
+        0x0FD8 => execIntBin(cpu, insn, pfx, 1, .subus), // PSUBUSB
+        0x0FD9 => execIntBin(cpu, insn, pfx, 2, .subus), // PSUBUSW
+        0x0FDA => execIntBin(cpu, insn, pfx, 1, .minu), // PMINUB
+        0x0FDB => execBitwise128(cpu, insn, .@"and"), // PAND
+        0x0FDC => execIntBin(cpu, insn, pfx, 1, .addus), // PADDUSB
+        0x0FDD => execIntBin(cpu, insn, pfx, 2, .addus), // PADDUSW
+        0x0FDE => execIntBin(cpu, insn, pfx, 1, .maxu), // PMAXUB
+        0x0FDF => execBitwise128(cpu, insn, .andn), // PANDN
+        0x0FE0 => execIntBin(cpu, insn, pfx, 1, .avg), // PAVGB
+        0x0FE1 => execShiftReg(cpu, insn, pfx, 2, .sra), // PSRAW
+        0x0FE2 => execShiftReg(cpu, insn, pfx, 4, .sra), // PSRAD
+        0x0FE3 => execIntBin(cpu, insn, pfx, 2, .avg), // PAVGW
+        0x0FE4 => execIntBin(cpu, insn, pfx, 2, .mulhu), // PMULHUW
+        0x0FE5 => execIntBin(cpu, insn, pfx, 2, .mulhi), // PMULHW
+        0x0FE6 => execConvertE6(cpu, insn, pfx), // CVT*
         0x0FE7 => { // MOVNTDQ/MOVNTQ — non-temporal store
-            if (pfx == .p66) writeXmm128(cpu, insn, 0, cpu.xmm[getRegIdx(insn, 1)])
-            else writeXmm64(cpu, insn, 0, cpu.getMmx(getRegIdx(insn, 1)));
+            if (pfx == .p66) writeXmm128(cpu, insn, 0, cpu.xmm[getRegIdx(insn, 1)]) else writeXmm64(cpu, insn, 0, cpu.getMmx(getRegIdx(insn, 1)));
         },
-        0x0FE8 => execIntBin(cpu, insn, pfx, 1, .subs),    // PSUBSB
-        0x0FE9 => execIntBin(cpu, insn, pfx, 2, .subs),    // PSUBSW
-        0x0FEA => execIntBin(cpu, insn, pfx, 2, .mins),    // PMINSW
-        0x0FEB => execBitwise128(cpu, insn, .@"or"),        // POR
-        0x0FEC => execIntBin(cpu, insn, pfx, 1, .adds),    // PADDSB
-        0x0FED => execIntBin(cpu, insn, pfx, 2, .adds),    // PADDSW
-        0x0FEE => execIntBin(cpu, insn, pfx, 2, .maxs),    // PMAXSW
-        0x0FEF => execBitwise128(cpu, insn, .xor),          // PXOR
-        0x0FF1 => execShiftReg(cpu, insn, pfx, 2, .sll),   // PSLLW
-        0x0FF2 => execShiftReg(cpu, insn, pfx, 4, .sll),   // PSLLD
-        0x0FF3 => execShiftReg(cpu, insn, pfx, 8, .sll),   // PSLLQ
-        0x0FF4 => execPmuludq(cpu, insn, pfx),              // PMULUDQ
-        0x0FF5 => execPmaddwd(cpu, insn, pfx),              // PMADDWD
-        0x0FF6 => execPsadbw(cpu, insn, pfx),               // PSADBW
+        0x0FE8 => execIntBin(cpu, insn, pfx, 1, .subs), // PSUBSB
+        0x0FE9 => execIntBin(cpu, insn, pfx, 2, .subs), // PSUBSW
+        0x0FEA => execIntBin(cpu, insn, pfx, 2, .mins), // PMINSW
+        0x0FEB => execBitwise128(cpu, insn, .@"or"), // POR
+        0x0FEC => execIntBin(cpu, insn, pfx, 1, .adds), // PADDSB
+        0x0FED => execIntBin(cpu, insn, pfx, 2, .adds), // PADDSW
+        0x0FEE => execIntBin(cpu, insn, pfx, 2, .maxs), // PMAXSW
+        0x0FEF => execBitwise128(cpu, insn, .xor), // PXOR
+        0x0FF1 => execShiftReg(cpu, insn, pfx, 2, .sll), // PSLLW
+        0x0FF2 => execShiftReg(cpu, insn, pfx, 4, .sll), // PSLLD
+        0x0FF3 => execShiftReg(cpu, insn, pfx, 8, .sll), // PSLLQ
+        0x0FF4 => execPmuludq(cpu, insn, pfx), // PMULUDQ
+        0x0FF5 => execPmaddwd(cpu, insn, pfx), // PMADDWD
+        0x0FF6 => execPsadbw(cpu, insn, pfx), // PSADBW
         0x0FF7 => {}, // MASKMOVDQU — NOP for now
-        0x0FF8 => execIntBin(cpu, insn, pfx, 1, .sub),     // PSUBB
-        0x0FF9 => execIntBin(cpu, insn, pfx, 2, .sub),     // PSUBW
-        0x0FFA => execIntBin(cpu, insn, pfx, 4, .sub),     // PSUBD
-        0x0FFB => execIntBin(cpu, insn, pfx, 8, .sub),     // PSUBQ
-        0x0FFC => execIntBin(cpu, insn, pfx, 1, .add),     // PADDB
-        0x0FFD => execIntBin(cpu, insn, pfx, 2, .add),     // PADDW
-        0x0FFE => execIntBin(cpu, insn, pfx, 4, .add),     // PADDD
+        0x0FF8 => execIntBin(cpu, insn, pfx, 1, .sub), // PSUBB
+        0x0FF9 => execIntBin(cpu, insn, pfx, 2, .sub), // PSUBW
+        0x0FFA => execIntBin(cpu, insn, pfx, 4, .sub), // PSUBD
+        0x0FFB => execIntBin(cpu, insn, pfx, 8, .sub), // PSUBQ
+        0x0FFC => execIntBin(cpu, insn, pfx, 1, .add), // PADDB
+        0x0FFD => execIntBin(cpu, insn, pfx, 2, .add), // PADDW
+        0x0FFE => execIntBin(cpu, insn, pfx, 4, .add), // PADDD
 
         // --- Group 15: LDMXCSR/STMXCSR/LFENCE/MFENCE/SFENCE ---
         0x0FAE => {

@@ -352,23 +352,23 @@ fn loadBitmapFromPE(hInst: usize, lpBitmapName: usize) usize {
                 const w: u32 = @intCast(if (hdr.biWidth < 0) -hdr.biWidth else hdr.biWidth);
                 const h: u32 = @intCast(if (hdr.biHeight < 0) -hdr.biHeight else hdr.biHeight);
                 const bitcount = hdr.biBitCount;
-                
+
                 const bytes = w * h * 4;
                 const buf = std.heap.page_allocator.alloc(u8, bytes) catch return 0;
                 @memset(buf, 0);
-                
+
                 const palette_num_colors: u32 = if (hdr.biClrUsed > 0) hdr.biClrUsed else if (bitcount <= 8) @as(u32, 1) << @as(u5, @intCast(bitcount)) else 0;
                 const bits_offset = hdr.biSize + palette_num_colors * 4;
                 const lpvBits = @intFromPtr(bmp_data.ptr) + bits_offset;
                 const lpbmi = @intFromPtr(bmp_data.ptr);
-                
+
                 const drawing = @import("../gdi32/drawing.zig");
                 drawing.blitDIBToBufferAt(lpvBits, lpbmi, buf, w, h, 0, 0, 0, 0, w, h, null, 0x00CC0020); // SRCCOPY
-                
+
                 const gdi32 = @import("../gdi32.zig");
                 const handle = gdi32.nextHandle();
                 gdi32.registerDib(handle, @intFromPtr(buf.ptr), w, h, 32);
-                if (trace.enable_tracing) trace.print("USER32: LoadBitmap loaded {d}x{d} bpp={d} from PE resource\n", .{w, h, bitcount});
+                if (trace.enable_tracing) trace.print("USER32: LoadBitmap loaded {d}x{d} bpp={d} from PE resource\n", .{ w, h, bitcount });
                 return handle;
             }
         }

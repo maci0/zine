@@ -38,7 +38,9 @@ pub const Mutex = struct {
     /// Unlocks the mutex.
     pub fn unlock(_: *@This()) void {}
     /// Attempts to lock the mutex without blocking.
-    pub fn tryLock(_: *@This()) bool { return true; }
+    pub fn tryLock(_: *@This()) bool {
+        return true;
+    }
 };
 
 /// Spawns a new thread. Returns true on success.

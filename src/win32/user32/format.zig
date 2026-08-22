@@ -20,14 +20,23 @@ pub fn wsprintfA(lpOut: [*]u8, lpFmt: [*:0]const u8, a1: usize, a2: usize, a3: u
             while (lpFmt[fi] >= '0' and lpFmt[fi] <= '9') fi += 1;
 
             switch (lpFmt[fi]) {
-                '%' => { lpOut[oi] = '%'; oi += 1; fi += 1; },
+                '%' => {
+                    lpOut[oi] = '%';
+                    oi += 1;
+                    fi += 1;
+                },
                 'd', 'i' => {
                     if (ai < args.len) {
                         const val = @as(i32, @bitCast(@as(u32, @truncate(args[ai]))));
                         ai += 1;
                         var buf: [16]u8 = undefined;
                         const str = std.fmt.bufPrint(&buf, "{d}", .{val}) catch "?";
-                        for (str) |c| { if (oi < MAX_OUT - 1) { lpOut[oi] = c; oi += 1; } }
+                        for (str) |c| {
+                            if (oi < MAX_OUT - 1) {
+                                lpOut[oi] = c;
+                                oi += 1;
+                            }
+                        }
                     }
                     fi += 1;
                 },
@@ -37,7 +46,12 @@ pub fn wsprintfA(lpOut: [*]u8, lpFmt: [*:0]const u8, a1: usize, a2: usize, a3: u
                         ai += 1;
                         var buf: [16]u8 = undefined;
                         const str = std.fmt.bufPrint(&buf, "{d}", .{val}) catch "?";
-                        for (str) |c| { if (oi < MAX_OUT - 1) { lpOut[oi] = c; oi += 1; } }
+                        for (str) |c| {
+                            if (oi < MAX_OUT - 1) {
+                                lpOut[oi] = c;
+                                oi += 1;
+                            }
+                        }
                     }
                     fi += 1;
                 },
@@ -47,7 +61,12 @@ pub fn wsprintfA(lpOut: [*]u8, lpFmt: [*:0]const u8, a1: usize, a2: usize, a3: u
                         ai += 1;
                         var buf: [16]u8 = undefined;
                         const str = std.fmt.bufPrint(&buf, "{x}", .{val}) catch "?";
-                        for (str) |c| { if (oi < MAX_OUT - 1) { lpOut[oi] = c; oi += 1; } }
+                        for (str) |c| {
+                            if (oi < MAX_OUT - 1) {
+                                lpOut[oi] = c;
+                                oi += 1;
+                            }
+                        }
                     }
                     fi += 1;
                 },
@@ -57,7 +76,12 @@ pub fn wsprintfA(lpOut: [*]u8, lpFmt: [*:0]const u8, a1: usize, a2: usize, a3: u
                         ai += 1;
                         var buf: [16]u8 = undefined;
                         const str = std.fmt.bufPrint(&buf, "{X}", .{val}) catch "?";
-                        for (str) |c| { if (oi < MAX_OUT - 1) { lpOut[oi] = c; oi += 1; } }
+                        for (str) |c| {
+                            if (oi < MAX_OUT - 1) {
+                                lpOut[oi] = c;
+                                oi += 1;
+                            }
+                        }
                     }
                     fi += 1;
                 },
@@ -65,8 +89,15 @@ pub fn wsprintfA(lpOut: [*]u8, lpFmt: [*:0]const u8, a1: usize, a2: usize, a3: u
                     if (ai < args.len and args[ai] != 0) {
                         const s = trace.c_span(args[ai]);
                         ai += 1;
-                        for (s) |c| { if (oi < MAX_OUT - 1) { lpOut[oi] = c; oi += 1; } }
-                    } else { ai += 1; }
+                        for (s) |c| {
+                            if (oi < MAX_OUT - 1) {
+                                lpOut[oi] = c;
+                                oi += 1;
+                            }
+                        }
+                    } else {
+                        ai += 1;
+                    }
                     fi += 1;
                 },
                 'c' => {
@@ -79,8 +110,12 @@ pub fn wsprintfA(lpOut: [*]u8, lpFmt: [*:0]const u8, a1: usize, a2: usize, a3: u
                 },
                 else => {
                     // Unknown specifier — output literal
-                    lpOut[oi] = '%'; oi += 1;
-                    if (oi < MAX_OUT - 1) { lpOut[oi] = lpFmt[fi]; oi += 1; }
+                    lpOut[oi] = '%';
+                    oi += 1;
+                    if (oi < MAX_OUT - 1) {
+                        lpOut[oi] = lpFmt[fi];
+                        oi += 1;
+                    }
                     fi += 1;
                 },
             }
