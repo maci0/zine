@@ -166,13 +166,13 @@ pub const BatEnv = struct {
                     cmd_line = std.mem.trimStart(u8, cmd_line[4..], " \t");
                 }
 
-                if (cmd_line[0] == '"') {
+                if (cmd_line.len > 0 and cmd_line[0] == '"') {
                     if (std.mem.indexOfScalarPos(u8, cmd_line, 1, '"')) |quote_end| {
                         const lhs = cmd_line[1..quote_end];
                         const rest1 = std.mem.trimStart(u8, cmd_line[quote_end + 1 ..], " \t");
                         if (std.ascii.startsWithIgnoreCase(rest1, "==")) {
                             const rest2 = std.mem.trimStart(u8, rest1[2..], " \t");
-                            if (rest2[0] == '"') {
+                            if (rest2.len > 0 and rest2[0] == '"') {
                                 if (std.mem.indexOfScalarPos(u8, rest2, 1, '"')) |quote2_end| {
                                     const rhs = rest2[1..quote2_end];
                                     const cond_met = std.ascii.eqlIgnoreCase(lhs, rhs);
@@ -206,6 +206,7 @@ pub const BatEnv = struct {
 
             if (std.ascii.startsWithIgnoreCase(cmd_line, "call ")) {
                 var call_target = std.mem.trimStart(u8, cmd_line[5..], " \t");
+                if (call_target.len == 0) continue;
                 if (call_target[0] == '"') {
                     if (std.mem.indexOfScalarPos(u8, call_target, 1, '"')) |q| {
                         call_target = call_target[1..q];
@@ -411,4 +412,35 @@ test "parseFile: state machine and env tracking" {
     const not_var = bat.env.get("NOT_VAR");
     try testing.expect(not_var != null);
     try testing.expectEqualStrings("yes", not_var.?);
+}
+
+test "parseFile: empty expansion of if/call lines does not crash" {
+    var bat = testBatEnv();
+    defer bat.deinit();
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // %UNDEF% expands to an empty string, leaving bare "if " / "call "
+    // commands that previously indexed past the end of the line.
+    const bat_content =
+        \\if %UNDEF%
+        \\call %UNDEF%
+        \\final_target.exe
+    ;
+    const test_io = runtime.io();
+    try tmp_dir.dir.writeFile(test_io, .{ .sub_path = "empty_expand.bat", .data = bat_content });
+
+    const abs_path = try tmp_dir.dir.realPathFileAlloc(test_io, "empty_expand.bat", testing.allocator);
+    defer testing.allocator.free(abs_path);
+
+    const final_args = try bat.parseFile(abs_path, &[_][]const u8{});
+    defer if (final_args) |args| {
+        for (args) |arg| testing.allocator.free(arg);
+        testing.allocator.free(args);
+    };
+
+    try testing.expect(final_args != null);
+    try testing.expectEqual(@as(usize, 1), final_args.?.len);
+    try testing.expectEqualStrings("final_target.exe", final_args.?[0]);
 }

@@ -288,8 +288,16 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
 
     var import_desc_offset = import_dir_entry.VirtualAddress;
     while (true) {
+        if (@as(u64, import_desc_offset) + @sizeOf(pe.IMAGE_IMPORT_DESCRIPTOR) > mod.mapped_memory.len) {
+            log.warn("loader: {s}: import descriptor table out of bounds at RVA 0x{X}, stopping", .{ mod.name, import_desc_offset });
+            break;
+        }
         const import_desc = @as(*pe.IMAGE_IMPORT_DESCRIPTOR, @ptrCast(@alignCast(&mod.mapped_memory[import_desc_offset])));
         if (import_desc.Name == 0) break;
+        if (import_desc.Name >= mod.mapped_memory.len) {
+            log.warn("loader: {s}: import DLL name RVA 0x{X} out of bounds, stopping", .{ mod.name, import_desc.Name });
+            break;
+        }
 
         const dll_name = std.mem.span(@as([*:0]const u8, @ptrCast(&mod.mapped_memory[import_desc.Name])));
 
@@ -298,7 +306,7 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
 
             if (!loaded_mod.imports_resolved) {
                 resolveImports(env, loaded_mod) catch |resolve_err| {
-                    if (trace.enable_tracing) trace.print("loader: failed to resolve imports for {s}: {}\n", .{ dll_name, resolve_err });
+                    log.warn("loader: failed to resolve imports for {s}: {} — its exports will be stubs", .{ dll_name, resolve_err });
                 };
             }
 
@@ -315,8 +323,16 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
 
         var thunk_offset: u32 = 0;
         while (true) : (thunk_offset += @sizeOf(u32)) {
-            const orig_thunk = @as(*pe.IMAGE_THUNK_DATA32, @ptrCast(@alignCast(&mod.mapped_memory[thunk_rva + thunk_offset])));
-            const first_thunk = @as(*u32, @ptrCast(@alignCast(&mod.mapped_memory[import_desc.FirstThunk + thunk_offset])));
+            const orig_rva: u64 = @as(u64, thunk_rva) + thunk_offset;
+            const iat_rva: u64 = @as(u64, import_desc.FirstThunk) + thunk_offset;
+            if (orig_rva + @sizeOf(pe.IMAGE_THUNK_DATA32) > mod.mapped_memory.len or
+                iat_rva + @sizeOf(u32) > mod.mapped_memory.len)
+            {
+                log.warn("loader: {s}: import thunk table for {s} out of bounds at offset {d}, stopping", .{ mod.name, dll_name, thunk_offset });
+                break;
+            }
+            const orig_thunk = @as(*pe.IMAGE_THUNK_DATA32, @ptrCast(@alignCast(&mod.mapped_memory[@intCast(orig_rva)])));
+            const first_thunk = @as(*u32, @ptrCast(@alignCast(&mod.mapped_memory[@intCast(iat_rva)])));
 
             if (orig_thunk.u1.AddressOfData == 0) break;
 
@@ -343,6 +359,11 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
                     x86_thunks.registerUnresolvedImport(@intCast(@intFromPtr(first_thunk)), dll_name, ord_str);
                 }
             } else {
+                if (orig_thunk.u1.AddressOfData + @sizeOf(pe.IMAGE_IMPORT_BY_NAME) >= mod.mapped_memory.len) {
+                    log.warn("loader: {s}: import name RVA 0x{X} for {s} out of bounds, skipping", .{ mod.name, orig_thunk.u1.AddressOfData, dll_name });
+                    first_thunk.* = 0;
+                    continue;
+                }
                 const func_name = std.mem.span(@as([*:0]const u8, @ptrCast(@alignCast(&mod.mapped_memory[orig_thunk.u1.AddressOfData + @sizeOf(pe.IMAGE_IMPORT_BY_NAME)]))));
 
                 if (env.resolveExport(dll_name, func_name)) |exp| {

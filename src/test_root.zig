@@ -22,6 +22,8 @@ comptime {
     // Core utility tests
     _ = @import("path_utils.zig");
     _ = @import("bat.zig");
+    _ = @import("pe.zig");
+    _ = @import("runner.zig");
 
     // Win32 stub tests
     _ = @import("win32/user32.zig");

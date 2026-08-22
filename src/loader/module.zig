@@ -185,7 +185,11 @@ pub const Module = struct {
             _ = try file.readPositionalAll(runtime.io(), file_data, 0);
         }
 
-        var parser = try pe.PEParser.parse(allocator, file_data);
+        var parser = pe.PEParser.parse(allocator, file_data) catch |err| {
+            log.err("Module.load: failed to parse '{s}': {} ({d} bytes)", .{ path, err, file_data.len });
+            return err;
+        };
+        errdefer parser.deinit(allocator);
         const opt_header = &parser.getNtHeaders().OptionalHeader;
 
         const platform = @import("../platform.zig");
@@ -209,15 +213,33 @@ pub const Module = struct {
         const delta: isize = @as(isize, @bitCast(actual_base)) -% @as(isize, @intCast(opt_header.ImageBase));
         log.info("Mapped {s} at 0x{X} (preferred: 0x{X}, delta: 0x{X})", .{ std.fs.path.basename(path), actual_base, opt_header.ImageBase, delta });
 
+        if (opt_header.SizeOfHeaders > mapped_slice.len or opt_header.SizeOfHeaders > file_data.len) {
+            log.err("Module.load: '{s}': SizeOfHeaders {d} exceeds image ({d}) or file size ({d})", .{
+                std.fs.path.basename(path), opt_header.SizeOfHeaders, mapped_slice.len, file_data.len,
+            });
+            return error.InvalidPELayout;
+        }
         @memcpy(mapped_slice[0..opt_header.SizeOfHeaders], file_data[0..opt_header.SizeOfHeaders]);
 
         const sections = parser.getSectionHeaders();
         for (sections) |section| {
             const vsize = section.Misc.VirtualSize;
             if (section.SizeOfRawData > 0) {
-                const dest = mapped_slice[section.VirtualAddress .. section.VirtualAddress + section.SizeOfRawData];
-
+                // Malformed PEs may declare section ranges beyond the image or
+                // past EOF; skip them instead of panicking or reading out of bounds.
+                const sec_end = @as(u64, section.VirtualAddress) + section.SizeOfRawData;
+                if (sec_end > mapped_slice.len or section.PointerToRawData > file_data.len) {
+                    log.warn("Module.load: '{s}': section '{s}' range out of bounds (VA=0x{X} raw=0x{X} size={d}), skipping", .{
+                        std.fs.path.basename(path),
+                        std.mem.sliceTo(&section.Name, 0),
+                        section.VirtualAddress,
+                        section.PointerToRawData,
+                        section.SizeOfRawData,
+                    });
+                    continue;
+                }
                 const copy_size = @min(section.SizeOfRawData, file_data.len - section.PointerToRawData);
+                const dest = mapped_slice[section.VirtualAddress .. section.VirtualAddress + section.SizeOfRawData];
                 const src = file_data[section.PointerToRawData .. section.PointerToRawData + copy_size];
 
                 @memcpy(dest[0..copy_size], src);
@@ -242,12 +264,19 @@ pub const Module = struct {
         if (delta != 0) {
             const reloc_dir = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC];
             if (reloc_dir.Size > 0) {
-                var reloc_offset = reloc_dir.VirtualAddress;
-                const reloc_end = reloc_offset + reloc_dir.Size;
+                var reloc_offset: usize = reloc_dir.VirtualAddress;
+                // Clamp the reloc table to the mapped image; malformed PEs may
+                // declare a directory extending past SizeOfImage.
+                const reloc_end = @min(@as(u64, reloc_offset) + reloc_dir.Size, mapped_slice.len);
+                var skipped_blocks: usize = 0;
 
-                while (reloc_offset < reloc_end) {
+                while (reloc_offset + @sizeOf(pe.IMAGE_BASE_RELOCATION) <= reloc_end) {
                     const block = @as(*pe.IMAGE_BASE_RELOCATION, @ptrCast(@alignCast(&mapped_slice[reloc_offset])));
                     if (block.SizeOfBlock < @sizeOf(pe.IMAGE_BASE_RELOCATION)) break;
+                    if (@as(u64, reloc_offset) + block.SizeOfBlock > mapped_slice.len) {
+                        skipped_blocks += 1;
+                        break;
+                    }
 
                     const entries_count = (block.SizeOfBlock - @sizeOf(pe.IMAGE_BASE_RELOCATION)) / @sizeOf(u16);
                     const entries = @as([*]u16, @ptrCast(@alignCast(&mapped_slice[reloc_offset + @sizeOf(pe.IMAGE_BASE_RELOCATION)])));
@@ -259,20 +288,36 @@ pub const Module = struct {
 
                         const IMAGE_REL_BASED_HIGHLOW = 3;
                         if (reloc_type == IMAGE_REL_BASED_HIGHLOW) {
-                            const patch_addr = block.VirtualAddress + offset;
-                            const ptr = @as(*align(1) u32, @ptrCast(&mapped_slice[patch_addr]));
+                            const patch_addr = @as(u64, block.VirtualAddress) + offset;
+                            // Skip entries pointing outside the image instead of
+                            // corrupting host memory adjacent to the mapping.
+                            if (patch_addr + @sizeOf(u32) > mapped_slice.len) {
+                                skipped_blocks += 1;
+                                continue;
+                            }
+                            const ptr = @as(*align(1) u32, @ptrCast(&mapped_slice[@intCast(patch_addr)]));
                             ptr.* = ptr.* +% @as(u32, @truncate(@as(usize, @bitCast(delta))));
                         }
                     }
                     reloc_offset += block.SizeOfBlock;
                 }
+                if (skipped_blocks > 0) {
+                    log.warn("Module.load: '{s}': skipped {d} out-of-bounds relocation {s}", .{
+                        std.fs.path.basename(path), skipped_blocks, if (skipped_blocks == 1) "entry" else "entries",
+                    });
+                }
             }
         }
 
+        // From here on, ownership of parser state moves into the Module; the
+        // errdefers below only run if construction itself fails.
+        const name = try allocator.dupe(u8, std.fs.path.basename(path));
+        errdefer allocator.free(name);
         const mod = try allocator.create(Module);
+        errdefer allocator.destroy(mod);
         mod.* = .{
             .allocator = allocator,
-            .name = try allocator.dupe(u8, std.fs.path.basename(path)),
+            .name = name,
             .file_data = file_data,
             .mapped_memory = mapped_slice,
             .image_base = actual_base,
@@ -308,12 +353,26 @@ pub const Module = struct {
         const funcs_rva = export_dir.AddressOfFunctions;
         const ords_rva = export_dir.AddressOfNameOrdinals;
 
+        // Malformed export directories can point outside the image; bail out
+        // instead of reading host memory adjacent to the mapping.
+        const tables_end = @max(names_rva, @max(funcs_rva, ords_rva));
+        const forwarder_end = @as(u64, export_dir_rva) + export_dir_size;
+        if (tables_end > self.mapped_memory.len or
+            @as(u64, names_rva) + @as(u64, export_dir.NumberOfNames) * @sizeOf(u32) > self.mapped_memory.len or
+            @as(u64, funcs_rva) + @as(u64, export_dir.NumberOfFunctions) * @sizeOf(u32) > self.mapped_memory.len or
+            @as(u64, ords_rva) + @as(u64, export_dir.NumberOfNames) * @sizeOf(u16) > self.mapped_memory.len or
+            forwarder_end > self.mapped_memory.len)
+        {
+            return null;
+        }
+
         const names = @as([*]u32, @ptrCast(@alignCast(&self.mapped_memory[names_rva])));
         const funcs = @as([*]u32, @ptrCast(@alignCast(&self.mapped_memory[funcs_rva])));
         const ords = @as([*]u16, @ptrCast(@alignCast(&self.mapped_memory[ords_rva])));
 
         for (0..export_dir.NumberOfNames) |i| {
             const name_rva = names[i];
+            if (name_rva >= self.mapped_memory.len) continue;
             const func_name = std.mem.span(@as([*:0]const u8, @ptrCast(&self.mapped_memory[name_rva])));
 
             if (std.mem.eql(u8, func_name, name)) {

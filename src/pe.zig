@@ -329,8 +329,11 @@ pub const PEParser = struct {
 
         const num_sections = nt_headers_ptr.FileHeader.NumberOfSections;
         const sections_array = allocator.alloc(IMAGE_SECTION_HEADER, num_sections) catch return error.OutOfMemory;
+        errdefer allocator.free(sections_array);
 
         const section_headers_offset = @as(usize, @intCast(dos_header_ptr.e_lfanew)) + @sizeOf(u32) + @sizeOf(IMAGE_FILE_HEADER) + nt_headers_ptr.FileHeader.SizeOfOptionalHeader;
+        const section_headers_end = section_headers_offset + @as(usize, num_sections) * @sizeOf(IMAGE_SECTION_HEADER);
+        if (section_headers_end > data.len) return error.BufferTooSmall;
         const sections_ptr: [*]align(1) const IMAGE_SECTION_HEADER = @ptrCast(data.ptr + section_headers_offset);
 
         for (0..num_sections) |i| {
@@ -375,3 +378,52 @@ pub const IMAGE_RESOURCE_DIRECTORY_ENTRY = @import("pe_resources.zig").IMAGE_RES
 /// Canonical definition of a resource data entry.
 /// Re-exported from pe_resources.zig.
 pub const IMAGE_RESOURCE_DATA_ENTRY = @import("pe_resources.zig").IMAGE_RESOURCE_DATA_ENTRY;
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
+
+const testing = @import("std").testing;
+
+test "parse: rejects data smaller than the DOS header" {
+    const data = [_]u8{ 'M', 'Z', 0, 0 };
+    try testing.expectError(error.BufferTooSmall, PEParser.parse(testing.allocator, @constCast(&data)));
+}
+
+test "parse: rejects truncated section header table" {
+    // Build a minimal PE whose NumberOfSections claims more headers than
+    // the buffer holds; parse must fail cleanly instead of reading OOB.
+    // Layout: DOS header at 0, NT headers at 64 (248 bytes), one section
+    // header slot's worth of slack after that.
+    var buf: [64 + @sizeOf(IMAGE_NT_HEADERS32) + @sizeOf(IMAGE_SECTION_HEADER)]u8 align(8) = undefined;
+    @memset(&buf, 0);
+
+    const dos: *IMAGE_DOS_HEADER = @ptrCast(@alignCast(&buf));
+    dos.e_magic = IMAGE_DOS_SIGNATURE;
+    dos.e_lfanew = 64;
+
+    const nt: *IMAGE_NT_HEADERS32 = @ptrCast(@alignCast(buf[64..].ptr));
+    nt.Signature = IMAGE_NT_SIGNATURE;
+    nt.FileHeader.NumberOfSections = 2; // only room for one header
+    nt.FileHeader.SizeOfOptionalHeader = @sizeOf(IMAGE_OPTIONAL_HEADER32);
+
+    try testing.expectError(error.BufferTooSmall, PEParser.parse(testing.allocator, &buf));
+}
+
+test "parse: accepts well-formed minimal PE" {
+    var buf: [512]u8 align(8) = undefined;
+    @memset(&buf, 0);
+
+    const dos: *IMAGE_DOS_HEADER = @ptrCast(@alignCast(&buf));
+    dos.e_magic = IMAGE_DOS_SIGNATURE;
+    dos.e_lfanew = 64;
+
+    const nt: *IMAGE_NT_HEADERS32 = @ptrCast(@alignCast(buf[64..].ptr));
+    nt.Signature = IMAGE_NT_SIGNATURE;
+    nt.FileHeader.NumberOfSections = 1;
+    nt.FileHeader.SizeOfOptionalHeader = @sizeOf(IMAGE_OPTIONAL_HEADER32);
+
+    var parser = try PEParser.parse(testing.allocator, &buf);
+    defer parser.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), parser.sections.len);
+}

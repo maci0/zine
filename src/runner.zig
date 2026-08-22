@@ -278,11 +278,14 @@ pub fn applyReverseRelocations(
     const reloc_dir = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC];
     if (reloc_dir.Size > 0) {
         var reloc_offset = reloc_dir.VirtualAddress;
-        const reloc_end = reloc_offset + reloc_dir.Size;
-        while (reloc_offset < reloc_end) {
+        // Clamp the reloc table to the buffer; malformed PEs may declare a
+        // directory extending past the image.
+        const buf_end: u64 = @min(@as(u64, reloc_offset) + reloc_dir.Size, image_size);
+        while (@as(u64, reloc_offset) + 8 <= buf_end) {
             const block_va = @as(*align(1) const u32, @ptrCast(buf[reloc_offset..].ptr)).*;
             const block_size = @as(*align(1) const u32, @ptrCast(buf[reloc_offset + 4 ..].ptr)).*;
             if (block_size < 8) break;
+            if (@as(u64, reloc_offset) + block_size > image_size) break;
             const entries_count = (block_size - 8) / 2;
             for (0..entries_count) |e| {
                 const entry = @as(*align(1) const u16, @ptrCast(buf[reloc_offset + 8 + e * 2 ..].ptr)).*;
@@ -426,4 +429,72 @@ pub fn runWithJit(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
     }
 
     log.info("JIT: compiled {d} unique basic blocks", .{blocks_compiled});
+}
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
+
+const testing = @import("std").testing;
+
+const FakeParser = struct {
+    nt: *const pe.IMAGE_NT_HEADERS32,
+    pub fn getNtHeaders(self: *const FakeParser) *const pe.IMAGE_NT_HEADERS32 {
+        return self.nt;
+    }
+};
+
+fn makeNtHeaders() pe.IMAGE_NT_HEADERS32 {
+    var nt = std.mem.zeroes(pe.IMAGE_NT_HEADERS32);
+    nt.OptionalHeader.Magic = 0x10b;
+    return nt;
+}
+
+test "applyReverseRelocations: patches HIGHLOW entries" {
+    var nt = comptime makeNtHeaders();
+    const parser = FakeParser{ .nt = &nt };
+
+    // Image with one reloc block at RVA 0 patching the u32 at RVA 12.
+    var buf = [_]u8{0} ** 16;
+    std.mem.writeInt(u32, buf[0..4], 0, .little); // block VirtualAddress
+    std.mem.writeInt(u32, buf[4..8], 10, .little); // block SizeOfBlock (1 entry)
+    const entry: u16 = (3 << 12) | 0xC; // HIGHLOW, offset 12 -> patch RVA 12
+    std.mem.writeInt(u16, buf[8..10], entry, .little);
+    std.mem.writeInt(u32, buf[12..16], 0x0000_0001, .little);
+
+    nt.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC] =
+        .{ .VirtualAddress = 0, .Size = 10 };
+
+    applyReverseRelocations(&buf, &parser, buf.len, 0x0001_0000, 0x0002_0000);
+
+    // reverse_delta = preferred - actual = 0x10000
+    try testing.expectEqual(@as(u32, 0x0001_0001), std.mem.readInt(u32, buf[12..16], .little));
+}
+
+test "applyReverseRelocations: reloc directory beyond image is clamped" {
+    var nt = comptime makeNtHeaders();
+    const parser = FakeParser{ .nt = &nt };
+    nt.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC] =
+        .{ .VirtualAddress = 0x1000, .Size = 0x100 }; // entirely past image_size
+
+    var buf = [_]u8{0xAB} ** 64;
+    // Must not read out of bounds or panic.
+    applyReverseRelocations(&buf, &parser, buf.len, 0x0001_0000, 0x0002_0000);
+}
+
+test "applyReverseRelocations: out-of-bounds HIGHLOW entry is skipped" {
+    var nt = comptime makeNtHeaders();
+    const parser = FakeParser{ .nt = &nt };
+
+    // Reloc block claims an entry pointing past the end of the image.
+    var buf = [_]u8{0} ** 16;
+    std.mem.writeInt(u32, buf[0..4], 0, .little);
+    std.mem.writeInt(u32, buf[4..8], 10, .little);
+    const entry: u16 = (3 << 12) | 0xFC; // patch RVA 252 — far beyond 16 bytes
+    std.mem.writeInt(u16, buf[8..10], entry, .little);
+
+    nt.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC] =
+        .{ .VirtualAddress = 0, .Size = 10 };
+
+    applyReverseRelocations(&buf, &parser, buf.len, 0x0001_0000, 0x0002_0000);
 }

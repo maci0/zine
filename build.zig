@@ -340,5 +340,12 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    // runner.zig (and anything importing it) reads build_options; provide
+    // defaults matching a plain embedded-stubs native build.
+    const test_options = b.addOptions();
+    test_options.addOption(bool, "use_fltk", false);
+    test_options.addOption(bool, "embed_stubs", true);
+    test_options.addOption(bool, "enable_jit_host", false);
+    t.root_module.addOptions("build_options", test_options);
     test_step.dependOn(&b.addRunArtifact(t).step);
 }

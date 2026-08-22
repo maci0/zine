@@ -417,7 +417,7 @@ fn fsRename(old_path: []const u8, new_path: []const u8) bool {
         return @as(isize, @bitCast(rc)) == 0;
     }
     const cwd = std.Io.Dir.cwd();
-    cwd.rename(cwd, old_path, cwd, new_path, runtime.io()) catch return false;
+    cwd.rename(old_path, cwd, new_path, runtime.io()) catch return false;
     return true;
 }
 
