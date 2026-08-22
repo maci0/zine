@@ -1,4 +1,5 @@
 const std = @import("std");
+const x86_memory = @import("../../x86/memory.zig");
 const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
 
@@ -75,7 +76,6 @@ fn callComparator(compare_ptr: usize, a: usize, b: usize) i32 {
     // WASM: run the comparator on a fresh interpreter CPU sharing guest memory.
     const x86_cpu = @import("../../x86/cpu.zig");
     const x86_execute = @import("../../x86/execute.zig");
-    const shared = @import("../shared.zig");
     const teb_mod = @import("../teb.zig");
     const stack_size: u32 = 64 * 1024;
     // Lazily allocate the stack from the GLOBAL guest memory (once per guest
@@ -83,14 +83,14 @@ fn callComparator(compare_ptr: usize, a: usize, b: usize) i32 {
     // temp CPU. Copying first and allocating on the copy would bump a stale
     // heap cursor, so the comparator's own mallocs (which use the global) could
     // collide with this stack.
-    const owner = @as(?*const anyopaque, @ptrCast(shared.guest_memory));
+    const owner = @as(?*const anyopaque, @ptrCast(x86_memory.guest_memory));
     if (comparator_stack_owner != owner) {
-        comparator_stack_va = if (shared.guest_memory) |gm| gm.guestAlloc(stack_size) else 0;
+        comparator_stack_va = if (x86_memory.guest_memory) |gm| gm.guestAlloc(stack_size) else 0;
         comparator_stack_owner = owner;
     }
     if (comparator_stack_va == 0) return 0;
     var cpu = x86_cpu.Cpu{};
-    if (shared.guest_memory) |gm| cpu.memory = gm.*;
+    if (x86_memory.guest_memory) |gm| cpu.memory = gm.*;
     if (teb_mod.teb_base_addr != 0) cpu.fs_base = @intCast(teb_mod.teb_base_addr);
     // Use a HLT byte as the return address so the interpreter halts cleanly
     // (EIP 0 logs a spurious "out of bounds" error and is noisier).
@@ -160,8 +160,7 @@ pub fn errno() callconv(.c) *i32 {
     const process = @import("process.zig");
     const g = process.ensureGuestGlobals();
     if (g != 0) {
-        const shared = @import("../shared.zig");
-        if (shared.guest_memory) |gmem| {
+        if (x86_memory.guest_memory) |gmem| {
             // Sync host errno into guest slot
             const off = g + process.g_errno - gmem.base_addr;
             @as(*align(1) i32, @ptrCast(gmem.base[off..][0..4].ptr)).* = msvcrt.msvcrt_errno_val;
@@ -187,8 +186,7 @@ pub fn setlocale(category: i32, locale: ?[*:0]const u8) callconv(.c) ?[*:0]const
     const process = @import("process.zig");
     const g = process.ensureGuestGlobals();
     if (g != 0) {
-        const shared = @import("../shared.zig");
-        if (shared.guest_memory) |gmem| {
+        if (x86_memory.guest_memory) |gmem| {
             const off = g + process.g_setlocale - gmem.base_addr;
             return @ptrCast(gmem.base[off..].ptr);
         }

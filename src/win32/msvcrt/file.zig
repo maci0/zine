@@ -1,6 +1,7 @@
 //! MSVCRT low-level file descriptor I/O.
 
 const std = @import("std");
+const x86_memory = @import("../../x86/memory.zig");
 const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const io = @import("io.zig");
@@ -100,8 +101,7 @@ pub fn write(fd: i32, buffer_ptr: usize, count: u32) callconv(.c) i32 {
     if (buffer_ptr == 0 or count == 0) return 0;
     // On WASM, read from guest memory buffer directly instead of trace.addr
     // (which may return a stale host pointer if WASM memory grew)
-    const sc = @import("../shared.zig");
-    const slice = if (sc.guest_memory) |gmem| blk: {
+    const slice = if (x86_memory.guest_memory) |gmem| blk: {
         const offset = @as(u32, @truncate(buffer_ptr)) -% gmem.base_addr;
         if (offset + count <= gmem.base.len) {
             break :blk gmem.base[offset..][0..count];

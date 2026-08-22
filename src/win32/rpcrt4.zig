@@ -1,6 +1,7 @@
 //! RPCRT4.dll registration.
 
 const std = @import("std");
+const x86_memory = @import("../x86/memory.zig");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
 const platform = @import("../platform.zig");
@@ -45,12 +46,10 @@ fn stub_UuidToStringA(uuid_ptr: usize, string_ptr: usize) callconv(w32cc.WINAPI)
     }
     const uuid_len = 36;
 
-    const stub_common = @import("shared.zig");
-
     // On WASM, allocate from guest heap so the x86 code can read the string.
     // On native, allocate from page_allocator (host addresses work directly).
     if (comptime !platform.is_native) {
-        if (stub_common.guest_memory) |gmem| {
+        if (x86_memory.guest_memory) |gmem| {
             const guest_va = gmem.guestAlloc(uuid_len + 1);
             if (guest_va != 0) {
                 const offset = guest_va - gmem.base_addr;

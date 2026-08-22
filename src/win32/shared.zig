@@ -28,12 +28,9 @@ pub var child_exit_code: ?*i32 = null;
 /// ExitProcess/exit is called in child-process mode.
 pub var child_cpu: ?*@import("../x86/cpu.zig").Cpu = null;
 
-/// Shared guest memory reference. Set by wasm_main.zig at startup.
-/// When non-null, stubs use guest-heap allocation so addresses stay
-/// within the GuestMemory range.  All DLL stubs access this through
-/// stub_common instead of reaching into kernel32/mem.zig.
-pub var guest_memory: ?*x86_memory.GuestMemory = null;
-
+/// Shared guest memory reference lives in x86/memory.zig (`guest_memory`),
+/// set by wasm_main.zig at startup. When non-null, stubs use guest-heap
+/// allocation so addresses stay within the GuestMemory range.
 /// Shared SMC JIT Cache Invalidation Callback.
 /// Triggered during execution rights modification (e.g. VirtualProtect or FlushInstructionCache).
 pub var smc_invalidate_cache: ?*const fn () callconv(.c) void = null;
@@ -101,7 +98,7 @@ pub fn raw_alloc(size: usize) ?*anyopaque {
     // On WASM: use guest heap allocator to keep addresses in range.
     // Return a guest virtual address (not a host pointer) so the x86
     // interpreter's address translation works correctly.
-    if (guest_memory) |gmem| {
+    if (x86_memory.guest_memory) |gmem| {
         // Clamp in 64-bit math: a guest size near usize max must fail the
         // allocation, not overflow the +16 header reservation.
         const alloc_size: u32 = @intCast(@min(@as(u64, actual_size) + 16, 0xFFFFFFFF));
@@ -135,7 +132,7 @@ pub fn raw_alloc(size: usize) ?*anyopaque {
 /// reverse-translates TYPED pointer returns, so a `usize`-returning stub must
 /// hand back a guest VA itself or the guest dereferences a host address.
 pub fn hostToGuest(host_addr: usize) usize {
-    if (guest_memory) |gmem| {
+    if (x86_memory.guest_memory) |gmem| {
         const base_ptr = @intFromPtr(gmem.base.ptr);
         const base_end = base_ptr + gmem.base.len;
         if (host_addr >= base_ptr and host_addr < base_end) {
@@ -156,7 +153,7 @@ pub fn raw_realloc(old_ptr: ?*anyopaque, new_size: usize) ?*anyopaque {
 
     // On WASM with guest heap: alloc + copy via guest memory (we don't free).
     // Pointers are guest virtual addresses, not host pointers.
-    if (guest_memory) |gmem| {
+    if (x86_memory.guest_memory) |gmem| {
         const old_host = @intFromPtr(old_ptr.?);
         const old_guest_va = @as(u32, @truncate(old_host - @intFromPtr(gmem.base.ptr))) + gmem.base_addr;
         const old_size = gmem.read32(old_guest_va -% 8);

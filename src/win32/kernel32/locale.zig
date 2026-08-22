@@ -1,4 +1,5 @@
 const std = @import("std");
+const x86_memory = @import("../../x86/memory.zig");
 const trace = @import("../../trace.zig");
 
 /// Retrieves information about any valid installed or available code page.
@@ -437,11 +438,10 @@ fn callGuestCallback1(cb_addr: usize, arg0: usize) void {
         // valid WASM indirect-call index).
         const x86_cpu = @import("../../x86/cpu.zig");
         const x86_execute = @import("../../x86/execute.zig");
-        const shared = @import("../shared.zig");
         var cpu = x86_cpu.Cpu{};
-        if (shared.guest_memory) |gm| cpu.memory = gm.*;
+        if (x86_memory.guest_memory) |gm| cpu.memory = gm.*;
         var stack: [256]u8 = undefined;
-        cpu.esp = @intFromPtr(&stack) + stack.len - 16;
+        cpu.esp = @truncate(@intFromPtr(&stack) + stack.len - 16);
         cpu.push32(@intCast(arg0));
         cpu.push32(0);
         cpu.eip = @intCast(cb_addr);

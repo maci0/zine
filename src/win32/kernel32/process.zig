@@ -1,4 +1,5 @@
 const std = @import("std");
+const x86_memory = @import("../../x86/memory.zig");
 const runtime = @import("../../runtime.zig");
 const env = @import("../../loader/env.zig");
 const trace = @import("../../trace.zig");
@@ -168,7 +169,7 @@ pub fn LoadLibraryA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
                         }
                     } else {
                         const shared = @import("../shared.zig");
-                        if (shared.guest_memory) |gmem| {
+                        if (x86_memory.guest_memory) |gmem| {
                             const stack_base = gmem.guestAlloc(64);
                             if (stack_base != 0) {
                                 const x86_cpu = @import("../../x86/cpu.zig");
@@ -1058,7 +1059,7 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
 
         var cpu = x86_cpu.Cpu{};
         // Share the same guest memory
-        if (shared.guest_memory) |gm| {
+        if (x86_memory.guest_memory) |gm| {
             cpu.memory = gm.*;
         }
         cpu.eip = @intCast(start_address);

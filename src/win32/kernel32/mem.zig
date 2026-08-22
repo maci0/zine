@@ -10,7 +10,7 @@ pub const stub_common = @import("../shared.zig");
 /// Access the shared guest memory global.
 /// Implementation status: Fully implemented
 pub inline fn guest_memory() ?*x86_memory.GuestMemory {
-    return stub_common.guest_memory;
+    return x86_memory.guest_memory;
 }
 
 // Re-export shared allocator functions from stub_common.

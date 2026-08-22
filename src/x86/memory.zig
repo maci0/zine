@@ -5,6 +5,26 @@
 //! buffer). It handles bounds-checked reading, writing, and guest heap
 //! allocation.
 
+/// Process-wide guest memory instance. Set at startup by wasm_main; null on
+/// native builds (guest addresses are then host addresses). Lives here with
+/// the GuestMemory type it points to, so low-level utilities such as trace
+/// can translate addresses without reaching up into the win32 layer.
+pub var guest_memory: ?*GuestMemory = null;
+
+/// Translate a guest virtual address to a host pointer through the
+/// process-wide instance. Identity when no instance is registered or the
+/// address falls outside the mapping.
+pub fn guestToHost(guest_addr: usize) usize {
+    if (guest_addr == 0) return 0;
+    const gmem = guest_memory orelse return guest_addr;
+    const base_addr: usize = gmem.base_addr;
+    const base_end = base_addr + gmem.base.len;
+    if (guest_addr >= base_addr and guest_addr < base_end) {
+        return @intFromPtr(gmem.base.ptr) + (guest_addr - base_addr);
+    }
+    return guest_addr;
+}
+
 /// Bounds-checked guest memory accessor.
 pub const GuestMemory = struct {
     /// The backing memory buffer.  On WASM this is a slice of the linear

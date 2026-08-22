@@ -5,6 +5,7 @@
 //! abstraction for pixel presentation.
 
 const env = @import("../../loader/env.zig");
+const x86_memory = @import("../../x86/memory.zig");
 const trace = @import("../../trace.zig");
 const log = @import("../../log.zig");
 const renderer = @import("../../gui/renderer.zig");
@@ -649,11 +650,10 @@ fn ddrawCallEnumCallback(cb_addr: usize, arg0: usize, arg1: usize) i32 {
     // WASM: interpreter.
     const x86_cpu = @import("../../x86/cpu.zig");
     const x86_execute = @import("../../x86/execute.zig");
-    const shared = @import("../shared.zig");
     var cpu = x86_cpu.Cpu{};
-    if (shared.guest_memory) |gm| cpu.memory = gm.*;
+    if (x86_memory.guest_memory) |gm| cpu.memory = gm.*;
     var stack: [256]u8 = undefined;
-    cpu.esp = @intFromPtr(&stack) + stack.len - 16;
+    cpu.esp = @truncate(@intFromPtr(&stack) + stack.len - 16);
     cpu.push32(@intCast(arg1));
     cpu.push32(@intCast(arg0));
     cpu.push32(0);

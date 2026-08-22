@@ -1,58 +1,57 @@
 const std = @import("std");
 const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
+const path_utils = @import("../../path_utils.zig");
 const w32cc = @import("../calling_convention.zig");
 
-/// The current working directory stored in narrow form.
-pub var current_directory: [1024]u8 = undefined;
-/// The length of the current working directory string.
-pub var current_directory_len: usize = 0;
+// The guest's virtual current directory is canonically stored in
+// path_utils so path translation and these stubs share one source of truth.
 
 /// Retrieves the current directory for the current process.
 /// Implementation status: Partially implemented (returns C:\ by default)
 pub fn GetCurrentDirectoryA(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCurrentDirectoryA(len={d})\n", .{nBufferLength});
-    if (current_directory_len == 0) {
+    if (path_utils.current_directory_len == 0) {
         // Initialize from actual host CWD in Win32 format
         const host_io = @import("../host_io.zig");
-        const len = host_io.getCwd(&current_directory);
-        if (trace.enable_tracing) trace.print("KERNEL32: getCwd retrieved '{s}'\n", .{current_directory[0..len]});
-        current_directory_len = if (len > 0) len else blk: {
+        const len = host_io.getCwd(&path_utils.current_directory);
+        if (trace.enable_tracing) trace.print("KERNEL32: getCwd retrieved '{s}'\n", .{path_utils.current_directory[0..len]});
+        path_utils.current_directory_len = if (len > 0) len else blk: {
             const cwd = "C:\\";
-            @memcpy(current_directory[0..cwd.len], cwd);
+            @memcpy(path_utils.current_directory[0..cwd.len], cwd);
             break :blk cwd.len;
         };
     }
 
-    if (lpBuffer != 0 and nBufferLength > current_directory_len) {
+    if (lpBuffer != 0 and nBufferLength > path_utils.current_directory_len) {
         const host_buf = trace.addr(lpBuffer);
         const buf = @as([*]u8, @ptrFromInt(host_buf));
-        @memcpy(buf[0..current_directory_len], current_directory[0..current_directory_len]);
-        buf[current_directory_len] = 0;
-        return @intCast(current_directory_len);
+        @memcpy(buf[0..path_utils.current_directory_len], path_utils.current_directory[0..path_utils.current_directory_len]);
+        buf[path_utils.current_directory_len] = 0;
+        return @intCast(path_utils.current_directory_len);
     }
-    return @intCast(current_directory_len + 1);
+    return @intCast(path_utils.current_directory_len + 1);
 }
 
 /// Retrieves the current directory for the current process (Unicode version).
 /// Implementation status: Partially implemented (returns C:\ by default)
 pub fn GetCurrentDirectoryW(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCurrentDirectoryW(len={d})\n", .{nBufferLength});
-    if (current_directory_len == 0) {
+    if (path_utils.current_directory_len == 0) {
         const cwd = "C:\\";
-        @memcpy(current_directory[0..cwd.len], cwd);
-        current_directory_len = cwd.len;
+        @memcpy(path_utils.current_directory[0..cwd.len], cwd);
+        path_utils.current_directory_len = cwd.len;
     }
-    if (lpBuffer != 0 and nBufferLength > current_directory_len) {
+    if (lpBuffer != 0 and nBufferLength > path_utils.current_directory_len) {
         const host_buf = trace.addr(lpBuffer);
         const buf = @as([*]u16, @ptrFromInt(host_buf));
-        for (0..current_directory_len) |i| {
-            buf[i] = current_directory[i];
+        for (0..path_utils.current_directory_len) |i| {
+            buf[i] = path_utils.current_directory[i];
         }
-        buf[current_directory_len] = 0;
-        return @intCast(current_directory_len);
+        buf[path_utils.current_directory_len] = 0;
+        return @intCast(path_utils.current_directory_len);
     }
-    return @intCast(current_directory_len + 1);
+    return @intCast(path_utils.current_directory_len + 1);
 }
 
 /// Changes the current directory for the current process.
@@ -63,9 +62,9 @@ pub fn SetCurrentDirectoryA(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: SetCurrentDirectoryA('{s}')\n", .{path});
 
     const copy_len = @min(path.len, 1023);
-    @memcpy(current_directory[0..copy_len], path[0..copy_len]);
-    current_directory_len = copy_len;
-    current_directory[current_directory_len] = 0;
+    @memcpy(path_utils.current_directory[0..copy_len], path[0..copy_len]);
+    path_utils.current_directory_len = copy_len;
+    path_utils.current_directory[path_utils.current_directory_len] = 0;
     return 1;
 }
 
@@ -81,9 +80,9 @@ pub fn SetCurrentDirectoryW(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
     }
     narrow[i] = 0;
     if (trace.enable_tracing) trace.print("KERNEL32: SetCurrentDirectoryW('{s}')\n", .{narrow[0..i]});
-    @memcpy(current_directory[0..i], narrow[0..i]);
-    current_directory_len = i;
-    current_directory[i] = 0;
+    @memcpy(path_utils.current_directory[0..i], narrow[0..i]);
+    path_utils.current_directory_len = i;
+    path_utils.current_directory[i] = 0;
     return 1;
 }
 
@@ -198,7 +197,6 @@ pub fn RemoveDirectoryA(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
     const path = trace.c_span(lpPathName);
     if (trace.enable_tracing) trace.print("KERNEL32: RemoveDirectoryA('{s}')\n", .{path});
     var host_buf: [1024]u8 = undefined;
-    const path_utils = @import("../../path_utils.zig");
     const host_len = path_utils.toHostPath(path, &host_buf);
     if (host_len == 0) return 0;
 

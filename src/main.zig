@@ -353,7 +353,6 @@ pub fn main(init: std.process.Init) !void {
 
     // Store the exe's directory as a Windows-style path for GetModuleFileNameA
     {
-        const kernel32_path = @import("win32/kernel32/path.zig");
         const fixed_exe = try allocator.dupe(u8, target_exe);
         defer allocator.free(fixed_exe);
         std.mem.replaceScalar(u8, fixed_exe, '\\', '/');
@@ -376,13 +375,13 @@ pub fn main(init: std.process.Init) !void {
             if (std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator)) |real_cwd| {
                 var cwd_win_buf: [1024]u8 = undefined;
                 const cwd_win_len = try path_utils.posixToWin32(real_cwd, &cwd_win_buf);
-                const cwd_copy_len = @min(cwd_win_len, kernel32_path.current_directory.len - 1);
-                @memcpy(kernel32_path.current_directory[0..cwd_copy_len], cwd_win_buf[0..cwd_copy_len]);
-                kernel32_path.current_directory_len = cwd_copy_len;
+                const cwd_copy_len = @min(cwd_win_len, path_utils.current_directory.len - 1);
+                @memcpy(path_utils.current_directory[0..cwd_copy_len], cwd_win_buf[0..cwd_copy_len]);
+                path_utils.current_directory_len = cwd_copy_len;
             } else |_| {
                 // Fallback: use exe dir if we can't get the real cwd
-                @memcpy(kernel32_path.current_directory[0..win_dir_len], win_dir_buf[0..win_dir_len]);
-                kernel32_path.current_directory_len = win_dir_len;
+                @memcpy(path_utils.current_directory[0..win_dir_len], win_dir_buf[0..win_dir_len]);
+                path_utils.current_directory_len = win_dir_len;
             }
         }
     }

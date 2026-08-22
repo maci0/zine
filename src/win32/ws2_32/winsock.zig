@@ -1,4 +1,5 @@
 const std = @import("std");
+const x86_memory = @import("../../x86/memory.zig");
 const trace = @import("../../trace.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
@@ -716,7 +717,7 @@ pub fn inet_ntoa(in_addr: u32) callconv(w32cc.WINAPI) [*:0]const u8 {
     inet_ntoa_buf[result.len] = 0;
     // On WASM, allocate in guest memory so x86 code can read it
     const shared = @import("../shared.zig");
-    if (shared.guest_memory != null) {
+    if (x86_memory.guest_memory != null) {
         const raw = shared.raw_alloc(result.len + 1) orelse return @ptrCast(&inet_ntoa_buf);
         const ptr = @as([*]u8, @ptrCast(raw));
         @memcpy(ptr[0..result.len], result);
@@ -750,7 +751,7 @@ var hostent_alias_list: [1]u32 = .{0};
 fn fillHostent(name_str: []const u8, addr_bytes: [4]u8) usize {
     // On WASM, build the entire hostent + data in guest memory
     const shared = @import("../shared.zig");
-    if (shared.guest_memory != null) {
+    if (x86_memory.guest_memory != null) {
         // Layout in guest block: hostent(16) + name(256) + addr(4) + addr_list(8) + alias_list(4) = 288
         const raw = shared.raw_alloc(288) orelse return 0;
         const base = @as([*]u8, @ptrCast(raw));

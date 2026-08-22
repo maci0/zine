@@ -1,6 +1,7 @@
 const std = @import("std");
 const platform = @import("platform.zig");
 const log = @import("log.zig");
+const x86_memory = @import("x86/memory.zig");
 
 /// Enables globally visible trace messages.
 pub var enable_tracing: bool = false;
@@ -66,16 +67,7 @@ pub fn c_span_w(ptr: usize) []const u16 {
 /// On WASM, translates through the GuestMemory buffer.
 pub fn addr(guest_addr: usize) usize {
     if (comptime !platform.is_native) {
-        if (guest_addr == 0) return 0;
-        const stub_common = @import("win32/shared.zig");
-        if (stub_common.guest_memory) |gmem| {
-            const base_addr: usize = gmem.base_addr;
-            const base_end = base_addr + gmem.base.len;
-            if (guest_addr >= base_addr and guest_addr < base_end) {
-                const offset = guest_addr - base_addr;
-                return @intFromPtr(gmem.base.ptr) + offset;
-            }
-        }
+        return x86_memory.guestToHost(guest_addr);
     }
     return guest_addr;
 }

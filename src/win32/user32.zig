@@ -1,4 +1,5 @@
 const std = @import("std");
+const x86_memory = @import("../x86/memory.zig");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
 
@@ -1011,11 +1012,10 @@ fn callWndProcSafe_zig(wndproc: usize, hwnd: usize, msg: u32, wParam: usize, lPa
     if (comptime @import("../platform.zig").is_wasm) {
         const x86_cpu = @import("../x86/cpu.zig");
         const x86_execute = @import("../x86/execute.zig");
-        const shared = @import("shared.zig");
         const teb_mod = @import("teb.zig");
         const stack_size: u32 = 64 * 1024;
         var cpu = x86_cpu.Cpu{};
-        if (shared.guest_memory) |gm| cpu.memory = gm.*;
+        if (x86_memory.guest_memory) |gm| cpu.memory = gm.*;
         if (teb_mod.teb_base_addr != 0) cpu.fs_base = @intCast(teb_mod.teb_base_addr);
         const stack_va = cpu.memory.guestAlloc(stack_size);
         if (stack_va == 0) return 0;
@@ -1025,14 +1025,14 @@ fn callWndProcSafe_zig(wndproc: usize, hwnd: usize, msg: u32, wParam: usize, lPa
         cpu.memory.write8(halt_va, 0xF4); // HLT
         cpu.esp = stack_va + stack_size - 16;
         // stdcall: args pushed right-to-left, then the (halting) return addr.
-        cpu.push32(@truncate(@as(u32, @bitCast(lParam))));
+        cpu.push32(@truncate(@as(u64, @bitCast(@as(i64, lParam)))));
         cpu.push32(@truncate(wParam));
         cpu.push32(msg);
         cpu.push32(@truncate(hwnd));
         cpu.push32(halt_va);
         cpu.eip = @truncate(wndproc);
         x86_execute.run(&cpu);
-        return @bitCast(@as(u32, cpu.eax));
+        return @as(i32, @bitCast(cpu.eax));
     }
     const WndProc = *const fn (usize, u32, usize, isize) callconv(w32cc.WINAPI) isize;
     const func = @as(WndProc, @ptrFromInt(wndproc));

@@ -13,6 +13,15 @@ const runtime = @import("runtime.zig");
 pub const DRIVE_ROOT = "drive_c/";
 const drive_root_len: usize = DRIVE_ROOT.len;
 
+/// The guest process's virtual current directory in Win32 form ("C:\...").
+/// Canonical storage lives here so `toHostPath` and the kernel32
+/// Get/SetCurrentDirectory stubs share one source of truth without this
+/// module depending on win32/. Set at startup by main; mutated through
+/// SetCurrentDirectory.
+pub var current_directory: [1024]u8 = undefined;
+/// Length in bytes of the valid prefix of `current_directory` (0 = unset).
+pub var current_directory_len: usize = 0;
+
 const builtin = @import("builtin");
 const is_wasi = builtin.os.tag == .wasi;
 
@@ -391,9 +400,8 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
     }
 
     // Step 6: Relative path — resolve against virtual CWD
-    const kernel32_path = @import("win32/kernel32/path.zig");
-    if (kernel32_path.current_directory_len > 0) {
-        const cwd_win = kernel32_path.current_directory[0..kernel32_path.current_directory_len];
+    if (current_directory_len > 0) {
+        const cwd_win = current_directory[0..current_directory_len];
         var cwd_posix: [1024]u8 = undefined;
         const cwd_len = win32ToPosix(cwd_win, &cwd_posix) catch return 0;
         // Strip trailing slash

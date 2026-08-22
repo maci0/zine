@@ -1,6 +1,7 @@
 //! MSVCRT time functions implementation.
 
 const std = @import("std");
+const x86_memory = @import("../../x86/memory.zig");
 const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
@@ -182,7 +183,7 @@ pub fn asctime(tm_ptr: usize) callconv(.c) [*]const u8 {
     asctime_buf[s.len] = 0;
     // On WASM, allocate in guest memory so x86 code can read it
     const stub_common = @import("../shared.zig");
-    if (stub_common.guest_memory != null) {
+    if (x86_memory.guest_memory != null) {
         const raw = stub_common.raw_alloc(s.len + 1) orelse return &asctime_buf;
         const ptr = @as([*]u8, @ptrCast(raw));
         @memcpy(ptr[0..s.len], s);
@@ -208,7 +209,7 @@ pub fn localtime64(t: usize) callconv(.c) *[64]u8 {
     _ = t;
     // On WASM, allocate in guest memory so x86 can dereference
     const stub_common = @import("../shared.zig");
-    if (stub_common.guest_memory != null) {
+    if (x86_memory.guest_memory != null) {
         const raw = stub_common.raw_alloc(64) orelse return &tm_buf;
         const ptr = @as(*[64]u8, @ptrCast(raw));
         @memset(ptr, 0);

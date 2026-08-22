@@ -2,6 +2,7 @@
 // _EH_prolog (x86/x64/generic variants).
 
 const trace = @import("../../trace.zig");
+const x86_memory = @import("../../x86/memory.zig");
 const platform = @import("../../platform.zig");
 
 // --- setjmp / longjmp / EH_prolog ---
@@ -227,13 +228,12 @@ pub var wasm_seh_redirect: ?struct { eip: u32, esp: u32, ebp: u32 } = null;
 fn call_seh_filter_wasm(filter_addr: usize, frame_ebp: usize) i32 {
     const x86_cpu = @import("../../x86/cpu.zig");
     const x86_execute = @import("../../x86/execute.zig");
-    const shared = @import("../shared.zig");
     const teb_mod = @import("../teb.zig");
     var cpu = x86_cpu.Cpu{};
-    if (shared.guest_memory) |gm| cpu.memory = gm.*;
+    if (x86_memory.guest_memory) |gm| cpu.memory = gm.*;
     if (teb_mod.teb_base_addr != 0) cpu.fs_base = @intCast(teb_mod.teb_base_addr);
     var stack: [4096]u8 = undefined;
-    cpu.esp = @intFromPtr(&stack) + stack.len - 16;
+    cpu.esp = @truncate(@intFromPtr(&stack) + stack.len - 16);
     cpu.ebp = @intCast(frame_ebp);
     cpu.eip = @intCast(filter_addr);
     x86_execute.run(&cpu);

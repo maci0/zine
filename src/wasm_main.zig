@@ -395,7 +395,7 @@ pub fn main(init: std.process.Init) !void {
     // Set guest_memory BEFORE resolveAllImports so that copyModuleToGuest
     // (which copies PE DLL dependencies into the interpreter's address space)
     // can allocate from the guest heap.
-    stub_common.guest_memory = &thunk_guest_mem;
+    x86_memory.guest_memory = &thunk_guest_mem;
 
     // Resolve imports BEFORE copying the PE into combined_buf (patches IAT in mapped_memory)
     try runner.resolveAllImports(&environment, allocator);
@@ -461,7 +461,6 @@ pub fn main(init: std.process.Init) !void {
     // (e.g. wasmer), where cwd()-relative file creation fails with
     // PermissionDenied but absolute-path creation via the \"/\" preopen works.
     {
-        const kernel32_path = @import("win32/kernel32/path.zig");
         var cwd_buf: [1024]u8 = undefined;
         var cwd_str: []const u8 = ".";
         if (init.environ_map.get("ZINE_CWD")) |cwd| {
@@ -475,8 +474,8 @@ pub fn main(init: std.process.Init) !void {
                 cwd_str = cwd_buf[0..j];
             }
         }
-        @memcpy(kernel32_path.current_directory[0..cwd_str.len], cwd_str);
-        kernel32_path.current_directory_len = cwd_str.len;
+        @memcpy(path_utils.current_directory[0..cwd_str.len], cwd_str);
+        path_utils.current_directory_len = cwd_str.len;
     }
 
     // Pass through host environment variables to the guest.
@@ -572,7 +571,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Wire up guest heap for all stubs (VirtualAlloc, HeapAlloc, malloc, etc.)
     // (stub_common was already imported above for the pre-resolveAllImports setup)
-    stub_common.guest_memory = &cpu.memory;
+    x86_memory.guest_memory = &cpu.memory;
 
     // Register spawn handler so _spawnvp can load child PEs in-process
     stub_common.spawn_handler = &wasmSpawnHandler;
@@ -699,14 +698,14 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     // Save parent state
     const shared = @import("win32/shared.zig");
     const msvcrt_process = @import("win32/msvcrt/process.zig");
-    const saved_guest_memory = shared.guest_memory;
+    const saved_guest_memory = x86_memory.guest_memory;
     const saved_argc = stubs_msvcrt.global_argc;
     const saved_argv = stubs_msvcrt.global_argv;
     const saved_thunk = loader.saveThunkState();
 
     defer {
         // Restore parent state
-        shared.guest_memory = saved_guest_memory;
+        x86_memory.guest_memory = saved_guest_memory;
         stubs_msvcrt.global_argc = saved_argc;
         stubs_msvcrt.global_argv = saved_argv;
         loader.restoreThunkState(saved_thunk);
@@ -810,7 +809,7 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     // Reuse parent's TEB
     child_cpu.fs_base = @truncate(teb.teb_base_addr);
 
-    shared.guest_memory = &child_cpu.memory;
+    x86_memory.guest_memory = &child_cpu.memory;
 
     runner.protectRsrc(child_module.parser.sections, &child_cpu.memory, child_preferred, child_image_size);
 

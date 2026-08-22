@@ -59,13 +59,12 @@ fn allocThunkCode(mem: *x86_memory.GuestMemory, thunk_id: u32) u32 {
 /// guest copy. Applies relocations for the new base address.
 /// Called on WASM when resolveImports encounters a real PE dependency.
 pub fn copyModuleToGuest(mod: *Module) void {
-    const shared = @import("../win32/shared.zig");
     log.info("copyModuleToGuest: {s}, guest_memory={?}, heap_start={d}", .{
         mod.name,
-        @as(?usize, if (shared.guest_memory) |g| @intFromPtr(g) else null),
-        if (shared.guest_memory) |g| g.heap_start else 0,
+        @as(?usize, if (x86_memory.guest_memory) |g| @intFromPtr(g) else null),
+        if (x86_memory.guest_memory) |g| g.heap_start else 0,
     });
-    const gmem = shared.guest_memory orelse return;
+    const gmem = x86_memory.guest_memory orelse return;
 
     // Skip if already in guest memory (image_base falls within guest range)
     const guest_end = gmem.base_addr +% @as(u32, @intCast(gmem.base.len));

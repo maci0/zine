@@ -1,6 +1,7 @@
 //! KERNEL32 error and exception handling functions.
 
 const std = @import("std");
+const x86_memory = @import("../../x86/memory.zig");
 const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const platform = @import("../../platform.zig");
@@ -55,8 +56,7 @@ pub const EXCEPTION_REGISTRATION_RECORD = extern struct {
 /// guest memory); on native, guest == host (direct pointer read).
 fn readGuestU32(va: u32) u32 {
     if (comptime platform.is_wasm) {
-        const shared = @import("../shared.zig");
-        if (shared.guest_memory) |gmem| return gmem.read32(va);
+        if (x86_memory.guest_memory) |gmem| return gmem.read32(va);
         return 0;
     }
     return @as(*const u32, @ptrFromInt(va)).*;
@@ -71,8 +71,7 @@ inline fn gmemRead(va: u32) u32 {
 /// Guest-memory u32 write (the SEH record slots live in guest memory).
 inline fn gmemWrite(va: u32, val: u32) void {
     if (comptime platform.is_wasm) {
-        const shared = @import("../shared.zig");
-        if (shared.guest_memory) |gmem| gmem.write32(va, val);
+        if (x86_memory.guest_memory) |gmem| gmem.write32(va, val);
     } else {
         @as(*u32, @ptrFromInt(va)).* = val;
     }
@@ -275,11 +274,10 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
                 // disposition for the walk. rec/ctx must live in guest memory so
                 // the interpreted handler can read them.
                 const except_mod = @import("../msvcrt/except.zig");
-                const shared = @import("../shared.zig");
                 const teb_mod = @import("../teb.zig");
                 var rec_va: u32 = 0;
                 var ctx_va: u32 = 0;
-                if (shared.guest_memory) |gmem| {
+                if (x86_memory.guest_memory) |gmem| {
                     rec_va = gmem.guestAlloc(@sizeOf(EXCEPTION_RECORD));
                     ctx_va = gmem.guestAlloc(@sizeOf(CONTEXT));
                     if (gmem.writeSlice(rec_va, @sizeOf(EXCEPTION_RECORD))) |dst| {
@@ -292,7 +290,7 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
                 const x86_cpu = @import("../../x86/cpu.zig");
                 const x86_execute = @import("../../x86/execute.zig");
                 var cpu = x86_cpu.Cpu{};
-                if (shared.guest_memory) |gm| cpu.memory = gm.*;
+                if (x86_memory.guest_memory) |gm| cpu.memory = gm.*;
                 if (teb_mod.teb_base_addr != 0) cpu.fs_base = @intCast(teb_mod.teb_base_addr);
                 cpu.esp = except_mod.seh_current_guest_esp;
                 cpu.ebp = except_mod.seh_current_guest_ebp;
