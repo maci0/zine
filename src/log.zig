@@ -61,8 +61,9 @@ var start_ns: ?i128 = null;
 
 fn getElapsedMs() u64 {
     if (comptime builtin.target.cpu.arch.isWasm()) return 0;
-    const ts = std.Io.Timestamp.now(runtime.io(), .real);
-    const now: i128 = ts.nanoseconds;
+    // Elapsed-since-start is a duration: monotonic clock, immune to
+    // wall-clock steps that would skew or negate log timestamps.
+    const now: i128 = runtime.monoNanoTimestamp();
     if (start_ns == null) {
         start_ns = now;
         return 0;

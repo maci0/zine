@@ -153,8 +153,9 @@ var clock_start: ?i64 = null;
 /// Get elapsed processor time.
 /// Implementation status: Partially implemented
 pub fn clock() callconv(.c) i32 {
-    // CLOCKS_PER_SEC is 1000 on MSVC
-    const now = runtime.milliTimestamp();
+    // CLOCKS_PER_SEC is 1000 on MSVC. Measures elapsed time, so it must use
+    // the monotonic clock: a wall-clock step would corrupt the delta.
+    const now = runtime.monoMilliTimestamp();
     if (clock_start == null) clock_start = now;
     const elapsed = now - clock_start.?;
     return @intCast(@min(elapsed, 0x7FFFFFFF));

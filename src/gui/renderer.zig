@@ -350,14 +350,16 @@ pub fn pushFrame() void {
     // Don't push frames before the app has set real window dimensions
     if (!resolution_set) return;
 
-    const current_time = runtime.milliTimestamp();
+    // Frame pacing measures a duration: use the monotonic clock so a
+    // wall-clock step cannot produce a negative or huge frame delta.
+    const current_time = runtime.monoMilliTimestamp();
     if (last_frame_time) |last_time| {
         const diff = current_time - last_time;
         if (diff < 16) {
             @import("../platform.zig").sleep(@as(u64, @intCast(16 - diff)) * 1000 * 1000);
         }
     }
-    last_frame_time = runtime.milliTimestamp();
+    last_frame_time = runtime.monoMilliTimestamp();
 
     switch (active_backend) {
         .web_ui => web_ui.pushFrame(),

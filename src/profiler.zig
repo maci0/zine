@@ -17,7 +17,7 @@ const log = @import("log.zig");
 pub var enabled: bool = false;
 
 // -----------------------------------------------------------------------
-// Wall-clock elapsed time
+// Monotonic elapsed time
 // -----------------------------------------------------------------------
 
 var start_ns: ?i128 = null;
@@ -25,13 +25,13 @@ var start_ns: ?i128 = null;
 /// Record the profiling start time. Called when profiling begins.
 pub fn start() void {
     if (comptime builtin.target.cpu.arch.isWasm()) return;
-    start_ns = runtime.nanoTimestamp();
+    start_ns = runtime.monoNanoTimestamp();
 }
 
 fn getElapsedMs() u64 {
     if (comptime builtin.target.cpu.arch.isWasm()) return 0;
     const s = start_ns orelse return 0;
-    const now = runtime.nanoTimestamp();
+    const now = runtime.monoNanoTimestamp();
     const delta = now - s;
     if (delta < 0) return 0;
     return @intCast(@as(u128, @intCast(delta)) / 1_000_000);

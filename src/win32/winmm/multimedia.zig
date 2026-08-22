@@ -16,8 +16,9 @@ pub fn timeGetTime() callconv(w32cc.WINAPI) u32 {
     // Called in tight timing loops; yield to avoid 100% CPU usage.
     platform.yield();
 
-    const ts = runtime.milliTimestamp();
-    return @intCast(ts & 0xFFFFFFFF);
+    // Milliseconds since system start: monotonic so guest frame/animation
+    // deltas survive wall-clock steps.
+    return @intCast(runtime.monoMilliTimestamp() & 0xFFFFFFFF);
 }
 
 /// waveOutSetVolume

@@ -124,7 +124,10 @@ pub fn PeekMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFil
 
     // Check for expired SetTimer-based timers — WM_TIMER has lowest priority (after WM_PAINT)
     const input = @import("../user32/input.zig");
-    const now = runtime.milliTimestamp();
+    // Must pair with input.safeMilliTs(): same (monotonic) clock on both
+    // sides of the elapsed-time comparison, or a wall-clock step would make
+    // timers fire never or continuously.
+    const now = runtime.monoMilliTimestamp();
     for (&input.timers) |*t| {
         if (t.active) {
             const elapsed = now - t.last_fire;
@@ -1706,8 +1709,9 @@ pub fn WaitMessage() callconv(w32cc.WINAPI) i32 {
 // -------------------------------------------------------------------------
 
 pub fn GetMessageTime() callconv(w32cc.WINAPI) i32 {
-    const ts = runtime.milliTimestamp();
-    return @truncate(ts);
+    // Windows defines the message time as a GetTickCount-style value; use the
+    // same monotonic clock so it is comparable with guest tick deltas.
+    return @truncate(runtime.monoMilliTimestamp());
 }
 
 pub fn stub_MsgWaitForMultipleObjects(nCount: u32, pHandles: usize, fWaitAll: i32, dwMilliseconds: u32, dwWakeMask: u32) callconv(w32cc.WINAPI) u32 {

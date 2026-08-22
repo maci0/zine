@@ -176,9 +176,9 @@ pub fn pushMouseEvent(dwOfs: u32, dwData: u32) void {
 }
 
 fn getTickCount() u32 {
-    // DirectInput timestamps use milliseconds (like GetTickCount)
-    const ms = runtime.milliTimestamp();
-    return @truncate(@as(u64, @bitCast(@as(i64, ms))));
+    // DirectInput timestamps use milliseconds (like GetTickCount): monotonic,
+    // since consumers diff consecutive dwTimeStamp values.
+    return @truncate(@as(u64, @bitCast(runtime.monoMilliTimestamp())));
 }
 
 /// Global IDirectInput instance.

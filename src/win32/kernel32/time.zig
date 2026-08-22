@@ -20,7 +20,9 @@ pub fn GetTimeZoneInformation(lpTimeZoneInformation: usize) callconv(w32cc.WINAP
 pub fn QueryPerformanceCounter(lpPerformanceCount: usize) callconv(w32cc.WINAPI) i32 {
     if (lpPerformanceCount != 0) {
         const ptr = @as(*u64, @ptrFromInt(lpPerformanceCount));
-        ptr.* = @intCast(@as(u64, @truncate(@as(u128, @bitCast(runtime.nanoTimestamp())))));
+        // Windows guarantees QPC never steps backwards (NTP, manual clock
+        // changes), so it must read the monotonic clock, not the wall clock.
+        ptr.* = @intCast(@as(u64, @truncate(@as(u128, @bitCast(runtime.monoNanoTimestamp())))));
     }
     if (trace.enable_tracing) trace.print("KERNEL32: QueryPerformanceCounter({x})\n", .{lpPerformanceCount});
     return 1;
@@ -67,6 +69,11 @@ pub fn GetVersionExW(lpVersionInfo: usize) callconv(w32cc.WINAPI) i32 {
 /// Implementation status: Partially implemented
 pub fn GetLocalTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: GetLocalTime({x})\n", .{lpSystemTime});
+    // Zine presents the guest with a UTC system clock: GetTimeZoneInformation
+    // reports bias 0, FileTimeToLocalFileTime is the identity, and both
+    // GetLocalTime and GetSystemTime return UTC fields. Keep all of these in
+    // agreement; converting only one side would corrupt every conversion
+    // built on top of them.
     if (lpSystemTime == 0) return;
     const st = @as(*w32.SYSTEMTIME, @ptrFromInt(lpSystemTime));
     const ms = runtime.milliTimestamp();
@@ -108,8 +115,9 @@ pub fn GetSystemTimeAdjustment(lpTimeAdjustment: usize, lpTimeIncrement: usize, 
 
 /// Implementation status: Partially implemented
 pub fn GetTickCount() callconv(w32cc.WINAPI) u32 {
-    const ts = runtime.milliTimestamp();
-    return @intCast(ts & 0xFFFFFFFF);
+    // Guests compute elapsed durations from tick deltas; a wall-clock step
+    // would make those negative or huge. Monotonic keeps deltas sane.
+    return @intCast(runtime.monoMilliTimestamp() & 0xFFFFFFFF);
 }
 
 /// Implementation status: Partially implemented
@@ -150,7 +158,8 @@ pub fn CompareFileTime(lpft1: usize, lpft2: usize) callconv(w32cc.WINAPI) i32 {
 /// Implementation status: Partially implemented
 pub fn GetSystemTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: GetSystemTime({x})\n", .{lpSystemTime});
-    // Use GetLocalTime for simplicity (close enough for gaming)
+    // GetLocalTime returns UTC fields (see comment there), so the two
+    // implementations coincide by design.
     GetLocalTime(lpSystemTime);
 }
 
@@ -213,9 +222,77 @@ pub fn FileTimeToSystemTime(lpFileTime: usize, lpSystemTime: usize) callconv(w32
 /// Implementation status: Partially implemented
 pub fn FileTimeToLocalFileTime(lpFileTime: usize, lpLocalFileTime: usize) callconv(w32cc.WINAPI) i32 {
     if (lpFileTime == 0 or lpLocalFileTime == 0) return 0;
-    // We don't do timezone conversion — just copy
+    // The guest clock is UTC (see GetLocalTime), so local == UTC and the
+    // conversion is the identity by policy.
     const src = @as(*const w32.FILETIME, @ptrFromInt(lpFileTime));
     const dst = @as(*w32.FILETIME, @ptrFromInt(lpLocalFileTime));
     dst.* = src.*;
     return 1; // TRUE
+}
+
+const testing = std.testing;
+
+test "QueryPerformanceCounter never steps backwards" {
+    var first: u64 = 0;
+    var second: u64 = 0;
+    try testing.expectEqual(@as(i32, 1), QueryPerformanceCounter(@intFromPtr(&first)));
+    try testing.expectEqual(@as(i32, 1), QueryPerformanceCounter(@intFromPtr(&second)));
+    try testing.expect(second >= first);
+}
+
+test "GetTickCount never steps backwards" {
+    const first = GetTickCount();
+    const second = GetTickCount();
+    try testing.expect(second >= first);
+}
+
+fn fileTimeOf(st: w32.SYSTEMTIME) w32.FILETIME {
+    var ft: w32.FILETIME = .{};
+    _ = SystemTimeToFileTime(@intFromPtr(&st), @intFromPtr(&ft));
+    return ft;
+}
+
+fn systemTimeOf(ft: w32.FILETIME) w32.SYSTEMTIME {
+    var st: w32.SYSTEMTIME = .{};
+    _ = FileTimeToSystemTime(@intFromPtr(&ft), @intFromPtr(&st));
+    return st;
+}
+
+test "SYSTEMTIME/FILETIME round trip across year, leap-day and DST boundaries" {
+    // The guest clock is UTC with no DST, so every wall-time field must
+    // survive the conversion exactly, including Feb 29 and New Year's Eve.
+    const samples = [_]w32.SYSTEMTIME{
+        .{ .wYear = 1601, .wMonth = 1, .wDay = 1 },
+        .{ .wYear = 1999, .wMonth = 12, .wDay = 31, .wHour = 23, .wMinute = 59, .wSecond = 59 },
+        .{ .wYear = 2000, .wMonth = 2, .wDay = 29 },
+        .{ .wYear = 2024, .wMonth = 2, .wDay = 29, .wHour = 23, .wMinute = 59, .wSecond = 59, .wMilliseconds = 999 },
+        .{ .wYear = 2100, .wMonth = 3, .wDay = 1 }, // non-leap century year
+    };
+    for (samples) |st| {
+        const back = systemTimeOf(fileTimeOf(st));
+        try testing.expectEqual(st.wYear, back.wYear);
+        try testing.expectEqual(st.wMonth, back.wMonth);
+        try testing.expectEqual(st.wDay, back.wDay);
+        try testing.expectEqual(st.wHour, back.wHour);
+        try testing.expectEqual(st.wMinute, back.wMinute);
+        try testing.expectEqual(st.wSecond, back.wSecond);
+        try testing.expectEqual(st.wMilliseconds, back.wMilliseconds);
+    }
+}
+
+test "SystemTimeToFileTime normalizes out-of-range months like mktime" {
+    // Month 13 of 2023 is January 2024.
+    const st: w32.SYSTEMTIME = .{ .wYear = 2023, .wMonth = 13, .wDay = 1 };
+    const jan: w32.SYSTEMTIME = .{ .wYear = 2024, .wMonth = 1, .wDay = 1 };
+    try testing.expectEqual(fileTimeOf(jan), fileTimeOf(st));
+}
+
+test "GetLocalTime and GetSystemTime agree (UTC guest clock policy)" {
+    var local: w32.SYSTEMTIME = .{};
+    var system: w32.SYSTEMTIME = .{};
+    GetLocalTime(@intFromPtr(&local));
+    GetSystemTime(@intFromPtr(&system));
+    try testing.expect(local.wYear == system.wYear);
+    try testing.expect(local.wHour == system.wHour);
+    try testing.expect(local.wMilliseconds < 1000);
 }

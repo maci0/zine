@@ -71,6 +71,21 @@ pub fn nanoTimestamp() i128 {
     return ts.nanoseconds;
 }
 
+/// Milliseconds on the monotonic clock (CLOCK_MONOTONIC). Unaffected by
+/// wall-clock steps (NTP, manual setting). Use for measuring elapsed time;
+/// the absolute value is meaningless across processes or boots.
+pub fn monoMilliTimestamp() i64 {
+    const ts = std.Io.Timestamp.now(io(), .awake);
+    return ts.toMilliseconds();
+}
+
+/// Nanoseconds on the monotonic clock. Pairs with `monoMilliTimestamp`
+/// (same underlying clock); never comparable with `nanoTimestamp`.
+pub fn monoNanoTimestamp() i128 {
+    const ts = std.Io.Timestamp.now(io(), .awake);
+    return ts.nanoseconds;
+}
+
 /// Spin-based condition variable (see `Mutex` above for why we avoid
 /// `std.Io.Condition` — it parks on the io instance, which breaks inside the
 /// compat-mode signal dispatch context).

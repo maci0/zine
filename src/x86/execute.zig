@@ -1279,7 +1279,9 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // RDTSC (0F 31) — read timestamp counter
         0x0F31 => {
-            const tsc: u64 = @intCast(@as(i128, runtime.nanoTimestamp()));
+            // A real TSC is monotonic; guests diff consecutive readings, so
+            // feed the monotonic clock instead of the steppable wall clock.
+            const tsc: u64 = @intCast(@as(i128, runtime.monoNanoTimestamp()));
             cpu.eax = @truncate(tsc);
             cpu.edx = @truncate(tsc >> 32);
         },

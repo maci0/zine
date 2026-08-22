@@ -66,14 +66,16 @@ var timer_thread_started: bool = false;
 
 /// Io-free millisecond timestamp (safe on the guest thread inside the signal
 /// dispatch context — runtime.milliTimestamp uses std.Io which reads TLS).
+/// Monotonic clock: timer bookkeeping diffs these values against readings in
+/// user32/message.zig, and neither side may step with the wall clock.
 fn safeMilliTs() i64 {
     if (comptime @import("builtin").os.tag == .linux) {
         const linux = std.os.linux;
         var ts: linux.timespec = .{ .sec = 0, .nsec = 0 };
-        _ = linux.clock_gettime(linux.CLOCK.REALTIME, &ts);
+        _ = linux.clock_gettime(linux.CLOCK.MONOTONIC, &ts);
         return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
     }
-    return @import("../../runtime.zig").milliTimestamp();
+    return @import("../../runtime.zig").monoMilliTimestamp();
 }
 
 /// Spawn the WM_TIMER dispatcher thread on first SetTimer. It wakes every

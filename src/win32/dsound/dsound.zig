@@ -449,7 +449,7 @@ fn dsbuffer_Play(this: usize, dwReserved1: u32, dwPriority: u32, dwFlags: u32) c
     if (findBuffer(this)) |buf| {
         buf.playing = true;
         buf.looping = (dwFlags & 1) != 0; // DSBPLAY_LOOPING
-        buf.play_start_ns = runtime.nanoTimestamp();
+        buf.play_start_ns = runtime.monoNanoTimestamp();
         if (!format_sent) {
             renderer.setAudioFormat(buf.sample_rate, buf.channels, buf.bits_per_sample);
             format_sent = true;
@@ -466,7 +466,8 @@ fn dsbuffer_Stop(this: usize) callconv(w32cc.WINAPI) i32 {
 
 fn getPlayCursorFor(buf: *SoundBufferState) u32 {
     if (!buf.playing or buf.bytes_per_sec == 0 or buf.size == 0) return buf.play_cursor;
-    const now: i128 = runtime.nanoTimestamp();
+    // Elapsed playback time on the monotonic clock; pairs with play_start_ns.
+    const now: i128 = runtime.monoNanoTimestamp();
     const elapsed = now - buf.play_start_ns;
     if (elapsed <= 0) return buf.play_cursor;
     const elapsed_u: u128 = @intCast(elapsed);
