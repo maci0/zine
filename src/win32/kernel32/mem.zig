@@ -60,7 +60,9 @@ pub fn VirtualAlloc(lpAddress: usize, dwSize: usize, flAllocationType: u32, flPr
         }
 
         const alloc_size: u32 = @intCast(@min(dwSize, 0xFFFFFFFF));
-        const aligned_alloc_size = (alloc_size + 0xFFFF) & ~@as(u32, 0xFFFF);
+        // Round up to 64KB in 64-bit math: a guest dwSize near u32 max must
+        // fail the allocation (guestAlloc returns 0), not overflow.
+        const aligned_alloc_size: u32 = @intCast((@as(u64, alloc_size) + 0xFFFF) & ~@as(u64, 0xFFFF));
         const addr = gmem.guestAlloc(aligned_alloc_size);
         if (trace.enable_tracing) trace.print("KERNEL32: VirtualAlloc -> {x}\n", .{addr});
         return addr;

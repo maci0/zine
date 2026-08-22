@@ -160,7 +160,6 @@ pub fn mktime(tm: *const Tm) callconv(.c) i32 {
 }
 
 var clock_start: ?i64 = null;
-var clock_call_count: u32 = 0;
 
 /// Get elapsed processor time.
 /// Implementation status: Partially implemented
@@ -169,11 +168,6 @@ pub fn clock() callconv(.c) i32 {
     const now = runtime.milliTimestamp();
     if (clock_start == null) clock_start = now;
     const elapsed = now - clock_start.?;
-    clock_call_count += 1;
-    if (clock_call_count <= 5 or clock_call_count % 10000 == 0) {
-        const log = @import("../../log.zig");
-        log.info("clock() = {d} (call #{d})", .{ elapsed, clock_call_count });
-    }
     return @intCast(@min(elapsed, 0x7FFFFFFF));
 }
 

@@ -43,15 +43,7 @@ const Segment = cpu_mod.Segment;
 
 /// Continually executes instructions in the provided CPU context until the `halted` flag is set.
 pub fn run(cpu: *Cpu) void {
-    var insn_count: u64 = 0;
     while (!cpu.halted) {
-        if (cpu.eip == 0x4A3FE7) {
-            trace.print(">>> STOSD TRIGGER: ECX={X}, EDI={X}, EDX={X}, EAX={X} <<<\n", .{cpu.ecx, cpu.edi, cpu.edx, cpu.eax});
-        }
-        insn_count += 1;
-        if (insn_count % 100 == 0) {
-             trace.print("x86 exec: [{d}] EIP={X:0>8} ESP={X:0>8} EAX={X} ECX={X} EDX={X}\n", .{ insn_count, cpu.eip, cpu.esp, cpu.eax, cpu.ecx, cpu.edx });
-        }
         step(cpu);
     }
 }

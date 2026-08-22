@@ -102,7 +102,9 @@ pub fn raw_alloc(size: usize) ?*anyopaque {
     // Return a guest virtual address (not a host pointer) so the x86
     // interpreter's address translation works correctly.
     if (guest_memory) |gmem| {
-        const alloc_size: u32 = @intCast(@min(actual_size + 16, 0xFFFFFFFF));
+        // Clamp in 64-bit math: a guest size near usize max must fail the
+        // allocation, not overflow the +16 header reservation.
+        const alloc_size: u32 = @intCast(@min(@as(u64, actual_size) + 16, 0xFFFFFFFF));
         const addr = gmem.guestAlloc(alloc_size);
         if (addr == 0) return null;
         gmem.write32(addr, @intCast(actual_size));

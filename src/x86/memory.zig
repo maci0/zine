@@ -40,17 +40,18 @@ pub const GuestMemory = struct {
     pub fn guestAlloc(self: *GuestMemory, size: u32) u32 {
         if (self.heap_start == 0) return 0; // heap not configured
 
-        // Align to 16 bytes
-        const aligned_size = (size + 15) & ~@as(u32, 15);
+        // 64-bit math so a guest-supplied size near u32 max fails the
+        // bounds check instead of overflowing into a bogus allocation.
+        const aligned_size = (@as(u64, size) + 15) & ~@as(u64, 15);
         const alloc_offset = self.heap_cursor;
-        const end = alloc_offset + aligned_size;
+        const end = @as(u64, alloc_offset) + aligned_size;
 
         if (end > self.base.len) return 0; // out of memory
 
         // Zero the allocated area
-        @memset(self.base[alloc_offset..end], 0);
+        @memset(self.base[alloc_offset..@intCast(end)], 0);
 
-        self.heap_cursor = end;
+        self.heap_cursor = @intCast(end);
         return self.base_addr +% @as(u32, @intCast(alloc_offset));
     }
 
@@ -96,9 +97,6 @@ pub const GuestMemory = struct {
 
     /// Writes a 16-bit little-endian value to guest memory at `addr`.
     pub inline fn write16(self: *GuestMemory, addr: u32, val: u16) void {
-        if ((addr >= 0x512A70 and addr <= 0x512A78) or addr == 0x512A6C) {
-            @import("../trace.zig").print(">>> MEMORY CORRUPTION write16 AT {X} val {X} <<<\n", .{addr, val});
-        }
         if (self.native_linear) { if (addr >= 4096) @as(*align(1) u16, @ptrFromInt(addr)).* = val; return; }
         if (self.isWriteProtected(addr)) return;
         const a = self.translate(addr);
@@ -109,9 +107,6 @@ pub const GuestMemory = struct {
 
     /// Writes a 32-bit little-endian value to guest memory at `addr`.
     pub inline fn write32(self: *GuestMemory, addr: u32, val: u32) void {
-        if ((addr >= 0x512A70 and addr <= 0x512A78) or addr == 0x512A6C) {
-            @import("../trace.zig").print(">>> MEMORY CORRUPTION write32 AT {X} val {X} <<<\n", .{addr, val});
-        }
         if (self.native_linear) { if (addr >= 4096) @as(*align(1) u32, @ptrFromInt(addr)).* = val; return; }
         if (self.isWriteProtected(addr)) return;
         const a = self.translate(addr);
@@ -274,6 +269,16 @@ test "guest memory: guestAlloc returns 0 when heap not configured" {
     var mem = GuestMemory{ .base = &buf };
     // heap_start == 0 means heap is not configured
     try testing.expectEqual(@as(u32, 0), mem.guestAlloc(16));
+}
+
+test "guest memory: guestAlloc rejects sizes that overflow u32" {
+    var buf: [256]u8 = .{0} ** 256;
+    var mem = GuestMemory{ .base = &buf, .base_addr = 0x1000, .heap_start = 64, .heap_cursor = 64 };
+    // A guest-supplied size near u32 max must fail cleanly (return 0),
+    // not overflow the alignment computation into a bogus allocation.
+    try testing.expectEqual(@as(u32, 0), mem.guestAlloc(0xFFFFFFF0));
+    try testing.expectEqual(@as(u32, 0), mem.guestAlloc(0xFFFFFFFF));
+    try testing.expectEqual(@as(u32, 64), mem.heap_cursor); // state unchanged
 }
 
 test "guest memory: write protection blocks writes to PE image" {
