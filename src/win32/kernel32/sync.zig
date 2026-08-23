@@ -856,6 +856,8 @@ pub fn FlsFree(dwFlsIndex: u32) callconv(w32cc.WINAPI) i32 {
 // -------------------------------------------------------------------------
 
 test "CloseHandle frees kernel object slots" {
+    const saved_objects = kernel_objects;
+    defer kernel_objects = saved_objects;
     kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
 
     const h = CreateEventA(0, 0, 0, 0);
@@ -870,6 +872,8 @@ test "CloseHandle frees kernel object slots" {
 }
 
 test "closeKernelObject ignores unknown handles" {
+    const saved_objects = kernel_objects;
+    defer kernel_objects = saved_objects;
     kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
     try std.testing.expect(!closeKernelObject(0xE0000001));
 }

@@ -615,6 +615,33 @@ test "hasDriveLetter: exactly two chars" {
     try testing.expect(!hasDriveLetter(":C"));
 }
 
+test "tryCaseInsensitiveResolve matches on-disk filename casing" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const io = runtime.io();
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "ReadMe.TXT", .data = "x" });
+
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_len = try tmp_dir.dir.realPath(io, &dir_buf);
+    const abs_dir = dir_buf[0..dir_len];
+
+    var buf: [1024]u8 = undefined;
+
+    // Wrong-case query resolves to the on-disk spelling.
+    var query_buf: [1024]u8 = undefined;
+    const wrong_case = try std.fmt.bufPrint(&query_buf, "{s}/readme.txt", .{abs_dir});
+    const resolved = tryCaseInsensitiveResolve(wrong_case, &buf) orelse return error.TestUnexpectedResult;
+    try testing.expect(std.mem.endsWith(u8, resolved, "/ReadMe.TXT"));
+
+    // Exact-case queries still resolve.
+    const exact = try std.fmt.bufPrint(&query_buf, "{s}/ReadMe.TXT", .{abs_dir});
+    try testing.expect(tryCaseInsensitiveResolve(exact, &buf) != null);
+
+    // Missing files return null instead of fabricating a path.
+    const missing = try std.fmt.bufPrint(&query_buf, "{s}/no_such_file.bin", .{abs_dir});
+    try testing.expect(tryCaseInsensitiveResolve(missing, &buf) == null);
+}
+
 /// Case-insensitive path resolution: scan parent directory for matching filename.
 pub fn tryCaseInsensitiveResolve(path: []const u8, buf: []u8) ?[]const u8 {
     if (comptime builtin.target.os.tag == .linux) return tryCaseInsensitiveResolveLinux(path, buf);

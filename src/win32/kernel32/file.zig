@@ -1495,6 +1495,12 @@ test "CloseHandle frees file mapping slots" {
 }
 
 test "native map registry unmaps registered views" {
+    const saved_addrs = native_map_addrs;
+    const saved_sizes = native_map_sizes;
+    defer {
+        native_map_addrs = saved_addrs;
+        native_map_sizes = saved_sizes;
+    }
     native_map_addrs = [_]usize{0} ** MAX_NATIVE_MAPS;
     native_map_sizes = [_]usize{0} ** MAX_NATIVE_MAPS;
 

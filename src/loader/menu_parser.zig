@@ -161,3 +161,99 @@ fn freeMenuItem(allocator: std.mem.Allocator, item: *MenuItem) void {
         allocator.free(popup);
     }
 }
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
+
+const testing = std.testing;
+
+fn u16le(value: u16) [2]u8 {
+    return std.mem.toBytes(std.mem.nativeToLittle(u16, value));
+}
+
+/// Append one MENUITEMTEMPLATE entry: flags [+ id] + UTF-16LE name + NUL.
+fn appendItem(items: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, flags: u16, id: ?u16, name: []const u16) !void {
+    try items.appendSlice(allocator, &u16le(flags));
+    if (id) |v| try items.appendSlice(allocator, &u16le(v));
+    for (name) |c| try items.appendSlice(allocator, &u16le(c));
+    try items.appendSlice(allocator, &u16le(0));
+}
+
+test "parseMenuResource: flat menu renders items in order" {
+    var data: std.ArrayListUnmanaged(u8) = .empty;
+    defer data.deinit(testing.allocator);
+    // MENUITEMTEMPLATEHEADER: version 0, cbHeader 0
+    try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
+    const MF_END: u16 = 0x0080;
+    try appendItem(&data, testing.allocator, MF_END, 0x1001, &.{ 'E', 'x', 'i', 't' });
+
+    const json = try parseMenuResource(testing.allocator, data.items);
+    defer testing.allocator.free(json);
+    try testing.expectEqualStrings(
+        "{\"type\":\"menu\",\"menu\":[{\"id\":4097,\"name\":\"Exit\",\"flags\":128}]}",
+        json,
+    );
+}
+
+test "parseMenuResource: popup submenu nests children" {
+    var data: std.ArrayListUnmanaged(u8) = .empty;
+    defer data.deinit(testing.allocator);
+    try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
+    const MF_POPUP: u16 = 0x0010;
+    const MF_END: u16 = 0x0080;
+    // "&File" popup containing Open then Exit; root list ends after the
+    // following Help item carries MF_END.
+    try appendItem(&data, testing.allocator, MF_POPUP, null, &.{ '&', 'F', 'i', 'l', 'e' });
+    try appendItem(&data, testing.allocator, 0, 1, &.{ 'O', 'p', 'e', 'n' });
+    try appendItem(&data, testing.allocator, MF_END, 2, &.{ 'E', 'x', 'i', 't' });
+    try appendItem(&data, testing.allocator, MF_END, 3, &.{ 'H', 'e', 'l', 'p' });
+
+    const json = try parseMenuResource(testing.allocator, data.items);
+    defer testing.allocator.free(json);
+    try testing.expectEqualStrings(
+        "{\"type\":\"menu\",\"menu\":[" ++
+            "{\"id\":0,\"name\":\"&File\",\"flags\":16,\"popup\":[" ++
+            "{\"id\":1,\"name\":\"Open\",\"flags\":0}," ++
+            "{\"id\":2,\"name\":\"Exit\",\"flags\":128}]}," ++
+            "{\"id\":3,\"name\":\"Help\",\"flags\":128}" ++
+            "]}",
+        json,
+    );
+}
+
+test "parseMenuResource: tabs widen and JSON metacharacters escape" {
+    var data: std.ArrayListUnmanaged(u8) = .empty;
+    defer data.deinit(testing.allocator);
+    try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
+    const name = [_]u16{ 'O', '\t', '"', 'q', '\\', 0 };
+    try appendItem(&data, testing.allocator, 0x0080, 7, &name);
+
+    const json = try parseMenuResource(testing.allocator, data.items);
+    defer testing.allocator.free(json);
+    try testing.expectEqualStrings(
+        "{\"type\":\"menu\",\"menu\":[{\"id\":7,\"name\":\"O   \\\"q\\\\\",\"flags\":128}]}",
+        json,
+    );
+}
+
+test "parseMenuResource: non-ASCII UTF-16 becomes question mark" {
+    var data: std.ArrayListUnmanaged(u8) = .empty;
+    defer data.deinit(testing.allocator);
+    try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
+    try appendItem(&data, testing.allocator, 0x0080, 9, &.{0xE9}); // é
+
+    const json = try parseMenuResource(testing.allocator, data.items);
+    defer testing.allocator.free(json);
+    try testing.expectEqualStrings(
+        "{\"type\":\"menu\",\"menu\":[{\"id\":9,\"name\":\"?\",\"flags\":128}]}",
+        json,
+    );
+}
+
+test "parseMenuResource: truncated input is rejected" {
+    // Shorter than the 4-byte template header.
+    try testing.expectError(error.InvalidMenuResource, parseMenuResource(testing.allocator, &.{ 0, 0 }));
+    // Header present but first item's flags are cut off.
+    try testing.expectError(error.InvalidMenuResource, parseMenuResource(testing.allocator, &.{ 0, 0, 0, 0, 0x80 }));
+}

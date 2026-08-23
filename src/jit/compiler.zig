@@ -1657,24 +1657,15 @@ fn translateStringOp(body: *Body, insn: *const decoder.Instruction) !void {
 // Tests
 // =======================================================================
 
-/// Verify a compiled WASM binary has correct header and required sections.
-fn expectValidWasmModule(wasm_bin: []const u8) !void {
-    // Valid WASM binary: magic \0asm + version 1
-    try std.testing.expect(wasm_bin.len >= 8);
-    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
-    try std.testing.expectEqualSlices(u8, &.{ 0x01, 0x00, 0x00, 0x00 }, wasm_bin[4..8]);
+const testing = std.testing;
 
-    // Walk sections and verify expected section IDs are present
-    var has_type = false;
-    var has_import = false;
-    var has_func = false;
-    var has_export = false;
-    var has_code = false;
-    var pos: usize = 8;
+/// Return the payload of the section with the given ID, or null if absent.
+/// A section payload is `id: u8` followed by a ULEB128 length and the bytes.
+fn findSection(wasm_bin: []const u8, id: u8) ?[]const u8 {
+    var pos: usize = 8; // skip magic + version
     while (pos < wasm_bin.len) {
         const section_id = wasm_bin[pos];
         pos += 1;
-        // Decode section length (ULEB128)
         var section_len: u32 = 0;
         var shift: u5 = 0;
         while (pos < wasm_bin.len) {
@@ -1684,28 +1675,39 @@ fn expectValidWasmModule(wasm_bin: []const u8) !void {
             if (b & 0x80 == 0) break;
             shift +%= 7;
         }
-        switch (section_id) {
-            1 => has_type = true,
-            2 => has_import = true,
-            3 => has_func = true,
-            7 => {
-                has_export = true;
-                // Verify the export section contains "run"
-                if (section_len > 0 and pos + section_len <= wasm_bin.len) {
-                    const section_data = wasm_bin[pos .. pos + section_len];
-                    try std.testing.expect(std.mem.indexOf(u8, section_data, "run") != null);
-                }
-            },
-            10 => has_code = true,
-            else => {},
-        }
+        const payload = wasm_bin[pos..@min(pos + section_len, wasm_bin.len)];
         pos += section_len;
+        if (section_id == id) return payload;
     }
-    try std.testing.expect(has_type);
-    try std.testing.expect(has_import);
-    try std.testing.expect(has_func);
-    try std.testing.expect(has_export);
-    try std.testing.expect(has_code);
+    return null;
+}
+
+/// Verify a compiled WASM binary has correct header and required sections.
+fn expectValidWasmModule(wasm_bin: []const u8) !void {
+    // Valid WASM binary: magic \0asm + version 1
+    try std.testing.expect(wasm_bin.len >= 8);
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
+    try std.testing.expectEqualSlices(u8, &.{ 0x01, 0x00, 0x00, 0x00 }, wasm_bin[4..8]);
+
+    // Walk sections and verify expected section IDs are present
+    try testing.expect(findSection(wasm_bin, 1) != null); // type
+    try testing.expect(findSection(wasm_bin, 2) != null); // import
+    try testing.expect(findSection(wasm_bin, 3) != null); // func
+    try testing.expect(findSection(wasm_bin, 10) != null); // code
+
+    const export_section = findSection(wasm_bin, 7) orelse return error.TestUnexpectedResult;
+    // The module must export the "run" entry point.
+    try testing.expect(std.mem.indexOf(u8, export_section, "run") != null);
+}
+
+/// Assert the code section contains each of the given WASM opcode bytes,
+/// i.e. the translated x86 instruction actually produced the expected
+/// operation instead of an empty or unrelated body.
+fn expectCodeSectionContains(wasm_bin: []const u8, opcodes: []const u8) !void {
+    const code = findSection(wasm_bin, 10) orelse return error.TestUnexpectedResult;
+    for (opcodes) |op| {
+        try testing.expect(std.mem.indexOfScalar(u8, code, op) != null);
+    }
 }
 
 test "jit compiler basic structure" {
@@ -1736,8 +1738,9 @@ test "jit compiler push/pop" {
     const wasm_bin = try compiler.compile(0x2000, &code);
     defer std.testing.allocator.free(wasm_bin);
 
-    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
-    try std.testing.expect(wasm_bin.len > 40);
+    try expectValidWasmModule(wasm_bin);
+    // PUSH stores through the stack pointer; POP loads back.
+    try expectCodeSectionContains(wasm_bin, &.{ @intFromEnum(wasm.Opcode.i32_store), @intFromEnum(wasm.Opcode.i32_load) });
 }
 
 test "jit compiler group1 sub imm" {
@@ -1751,8 +1754,9 @@ test "jit compiler group1 sub imm" {
     const wasm_bin = try compiler.compile(0x3000, &code);
     defer std.testing.allocator.free(wasm_bin);
 
-    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
-    try std.testing.expect(wasm_bin.len > 40);
+    try expectValidWasmModule(wasm_bin);
+    // SUB must lower to the WASM i32.sub operation.
+    try expectCodeSectionContains(wasm_bin, &.{@intFromEnum(wasm.Opcode.i32_sub)});
 }
 
 test "jit compiler stops at control flow" {
@@ -1797,9 +1801,13 @@ test "jit compiler shifts" {
     const wasm_bin = try compiler.compile(0x5000, &code);
     defer std.testing.allocator.free(wasm_bin);
 
-    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
-    // 3 shift instructions should produce more output than 1 instruction
-    try std.testing.expect(wasm_bin.len > 60);
+    try expectValidWasmModule(wasm_bin);
+    // SHL / SHR / SAR must map to the corresponding WASM shift operations.
+    try expectCodeSectionContains(wasm_bin, &.{
+        @intFromEnum(wasm.Opcode.i32_shl),
+        @intFromEnum(wasm.Opcode.i32_shr_u),
+        @intFromEnum(wasm.Opcode.i32_shr_s),
+    });
 }
 
 test "jit compiler movzx/movsx" {
@@ -1814,8 +1822,10 @@ test "jit compiler movzx/movsx" {
     const wasm_bin = try compiler.compile(0x6000, &code);
     defer std.testing.allocator.free(wasm_bin);
 
-    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
-    try std.testing.expect(wasm_bin.len > 40);
+    try expectValidWasmModule(wasm_bin);
+    // MOVZX masks to 8 bits; MOVSX sign-extends via shift left + arithmetic
+    // shift right.
+    try expectCodeSectionContains(wasm_bin, &.{ @intFromEnum(wasm.Opcode.i32_and), @intFromEnum(wasm.Opcode.i32_shr_s) });
 }
 
 test "jit compiler lea" {
@@ -1829,7 +1839,7 @@ test "jit compiler lea" {
     const wasm_bin = try compiler.compile(0x7000, &code);
     defer std.testing.allocator.free(wasm_bin);
 
-    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6d }, wasm_bin[0..4]);
-    // LEA with SIB addressing should produce substantial WASM code
-    try std.testing.expect(wasm_bin.len > 40);
+    try expectValidWasmModule(wasm_bin);
+    // SIB addressing scales the index (mul) and adds base + displacement.
+    try expectCodeSectionContains(wasm_bin, &.{ @intFromEnum(wasm.Opcode.i32_mul), @intFromEnum(wasm.Opcode.i32_add) });
 }

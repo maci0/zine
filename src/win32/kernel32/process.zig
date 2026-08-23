@@ -1574,6 +1574,8 @@ fn testDummyChild() if (platform.is_native) std.process.Child else void {
 }
 
 test "child proc table recycles reaped slots" {
+    const saved_procs = child_procs;
+    defer child_procs = saved_procs;
     child_procs = [_]ChildProc{.{}} ** max_child_procs;
 
     const dummy = testDummyChild();
@@ -1591,6 +1593,8 @@ test "child proc table recycles reaped slots" {
 }
 
 test "closeChildProcHandle frees reaped slots only" {
+    const saved_procs = child_procs;
+    defer child_procs = saved_procs;
     child_procs = [_]ChildProc{.{}} ** max_child_procs;
 
     const dummy = testDummyChild();
@@ -1607,12 +1611,16 @@ test "closeChildProcHandle frees reaped slots only" {
 
 test "thread registry recycles finished slots" {
     thread_registry_mutex.lock();
+    const saved_registry = thread_registry;
+    defer {
+        thread_registry = saved_registry;
+        thread_registry_mutex.unlock();
+    }
     for (&thread_registry) |*ti| ti.* = .{};
     for (&thread_registry, 0..) |*ti, i| {
         ti.handle = 0xA0010000 + i;
         ti.running = false;
     }
-    thread_registry_mutex.unlock();
 
     // Every slot holds a finished thread — allocation must recycle, not fail.
     try std.testing.expect(allocThreadInfo() != null);
@@ -1620,8 +1628,12 @@ test "thread registry recycles finished slots" {
 
 test "closeThreadHandle releases finished entries and reserves running ones" {
     thread_registry_mutex.lock();
+    const saved_registry = thread_registry;
+    defer {
+        thread_registry = saved_registry;
+        thread_registry_mutex.unlock();
+    }
     for (&thread_registry) |*ti| ti.* = .{};
-    thread_registry_mutex.unlock();
 
     const done = allocThreadInfo() orelse return error.TestUnexpectedResult;
     done.handle = 0xA0010042;
