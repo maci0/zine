@@ -1,0 +1,8 @@
+# Test-only Python dependency: the inline websocket clients in
+# test_msvc_cli.sh use it to drive zine's web UI (ws://127.0.0.1:1995/ws).
+# Exact-pinned with sha256 hashes so installs are reproducible and reviewed.
+# Upgrade deliberately, then update both hashes from PyPI:
+#   pip install -r tests/requirements.txt --require-hashes
+websocket-client==1.9.0 \
+    --hash=sha256:af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef \
+    --hash=sha256:9e813624b6eb619999a97dc7958469217c3176312b3a16a4bd1bc7e08a46ec98

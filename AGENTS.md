@@ -24,6 +24,7 @@ Zine is a Win32 PE binary interpreter that runs 32-bit Windows executables on Li
 | Dependency | Source | Purpose |
 |---|---|---|
 | `zig-toml` | GitHub (sam701/zig-toml v0.3.0) | TOML config parsing |
+| VanJS (`van.min.js`) | Vendored in src/gui (MIT) | Browser UI reactivity (`van.state`/`van.tags`) |
 | FLTK 1.3 | System library (optional) | Native GUI backend (requires x86_64 build) |
 | wasmer C API | System library (optional) | WASM JIT host runtime |
 
