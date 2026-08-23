@@ -99,43 +99,9 @@ fn fileExists(path: []const u8) bool {
     return true;
 }
 
-/// Raw getdents64 scan for a case-insensitive filename match (Linux only).
-/// Returns a "dir/Name" path in `out`, or null. std.Io.Dir iteration goes
-/// through Io.Threaded (TLS), which faults in the compat signal context.
-fn findDirEntryCiLinux(dir_path: []const u8, base: []const u8, out: []u8) ?[]const u8 {
-    const linux = std.os.linux;
-    if (base.len == 0 or base.len > 255) return null;
-    var buf: [std.posix.PATH_MAX]u8 = undefined;
-    if (dir_path.len >= buf.len) return null;
-    @memcpy(buf[0..dir_path.len], dir_path);
-    buf[dir_path.len] = 0;
-    const open_rc = linux.open(@ptrCast(&buf), .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true }, 0);
-    const fd: isize = @bitCast(open_rc);
-    if (fd < 0) return null;
-    defer _ = linux.close(@intCast(fd));
-
-    var ent_buf: [4096]u8 align(8) = undefined;
-    while (true) {
-        const n_rc = linux.getdents64(@intCast(fd), &ent_buf, ent_buf.len);
-        const n: isize = @bitCast(n_rc);
-        if (n <= 0) break;
-        var pos: usize = 0;
-        while (pos < @as(usize, @intCast(n))) {
-            const d = @as(*align(1) linux.dirent64, @ptrCast(ent_buf[pos..].ptr));
-            const name_ptr: [*:0]const u8 = @ptrCast(&d.name);
-            const name = std.mem.sliceTo(name_ptr, 0);
-            pos += d.reclen;
-            if (name.len == base.len and std.ascii.eqlIgnoreCase(name, base)) {
-                const total = dir_path.len + 1 + name.len;
-                if (total >= out.len) return null;
-                @memcpy(out[0..dir_path.len], dir_path);
-                out[dir_path.len] = '/';
-                @memcpy(out[dir_path.len + 1 .. total], name);
-                return out[0..total];
-            }
-        }
-    }
-    return null;
+/// Case-insensitive exact filename match.
+fn nameEqualsCi(name: []const u8, base: []const u8) bool {
+    return name.len == base.len and std.ascii.eqlIgnoreCase(name, base);
 }
 
 /// Case-insensitive filename match against `base`, `base.exe`, or `base.dll`
@@ -150,10 +116,9 @@ fn nameMatchesModuleCi(name: []const u8, base: []const u8) bool {
     return false;
 }
 
-/// Raw getdents64 scan of `dir_path` for a module entry matching `base`
-/// (see findDirEntryCiLinux for why std.Io is avoided). Returns a
-/// "dir/EntryName" path in `out`, or null.
-fn findModuleEntryCiLinux(dir_path: []const u8, base: []const u8, out: []u8) ?[]const u8 {
+/// Raw getdents64 scan of `dir_path` for an entry matching `base` via
+/// `matches`. Returns a "dir/EntryName" path in `out`, or null.
+fn scanDirEntriesCi(dir_path: []const u8, base: []const u8, out: []u8, comptime matches: fn ([]const u8, []const u8) bool) ?[]const u8 {
     const linux = std.os.linux;
     if (base.len == 0 or base.len > 255) return null;
     var buf: [std.posix.PATH_MAX]u8 = undefined;
@@ -176,7 +141,7 @@ fn findModuleEntryCiLinux(dir_path: []const u8, base: []const u8, out: []u8) ?[]
             const name_ptr: [*:0]const u8 = @ptrCast(&d.name);
             const name = std.mem.sliceTo(name_ptr, 0);
             pos += d.reclen;
-            if (nameMatchesModuleCi(name, base)) {
+            if (matches(name, base)) {
                 const total = dir_path.len + 1 + name.len;
                 if (total >= out.len) return null;
                 @memcpy(out[0..dir_path.len], dir_path);
@@ -187,6 +152,20 @@ fn findModuleEntryCiLinux(dir_path: []const u8, base: []const u8, out: []u8) ?[]
         }
     }
     return null;
+}
+
+/// Raw getdents64 scan for a case-insensitive filename match (Linux only).
+/// Returns a "dir/Name" path in `out`, or null. std.Io.Dir iteration goes
+/// through Io.Threaded (TLS), which faults in the compat signal context.
+fn findDirEntryCiLinux(dir_path: []const u8, base: []const u8, out: []u8) ?[]const u8 {
+    return scanDirEntriesCi(dir_path, base, out, nameEqualsCi);
+}
+
+/// Raw getdents64 scan of `dir_path` for a module entry matching `base`
+/// (see findDirEntryCiLinux for why std.Io is avoided). Returns a
+/// "dir/EntryName" path in `out`, or null.
+fn findModuleEntryCiLinux(dir_path: []const u8, base: []const u8, out: []u8) ?[]const u8 {
+    return scanDirEntriesCi(dir_path, base, out, nameMatchesModuleCi);
 }
 
 /// Open a directory portably — resolves through WASI preopened dirs for absolute paths.

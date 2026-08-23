@@ -1484,6 +1484,36 @@ fn emitStringMemStore(body: *Body, reg_local: u32, size: u32) !void {
     }
 }
 
+/// Mask the value on the Wasm stack to a string element of `size` bytes.
+fn emitStringMaskSize(body: *Body, size: u32) !void {
+    switch (size) {
+        1 => {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0xFF);
+            try body.appendOpcode(.i32_and);
+        },
+        2 => {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0xFFFF);
+            try body.appendOpcode(.i32_and);
+        },
+        else => {},
+    }
+}
+
+/// Emit CMPS/SCAS flag updates: SCRATCH2 - SCRATCH3 on the Wasm stack,
+/// then ZF/SF from the result and CF from the unsigned comparison.
+fn emitStringCmpFlags(body: *Body, insn: *const decoder.Instruction, size: u32) !void {
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(t.LOCAL_SCRATCH2);
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(t.LOCAL_SCRATCH3);
+    try body.appendOpcode(.i32_sub);
+    try emitStringMaskSize(body, size);
+    try t.emitUpdateZfSf(body, if (size == 1) .byte else if (size == 2) .word else .dword);
+    try t.emitSubCfOf(body, insn, t.LOCAL_SCRATCH2, t.LOCAL_SCRATCH3);
+}
+
 /// Emit the body of one string instruction (no REP wrapper).
 /// `size` is the element size in bytes.
 fn emitStringBody(body: *Body, insn: *const decoder.Instruction, size: u32) !void {
@@ -1525,26 +1555,7 @@ fn emitStringBody(body: *Body, insn: *const decoder.Instruction, size: u32) !voi
             try emitStringMemLoad(body, t.REG_EDI, size);
             try body.appendOpcode(.local_set);
             try body.appendUleb128(t.LOCAL_SCRATCH3);
-            try body.appendOpcode(.local_get);
-            try body.appendUleb128(t.LOCAL_SCRATCH2);
-            try body.appendOpcode(.local_get);
-            try body.appendUleb128(t.LOCAL_SCRATCH3);
-            try body.appendOpcode(.i32_sub);
-            switch (size) {
-                1 => {
-                    try body.appendOpcode(.i32_const);
-                    try body.appendIleb128(0xFF);
-                    try body.appendOpcode(.i32_and);
-                },
-                2 => {
-                    try body.appendOpcode(.i32_const);
-                    try body.appendIleb128(0xFFFF);
-                    try body.appendOpcode(.i32_and);
-                },
-                else => {},
-            }
-            try t.emitUpdateZfSf(body, if (size == 1) .byte else if (size == 2) .word else .dword);
-            try t.emitSubCfOf(body, insn, t.LOCAL_SCRATCH2, t.LOCAL_SCRATCH3);
+            try emitStringCmpFlags(body, insn, size);
             try emitStringAdjust(body, t.REG_ESI, size);
             try emitStringAdjust(body, t.REG_EDI, size);
         },
@@ -1563,26 +1574,7 @@ fn emitStringBody(body: *Body, insn: *const decoder.Instruction, size: u32) !voi
             try emitStringMemLoad(body, t.REG_EDI, size);
             try body.appendOpcode(.local_set);
             try body.appendUleb128(t.LOCAL_SCRATCH3);
-            try body.appendOpcode(.local_get);
-            try body.appendUleb128(t.LOCAL_SCRATCH2);
-            try body.appendOpcode(.local_get);
-            try body.appendUleb128(t.LOCAL_SCRATCH3);
-            try body.appendOpcode(.i32_sub);
-            switch (size) {
-                1 => {
-                    try body.appendOpcode(.i32_const);
-                    try body.appendIleb128(0xFF);
-                    try body.appendOpcode(.i32_and);
-                },
-                2 => {
-                    try body.appendOpcode(.i32_const);
-                    try body.appendIleb128(0xFFFF);
-                    try body.appendOpcode(.i32_and);
-                },
-                else => {},
-            }
-            try t.emitUpdateZfSf(body, if (size == 1) .byte else if (size == 2) .word else .dword);
-            try t.emitSubCfOf(body, insn, t.LOCAL_SCRATCH2, t.LOCAL_SCRATCH3);
+            try emitStringCmpFlags(body, insn, size);
             try emitStringAdjust(body, t.REG_EDI, size);
         },
         else => {},

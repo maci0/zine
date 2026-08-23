@@ -53,6 +53,64 @@ const DlgItem = struct {
     tlen: u8,
 };
 
+const RcMenuItem = struct { name: []const u8 = "", id: u16 = 0, flags: u16 = 0 };
+
+/// Parses one MENUITEM clause at *pos: `MENUITEM SEPARATOR` or
+/// `MENUITEM "text", id[, CHECKED|GRAYED|INACTIVE|HELP]` (flags only when
+/// `with_flags`). Advances *pos past the consumed text even on failure.
+/// Returns null when the text is not a well-formed MENUITEM.
+fn parseRcMenuitem(rc_text: []const u8, pos: *usize, with_flags: bool) ?RcMenuItem {
+    if (!startsWithIgnoreCase(rc_text[pos.*..], "MENUITEM")) return null;
+    var ci = pos.* + 8;
+    while (ci < rc_text.len and (std.ascii.isWhitespace(rc_text[ci]) or rc_text[ci] == ',')) ci += 1;
+    var item = RcMenuItem{};
+    if (startsWithIgnoreCase(rc_text[ci..], "SEPARATOR")) {
+        item.flags = 0x0800;
+        ci += 9;
+    } else {
+        item.name = parseQuotedString(rc_text, &ci);
+        while (ci < rc_text.len and (std.ascii.isWhitespace(rc_text[ci]) or rc_text[ci] == ',')) ci += 1;
+        var val: u32 = 0;
+        var have_num = false;
+        if (ci < rc_text.len and rc_text[ci] >= '0' and rc_text[ci] <= '9') {
+            while (ci < rc_text.len and rc_text[ci] >= '0' and rc_text[ci] <= '9') {
+                val = val * 10 + @as(u32, rc_text[ci] - '0');
+                ci += 1;
+            }
+            have_num = true;
+        } else {
+            // try a #define name
+            var ne2 = ci;
+            while (ne2 < rc_text.len and !std.ascii.isWhitespace(rc_text[ne2]) and rc_text[ne2] != ',') ne2 += 1;
+            if (defineLookup(rc_text[ci..ne2])) |v| {
+                val = v;
+                have_num = true;
+                ci = ne2;
+            }
+        }
+        if (!have_num) {
+            pos.* = ci;
+            return null;
+        }
+        item.id = @intCast(val & 0xFFFF);
+        if (with_flags) {
+            // optional flags
+            var lk = ci;
+            while (lk < rc_text.len and (std.ascii.isWhitespace(rc_text[lk]) or rc_text[lk] == ',')) lk += 1;
+            if (lk < rc_text.len and rc_text[lk] != '\n' and rc_text[lk] != '}') {
+                var fend = lk;
+                while (fend < rc_text.len and !std.ascii.isWhitespace(rc_text[fend]) and rc_text[fend] != ',') fend += 1;
+                const fnm = rc_text[lk..fend];
+                if (std.ascii.eqlIgnoreCase(fnm, "CHECKED")) item.flags |= 0x0008;
+                if (std.ascii.eqlIgnoreCase(fnm, "GRAYED") or std.ascii.eqlIgnoreCase(fnm, "INACTIVE")) item.flags |= 0x0001;
+                if (std.ascii.eqlIgnoreCase(fnm, "HELP")) item.flags |= 0x4000;
+            }
+        }
+    }
+    pos.* = ci;
+    return item;
+}
+
 fn defineLookup(name: []const u8) ?u32 {
     for (0..define_count) |i| {
         const n = define_names[i];
@@ -403,57 +461,8 @@ fn rc_main(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(
                             break;
                         }
                         // parse a child MENUITEM line: name/id/flags or SEPARATOR
-                        var cname: []const u8 = "";
-                        var cid: u16 = 0;
-                        var cflags: u16 = 0;
-                        var cok = false;
-                        if (startsWithIgnoreCase(rc_text[mi..], "MENUITEM")) {
-                            var ci = mi + 8;
-                            while (ci < rc_text.len and (std.ascii.isWhitespace(rc_text[ci]) or rc_text[ci] == ',')) ci += 1;
-                            if (startsWithIgnoreCase(rc_text[ci..], "SEPARATOR")) {
-                                cflags = 0x0800;
-                                cok = true;
-                                ci += 9;
-                            } else {
-                                cname = parseQuotedString(rc_text, &ci);
-                                while (ci < rc_text.len and (std.ascii.isWhitespace(rc_text[ci]) or rc_text[ci] == ',')) ci += 1;
-                                var val: u32 = 0;
-                                var have_num = false;
-                                if (ci < rc_text.len and rc_text[ci] >= '0' and rc_text[ci] <= '9') {
-                                    while (ci < rc_text.len and rc_text[ci] >= '0' and rc_text[ci] <= '9') {
-                                        val = val * 10 + @as(u32, rc_text[ci] - '0');
-                                        ci += 1;
-                                    }
-                                    have_num = true;
-                                } else {
-                                    var ne2 = ci;
-                                    while (ne2 < rc_text.len and !std.ascii.isWhitespace(rc_text[ne2]) and rc_text[ne2] != ',') ne2 += 1;
-                                    if (defineLookup(rc_text[ci..ne2])) |v| {
-                                        val = v;
-                                        have_num = true;
-                                        ci = ne2;
-                                    }
-                                }
-                                if (have_num) {
-                                    cid = @intCast(val & 0xFFFF);
-                                    // optional flags
-                                    var lk = ci;
-                                    while (lk < rc_text.len and (std.ascii.isWhitespace(rc_text[lk]) or rc_text[lk] == ',')) lk += 1;
-                                    if (lk < rc_text.len and rc_text[lk] != '\n' and rc_text[lk] != '}') {
-                                        var fend = lk;
-                                        while (fend < rc_text.len and !std.ascii.isWhitespace(rc_text[fend]) and rc_text[fend] != ',') fend += 1;
-                                        const fnm = rc_text[lk..fend];
-                                        if (std.ascii.eqlIgnoreCase(fnm, "CHECKED")) cflags |= 0x0008;
-                                        if (std.ascii.eqlIgnoreCase(fnm, "GRAYED") or std.ascii.eqlIgnoreCase(fnm, "INACTIVE")) cflags |= 0x0001;
-                                        if (std.ascii.eqlIgnoreCase(fnm, "HELP")) cflags |= 0x4000;
-                                    }
-                                    cok = true;
-                                }
-                            }
-                            mi = ci;
-                        }
-                        if (cok) {
-                            t.children[t.nchildren] = .{ .name = cname, .id = cid, .flags = cflags };
+                        if (parseRcMenuitem(rc_text, &mi, true)) |child| {
+                            t.children[t.nchildren] = .{ .name = child.name, .id = child.id, .flags = child.flags };
                             t.nchildren += 1;
                         } else {
                             while (mi < rc_text.len and rc_text[mi] != '\n') mi += 1;
@@ -464,49 +473,8 @@ fn rc_main(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(
                     top_count += 1;
                 } else {
                     // top-level MENUITEM
-                    var t2 = TItem{ .is_popup = false, .name = "", .id = 0, .nchildren = 0, .children = undefined };
-                    var cname: []const u8 = "";
-                    var cid: u16 = 0;
-                    var cflags: u16 = 0;
-                    var cok = false;
-                    if (startsWithIgnoreCase(rc_text[mi..], "MENUITEM")) {
-                        var ci = mi + 8;
-                        while (ci < rc_text.len and (std.ascii.isWhitespace(rc_text[ci]) or rc_text[ci] == ',')) ci += 1;
-                        if (startsWithIgnoreCase(rc_text[ci..], "SEPARATOR")) {
-                            cflags = 0x0800;
-                            cok = true;
-                            ci += 9;
-                        } else {
-                            cname = parseQuotedString(rc_text, &ci);
-                            while (ci < rc_text.len and (std.ascii.isWhitespace(rc_text[ci]) or rc_text[ci] == ',')) ci += 1;
-                            var val: u32 = 0;
-                            var have_num = false;
-                            if (ci < rc_text.len and rc_text[ci] >= '0' and rc_text[ci] <= '9') {
-                                while (ci < rc_text.len and rc_text[ci] >= '0' and rc_text[ci] <= '9') {
-                                    val = val * 10 + @as(u32, rc_text[ci] - '0');
-                                    ci += 1;
-                                }
-                                have_num = true;
-                            } else {
-                                var ne2 = ci;
-                                while (ne2 < rc_text.len and !std.ascii.isWhitespace(rc_text[ne2]) and rc_text[ne2] != ',') ne2 += 1;
-                                if (defineLookup(rc_text[ci..ne2])) |v| {
-                                    val = v;
-                                    have_num = true;
-                                    ci = ne2;
-                                }
-                            }
-                            if (have_num) {
-                                cid = @intCast(val & 0xFFFF);
-                                cok = true;
-                            }
-                        }
-                        mi = ci;
-                    }
-                    if (cok) {
-                        t2.name = cname;
-                        t2.id = cid;
-                        tops[top_count] = t2;
+                    if (parseRcMenuitem(rc_text, &mi, false)) |item| {
+                        tops[top_count] = .{ .is_popup = false, .name = item.name, .id = item.id, .nchildren = 0, .children = undefined };
                         top_count += 1;
                     } else {
                         while (mi < rc_text.len and rc_text[mi] != '\n') mi += 1;

@@ -8,6 +8,7 @@ const std = @import("std");
 const runtime = @import("../runtime.zig");
 const pe = @import("../pe.zig");
 const log = @import("../log.zig");
+const pe_resources = @import("../pe_resources.zig");
 const builtin = @import("builtin");
 
 /// statx mask for raw fstat (see openFilePortable for why std.Io is avoided
@@ -37,10 +38,6 @@ fn fileLengthLinux(file: std.Io.File) !u64 {
 const RESOURCE_DATA_IS_DIRECTORY: u32 = 0x80000000;
 const RESOURCE_OFFSET_MASK: u32 = 0x7FFFFFFF;
 
-/// CVTRES under the emulator writes resource type/name entries as string names
-/// holding the NUMERIC value in a single wchar (char 0x0006 for type 6), and
-/// byte-swaps the resource data RVA. Normalize an entry's NameOrId to its
-/// numeric id so lookups match both forms.
 /// True if `[off, off+size)` lies entirely within the mapped image. Every
 /// pointer formed from PE-supplied resource-directory offsets must pass this
 /// first: malformed PEs can otherwise form out-of-bounds references into
@@ -49,6 +46,10 @@ fn inImage(self: *Module, off: u64, size: u64) bool {
     return off + size <= self.mapped_memory.len;
 }
 
+/// CVTRES under the emulator writes resource type/name entries as string names
+/// holding the NUMERIC value in a single wchar (char 0x0006 for type 6), and
+/// byte-swaps the resource data RVA. Normalize an entry's NameOrId to its
+/// numeric id so lookups match both forms.
 fn entryNameValue(self: *Module, res_dir_rva: u32, name_or_id: u32) ?u32 {
     if (name_or_id & 0x80000000 == 0) return name_or_id;
     const off = @as(u64, res_dir_rva) + (name_or_id & RESOURCE_OFFSET_MASK);
@@ -403,148 +404,132 @@ pub const Module = struct {
         return null;
     }
 
-    /// Returns the raw data of the first resource of a given type.
-    /// Used when the resource ID is unknown or the first available resource
-    /// of that type is needed (e.g. the first icon in a module).
-    pub fn getFirstResource(self: *Module, resource_type: u32) ?[]const u8 {
+    const ResourceTypeTable = struct {
+        res_dir_rva: u32,
+        entries: []const pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY,
+    };
+
+    /// Validates the root resource directory and returns its type-entry table,
+    /// or null if the image has no resource directory or it is malformed.
+    fn resourceTypeTable(self: *Module) ?ResourceTypeTable {
         const opt_header = &self.parser.getNtHeaders().OptionalHeader;
         const res_dir_rva = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
-
         if (res_dir_rva == 0) return null;
+        if (!inImage(self, res_dir_rva, @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY))) return null;
 
-        const pe_res = @import("../pe_resources.zig");
-        if (!inImage(self, res_dir_rva, @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY))) return null;
-        const root_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva])));
-
+        const root_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva])));
         const num_type_entries = root_dir.NumberOfNamedEntries + root_dir.NumberOfIdEntries;
-        if (!inImage(self, @as(u64, res_dir_rva) + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY), @as(u64, num_type_entries) * @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
-        const type_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
+        if (!inImage(self, @as(u64, res_dir_rva) + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY), @as(u64, num_type_entries) * @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
 
-        var type_offset: ?u32 = null;
-        for (0..num_type_entries) |i| {
-            if ((entryNameValue(self, res_dir_rva, type_entries[i].NameOrId) orelse continue) == resource_type) {
-                type_offset = type_entries[i].OffsetToData & RESOURCE_OFFSET_MASK;
-                break;
-            }
-        }
-        if (type_offset == null) return null;
-        if (!inImage(self, @as(u64, res_dir_rva) + type_offset.?, @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
+        const type_entries = @as([*]pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)])));
+        return .{ .res_dir_rva = res_dir_rva, .entries = type_entries[0..num_type_entries] };
+    }
 
-        const name_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + type_offset.?])));
-        const num_name_entries = name_dir.NumberOfNamedEntries + name_dir.NumberOfIdEntries;
-        if (num_name_entries == 0) return null;
-        const name_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + type_offset.? + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
-        var name_offset: ?u32 = null;
-        for (0..num_name_entries) |i| {
-            if ((entryNameValue(self, res_dir_rva, name_entries[i].NameOrId) orelse continue) == resource_type) {
-                name_offset = name_entries[i].OffsetToData & RESOURCE_OFFSET_MASK;
-                break;
-            }
-        }
-        if (name_offset == null) name_offset = name_entries[0].OffsetToData & RESOURCE_OFFSET_MASK;
-        const name_offset_val = name_offset.?;
-        if (!inImage(self, @as(u64, res_dir_rva) + name_offset_val, @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
+    /// Reads the language-level data entry of the directory at `dir_offset`
+    /// (relative to `res_dir_rva`) and returns the resource bytes. This is the
+    /// shared tail of all resource lookups: Type -> Name/ID -> Language -> data.
+    fn resourceDataSlice(self: *Module, res_dir_rva: u32, dir_offset: u32) ?[]const u8 {
+        if (!inImage(self, @as(u64, res_dir_rva) + dir_offset, @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
 
-        const lang_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset_val])));
+        const lang_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + dir_offset])));
         if (lang_dir.NumberOfIdEntries == 0 and lang_dir.NumberOfNamedEntries == 0) return null;
 
-        const lang_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset_val + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
+        const lang_entries = @as([*]pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + dir_offset + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)])));
         const data_offset = lang_entries[0].OffsetToData & RESOURCE_OFFSET_MASK;
-        if (!inImage(self, @as(u64, res_dir_rva) + data_offset, @sizeOf(pe_res.IMAGE_RESOURCE_DATA_ENTRY))) return null;
+        if (!inImage(self, @as(u64, res_dir_rva) + data_offset, @sizeOf(pe_resources.IMAGE_RESOURCE_DATA_ENTRY))) return null;
 
-        const data_entry = @as(*pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + data_offset])));
+        const data_entry = @as(*pe_resources.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + data_offset])));
 
         const data_rva = fixDataRva(self, data_entry.OffsetToData, data_entry.Size);
         if (@as(u64, data_rva) + data_entry.Size > self.mapped_memory.len) return null;
         return self.mapped_memory[@intCast(data_rva)..@intCast(data_rva + data_entry.Size)];
+    }
+
+    /// Returns the raw data of the first resource of a given type.
+    /// Used when the resource ID is unknown or the first available resource
+    /// of that type is needed (e.g. the first icon in a module).
+    pub fn getFirstResource(self: *Module, resource_type: u32) ?[]const u8 {
+        const table = self.resourceTypeTable() orelse return null;
+
+        var type_offset: ?u32 = null;
+        for (table.entries) |entry| {
+            if ((entryNameValue(self, table.res_dir_rva, entry.NameOrId) orelse continue) == resource_type) {
+                type_offset = entry.OffsetToData & RESOURCE_OFFSET_MASK;
+                break;
+            }
+        }
+        const type_off = type_offset orelse return null;
+        if (!inImage(self, @as(u64, table.res_dir_rva) + type_off, @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
+
+        const name_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off])));
+        const num_name_entries = name_dir.NumberOfNamedEntries + name_dir.NumberOfIdEntries;
+        if (num_name_entries == 0) return null;
+        const name_entries = @as([*]pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)])));
+        var name_offset: ?u32 = null;
+        for (0..num_name_entries) |i| {
+            if ((entryNameValue(self, table.res_dir_rva, name_entries[i].NameOrId) orelse continue) == resource_type) {
+                name_offset = name_entries[i].OffsetToData & RESOURCE_OFFSET_MASK;
+                break;
+            }
+        }
+        // Fall back to the first entry when no name matches.
+        const name_off = name_offset orelse name_entries[0].OffsetToData & RESOURCE_OFFSET_MASK;
+        return self.resourceDataSlice(table.res_dir_rva, name_off);
     }
 
     /// Returns the raw data of a specific resource by type and ID.
     /// Traverses the PE resource directory tree: Type -> Name/ID -> Language.
     /// Always returns the first language entry found for the given ID.
     pub fn getResource(self: *Module, resource_type: u32, resource_id: u32) ?[]const u8 {
-        const opt_header = &self.parser.getNtHeaders().OptionalHeader;
-        const res_dir_rva = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
-
-        if (res_dir_rva == 0) return null;
-
-        const pe_res = @import("../pe_resources.zig");
-        if (!inImage(self, res_dir_rva, @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY))) return null;
-        const root_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva])));
-
-        const num_type_entries = root_dir.NumberOfNamedEntries + root_dir.NumberOfIdEntries;
-        if (!inImage(self, @as(u64, res_dir_rva) + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY), @as(u64, num_type_entries) * @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
-        const type_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
+        const table = self.resourceTypeTable() orelse return null;
 
         var type_offset: ?u32 = null;
-        for (0..num_type_entries) |i| {
-            if ((entryNameValue(self, res_dir_rva, type_entries[i].NameOrId) orelse continue) == resource_type) {
-                type_offset = type_entries[i].OffsetToData & RESOURCE_OFFSET_MASK;
+        for (table.entries) |entry| {
+            if ((entryNameValue(self, table.res_dir_rva, entry.NameOrId) orelse continue) == resource_type) {
+                type_offset = entry.OffsetToData & RESOURCE_OFFSET_MASK;
                 break;
             }
         }
-        if (type_offset == null) return null;
-        if (!inImage(self, @as(u64, res_dir_rva) + type_offset.?, @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
+        const type_off = type_offset orelse return null;
+        if (!inImage(self, @as(u64, table.res_dir_rva) + type_off, @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
 
-        const name_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + type_offset.?])));
+        const name_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off])));
         const num_name_entries = name_dir.NumberOfNamedEntries + name_dir.NumberOfIdEntries;
-        const name_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + type_offset.? + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
+        const name_entries = @as([*]pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)])));
 
         var name_offset: ?u32 = null;
         for (0..num_name_entries) |i| {
-            if ((entryNameValue(self, res_dir_rva, name_entries[i].NameOrId) orelse continue) == resource_id) {
+            if ((entryNameValue(self, table.res_dir_rva, name_entries[i].NameOrId) orelse continue) == resource_id) {
                 name_offset = name_entries[i].OffsetToData & RESOURCE_OFFSET_MASK;
                 break;
             }
         }
-        if (name_offset == null) return null;
-        if (!inImage(self, @as(u64, res_dir_rva) + name_offset.?, @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
-
-        const lang_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset.?])));
-        if (lang_dir.NumberOfIdEntries == 0 and lang_dir.NumberOfNamedEntries == 0) return null;
-
-        const lang_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset.? + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
-        const data_offset = lang_entries[0].OffsetToData & RESOURCE_OFFSET_MASK;
-        if (!inImage(self, @as(u64, res_dir_rva) + data_offset, @sizeOf(pe_res.IMAGE_RESOURCE_DATA_ENTRY))) return null;
-
-        const data_entry = @as(*pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + data_offset])));
-
-        const data_rva = fixDataRva(self, data_entry.OffsetToData, data_entry.Size);
-        if (@as(u64, data_rva) + data_entry.Size > self.mapped_memory.len) return null;
-        return self.mapped_memory[@intCast(data_rva)..@intCast(data_rva + data_entry.Size)];
+        const name_off = name_offset orelse return null;
+        return self.resourceDataSlice(table.res_dir_rva, name_off);
     }
 
     /// Look up a resource by type ID and string name (e.g., Delphi form resources).
     /// Named resource entries have bit 31 set in NameOrId, pointing to a
     /// UTF-16 name string in the resource directory.
     pub fn getResourceByName(self: *Module, resource_type: u32, name: []const u8) ?[]const u8 {
-        const opt_header = &self.parser.getNtHeaders().OptionalHeader;
-        const res_dir_rva = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
-        if (res_dir_rva == 0) return null;
-
-        const pe_res = @import("../pe_resources.zig");
-        if (!inImage(self, res_dir_rva, @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY))) return null;
-        const root_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva])));
-        const num_type_entries = root_dir.NumberOfNamedEntries + root_dir.NumberOfIdEntries;
-        if (!inImage(self, @as(u64, res_dir_rva) + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY), @as(u64, num_type_entries) * @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
-        const type_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
+        const table = self.resourceTypeTable() orelse return null;
 
         // Find the type subdirectory
         var type_offset: ?u32 = null;
-        for (0..num_type_entries) |i| {
-            if (type_entries[i].NameOrId == resource_type) {
-                type_offset = type_entries[i].OffsetToData & RESOURCE_OFFSET_MASK;
+        for (table.entries) |entry| {
+            if (entry.NameOrId == resource_type) {
+                type_offset = entry.OffsetToData & RESOURCE_OFFSET_MASK;
                 break;
             }
         }
-        if (type_offset == null) return null;
-        if (!inImage(self, @as(u64, res_dir_rva) + type_offset.?, @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
+        const type_off = type_offset orelse return null;
+        if (!inImage(self, @as(u64, table.res_dir_rva) + type_off, @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
 
         // Search name entries — named entries have bit 31 set
-        const name_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + type_offset.?])));
+        const name_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off])));
         const num_name_entries = name_dir.NumberOfNamedEntries + name_dir.NumberOfIdEntries;
-        if (!inImage(self, @as(u64, res_dir_rva) + type_offset.? + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY), @as(u64, num_name_entries) * @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
-        const name_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + type_offset.? + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
+        if (!inImage(self, @as(u64, table.res_dir_rva) + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY), @as(u64, num_name_entries) * @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
+        const name_entries = @as([*]pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)])));
 
         var name_offset: ?u32 = null;
         for (0..num_name_entries) |i| {
@@ -555,7 +540,7 @@ pub const Module = struct {
                 // many-pointer, so indexing it past the image would read host
                 // memory beyond the mapping.
                 const name_rva = entry.NameOrId & RESOURCE_OFFSET_MASK;
-                const str_off = @as(u64, res_dir_rva) + name_rva;
+                const str_off = @as(u64, table.res_dir_rva) + name_rva;
                 if (!inImage(self, str_off, 2 + 2 * @as(u64, name.len))) continue;
                 const str_len = std.mem.readInt(u16, self.mapped_memory[@intCast(str_off)..][0..2], .little);
                 if (str_len != name.len) continue;
@@ -578,20 +563,8 @@ pub const Module = struct {
                 }
             }
         }
-        if (name_offset == null) return null;
-        if (!inImage(self, @as(u64, res_dir_rva) + name_offset.?, @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
-
-        // Get the language entry and data
-        const lang_dir = @as(*pe_res.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset.?])));
-        if (lang_dir.NumberOfIdEntries == 0 and lang_dir.NumberOfNamedEntries == 0) return null;
-        const lang_entries = @as([*]pe_res.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + name_offset.? + @sizeOf(pe_res.IMAGE_RESOURCE_DIRECTORY)])));
-        const data_offset = lang_entries[0].OffsetToData & RESOURCE_OFFSET_MASK;
-        if (!inImage(self, @as(u64, res_dir_rva) + data_offset, @sizeOf(pe_res.IMAGE_RESOURCE_DATA_ENTRY))) return null;
-        const data_entry = @as(*pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + data_offset])));
-
-        const data_rva = fixDataRva(self, data_entry.OffsetToData, data_entry.Size);
-        if (@as(u64, data_rva) + data_entry.Size > self.mapped_memory.len) return null;
-        return self.mapped_memory[@intCast(data_rva)..@intCast(data_rva + data_entry.Size)];
+        const name_off = name_offset orelse return null;
+        return self.resourceDataSlice(table.res_dir_rva, name_off);
     }
 };
 
@@ -600,7 +573,6 @@ pub const Module = struct {
 // -----------------------------------------------------------------------
 
 const testing = @import("std").testing;
-const pe_resources = @import("../pe_resources.zig");
 
 const TestImage = struct {
     file_data: []u8,
@@ -732,4 +704,29 @@ test "getResourceByName skips named entries whose string runs past the image" {
     std.mem.writeInt(u16, ti.image[ti.image.len - 2 ..][0..2], 4, .little); // claims 4 wchars
 
     try testing.expectEqual(@as(?[]const u8, null), ti.mod.getResourceByName(42, "abcd"));
+}
+
+test "getFirstResource falls back to the first name entry" {
+    var ti = try TestImage.create(testing.allocator);
+    defer ti.destroy(testing.allocator);
+
+    const rva = TestImage.res_rva;
+    // Root dir: 1 id entry of type RT_ICON(3), subdirectory at rva+0x80.
+    ti.putDirHeader(rva, 1);
+    ti.put32(rva + 16, pe_resources.RT_ICON);
+    ti.put32(rva + 20, 0x80000080);
+    // Name/ID dir: one id entry that does not equal the type; the lookup
+    // must still return the first (only) language branch.
+    ti.putDirHeader(rva + 0x80, 1);
+    ti.put32(rva + 0x80 + 16, 7);
+    ti.put32(rva + 0x80 + 20, 0x800000C0);
+    ti.putDirHeader(rva + 0xC0, 1);
+    ti.put32(rva + 0xC0 + 16, 0x409);
+    ti.put32(rva + 0xC0 + 20, 0x100);
+    ti.put32(rva + 0x100, rva + 0x200);
+    ti.put32(rva + 0x104, 8);
+    @memcpy(ti.image[rva + 0x200 ..][0..8], "ICONDATA");
+
+    const data = ti.mod.getFirstResource(pe_resources.RT_ICON) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("ICONDATA", data);
 }

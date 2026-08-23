@@ -483,20 +483,7 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
             if (is_mem) {
                 if (mem_addr) |addr| {
                     const fval: f64 = @floatCast(@as(f32, @bitCast(cpu.memory.read32(addr))));
-                    switch (reg) {
-                        0 => cpu.fpu.setSt(0, cpu.fpu.st(0) + fval),
-                        1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * fval),
-                        2, 3 => {
-                            fpuCompare(cpu, cpu.fpu.st(0), fval);
-                            if (reg == 3) _ = cpu.fpu.pop();
-                        },
-                        4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - fval),
-                        5 => cpu.fpu.setSt(0, fval - cpu.fpu.st(0)),
-                        // Masked x87: division by zero yields +/-inf (ZE flag), not a skipped op.
-                        6 => cpu.fpu.setSt(0, cpu.fpu.st(0) / fval),
-                        7 => cpu.fpu.setSt(0, fval / cpu.fpu.st(0)),
-                        else => {},
-                    }
+                    fpuArithMemOp(cpu, reg, fval);
                 }
             } else {
                 const sti = cpu.fpu.st(insn.op0_reg);
@@ -610,20 +597,7 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
                     const lo = cpu.memory.read32(addr);
                     const hi = cpu.memory.read32(addr +% 4);
                     const fval: f64 = @bitCast(@as(u64, hi) << 32 | lo);
-                    switch (reg) {
-                        0 => cpu.fpu.setSt(0, cpu.fpu.st(0) + fval),
-                        1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * fval),
-                        2, 3 => {
-                            fpuCompare(cpu, cpu.fpu.st(0), fval);
-                            if (reg == 3) _ = cpu.fpu.pop();
-                        },
-                        4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - fval),
-                        5 => cpu.fpu.setSt(0, fval - cpu.fpu.st(0)),
-                        // Masked x87: division by zero yields +/-inf (ZE flag), not a skipped op.
-                        6 => cpu.fpu.setSt(0, cpu.fpu.st(0) / fval),
-                        7 => cpu.fpu.setSt(0, fval / cpu.fpu.st(0)),
-                        else => {},
-                    }
+                    fpuArithMemOp(cpu, reg, fval);
                 }
             } else {
                 const i: u3 = insn.op0_reg;
@@ -794,6 +768,25 @@ fn fpuCompare(cpu: anytype, a: f64, b: f64) void {
         cpu.fpu.status_word |= 0x4000; // C3
     }
     // else: a > b — all clear
+}
+
+/// FADD/FSUB/FMUL/FDIV memory forms (opcodes D8/DC): apply `op` to ST(0)
+/// according to the instruction's reg field.
+fn fpuArithMemOp(cpu: anytype, reg: u8, op: f64) void {
+    switch (reg) {
+        0 => cpu.fpu.setSt(0, cpu.fpu.st(0) + op),
+        1 => cpu.fpu.setSt(0, cpu.fpu.st(0) * op),
+        2, 3 => {
+            fpuCompare(cpu, cpu.fpu.st(0), op);
+            if (reg == 3) _ = cpu.fpu.pop();
+        },
+        4 => cpu.fpu.setSt(0, cpu.fpu.st(0) - op),
+        5 => cpu.fpu.setSt(0, op - cpu.fpu.st(0)),
+        // Masked x87: division by zero yields +/-inf (ZE flag), not a skipped op.
+        6 => cpu.fpu.setSt(0, cpu.fpu.st(0) / op),
+        7 => cpu.fpu.setSt(0, op / cpu.fpu.st(0)),
+        else => {},
+    }
 }
 
 /// Apply a relative jump to EIP from the instruction's rel operand.
