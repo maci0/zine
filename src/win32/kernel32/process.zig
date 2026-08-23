@@ -646,32 +646,55 @@ var child_procs: [max_child_procs]ChildProc = [_]ChildProc{.{}} ** max_child_pro
 var next_process_handle: usize = 0xCA000001;
 
 fn allocChildProc(child: if (platform.is_native) std.process.Child else void) ?usize {
-    var slot: ?*ChildProc = null;
+    const cp = reserveChildSlot() orelse return null;
+    return adoptReservedChild(cp, child);
+}
+
+/// Find a free or evictable table slot without recording a child in it.
+/// Callers must fill the slot via adoptReservedChild (or leave it untouched,
+/// where handle == 0 keeps it free).
+fn reserveChildSlot() ?*ChildProc {
     for (&child_procs) |*cp| {
         if (cp.handle == 0) {
-            slot = cp;
-            break;
+            return cp;
         }
     }
     // Evict an already-reaped child so repeated spawn/wait cycles don't
     // exhaust the table with finished entries.
-    if (slot == null) {
-        for (&child_procs) |*cp| {
-            if (cp.exit_code != null) {
-                slot = cp;
-                break;
-            }
+    for (&child_procs) |*cp| {
+        if (cp.exit_code != null) {
+            return cp;
         }
     }
-    if (slot) |cp| {
-        const h = next_process_handle;
-        next_process_handle += 1;
-        cp.handle = h;
-        cp.child = child;
-        cp.exit_code = null;
-        return h;
-    }
     return null;
+}
+
+fn adoptReservedChild(cp: *ChildProc, child: if (platform.is_native) std.process.Child else void) usize {
+    const h = next_process_handle;
+    next_process_handle += 1;
+    cp.handle = h;
+    cp.child = child;
+    cp.exit_code = null;
+    return h;
+}
+
+/// Poll every tracked-but-unwaited child with waitpid(WNOHANG), recording the
+/// exit code of finished ones. Without this, a guest that spawns short-lived
+/// processes without waiting on them accumulates one zombie per spawn until
+/// the table fills and spawns start failing.
+pub fn reapExitedChildren() void {
+    if (comptime !platform.is_native) return;
+    if (comptime @import("builtin").os.tag != .linux) return;
+    for (&child_procs) |*cp| {
+        if (cp.handle == 0 or cp.exit_code != null) continue;
+        const child = &(cp.child orelse continue);
+        const id = child.id orelse continue;
+        var status: u32 = 0;
+        const wrc = std.os.linux.waitpid(@intCast(id), &status, std.os.linux.W.NOHANG);
+        const waited: isize = @bitCast(wrc);
+        if (waited != id) continue; // still running (0) or error (<0)
+        cp.exit_code = if (std.posix.W.IFEXITED(status)) @as(u32, std.posix.W.EXITSTATUS(status)) else 1;
+    }
 }
 
 /// getChildProc
@@ -826,23 +849,22 @@ pub fn CreateProcessA(
         trace.print("\n", .{});
     }
 
-    // Spawn the child process
-    const child = std.process.spawn(rt_io, .{ .argv = argv_buf[0..argc] }) catch |err| {
-        log.warn("CreateProcessA: spawn failed: {}", .{err});
+    // Reclaim slots of children that already exited un-waited, then reserve
+    // a table slot BEFORE spawning: spawning a child we cannot track would
+    // leave it permanently unreaped (zombie) and unwaitable.
+    reapExitedChildren();
+    const reserved_slot = reserveChildSlot() orelse {
+        log.warn("CreateProcessA: child process table full ({d} live children)", .{max_child_procs});
         return 0; // FALSE
     };
 
-    const proc_handle = allocChildProc(child) orelse {
-        // No room, but process is running. Store handle anyway.
-        if (lpProcessInformation != 0) {
-            const pi = @as(*align(1) w32.PROCESS_INFORMATION, @ptrFromInt(lpProcessInformation));
-            pi.hProcess = 0x1234;
-            pi.hThread = 0x5678;
-            pi.dwProcessId = @intCast(child.id orelse 0);
-            pi.dwThreadId = @intCast(child.id orelse 0);
-        }
-        return 1;
+    // Spawn the child process
+    const child = std.process.spawn(rt_io, .{ .argv = argv_buf[0..argc] }) catch |err| {
+        log.warn("CreateProcessA: spawn failed: {}", .{err});
+        return 0; // FALSE: reservation had no handle set, so the slot stays free
     };
+
+    const proc_handle = adoptReservedChild(reserved_slot, child);
 
     if (lpProcessInformation != 0) {
         const pi = @as(*align(1) w32.PROCESS_INFORMATION, @ptrFromInt(lpProcessInformation));
@@ -1622,6 +1644,49 @@ test "thread registry recycles finished slots" {
 
     // Every slot holds a finished thread — allocation must recycle, not fail.
     try std.testing.expect(allocThreadInfo() != null);
+}
+
+test "reapExitedChildren records exit codes of finished children" {
+    if (comptime !platform.is_native) return error.SkipZigTest;
+    if (comptime @import("builtin").os.tag != .linux) return error.SkipZigTest;
+
+    const saved_procs = child_procs;
+    defer child_procs = saved_procs;
+    child_procs = [_]ChildProc{.{}} ** max_child_procs;
+
+    const fork_rc = std.os.linux.fork();
+    const pid_signed: isize = @bitCast(fork_rc);
+    if (pid_signed < 0) return error.SkipZigTest;
+    if (pid_signed == 0) {
+        // Child: exit immediately with a known code (raw exit, no atexit).
+        std.os.linux.exit(7);
+    }
+
+    child_procs[0] = .{
+        .handle = 0xCA000001,
+        .child = .{
+            .id = @intCast(pid_signed),
+            .thread_handle = {},
+            .stdin = null,
+            .stdout = null,
+            .stderr = null,
+            .request_resource_usage_statistics = false,
+        },
+        .exit_code = null,
+    };
+
+    // The child may need a moment to terminate; reapExitedChildren only
+    // collects children that have already exited.
+    var spins: usize = 0;
+    while (spins < 1000 and child_procs[0].exit_code == null) : (spins += 1) {
+        reapExitedChildren();
+        if (child_procs[0].exit_code == null) platform.sleep(1 * std.time.ns_per_ms);
+    }
+    try std.testing.expect(child_procs[0].exit_code != null);
+    try std.testing.expectEqual(@as(u32, 7), child_procs[0].exit_code.?);
+
+    // A reaped entry is evictable again.
+    try std.testing.expect(allocChildProc(testDummyChild()) != null);
 }
 
 test "closeThreadHandle releases finished entries and reserves running ones" {

@@ -335,6 +335,28 @@ fn cacheReplace(field: *?[]const u8, json: []const u8) void {
     field.* = owned;
 }
 
+/// Cap on the control-update replay cache. Control updates arrive
+/// continuously (progress bars, status text, window titles); each entry is a
+/// heap string kept forever, and every web-client reconnect replays the whole
+/// list, so without a cap both memory and reconnect cost grow without bound.
+const MAX_CACHED_CONTROL_UPDATES = 256;
+
+/// Caches a control-update JSON for replay to (re)connecting web clients,
+/// dropping the oldest entries once over the cap. Duplicates `json`; takes
+/// ownership of nothing.
+fn cacheControlUpdate(json: []const u8) void {
+    if (!g_allocator_ready) return;
+    const owned = g_allocator.dupe(u8, json) catch return;
+    cache_mutex.lock();
+    defer cache_mutex.unlock();
+    while (cached_control_text_updates.items.len >= MAX_CACHED_CONTROL_UPDATES) {
+        g_allocator.free(cached_control_text_updates.orderedRemove(0));
+    }
+    cached_control_text_updates.append(g_allocator, owned) catch {
+        g_allocator.free(owned);
+    };
+}
+
 // --- Lifecycle ---
 
 /// Initializes the renderer and the active backend.
@@ -751,13 +773,7 @@ pub fn addControl(class: []const u8, hwnd_id: usize, x: i32, y: i32, w: i32, h: 
             web_ui.pushMessage(json);
             // Cache for reconnect: like resolution/title, controls created before
             // a client connects would otherwise never reach the browser.
-            if (g_allocator.dupe(u8, json)) |cached| {
-                cache_mutex.lock();
-                defer cache_mutex.unlock();
-                cached_control_text_updates.append(g_allocator, cached) catch {
-                    g_allocator.free(cached);
-                };
-            } else |_| {}
+            cacheControlUpdate(json);
         },
         .fltk => fltk_ui.addControl(class, hwnd_id, x, y, w, h, style, text),
         .none => {},
@@ -772,15 +788,7 @@ pub fn updateControlText(nIDDlgItem: i32, text: []const u8) void {
     const json = std.fmt.bufPrint(&buf, "{{\"type\":\"update_control_text\",\"id\":{d},\"text\":\"{s}\"}}", .{ nIDDlgItem, escaped[0..esc_len] }) catch return;
     // Cache for replay on reconnect (only when the renderer allocator is live —
     // console apps keep backend .none and never call init()).
-    if (g_allocator_ready) {
-        const cached = g_allocator.dupe(u8, json) catch return;
-        cache_mutex.lock();
-        defer cache_mutex.unlock();
-        cached_control_text_updates.append(g_allocator, cached) catch {
-            g_allocator.free(cached);
-            return;
-        };
-    }
+    cacheControlUpdate(json);
 
     switch (active_backend) {
         .web_ui => web_ui.pushMessage(json),
@@ -850,15 +858,7 @@ pub fn updateControlChecked(nIDDlgItem: i32, checked: bool) void {
 pub fn updateControlValue(nIDDlgItem: i32, value: i32) void {
     var buf: [256]u8 = undefined;
     const json = std.fmt.bufPrint(&buf, "{{\"type\":\"update_control_value\",\"id\":{d},\"value\":{d}}}", .{ nIDDlgItem, value }) catch return;
-    if (g_allocator_ready) {
-        const cached = g_allocator.dupe(u8, json) catch return;
-        cache_mutex.lock();
-        defer cache_mutex.unlock();
-        cached_control_text_updates.append(g_allocator, cached) catch {
-            g_allocator.free(cached);
-            return;
-        };
-    }
+    cacheControlUpdate(json);
 
     switch (active_backend) {
         .web_ui => web_ui.pushMessage(json),
@@ -871,15 +871,7 @@ pub fn updateControlValue(nIDDlgItem: i32, value: i32) void {
 pub fn updateControlRange(nIDDlgItem: i32, min: i32, max: i32) void {
     var buf: [256]u8 = undefined;
     const json = std.fmt.bufPrint(&buf, "{{\"type\":\"update_control_range\",\"id\":{d},\"min\":{d},\"max\":{d}}}", .{ nIDDlgItem, min, max }) catch return;
-    if (g_allocator_ready) {
-        const cached = g_allocator.dupe(u8, json) catch return;
-        cache_mutex.lock();
-        defer cache_mutex.unlock();
-        cached_control_text_updates.append(g_allocator, cached) catch {
-            g_allocator.free(cached);
-            return;
-        };
-    }
+    cacheControlUpdate(json);
 
     switch (active_backend) {
         .web_ui => web_ui.pushMessage(json),

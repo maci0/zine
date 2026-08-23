@@ -145,8 +145,12 @@ fn serverLoop(allocator: std.mem.Allocator) void {
 }
 
 fn handleClient(stream: std.Io.net.Stream, _: std.mem.Allocator) void {
+    // handleClientInner closes the stream on its success paths. On an error
+    // return (failed respond, handshake, or file read) nothing else owns the
+    // fd: close it here or every failed request leaks one until exit.
     handleClientInner(stream) catch |err| {
         std.debug.print("Error in handleClientInner: {}\n", .{err});
+        stream.close(runtime.io());
     };
 }
 

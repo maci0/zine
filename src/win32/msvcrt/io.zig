@@ -138,6 +138,28 @@ const max_files = 64;
 var file_handles: [max_files]?std.Io.File = [_]?std.Io.File{null} ** max_files;
 var file_ptrs: [max_files]usize = [_]usize{0} ** max_files;
 
+/// Recycled FILE structs. raw_alloc never frees, and a guest that
+/// fopen/fclose-cycles (logs, temp files, response files) would otherwise
+/// grow the heap by @sizeOf(MSVCRT_FILE) per cycle forever. fopen pops from
+/// here before allocating; the struct is fully reinitialized on reuse.
+var file_ptr_free_list: [max_files]usize = [_]usize{0} ** max_files;
+var file_ptr_free_count: usize = 0;
+
+fn takeFileSlotPtr() usize {
+    if (file_ptr_free_count > 0) {
+        file_ptr_free_count -= 1;
+        return file_ptr_free_list[file_ptr_free_count];
+    }
+    const ptr_opaque = @import("../shared.zig").raw_alloc(@sizeOf(MSVCRT_FILE)) orelse return 0;
+    return @intFromPtr(ptr_opaque);
+}
+
+fn recycleFileSlotPtr(ptr: usize) void {
+    if (ptr == 0 or file_ptr_free_count >= file_ptr_free_list.len) return;
+    file_ptr_free_list[file_ptr_free_count] = ptr;
+    file_ptr_free_count += 1;
+}
+
 /// Map MSVCRT_FILE pointers to Zig File handles.
 /// Implementation status: Partially implemented
 pub fn getFile(ptr: ?*anyopaque) ?std.Io.File {
@@ -329,13 +351,12 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
     if (allocateFileSlot()) |idx| {
         file_handles[idx] = file;
 
-        const shared = @import("../shared.zig");
-        const ptr_opaque = shared.raw_alloc(@sizeOf(MSVCRT_FILE)) orelse {
+        const ptr = takeFileSlotPtr();
+        if (ptr == 0) {
             @import("../host_io.zig").closeFile(file);
             file_handles[idx] = null;
             return null;
-        };
-        const ptr = @intFromPtr(ptr_opaque);
+        }
         file_ptrs[idx] = ptr;
 
         // raw_alloc already returns a HOST pointer. Do NOT run it through
@@ -382,9 +403,8 @@ pub fn fclose(f: ?*anyopaque) callconv(.c) i32 {
                     file.close(runtime.io());
                 }
                 file_handles[idx] = null;
+                recycleFileSlotPtr(file_ptrs[idx]);
                 file_ptrs[idx] = 0;
-                // Currently we don't free raw_alloc memory, so it leaks slightly.
-                // Not an issue for short-lived compilation passes.
                 return 0;
             }
         }
@@ -431,6 +451,7 @@ pub fn _fcloseall() callconv(.c) i32 {
                 file.close(runtime.io());
             }
             file_handles[idx] = null;
+            recycleFileSlotPtr(file_ptrs[idx]);
             file_ptrs[idx] = 0;
             closed += 1;
         }
@@ -657,4 +678,33 @@ pub fn fwprintf(f: ?*anyopaque, format_ptr: usize) callconv(.c) i32 {
         return -1;
     }
     return -1;
+}
+
+// -------------------------------------------------------------------------
+// Tests
+// -------------------------------------------------------------------------
+
+test "fclose recycles FILE structs across fopen cycles" {
+    file_handles = [_]?std.Io.File{null} ** max_files;
+    file_ptrs = [_]usize{0} ** max_files;
+    file_ptr_free_count = 0;
+
+    var name_buf: [16]u8 = undefined;
+    @memcpy(name_buf[0..9], "/dev/null");
+    name_buf[9] = 0;
+    var mode_buf: [4]u8 = undefined;
+    @memcpy(mode_buf[0..2], "r\x00");
+
+    const f1 = fopen(@intFromPtr(&name_buf), @intFromPtr(&mode_buf));
+    try std.testing.expect(f1 != null);
+    const p1 = @intFromPtr(f1.?);
+
+    try std.testing.expectEqual(@as(i32, 0), fclose(f1));
+    try std.testing.expectEqual(@as(usize, 0), file_ptrs[0]);
+
+    // The second open must reuse the recycled struct instead of allocating.
+    const f2 = fopen(@intFromPtr(&name_buf), @intFromPtr(&mode_buf));
+    try std.testing.expect(f2 != null);
+    try std.testing.expectEqual(p1, @intFromPtr(f2.?));
+    _ = fclose(f2);
 }
