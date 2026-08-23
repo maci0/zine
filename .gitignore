@@ -2,6 +2,10 @@
 zig-out/
 .zig-cache/
 
+# Scratch / temp workspace
+.scratch/
+.gauntlet.lock
+
 # Test artifacts (not test scripts — those are tracked)
 tests/*.txt
 tests/*.obj
