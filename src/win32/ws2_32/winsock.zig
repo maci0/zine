@@ -703,6 +703,11 @@ pub fn inet_addr(cp: usize) callconv(w32cc.WINAPI) u32 {
 }
 
 var inet_ntoa_buf: [16]u8 = undefined;
+/// Guest-side storage for inet_ntoa results. Win32 returns a pointer to a
+/// single static buffer that is overwritten on every call; allocating fresh
+/// raw_alloc memory per call made a guest that formats addresses in a loop
+/// grow the (free-less) guest heap until allocation started failing.
+var inet_ntoa_guest_buf: ?[*]u8 = null;
 /// inet_ntoa
 /// Implementation status: Partially implemented
 pub fn inet_ntoa(in_addr: u32) callconv(w32cc.WINAPI) [*:0]const u8 {
@@ -715,14 +720,18 @@ pub fn inet_ntoa(in_addr: u32) callconv(w32cc.WINAPI) [*:0]const u8 {
         return @ptrCast(&inet_ntoa_buf);
     };
     inet_ntoa_buf[result.len] = 0;
-    // On WASM, allocate in guest memory so x86 code can read it
+    // On WASM, serve from one persistent guest-memory buffer so x86 code can
+    // read it and repeated calls don't grow the heap.
     const shared = @import("../shared.zig");
     if (x86_memory.guest_memory != null) {
-        const raw = shared.raw_alloc(result.len + 1) orelse return @ptrCast(&inet_ntoa_buf);
-        const ptr = @as([*]u8, @ptrCast(raw));
-        @memcpy(ptr[0..result.len], result);
-        ptr[result.len] = 0;
-        return @ptrCast(ptr);
+        if (inet_ntoa_guest_buf == null) {
+            if (shared.raw_alloc(16)) |raw| inet_ntoa_guest_buf = @as([*]u8, @ptrCast(raw));
+        }
+        if (inet_ntoa_guest_buf) |p| {
+            @memcpy(p[0..result.len], result);
+            p[result.len] = 0;
+            return @ptrCast(p);
+        }
     }
     return @ptrCast(&inet_ntoa_buf);
 }
@@ -748,14 +757,20 @@ var hostent_addr_ptr: u32 = 0;
 var hostent_addr_list: [2]u32 = undefined;
 var hostent_alias_list: [1]u32 = .{0};
 
+/// Guest-side storage for the WASM hostent. Win32's gethostbyname returns a
+/// pointer to a static buffer rebuilt per call; allocating fresh raw_alloc
+/// memory per lookup grew the (free-less) guest heap by 288 bytes per call.
+var hostent_guest_buf: ?[*]u8 = null;
+
 fn fillHostent(name_str: []const u8, addr_bytes: [4]u8) usize {
-    // On WASM, build the entire hostent + data in guest memory
+    // On WASM, build the entire hostent + data in one reused guest block
     const shared = @import("../shared.zig");
     if (x86_memory.guest_memory != null) {
-        // Layout in guest block: hostent(16) + name(256) + addr(4) + addr_list(8) + alias_list(4) = 288
-        const raw = shared.raw_alloc(288) orelse return 0;
-        const base = @as([*]u8, @ptrCast(raw));
-        const base_addr: u32 = @truncate(@intFromPtr(raw));
+        if (hostent_guest_buf == null) {
+            if (shared.raw_alloc(288)) |raw| hostent_guest_buf = @as([*]u8, @ptrCast(raw));
+        }
+        const base = hostent_guest_buf orelse return 0;
+        const base_addr: u32 = @truncate(@intFromPtr(base));
 
         // Copy name string at offset 16
         const copy_len = @min(name_str.len, 255);
@@ -780,7 +795,7 @@ fn fillHostent(name_str: []const u8, addr_bytes: [4]u8) usize {
         he.h_length = 4;
         he.h_addr_list = base_addr + 276;
 
-        return @intFromPtr(raw);
+        return @intFromPtr(base);
     }
 
     // Native path: use static buffers

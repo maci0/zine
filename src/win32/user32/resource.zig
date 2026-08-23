@@ -367,7 +367,12 @@ fn loadBitmapFromPE(hInst: usize, lpBitmapName: usize) usize {
 
                 const gdi32 = @import("../gdi32.zig");
                 const handle = gdi32.nextHandle();
-                gdi32.registerDib(handle, @intFromPtr(buf.ptr), w, h, 32);
+                // Owned allocation: DeleteObject releases it, so reload
+                // cycles (per-dialog, per-state icons) don't grow the heap.
+                if (!gdi32.registerDib(handle, @intFromPtr(buf.ptr), w, h, 32, bytes, true)) {
+                    std.heap.page_allocator.free(buf);
+                    return 0;
+                }
                 if (trace.enable_tracing) trace.print("USER32: LoadBitmap loaded {d}x{d} bpp={d} from PE resource\n", .{ w, h, bitcount });
                 return handle;
             }

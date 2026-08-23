@@ -68,10 +68,21 @@ pub fn SelectObject(hdc: usize, h: usize) callconv(w32cc.WINAPI) usize {
     return if (old_obj != 0) old_obj else h; // Return previous object, or requested if failed
 }
 
-/// Delete a logical pen, brush, font, bitmap, region, or palette.
-/// Implementation status: Partially implemented (removes the object from the table)
+/// Deletes a GDI object, releasing its pixel buffer when zine allocated one.
+/// Without this, every CreateCompatibleBitmap/CreateDIBSection cycle leaked
+/// the full bitmap (up to megabytes) until process exit — a per-frame leak
+/// in any app that redraws through memory bitmaps.
 pub fn stub_DeleteObject(h: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("GDI32: DeleteObject(0x{x})\n", .{h});
+    // Copy out the buffer info BEFORE unregistering: unregisterObject
+    // swap-removes entries, invalidating pointers into the table.
+    if (gdi32.findObject(h)) |obj| {
+        if (obj.obj_type == .Bitmap and obj.data.bitmap.owned) {
+            const dib = obj.data.bitmap;
+            const buf: [*]u8 = @ptrFromInt(dib.buffer);
+            std.heap.page_allocator.free(buf[0..dib.alloc_len]);
+        }
+    }
     // Stock objects may be "deleted" legally; GetStockObject re-registers
     // them lazily on next use.
     _ = gdi32.unregisterObject(h);
@@ -108,6 +119,33 @@ test "DeleteObject removes entries so create/delete cycles stay bounded" {
         _ = stub_DeleteObject(h);
     }
     try std.testing.expectEqual(@as(usize, 0), gdi32.gdi_object_count);
+}
+
+test "DeleteObject frees owned DIB buffers but not caller-owned ones" {
+    const saved_objects = gdi32.gdi_objects;
+    const saved_count = gdi32.gdi_object_count;
+    defer {
+        gdi32.gdi_objects = saved_objects;
+        gdi32.gdi_object_count = saved_count;
+    }
+    gdi32.gdi_object_count = 0;
+
+    // Owned registration: DeleteObject must release the allocation.
+    const bytes = 64 * 64 * 4;
+    const buf = try std.heap.page_allocator.alloc(u8, bytes);
+    const h = gdi32.nextHandle();
+    try std.testing.expect(gdi32.registerDib(h, @intFromPtr(buf.ptr), 64, 64, 32, bytes, true));
+    try std.testing.expectEqual(@as(i32, 1), stub_DeleteObject(h));
+    // findObject must no longer return the deleted handle.
+    try std.testing.expect(gdi32.findObject(h) == null);
+
+    // Caller-owned (stack/static) registrations must never be freed.
+    var stack_px = [_]u32{0} ** 4;
+    const h2 = gdi32.nextHandle();
+    _ = gdi32.registerDib(h2, @intFromPtr(&stack_px), 2, 2, 32, 0, false);
+    try std.testing.expectEqual(@as(i32, 1), stub_DeleteObject(h2));
+    stack_px[0] = 0xDEADBEEF; // still writable, not dangling
+    try std.testing.expectEqual(@as(u32, 0xDEADBEEF), stack_px[0]);
 }
 
 /// Create a logical pen with the specified style, width, and color.
@@ -160,7 +198,12 @@ pub fn CreateCompatibleBitmap(hdc: usize, cx: i32, cy: i32) callconv(w32cc.WINAP
     const buf = std.heap.page_allocator.alloc(u8, bytes) catch return 0;
     @memset(buf, 0);
 
-    gdi32.registerDib(handle, @intFromPtr(buf.ptr), w, h, bitcount);
+    // If the table is full the buffer would be unreachable forever, so
+    // fail the call and release it instead of registering nothing.
+    if (!gdi32.registerDib(handle, @intFromPtr(buf.ptr), w, h, bitcount, bytes, true)) {
+        std.heap.page_allocator.free(buf);
+        return 0;
+    }
     return handle;
 }
 
@@ -213,8 +256,13 @@ pub fn CreateDIBSection(hdc: usize, pbmi: usize, usage: u32, ppvBits: usize, hSe
         };
         @memset(buf, 0);
         @as(*usize, @ptrFromInt(ppvBits)).* = @intFromPtr(buf.ptr);
-        // Register so BitBlt can find the pixel data via DC → bitmap lookup
-        gdi32.registerDib(handle, @intFromPtr(buf.ptr), w, h, bitcount);
+        // Register so BitBlt can find the pixel data via DC → bitmap lookup.
+        // A full table must not strand the allocation: report failure and free.
+        if (!gdi32.registerDib(handle, @intFromPtr(buf.ptr), w, h, bitcount, buf_size, true)) {
+            std.heap.page_allocator.free(buf);
+            @as(*usize, @ptrFromInt(ppvBits)).* = 0;
+            return 0;
+        }
     }
     return handle;
 }

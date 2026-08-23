@@ -1077,6 +1077,11 @@ const ThreadInfo = struct {
     thread: if (platform.is_native) ?std.Thread else void = if (platform.is_native) null else {},
     running: bool = false,
     exit_code: u32 = 0,
+    /// TEB copy owned by this slot and reused by every guest thread created
+    /// on it. Allocating a fresh one per CreateThread cycle and never freeing
+    /// it leaked one page-allocator block per finished thread; slots are
+    /// bounded (MAX_GUEST_THREADS) so reuse bounds total TEB memory too.
+    teb_mem: ?[]u8 = null,
 };
 
 var thread_registry: [MAX_GUEST_THREADS]ThreadInfo = [_]ThreadInfo{.{}} ** MAX_GUEST_THREADS;
@@ -1164,21 +1169,80 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
     const thread_info = ctx.thread_info;
 
     // Allocate a per-thread TEB so each thread has its own SEH chain and TLS.
-    // Copy the main thread's TEB as a template.
+    // Copy the main thread's TEB as a template. The allocation belongs to the
+    // registry slot (thread_info.teb_mem) and is reused across CreateThread
+    // cycles on that slot, so repeated thread create/exit stays bounded.
     const teb_mod = @import("../teb.zig");
+    const builtin_mod = @import("builtin");
+
+    // This OS thread's own TLS location, captured before setupFS points FS
+    // at the guest TEB. Restored in the defer below: past this function the
+    // spawned thread still runs its own exit path (std.Thread/pthread
+    // teardown reads per-thread libc state via %fs), and with the slot-owned
+    // TEB now reusable by the next CreateThread, leaving FS aimed at it would
+    // let a dying thread corrupt its successor's TLS. It also stops every
+    // finished thread from reading TLS out of leaked TEB memory forever.
+    var saved_fs_base: usize = 0;
+    var saved_fs_sel: u16 = 0;
+    defer {
+        if (comptime builtin_mod.os.tag == .linux and platform.is_native) {
+            if (comptime builtin_mod.target.cpu.arch == .x86_64) {
+                if (saved_fs_base != 0) {
+                    asm volatile ("syscall"
+                        :
+                        : [num] "{rax}" (@as(usize, 158)), // __NR_arch_prctl
+                          [arg1] "{rdi}" (@as(usize, 0x1002)), // ARCH_SET_FS
+                          [arg2] "{rsi}" (saved_fs_base),
+                        : .{ .rax = true, .rcx = true, .r11 = true, .memory = true });
+                }
+            } else if (comptime builtin_mod.target.cpu.arch == .x86) {
+                if (saved_fs_sel != 0) {
+                    asm volatile ("mov %[sel], %%fs"
+                        :
+                        : [sel] "r" (saved_fs_sel),
+                    );
+                }
+            }
+        }
+        // Clear running only after FS is back on host TLS: allocThreadInfo
+        // recycles any slot whose thread is !running, and the recycled TEB
+        // must not be repopulated while this thread can still reach it.
+        thread_info.running = false;
+    }
 
     if (teb_mod.teb_base_addr != 0) {
         const teb_size = @sizeOf(teb_mod.TEB);
-        const thread_teb_mem = std.heap.page_allocator.alloc(u8, teb_size) catch {
-            // Fallback: share main thread's TEB
-            teb_mod.setupFS(@ptrFromInt(teb_mod.teb_base_addr)) catch {};
-            if (start_address != 0) {
-                const func = @as(ThreadStartFn, @ptrFromInt(start_address));
-                thread_info.exit_code = func(parameter);
-            }
-            thread_info.running = false;
-            return;
+        const thread_teb_mem = blk: {
+            if (thread_info.teb_mem) |m| break :blk m;
+            const m = std.heap.page_allocator.alloc(u8, teb_size) catch {
+                // Fallback: share main thread's TEB
+                teb_mod.setupFS(@ptrFromInt(teb_mod.teb_base_addr)) catch {};
+                if (start_address != 0) {
+                    const func = @as(ThreadStartFn, @ptrFromInt(start_address));
+                    thread_info.exit_code = func(parameter);
+                }
+                return;
+            };
+            thread_info.teb_mem = m;
+            break :blk m;
         };
+
+        // Capture the pre-swap TLS base/selector for the defer above.
+        if (comptime builtin_mod.os.tag == .linux and platform.is_native) {
+            if (comptime builtin_mod.target.cpu.arch == .x86_64) {
+                asm volatile ("syscall"
+                    : [ret] "={rax}" (-> usize),
+                    : [num] "{rax}" (@as(usize, 158)), // __NR_arch_prctl
+                      [arg1] "{rdi}" (@as(usize, 0x1003)), // ARCH_GET_FS
+                      [arg2] "{rsi}" (@intFromPtr(&saved_fs_base)),
+                    : .{ .rax = true, .rcx = true, .r11 = true, .memory = true });
+            } else if (comptime builtin_mod.target.cpu.arch == .x86) {
+                asm volatile ("mov %%fs, %[out]"
+                    : [out] "=r" (saved_fs_sel),
+                );
+            }
+        }
+
         // Copy main thread's TEB
         const main_teb = @as([*]const u8, @ptrFromInt(teb_mod.teb_base_addr));
         @memcpy(thread_teb_mem[0..teb_size], main_teb[0..teb_size]);
@@ -1191,7 +1255,6 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
     }
 
     if (start_address == 0) {
-        thread_info.running = false;
         return;
     }
 
@@ -1234,8 +1297,6 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
         const func = @as(ThreadStartFn, @ptrFromInt(start_address));
         thread_info.exit_code = func(parameter);
     }
-
-    thread_info.running = false;
 }
 
 /// CreateThread: Creates a thread to execute within the virtual address space of the calling process.

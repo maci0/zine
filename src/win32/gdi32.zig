@@ -33,6 +33,13 @@ pub const DibInfo = struct {
     height: u32,
     /// Bits per pixel (e.g., 24, 32).
     bpp: u16,
+    /// Exact length of the allocation at `buffer`. Only meaningful together
+    /// with `owned`; needed to free the right span.
+    alloc_len: usize = 0,
+    /// True when zine allocated the pixel buffer (CreateCompatibleBitmap /
+    /// CreateDIBSection) and DeleteObject must release it. Registrations of
+    /// caller-owned buffers (tests, stack scratch) leave this false.
+    owned: bool = false,
 };
 
 /// Type identifiers for GDI objects.
@@ -142,7 +149,11 @@ pub fn unregisterObject(handle: usize) bool {
     return false;
 }
 
-pub fn registerDib(handle: usize, buffer: usize, width: u32, height: u32, bpp: u16) void {
+/// Registers a bitmap in the object table. `owned` marks pixel buffers that
+/// DeleteObject must free (see DibInfo.owned). Returns false when the table
+/// is full so callers can release their buffer instead of leaking it.
+pub fn registerDib(handle: usize, buffer: usize, width: u32, height: u32, bpp: u16, alloc_len: usize, owned: bool) bool {
+    if (gdi_object_count >= gdi_objects.len) return false;
     registerObject(.{
         .handle = handle,
         .obj_type = .Bitmap,
@@ -152,8 +163,11 @@ pub fn registerDib(handle: usize, buffer: usize, width: u32, height: u32, bpp: u
             .width = width,
             .height = height,
             .bpp = bpp,
+            .alloc_len = alloc_len,
+            .owned = owned,
         } },
     });
+    return true;
 }
 
 pub fn findDib(handle: usize) ?*const DibInfo {

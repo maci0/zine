@@ -192,15 +192,16 @@ const MAX_NATIVE_MAPS = 64;
 var native_map_addrs: [MAX_NATIVE_MAPS]usize = [_]usize{0} ** MAX_NATIVE_MAPS;
 var native_map_sizes: [MAX_NATIVE_MAPS]usize = [_]usize{0} ** MAX_NATIVE_MAPS;
 
-fn registerNativeMap(addr: usize, size: usize) void {
+fn registerNativeMap(addr: usize, size: usize) bool {
     const page_rounded = (size + 0xFFF) & ~@as(usize, 0xFFF);
     for (&native_map_addrs, &native_map_sizes) |*a, *s| {
         if (a.* == 0) {
             a.* = addr;
             s.* = page_rounded;
-            return;
+            return true;
         }
     }
+    return false;
 }
 
 fn unregisterNativeMap(addr: usize) void {
@@ -287,6 +288,9 @@ pub fn MapViewOfFileEx(hFileMappingObject: usize, dwDesiredAccess: u32, dwFileOf
                     const bytes_read = host_io.readPositional(map_file, slice, offset) catch 0;
                     if (bytes_read < guest_size) @memset(slice[bytes_read..], 0);
                     // Register the view so UnmapViewOfFile can flush writes back.
+                    // An unregistered view would silently lose every write on
+                    // unmap (LINK.EXE output), so a full table fails the call.
+                    var registered = false;
                     for (0..MAX_VIEWS) |vi| {
                         if (view_fds[vi] == -1) {
                             view_fds[vi] = fd;
@@ -294,9 +298,11 @@ pub fn MapViewOfFileEx(hFileMappingObject: usize, dwDesiredAccess: u32, dwFileOf
                             view_sizes[vi] = guest_size;
                             view_offsets[vi] = offset;
                             view_writable[vi] = is_write;
+                            registered = true;
                             break;
                         }
                     }
+                    if (!registered) return 0;
                     if (trace.enable_tracing) trace.print("KERNEL32: MapViewOfFileEx -> {x} (guest)\n", .{va});
                     return va;
                 }
@@ -322,7 +328,13 @@ pub fn MapViewOfFileEx(hFileMappingObject: usize, dwDesiredAccess: u32, dwFileOf
                     }
                     trace.print("]\n", .{});
                 }
-                registerNativeMap(@intFromPtr(memory.ptr), map_size);
+                // Register the mapping so UnmapViewOfFile munmaps it. A full
+                // table must not strand the address-space reservation: release
+                // it here and fail the call.
+                if (!registerNativeMap(@intFromPtr(memory.ptr), map_size)) {
+                    platform.munmap(memory);
+                    return 0;
+                }
                 return @intFromPtr(memory.ptr);
             }
         }
@@ -1518,8 +1530,13 @@ test "native map registry unmaps registered views" {
     native_map_addrs = [_]usize{0} ** MAX_NATIVE_MAPS;
     native_map_sizes = [_]usize{0} ** MAX_NATIVE_MAPS;
 
-    registerNativeMap(0x1234000, 0x2001); // page-rounded to 0x3000
+    try std.testing.expect(registerNativeMap(0x1234000, 0x2001)); // page-rounded to 0x3000
     try std.testing.expect(native_map_sizes[0] == 0x3000);
+
+    // A full table reports failure instead of silently dropping the mapping.
+    var i: usize = 1;
+    while (i < MAX_NATIVE_MAPS) : (i += 1) _ = registerNativeMap(0x2000000 + i * 0x10000, 0x1000);
+    try std.testing.expect(!registerNativeMap(0xDEAD000, 0x1000));
 
     // Unknown addresses are ignored without panicking.
     unregisterNativeMap(0xDEAD000);
