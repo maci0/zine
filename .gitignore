@@ -86,6 +86,12 @@ test_archive.7z
 /test_mmap.c
 /e2e.c
 
+# Copyrighted binaries and disassemblies
+/c1.asm
+tests/pokemon.gb
+tests/pokemon.gbc
+tests/smygb.asm
+
 # Downloaded Zig package cache
 /zig-pkg/
 
