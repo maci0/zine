@@ -88,7 +88,9 @@ The `-Dfltk=true` option:
 - Links system FLTK 1.3 (`/usr/lib/fltk1.3/`) and X11 dependencies
 - Passes `build_options.use_fltk` to Zig source for conditional compilation
 
-> **Note:** FLTK is currently supported on the x86 (default) target only.
+> **Note:** FLTK requires a native build; it is verified on the x86_64 target
+> (`zig build -Darch=x86_64 -Dfltk`, exercised by `tests/fltk_smoke.sh` — see
+> [`STATUS.md`](STATUS.md)). It is not available on wasm32.
 
 #### CLI flag (`main.zig`)
 

@@ -1,5 +1,12 @@
 # Translating DirectDraw / Direct3D to WebGPU
 
+> **Status: Proposal — nothing here is implemented yet.** No WebGPU code
+> exists in the tree, and the browser frontend itself is not started (see the
+> status table in [`WASM_PLAN.md`](WASM_PLAN.md) and
+> [`STATUS.md`](STATUS.md)). Current rendering goes over WebSocket as described
+> in [`ARCHITECTURE.md`](ARCHITECTURE.md) §GUI/Renderer. The tiers below are a
+> forward-looking design, not shipped behavior.
+
 This document describes how the Zine emulator's `ddraw.dll`, `d3d8.dll`,
 `d3d9.dll`, `d3d10.dll`, `d3d10_1.dll`, `d3d11.dll`, `d3d12.dll`, `vulkan-1.dll`,
 and GDI32 rendering stubs can be reimplemented on top of WebGPU when running in

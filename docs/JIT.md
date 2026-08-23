@@ -75,9 +75,9 @@ Self-Modifying Code is historically the hardest problem for x86 recompilers (esp
 Current state:
 
 1. **Interpreter decode cache**: each entry is validated by its EIP tag plus the first 4 bytes of the instruction stream, so a write to cached code causes a tag mismatch and a re-decode on the next fetch. This covers the interpreter path.
-2. **JIT block cache**: keyed by guest EIP only (`block_cache_keys`/`block_cache_vals` in `compiler.zig`) with no write detection — a block modified after translation can currently execute stale code. This is a known limitation.
+2. **JIT block cache**: keyed by guest EIP (`block_cache_keys`/`block_cache_vals` in `compiler.zig`). A coarse invalidation hook is implemented: guest calls that make code executable again — `VirtualProtect` raising an EXECUTE protection tier and `FlushInstructionCache` — invoke `stub_common.smc_invalidate_cache` (registered as `flushJitCache` in `wasm_main.zig`), which clears the entire block cache so stale blocks are recompiled. Fine-grained per-page invalidation of ordinary data writes to translated pages remains a known limitation.
 
-Planned design (not yet implemented):
+Planned design (only the fine-grained parts remain unimplemented; the coarse whole-cache flush described above ships today):
 
 1. **Marking Translated Pages:** When the JIT translates a block of memory, it marks the underlying guest memory page (usually 4KB) as "Translated" in the MMU (Memory Management Unit).
 2. **Write Intercepts:** The MMU enforces soft "Read-Only" permissions on these Translated pages.

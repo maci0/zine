@@ -98,7 +98,7 @@ x86 PE  →  [zine JIT compiler]  →  WASM module bytes
            ┌─────────────────────────────▼─────────────────┐
            │  Host Runtime                                  │
            │  browser: WebAssembly.instantiate()            │
-           │  zine-host: wasmtime C API                     │
+           │  zine-host: wasmer C API                       │
            │  ┌──────────────────────────────────────────┐  │
            │  │  Compiled WASM block                     │  │
            │  │  - Imports shared linear memory           │  │
@@ -157,10 +157,10 @@ base_addr (PE ImageBase or buffer host address for child PEs)
      ├──────────────────────┤
      │ Stack (64 KB)        │ ← ESP starts near the top
      ├──────────────────────┤
-     │ Thunks (32 KB)       │ ← CD FE + 4-byte thunk ID stubs
-     ├──────────────────────┤
-     │ Heap (32 MB)         │ ← Guest heap for malloc/VirtualAlloc/HeapAlloc
-     └──────────────────────┘
+      │ Thunks (32 KB)       │ ← CD FE + 4-byte thunk ID stubs
+      ├──────────────────────┤
+      │ Heap (512 MB)        │ ← Guest heap for malloc/VirtualAlloc/HeapAlloc
+      └──────────────────────┘
 ```
 
 Child PEs (loaded by `_spawnvp`) get their own combined buffer with
@@ -215,13 +215,13 @@ The test suite auto-adjusts expected codes per runtime via `WASM_EXIT_MAX`.
 zig build -Darch=wasm32
 
 # wasmtime
-wasmtime --dir=. zig-out/bin/zine.wasm -- path/to/program.exe
+wasmtime --dir=. zig-out/bin/zine.wasm32.wasm -- path/to/program.exe
 
 # wasmtime with JIT compile-only validation
-wasmtime --dir=. zig-out/bin/zine.wasm --jit path/to/program.exe
+wasmtime --dir=. zig-out/bin/zine.wasm32.wasm --jit path/to/program.exe
 
 # wasmer
-wasmer run --volume "$(pwd):$(pwd)" --volume . zig-out/bin/zine.wasm -- \
+wasmer run --volume "$(pwd):$(pwd)" --volume . zig-out/bin/zine.wasm32.wasm -- \
     "$(pwd)/path/to/program.exe"
 
 # Build with JIT host imports (for zine-host or browser)
@@ -237,15 +237,16 @@ zig build -Dhost
 
 | Command | Output | Notes |
 |---------|--------|-------|
-| `zig build` | `zig-out/bin/zine` | Native x86 Linux binary |
-| `zig build -Darch=wasm32` | `zig-out/bin/zine.wasm` | WASI binary, works with wasmtime/wasmer |
-| `zig build -Darch=wasm32 -Djit_host=true` | `zig-out/bin/zine.wasm` | WASI + JIT host extern imports |
-| `zig build -Dhost` | `zig-out/bin/zine-host` | Native wasmtime wrapper (skeleton) |
+| `zig build` | `zig-out/bin/zine.x86` | Native x86 Linux binary |
+| `zig build -Darch=wasm32` | `zig-out/bin/zine.wasm32.wasm` | WASI binary, works with wasmtime/wasmer |
+| `zig build -Darch=wasm32 -Djit_host=true` | `zig-out/bin/zine.wasm32.wasm` | WASI + JIT host extern imports (same path — rebuild before switching suites) |
+| `zig build -Dhost=true` | `zig-out/bin/zine-host` | Native wasmer wrapper (WASI + JIT imports) |
 | `zig build test` | — | Unit tests (host architecture) |
 
 The `--jit` runtime flag works with the standard WASM build (compile-only mode).
 The `-Djit_host=true` build flag is only needed for actual JIT block execution,
-which requires a host providing `jit_compile`/`jit_call` imports.
+which requires a host providing `jit_compile`/`jit_call` imports (zine-host or
+a browser runtime).
 
 ---
 

@@ -406,19 +406,138 @@ fn fsDelete(path: []const u8) bool {
     return true;
 }
 
-/// Raw rename (see fsStat for why std.Io is avoided on Linux).
-fn fsRename(old_path: []const u8, new_path: []const u8) bool {
+/// Outcome of a raw rename attempt.
+pub const RenameOutcome = enum {
+    /// The rename completed.
+    ok,
+    /// Failed because old and new paths live on different filesystems
+    /// (Linux EXDEV / Zig error.CrossDevice).
+    cross_device,
+    /// Failed for any other reason.
+    failed,
+};
+
+/// Raw rename (see fsStat for why std.Io is avoided on Linux). Distinguishes
+/// the cross-filesystem case so Win32 MoveFile can fall back to copy+delete,
+/// matching Windows where moving across volumes succeeds.
+fn fsRename(old_path: []const u8, new_path: []const u8) RenameOutcome {
     if (comptime builtin.target.os.tag == .linux) {
         var old_buf: [std.posix.PATH_MAX]u8 = undefined;
         var new_buf: [std.posix.PATH_MAX]u8 = undefined;
-        const old_nt = nullTermBuf(old_path, &old_buf) orelse return false;
-        const new_nt = nullTermBuf(new_path, &new_buf) orelse return false;
+        const old_nt = nullTermBuf(old_path, &old_buf) orelse return .failed;
+        const new_nt = nullTermBuf(new_path, &new_buf) orelse return .failed;
         const rc = std.os.linux.rename(old_nt, new_nt);
-        return @as(isize, @bitCast(rc)) == 0;
+        if (@as(isize, @bitCast(rc)) == 0) return .ok;
+        if (rc == @intFromEnum(std.os.linux.E.XDEV)) return .cross_device;
+        return .failed;
     }
     const cwd = std.Io.Dir.cwd();
-    cwd.rename(old_path, cwd, new_path, runtime.io()) catch return false;
+    cwd.rename(old_path, cwd, new_path, runtime.io()) catch |err| switch (err) {
+        error.CrossDevice => return .cross_device,
+        else => return .failed,
+    };
+    return .ok;
+}
+
+/// Cross-filesystem move fallback: copy contents, then delete the source.
+/// Regular files only (directory trees are not recursed). On Linux this uses
+/// raw syscalls only, so it stays safe inside the compat-mode SIGSEGV
+/// dispatch context (see fsStat for why std.Io is avoided there).
+fn copyDeleteMove(old_p: []const u8, new_p: []const u8) bool {
+    if (comptime builtin.target.os.tag == .linux) return copyDeleteMoveLinux(old_p, new_p);
+
+    // Only regular files are copied.
+    const st = fsStat(old_p) orelse return false;
+    if (st.kind != .file) return false;
+
+    const src = fsOpenFile(old_p, .{ .mode = .read_only }) catch return false;
+    defer src.close(runtime.io());
+    const dst = fsCreateFile(new_p, .{ .read = false, .truncate = true, .exclusive = false }) catch return false;
+
+    var buf: [8192]u8 = undefined;
+    var off: u64 = 0;
+    while (true) {
+        const n = src.readPositionalAll(runtime.io(), &buf, off) catch {
+            dst.close(runtime.io());
+            _ = fsDelete(new_p);
+            return false;
+        };
+        if (n == 0) break;
+        dst.writePositionalAll(runtime.io(), buf[0..n], off) catch {
+            dst.close(runtime.io());
+            _ = fsDelete(new_p);
+            return false;
+        };
+        off += n;
+    }
+    dst.close(runtime.io());
+    _ = fsDelete(old_p);
     return true;
+}
+
+fn copyDeleteMoveLinux(old_p: []const u8, new_p: []const u8) bool {
+    const linux = std.os.linux;
+    var old_buf: [std.posix.PATH_MAX]u8 = undefined;
+    var new_buf: [std.posix.PATH_MAX]u8 = undefined;
+    const old_nt = nullTermBuf(old_p, &old_buf) orelse return false;
+    const new_nt = nullTermBuf(new_p, &new_buf) orelse return false;
+
+    const src_rc = linux.open(old_nt, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+    const src_fd: isize = @bitCast(src_rc);
+    if (src_fd < 0) return false;
+    const src: linux.fd_t = @intCast(src_fd);
+    defer _ = linux.close(src);
+
+    // Refuse anything but regular files.
+    var stx = std.mem.zeroes(linux.Statx);
+    const stx_rc = linux.statx(src, "", linux.AT.EMPTY_PATH, linux_statx_request, &stx);
+    if (@as(isize, @bitCast(stx_rc)) < 0) return false;
+    if ((stx.mode & linux.S.IFMT) != linux.S.IFREG) return false;
+
+    const dst_rc = linux.open(new_nt, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .CLOEXEC = true }, 0o666);
+    const dst_fd: isize = @bitCast(dst_rc);
+    if (dst_fd < 0) return false;
+
+    var buf: [8192]u8 align(16) = undefined;
+    var failed = false;
+    while (true) {
+        const r_rc = linux.read(src, &buf, buf.len);
+        const r: isize = @bitCast(r_rc);
+        if (r <= 0) {
+            failed = r < 0;
+            break;
+        }
+        var written: usize = 0;
+        const r_len: usize = @intCast(r);
+        while (written < r_len) {
+            const w_rc = linux.write(@intCast(dst_fd), buf[written..r_len].ptr, r_len - written);
+            const w: isize = @bitCast(w_rc);
+            if (w <= 0) {
+                failed = true;
+                break;
+            }
+            written += @intCast(w);
+        }
+        if (failed) break;
+    }
+    _ = linux.close(@intCast(dst_fd));
+    if (failed) {
+        // Remove the partial destination instead of leaving debris behind.
+        _ = linux.unlink(new_nt);
+        return false;
+    }
+    _ = linux.unlink(old_nt);
+    return true;
+}
+
+/// Apply fsRename once, optionally falling back to copy+delete when the two
+/// paths turn out to live on different filesystems.
+fn renameOnce(old_p: []const u8, new_p: []const u8, allow_copy_move: bool) bool {
+    switch (fsRename(old_p, new_p)) {
+        .ok => return true,
+        .cross_device => return allow_copy_move and copyDeleteMove(old_p, new_p),
+        .failed => return false,
+    }
 }
 
 fn toHostBuf(path: [*:0]const u8, host_buf: []u8) ?[]const u8 {
@@ -468,13 +587,118 @@ pub fn renameWin32(old_win: []const u8, new_win: []const u8) i32 {
     const old_p = old_buf[0..old_len];
     const new_p = new_buf[0..new_len];
 
-    if (fsRename(old_p, new_p)) return 0;
+    if (renameOnce(old_p, new_p, false)) return 0;
 
     // Lowercased filename fallback
     var old_lower: [1024]u8 = undefined;
     if (tryLower(old_p, &old_lower)) |old_l| {
-        if (fsRename(old_l, new_p)) return 0;
+        if (renameOnce(old_l, new_p, false)) return 0;
     }
 
     return -1;
+}
+
+/// Core of kernel32 MoveFile given Win32-format path slices. Unlike CRT
+/// rename(), Win32 MoveFile works across volumes: when the host refuses the
+/// rename because source and target sit on different filesystems, fall back
+/// to copy + delete of the regular file.
+pub fn moveFileWin32(old_win: []const u8, new_win: []const u8) i32 {
+    var old_buf: [1024]u8 = undefined;
+    var new_buf: [1024]u8 = undefined;
+    const old_len = path_utils.toHostPath(old_win, &old_buf);
+    if (old_len == 0) return -1;
+    const new_len = path_utils.toHostPath(new_win, &new_buf);
+    if (new_len == 0) return -1;
+    const old_p = old_buf[0..old_len];
+    const new_p = new_buf[0..new_len];
+
+    if (renameOnce(old_p, new_p, true)) return 0;
+
+    // Lowercased filename fallback
+    var old_lower: [1024]u8 = undefined;
+    if (tryLower(old_p, &old_lower)) |old_l| {
+        if (renameOnce(old_l, new_p, true)) return 0;
+    }
+
+    return -1;
+}
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
+
+const testing = @import("std").testing;
+
+fn tmpFileRealPath(tmp_dir: *testing.TmpDir, name: []const u8, buf: []u8) ![]const u8 {
+    const io = runtime.io();
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = name, .data = "move me" });
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_len = try tmp_dir.dir.realPath(io, &dir_buf);
+    return std.fmt.bufPrint(buf, "{s}/{s}", .{ dir_buf[0..dir_len], name });
+}
+
+test "moveFileWin32: same-filesystem move renames and drops the source" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var src_buf: [512]u8 = undefined;
+    var dst_buf: [512]u8 = undefined;
+    const src = try tmpFileRealPath(&tmp_dir, "mv_src.txt", &src_buf);
+    const dst = try tmpFileRealPath(&tmp_dir, "mv_dst.txt", &dst_buf);
+
+    try testing.expectEqual(@as(i32, 0), moveFileWin32(src, dst));
+    try testing.expect(fsStat(dst) != null);
+    try testing.expect(fsStat(src) == null);
+}
+
+test "moveFileWin32: Z: drive paths resolve through translation" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var src_buf: [512]u8 = undefined;
+    var dst_buf: [512]u8 = undefined;
+    const src_posix = try tmpFileRealPath(&tmp_dir, "z_src.txt", &src_buf);
+    const dst_posix = try tmpFileRealPath(&tmp_dir, "z_dst.txt", &dst_buf);
+
+    var src_win: [516]u8 = undefined;
+    var dst_win: [516]u8 = undefined;
+    const src = try std.fmt.bufPrint(&src_win, "Z:{s}", .{src_posix});
+    const dst = try std.fmt.bufPrint(&dst_win, "Z:{s}", .{dst_posix});
+
+    try testing.expectEqual(@as(i32, 0), moveFileWin32(src, dst));
+    try testing.expect(fsStat(dst_posix) != null);
+    try testing.expect(fsStat(src_posix) == null);
+}
+
+test "moveFileWin32: missing source fails without creating the target" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const io = runtime.io();
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_len = try tmp_dir.dir.realPath(io, &dir_buf);
+    const dir = dir_buf[0..dir_len];
+
+    var src_buf: [512]u8 = undefined;
+    var dst_buf: [512]u8 = undefined;
+    const missing = try std.fmt.bufPrint(&src_buf, "{s}/no_such_file.bin", .{dir});
+    const dst = try std.fmt.bufPrint(&dst_buf, "{s}/should_not_exist.bin", .{dir});
+
+    try testing.expectEqual(@as(i32, -1), moveFileWin32(missing, dst));
+    try testing.expect(fsStat(dst) == null);
+}
+
+test "copyDeleteMove: copies content and removes the source" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var src_buf: [512]u8 = undefined;
+    var dst_buf: [512]u8 = undefined;
+    const src = try tmpFileRealPath(&tmp_dir, "cp_src.txt", &src_buf);
+    const dst = try tmpFileRealPath(&tmp_dir, "cp_dst.txt", &dst_buf);
+
+    try testing.expect(copyDeleteMove(src, dst));
+    try testing.expect(fsStat(src) == null);
+    const st = fsStat(dst) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u64, "move me".len), st.size);
 }

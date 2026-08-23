@@ -541,7 +541,7 @@ pub fn MoveFileA(lpExistingFileName: usize, lpNewFileName: usize) callconv(w32cc
     if (trace.enable_tracing) trace.print("KERNEL32: MoveFileA('{s}' -> '{s}')\n", .{ old_name, new_name });
 
     const posix_fs = @import("../msvcrt/posix_fs.zig");
-    return if (posix_fs.renameWin32(old_name, new_name) == 0) 1 else 0;
+    return if (posix_fs.moveFileWin32(old_name, new_name) == 0) 1 else 0;
 }
 
 /// Wide-char variant of MoveFileA (narrowed per the codebase W->A convention).
@@ -560,7 +560,7 @@ pub fn MoveFileW(lpExistingFileName_ptr: usize, lpNewFileName_ptr: usize) callco
     if (trace.enable_tracing) trace.print("KERNEL32: MoveFileW(len={d} -> len={d})\n", .{ old_len, new_len });
 
     const posix_fs = @import("../msvcrt/posix_fs.zig");
-    return if (posix_fs.renameWin32(old_buf[0..old_len], new_buf[0..new_len]) == 0) 1 else 0;
+    return if (posix_fs.moveFileWin32(old_buf[0..old_len], new_buf[0..new_len]) == 0) 1 else 0;
 }
 
 /// MoveFileExA/W: same as MoveFile; MOVEFILE_* flags only tune failure
