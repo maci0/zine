@@ -95,7 +95,7 @@ The `-Dfltk=true` option:
 #### CLI flag (`main.zig`)
 
 ```bash
-zig-out/bin/zine --fltk -i path/to/gui_app.exe
+zig-out/bin/zine.x86_64 --fltk -i path/to/gui_app.exe
 ```
 
 ### Phase 3: Win32 → FLTK Widget Mapping — PARTIALLY COMPLETE

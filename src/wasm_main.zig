@@ -144,9 +144,9 @@ pub fn main(init: std.process.Init) !void {
                 \\  ZINE_PROFILE        Set to any value to enable profiling
                 \\
                 \\Examples:
-                \\  wasmtime --dir=. zine.wasm -- myapp.exe
-                \\  wasmtime --dir=. zine.wasm -- --trace myapp.exe
-                \\  wasmtime --dir=. zine.wasm -- --argv0 editor notepad.exe
+                \\  wasmtime --dir=. zine.wasm32.wasm -- myapp.exe
+                \\  wasmtime --dir=. zine.wasm32.wasm -- --trace myapp.exe
+                \\  wasmtime --dir=. zine.wasm32.wasm -- --argv0 editor notepad.exe
                 \\
             });
             std.process.exit(0);

@@ -23,8 +23,8 @@ BENCH_LINUX32="/tmp/cpubench_linux32"
 # Clean up temp files on exit
 cleanup() { rm -f "$BENCH_LINUX64" "$BENCH_LINUX32"; }
 trap cleanup EXIT
-ZINE="./zig-out/bin/zine"
-ZINE_WASM="./zig-out/bin/zine.wasm"
+ZINE="./zig-out/bin/zine.x86"
+ZINE_WASM="./zig-out/bin/zine.wasm32.wasm"
 ZINE_HOST="./zig-out/bin/zine-host"
 TIMEOUT=30        # seconds per mode
 TIMEOUT_INTERP=30 # interpreter
