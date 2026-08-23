@@ -1610,12 +1610,10 @@ test "closeChildProcHandle frees reaped slots only" {
 }
 
 test "thread registry recycles finished slots" {
-    thread_registry_mutex.lock();
+    // No lock here: allocThreadInfo() takes thread_registry_mutex itself and
+    // the mutex is a non-reentrant spinlock — locking first would deadlock.
     const saved_registry = thread_registry;
-    defer {
-        thread_registry = saved_registry;
-        thread_registry_mutex.unlock();
-    }
+    defer thread_registry = saved_registry;
     for (&thread_registry) |*ti| ti.* = .{};
     for (&thread_registry, 0..) |*ti, i| {
         ti.handle = 0xA0010000 + i;
@@ -1627,12 +1625,9 @@ test "thread registry recycles finished slots" {
 }
 
 test "closeThreadHandle releases finished entries and reserves running ones" {
-    thread_registry_mutex.lock();
+    // No outer lock: closeThreadHandle()/allocThreadInfo() lock internally.
     const saved_registry = thread_registry;
-    defer {
-        thread_registry = saved_registry;
-        thread_registry_mutex.unlock();
-    }
+    defer thread_registry = saved_registry;
     for (&thread_registry) |*ti| ti.* = .{};
 
     const done = allocThreadInfo() orelse return error.TestUnexpectedResult;
