@@ -320,10 +320,14 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
     var file: std.Io.File = undefined;
     var w_idx: ?usize = null;
     var a_idx: ?usize = null;
+    var plus_mode = false;
     for (0..mode_slice.len) |i| {
         if (mode_slice[i] == 'w') w_idx = i;
         if (mode_slice[i] == 'a') a_idx = i;
+        if (mode_slice[i] == '+') plus_mode = true;
     }
+
+    const host_io_mod = @import("../host_io.zig");
 
     if (w_idx != null) {
         const rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed)), posix_fs.O_CREAT | posix_fs.O_RDWR | posix_fs.O_TRUNC, 0o666);
@@ -339,6 +343,15 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
             return null;
         }
         file = @import("../host_io.zig").fileFromFd(@intCast(rc));
+    } else if (plus_mode) {
+        // "r+": existing file opened for update — no create, no truncate.
+        // Opening O_RDONLY here made writes silently fail.
+        const rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed)), posix_fs.O_RDWR, 0);
+        if (rc < 0) {
+            trace.print("MSVCRT_IO: fopen openFile (r+) failed\n", .{});
+            return null;
+        }
+        file = host_io_mod.fileFromFd(@intCast(rc));
     } else {
         const rc = posix_fs.open(@as([*:0]const u8, @ptrCast(&fixed)), 0, 0);
         if (rc < 0) {
@@ -372,8 +385,10 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
         ms_file._bufsiz = 0;
         ms_file._tmpfname = 0;
 
-        // _flag = 1 (read), 2 (write), 3 (read/write) roughly
-        if (std.mem.indexOfScalar(u8, mode_slice, 'r') != null) {
+        // _flag: 1 (read), 2 (write), 3 (read/write)
+        if (plus_mode) {
+            ms_file._flag = 0x0003; // _IOREAD | _IOWRT
+        } else if (std.mem.indexOfScalar(u8, mode_slice, 'r') != null) {
             ms_file._flag = 0x0001; // _IOREAD
         } else {
             ms_file._flag = 0x0002; // _IOWRT

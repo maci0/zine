@@ -50,8 +50,10 @@ pub var msvcrt_wcmdln: usize = 0;
 pub var msvcrt_timezone: i32 = 0;
 /// MSVCRT _daylight global.
 pub var msvcrt_daylight: i32 = 0;
-/// MSVCRT _tzname (timezone name) global.
-pub var msvcrt_tzname: [2]?*anyopaque = [_]?*anyopaque{ @ptrCast(@constCast("PST\x00")), @ptrCast(@constCast("PDT\x00")) };
+/// MSVCRT _tzname (timezone name) global. UTC labels: the guest clock is UTC
+/// with zero bias and no DST (see kernel32/time.zig GetLocalTime), so the
+/// names must not claim a Pacific zone the offsets contradict.
+pub var msvcrt_tzname: [2]?*anyopaque = [_]?*anyopaque{ @ptrCast(@constCast("UTC\x00")), @ptrCast(@constCast("UTC\x00")) };
 
 /// MSVCRT _pctype table.
 pub var msvcrt_pctype: [257]u16 = [_]u16{0} ** 257;
@@ -62,7 +64,11 @@ pub var msvcrt_mbctype: [257]u8 = [_]u8{0} ** 257;
 /// Pointer to the _mbctype table.
 pub var msvcrt_mbctype_ptr: *u8 = &msvcrt_mbctype[1];
 /// Represents an environment variable key-value pair.
-pub const EnvVar = struct { key: []const u8, val: []const u8 };
+/// `deleted` marks a tombstone: the guest removed this name, so it must
+/// shadow any inherited entry of the same (or different-case) name instead
+/// of re-resolving to the inherited value. Windows env lookups are
+/// case-insensitive, so overrides match names ignoring case.
+pub const EnvVar = struct { key: []const u8, val: []const u8, deleted: bool = false };
 /// List of environment variables.
 pub var msvcrt_env_vars: std.ArrayListUnmanaged(EnvVar) = .empty;
 

@@ -145,7 +145,8 @@ pub fn ensureGuestGlobals() u32 {
 
         writeU32(ptr, g_timezone, @bitCast(msvcrt.msvcrt_timezone));
         writeU32(ptr, g_daylight, @bitCast(msvcrt.msvcrt_daylight));
-        // The strings PST and PDT could be copied, but for now just zeros.
+        // TZ strings are not mirrored into guest memory yet; _tzname stays
+        // null there (the host-side default is UTC, matching the zero bias).
         writeU32(ptr, g_tzname, 0);
         writeU32(ptr, g_tzname + 4, 0);
 
@@ -570,17 +571,32 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     var new_env_map = std.process.Environ.Map.init(std.heap.page_allocator);
     defer new_env_map.deinit();
 
+    // An override with different letter-case than the inherited entry must
+    // replace it for children: env lookup in the child is first-match, so
+    // keeping both entries would hand the child the stale inherited value.
+    const overrideShadows = struct {
+        fn f(vars: anytype, key: []const u8) bool {
+            for (vars.items) |v| {
+                if (std.ascii.eqlIgnoreCase(v.key, key)) return true;
+            }
+            return false;
+        }
+    }.f;
+
     var env_i: usize = 0;
     while (msvcrt.global_envp[env_i]) |e_ptr| : (env_i += 1) {
         const e_str = trace.c_span(@intFromPtr(e_ptr));
         if (std.mem.indexOfScalar(u8, e_str, '=')) |eq_idx| {
             const key = e_str[0..eq_idx];
             const val = e_str[eq_idx + 1 ..];
+            if (overrideShadows(msvcrt.msvcrt_env_vars, key)) continue;
             new_env_map.put(key, val) catch {};
         }
     }
 
     for (msvcrt.msvcrt_env_vars.items) |v| {
+        // Deleted variables must not reach spawned children.
+        if (v.deleted) continue;
         new_env_map.put(v.key, v.val) catch {};
     }
 
@@ -630,15 +646,26 @@ pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
 
     if (trace.enable_tracing) trace.print("MSVCRT: getenv('{s}')\n", .{name});
 
+    var deleted_shadow = false;
     for (msvcrt.msvcrt_env_vars.items) |v| {
-        if (std.ascii.eqlIgnoreCase(v.key, name)) {
-            if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> '{s}'\n", .{ name, v.val });
-            const stub_common = @import("../shared.zig");
-            const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(v.val.len + 1) orelse return null));
-            @memcpy(ptr[0..v.val.len], v.val);
-            ptr[v.val.len] = 0;
-            return @ptrCast(ptr);
+        // Tombstones shadow the inherited value too: a deleted name reads
+        // as absent, not as the pre-delete inherited string.
+        if (!std.ascii.eqlIgnoreCase(v.key, name)) continue;
+        if (v.deleted) {
+            deleted_shadow = true;
+            break;
         }
+        if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> '{s}'\n", .{ name, v.val });
+        const stub_common = @import("../shared.zig");
+        const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(v.val.len + 1) orelse return null));
+        @memcpy(ptr[0..v.val.len], v.val);
+        ptr[v.val.len] = 0;
+        return @ptrCast(ptr);
+    }
+
+    if (deleted_shadow) {
+        if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> null (deleted)\n", .{name});
+        return null;
     }
 
     // Fallback to global_envp for inherited environment variables
@@ -693,19 +720,47 @@ pub fn putenv(envstring_ptr: usize) callconv(.c) i32 {
     const key = envstring[0..idx];
     const val = envstring[idx + 1 ..];
 
-    // Check for existing key first to avoid unnecessary allocation
-    for (msvcrt.msvcrt_env_vars.items) |*v| {
-        if (std.mem.eql(u8, v.key, key)) {
-            const val_dupe = std.heap.page_allocator.dupe(u8, val) catch return -1;
-            std.heap.page_allocator.free(v.val);
-            v.val = val_dupe;
+    const msvcrt_mod = msvcrt;
+
+    // MSVC _putenv contract: "varname=" (empty value) removes varname from
+    // the environment.
+    if (val.len == 0) {
+        for (msvcrt_mod.msvcrt_env_vars.items) |*v| {
+            if (!v.deleted and std.ascii.eqlIgnoreCase(v.key, key)) {
+                std.heap.page_allocator.free(v.val);
+                std.heap.page_allocator.free(v.key);
+                v.key = "";
+                v.val = "";
+                v.deleted = true;
+                return 0;
+            }
+        }
+        // Not overridden: tombstone it so inherited entries are shadowed.
+        const key_dupe = std.heap.page_allocator.dupe(u8, key) catch return -1;
+        msvcrt_mod.msvcrt_env_vars.append(std.heap.page_allocator, .{ .key = key_dupe, .val = "", .deleted = true }) catch return -1;
+        return 0;
+    }
+
+    // Update any existing override in place; lookups are case-insensitive,
+    // so an exact-case-only match would leave a stale duplicate behind.
+    for (msvcrt_mod.msvcrt_env_vars.items) |*v| {
+        if (std.ascii.eqlIgnoreCase(v.key, key)) {
+            if (v.deleted) {
+                v.deleted = false;
+                const val_dupe = std.heap.page_allocator.dupe(u8, val) catch return -1;
+                v.val = val_dupe;
+            } else {
+                const val_dupe = std.heap.page_allocator.dupe(u8, val) catch return -1;
+                std.heap.page_allocator.free(v.val);
+                v.val = val_dupe;
+            }
             return 0;
         }
     }
 
     const key_dupe = std.heap.page_allocator.dupe(u8, key) catch return -1;
     const val_dupe = std.heap.page_allocator.dupe(u8, val) catch return -1;
-    msvcrt.msvcrt_env_vars.append(std.heap.page_allocator, .{ .key = key_dupe, .val = val_dupe }) catch return -1;
+    msvcrt_mod.msvcrt_env_vars.append(std.heap.page_allocator, .{ .key = key_dupe, .val = val_dupe }) catch return -1;
     return 0;
 }
 
@@ -921,4 +976,43 @@ pub fn abort() callconv(.c) void {
 pub fn stub_crt_atexit(func: usize) callconv(.c) i32 {
     _ = func;
     return 0; // success
+}
+
+test "putenv empty value deletes; getenv sees deletion" {
+    const msvcrt_mod = msvcrt;
+    const saved_vars = msvcrt_mod.msvcrt_env_vars;
+    const saved_env_init = msvcrt_mod.global_env_initialized;
+    const saved_envp = msvcrt_mod.global_envp;
+    msvcrt_mod.msvcrt_env_vars = .empty;
+    msvcrt_mod.global_env_initialized = false;
+    defer {
+        for (msvcrt_mod.msvcrt_env_vars.items) |v| {
+            if (!v.deleted) {
+                std.heap.page_allocator.free(v.key);
+                std.heap.page_allocator.free(v.val);
+            } else if (v.key.len > 0) {
+                std.heap.page_allocator.free(v.key);
+            }
+        }
+        msvcrt_mod.msvcrt_env_vars.deinit(std.heap.page_allocator);
+        msvcrt_mod.msvcrt_env_vars = saved_vars;
+        msvcrt_mod.global_env_initialized = saved_env_init;
+        msvcrt_mod.global_envp = saved_envp;
+    }
+
+    // Set, then delete via "NAME=" (MSVC _putenv contract).
+    var set_buf: [16]u8 = undefined;
+    @memcpy(set_buf[0..8], "MYVAR=1\x00");
+    set_buf[8] = 0;
+    try std.testing.expectEqual(@as(i32, 0), putenv(@intFromPtr(&set_buf)));
+
+    var del_buf: [8]u8 = undefined;
+    @memcpy(del_buf[0..6], "MYVAR=");
+    del_buf[6] = 0;
+    try std.testing.expectEqual(@as(i32, 0), putenv(@intFromPtr(&del_buf)));
+
+    var name_buf: [8]u8 = undefined;
+    @memcpy(name_buf[0..5], "MYVAR");
+    name_buf[5] = 0;
+    try std.testing.expect(getenv(@intFromPtr(&name_buf)) == null);
 }

@@ -331,16 +331,17 @@ fn waitOnKernelObject(ko: *KernelObject, dwMilliseconds: u32) u32 {
                 // Poll mode
                 if (!ko.event.signaled) return 258; // WAIT_TIMEOUT
             } else {
-                // Block until signaled
+                // Block until signaled or the monotonic deadline expires.
+                const deadline_ms = runtime.monoMilliTimestamp() + @as(i64, dwMilliseconds);
                 while (!ko.event.signaled) {
                     if (dwMilliseconds == 0xFFFFFFFF) {
                         ko.event.cond.wait(&ko.event.mutex);
                     } else {
-                        // Timed wait — use polling with sleep
                         ko.event.mutex.unlock();
-                        @import("../../platform.zig").sleep(1_000_000); // 1ms
+                        platform.sleep(1_000_000); // 1ms
                         ko.event.mutex.lock();
-                        // For simplicity, just check again — real timeout tracking TBD
+                        if (!ko.event.signaled and runtime.monoMilliTimestamp() >= deadline_ms)
+                            return 258; // WAIT_TIMEOUT (defer releases the mutex)
                     }
                 }
             }
@@ -374,13 +375,17 @@ fn waitOnKernelObject(ko: *KernelObject, dwMilliseconds: u32) u32 {
             if (dwMilliseconds == 0) {
                 if (ko.semaphore.count <= 0) return 258; // WAIT_TIMEOUT
             } else {
+                // Block until a slot frees or the monotonic deadline expires.
+                const deadline_ms = runtime.monoMilliTimestamp() + @as(i64, dwMilliseconds);
                 while (ko.semaphore.count <= 0) {
                     if (dwMilliseconds == 0xFFFFFFFF) {
                         ko.semaphore.cond.wait(&ko.semaphore.mutex);
                     } else {
                         ko.semaphore.mutex.unlock();
-                        @import("../../platform.zig").sleep(1_000_000);
+                        platform.sleep(1_000_000);
                         ko.semaphore.mutex.lock();
+                        if (ko.semaphore.count <= 0 and runtime.monoMilliTimestamp() >= deadline_ms)
+                            return 258; // WAIT_TIMEOUT (defer releases the mutex)
                     }
                 }
             }
@@ -876,4 +881,47 @@ test "closeKernelObject ignores unknown handles" {
     defer kernel_objects = saved_objects;
     kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
     try std.testing.expect(!closeKernelObject(0xE0000001));
+}
+
+test "WaitForSingleObject times out on unsignaled event" {
+    const saved_objects = kernel_objects;
+    defer kernel_objects = saved_objects;
+    kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
+
+    // Auto-reset event created nonsignaled: a finite wait must return
+    // WAIT_TIMEOUT instead of blocking forever.
+    const h = CreateEventA(0, 0, 0, 0);
+    try std.testing.expect(h != 0);
+    const started = runtime.monoMilliTimestamp();
+    try std.testing.expectEqual(@as(u32, 258), WaitForSingleObject(h, 40));
+    const elapsed = runtime.monoMilliTimestamp() - started;
+    try std.testing.expect(elapsed >= 30); // honored at least roughly
+    try std.testing.expect(elapsed < 5000); // and did not hang
+}
+
+test "event signaled during timed wait returns WAIT_OBJECT_0" {
+    const saved_objects = kernel_objects;
+    defer kernel_objects = saved_objects;
+    kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
+
+    const h = CreateEventA(0, 0, 0, 0);
+    try std.testing.expect(h != 0);
+    const waiter = try std.Thread.spawn(.{}, struct {
+        fn run(handle: usize) void {
+            platform.sleep(20 * std.time.ns_per_ms);
+            _ = SetEvent(handle);
+        }
+    }.run, .{h});
+    defer waiter.join();
+    try std.testing.expectEqual(@as(u32, 0), WaitForSingleObject(h, 10_000));
+}
+
+test "semaphore timed wait returns WAIT_TIMEOUT when empty" {
+    const saved_objects = kernel_objects;
+    defer kernel_objects = saved_objects;
+    kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
+
+    const ko = allocKernelObject(.semaphore) orelse return error.NoSlots;
+    ko.semaphore.max_count = 4;
+    try std.testing.expectEqual(@as(u32, 258), WaitForSingleObject(ko.handle, 30));
 }

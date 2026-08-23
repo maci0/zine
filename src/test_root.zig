@@ -39,6 +39,7 @@ comptime {
     _ = @import("win32/kernel32/sync.zig");
     _ = @import("win32/kernel32/process.zig");
     _ = @import("win32/msvcrt/io.zig");
+    _ = @import("win32/msvcrt/time.zig");
     _ = @import("win32/ntdll/ntapi.zig");
     _ = @import("win32/advapi32/services.zig");
     _ = @import("win32/advapi32/security.zig");

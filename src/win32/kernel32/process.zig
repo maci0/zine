@@ -545,19 +545,30 @@ pub fn GetCurrentThreadId() callconv(w32cc.WINAPI) u32 {
 
 /// Implementation status: Partially implemented
 pub fn SetEnvironmentVariableA(lpName: usize, lpValue: usize) callconv(w32cc.WINAPI) i32 {
-    if (lpName != 0 and lpValue != 0) {
-        const name = trace.c_span(lpName);
+    if (lpName == 0) return 0;
+    const name = trace.c_span(lpName);
+    // Win32 contract: lpValue == NULL deletes the variable.
+    if (lpValue != 0) {
         const value = trace.c_span(lpValue);
         if (trace.enable_tracing) trace.print("KERNEL32: SetEnvironmentVariableA('{s}', '{s}')\n", .{ name, value });
 
         const msvcrt = @import("../msvcrt.zig");
 
-        // Check for existing key first to avoid unnecessary allocation
+        // Update any existing override in place. Lookups elsewhere are
+        // case-insensitive, so matching by exact bytes only would let a
+        // differently-cased name coexist with the inherited entry and
+        // children would then see the stale inherited value first.
         for (msvcrt.msvcrt_env_vars.items) |*v| {
-            if (std.mem.eql(u8, v.key, name)) {
-                const val_dupe = std.heap.page_allocator.dupe(u8, value) catch return 0;
-                std.heap.page_allocator.free(v.val);
-                v.val = val_dupe;
+            if (std.ascii.eqlIgnoreCase(v.key, name)) {
+                if (v.deleted) {
+                    v.deleted = false;
+                    const val_dupe = std.heap.page_allocator.dupe(u8, value) catch return 0;
+                    v.val = val_dupe;
+                } else {
+                    const val_dupe = std.heap.page_allocator.dupe(u8, value) catch return 0;
+                    std.heap.page_allocator.free(v.val);
+                    v.val = val_dupe;
+                }
                 return 1;
             }
         }
@@ -568,16 +579,35 @@ pub fn SetEnvironmentVariableA(lpName: usize, lpValue: usize) callconv(w32cc.WIN
 
         return 1;
     }
-    return 0; // FALSE
+
+    // Delete: record a tombstone so reads stop resolving to the inherited
+    // value and spawned children no longer receive the variable.
+    if (trace.enable_tracing) trace.print("KERNEL32: SetEnvironmentVariableA('{s}', DELETE)\n", .{name});
+    const msvcrt = @import("../msvcrt.zig");
+    for (msvcrt.msvcrt_env_vars.items) |*v| {
+        if (!v.deleted and std.ascii.eqlIgnoreCase(v.key, name)) {
+            std.heap.page_allocator.free(v.val);
+            std.heap.page_allocator.free(v.key);
+            v.key = "";
+            v.val = "";
+            v.deleted = true;
+            return 1;
+        }
+    }
+    const key_dupe = std.heap.page_allocator.dupe(u8, name) catch return 0;
+    msvcrt.msvcrt_env_vars.append(std.heap.page_allocator, .{ .key = key_dupe, .val = "", .deleted = true }) catch return 0;
+    return 1;
 }
 
 /// Look up an environment variable by narrow name, returning a slice into the
 /// host-side env storage (overridden vars first, then global_envp).
 fn getEnvValue(name: []const u8) ?[]const u8 {
     const msvcrt = @import("../msvcrt.zig");
-    // First check overridden vars
+    // First check overridden vars. A tombstone means the guest deleted the
+    // name: it must not fall through to the inherited value.
     for (msvcrt.msvcrt_env_vars.items) |v| {
         if (std.ascii.eqlIgnoreCase(v.key, name)) {
+            if (v.deleted) return null;
             return v.val;
         }
     }
@@ -1773,4 +1803,41 @@ test "GetProcAddress returns a stable cached address per module+name" {
     try std.testing.expectEqual(@as(usize, 0), missing);
     const third = GetProcAddress(hmod, @intFromPtr(name_z));
     try std.testing.expectEqual(first, third);
+}
+
+test "SetEnvironmentVariableA NULL value deletes and shadows inherited vars" {
+    const msvcrt = @import("../msvcrt.zig");
+    const saved_vars = msvcrt.msvcrt_env_vars;
+    const saved_envp = msvcrt.global_envp;
+    var empty_envp: [1]?[*:0]const u8 = .{null};
+    msvcrt.msvcrt_env_vars = .empty;
+    msvcrt.global_envp = &empty_envp;
+    defer {
+        for (msvcrt.msvcrt_env_vars.items) |v| {
+            if (!v.deleted) {
+                std.heap.page_allocator.free(v.key);
+                std.heap.page_allocator.free(v.val);
+            } else if (v.key.len > 0) {
+                std.heap.page_allocator.free(v.key);
+            }
+        }
+        msvcrt.msvcrt_env_vars.deinit(std.heap.page_allocator);
+        msvcrt.msvcrt_env_vars = saved_vars;
+        msvcrt.global_envp = saved_envp;
+    }
+
+    var name_buf: [8]u8 = undefined;
+    @memcpy(name_buf[0..4], "PATH");
+    name_buf[4] = 0;
+    var val_buf: [16]u8 = undefined;
+    @memcpy(val_buf[0..7], "newdir/");
+    val_buf[7] = 0;
+
+    // Set an override (different case than a typical inherited "PATH").
+    try std.testing.expectEqual(@as(i32, 1), SetEnvironmentVariableA(@intFromPtr(&name_buf), @intFromPtr(&val_buf)));
+    try std.testing.expectEqualStrings("newdir/", getEnvValue("path").?);
+
+    // Delete via lpValue == NULL (Win32 contract).
+    try std.testing.expectEqual(@as(i32, 1), SetEnvironmentVariableA(@intFromPtr(&name_buf), 0));
+    try std.testing.expect(getEnvValue("PATH") == null);
 }

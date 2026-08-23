@@ -6,6 +6,10 @@ const w32cc = @import("../calling_convention.zig");
 
 // --- INI file support ---
 
+// Shared scratch buffer for INI contents. It must outlive readIniValue
+// because the returned value slice points into it.
+var ini_content_buf: [16384]u8 = undefined;
+
 fn readIniValue(lpFileName: usize, lpAppName: usize, lpKeyName: usize) ?[]const u8 {
     if (lpFileName == 0 or lpAppName == 0 or lpKeyName == 0) return null;
 
@@ -20,9 +24,8 @@ fn readIniValue(lpFileName: usize, lpAppName: usize, lpKeyName: usize) ?[]const 
     const file = @import("../host_io.zig").fileFromFd(@intCast(fd));
     defer file.close(runtime.io());
 
-    var content_buf: [16384]u8 = undefined;
-    const bytes_read = file.readPositionalAll(runtime.io(), &content_buf, 0) catch return null;
-    const content = content_buf[0..bytes_read];
+    const bytes_read = file.readPositionalAll(runtime.io(), &ini_content_buf, 0) catch return null;
+    const content = ini_content_buf[0..bytes_read];
 
     // Parse INI: find [section] then key=value
     var in_section = false;

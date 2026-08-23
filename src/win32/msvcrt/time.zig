@@ -161,23 +161,47 @@ pub fn clock() callconv(.c) i32 {
     return @intCast(@min(elapsed, 0x7FFFFFFF));
 }
 
-var asctime_buf: [32]u8 = undefined;
+var asctime_buf: [48]u8 = undefined;
 
-/// Convert struct tm to string. Returns a static buffer.
-/// Implementation status: Stub
+/// Convert struct tm to string. Returns a static buffer formatted like C
+/// asctime: "Www Mmm dd hh:mm:ss yyyy\n" with dd right-aligned in 3 columns.
+/// Reads the caller's tm through the guest->host translation; out-of-range
+/// field values are folded into range instead of indexing out of bounds.
+/// Implementation status: Partially implemented
 pub fn asctime(tm_ptr: usize) callconv(.c) [*]const u8 {
-    _ = tm_ptr;
-    const s = "Sat Jan  1 00:00:00 2000\n";
-    @memcpy(asctime_buf[0..s.len], s);
-    asctime_buf[s.len] = 0;
+    var tm: Tm = .{ .tm_mday = 1, .tm_year = 70, .tm_wday = 4 }; // Unix epoch
+    if (tm_ptr >= 0x10000) {
+        const src: *align(1) const Tm = @ptrFromInt(trace.addr(tm_ptr));
+        tm = src.*;
+    } else if (trace.enable_tracing) {
+        trace.print("MSVCRT: asctime(NULL tm) -> epoch\n", .{});
+    }
+    const wday: usize = @intCast(@mod(tm.tm_wday, 7));
+    const mon: usize = @intCast(@mod(tm.tm_mon, 12));
+    const result = std.fmt.bufPrint(&asctime_buf, "{s} {s}{d:>3} {d:0>2}:{d:0>2}:{d:0>2} {d}\n", .{
+        day_names[wday],
+        mon_names[mon],
+        @as(u32, @intCast(@max(tm.tm_mday, 0))),
+        @as(u32, @intCast(@max(tm.tm_hour, 0))),
+        @as(u32, @intCast(@max(tm.tm_min, 0))),
+        @as(u32, @intCast(@max(tm.tm_sec, 0))),
+        @as(i64, tm.tm_year) + 1900,
+    }) catch {
+        const fallback = "Thu Jan  1 00:00:00 1970\n";
+        @memcpy(asctime_buf[0..fallback.len], fallback);
+        asctime_buf[fallback.len] = 0;
+        return &asctime_buf;
+    };
+    asctime_buf[result.len] = 0;
     // On WASM, allocate in guest memory so x86 code can read it
     const stub_common = @import("../shared.zig");
     if (x86_memory.guest_memory != null) {
-        const raw = stub_common.raw_alloc(s.len + 1) orelse return &asctime_buf;
-        const ptr = @as([*]u8, @ptrCast(raw));
-        @memcpy(ptr[0..s.len], s);
-        ptr[s.len] = 0;
-        return ptr;
+        if (stub_common.raw_alloc(result.len + 1)) |raw| {
+            const ptr = @as([*]u8, @ptrCast(raw));
+            @memcpy(ptr[0..result.len], result);
+            ptr[result.len] = 0;
+            return ptr;
+        }
     }
     return &asctime_buf;
 }
@@ -205,4 +229,66 @@ pub fn localtime64(t: usize) callconv(.c) *[64]u8 {
         return ptr;
     }
     return &tm_buf;
+}
+
+// -------------------------------------------------------------------------
+// Tests
+// -------------------------------------------------------------------------
+
+const testing = std.testing;
+
+fn asctimeStr(tm: *const Tm) []const u8 {
+    return std.mem.sliceTo(asctime(@intFromPtr(tm)), 0);
+}
+
+test "asctime formats the caller's tm per the C standard layout" {
+    // Classic C standard example: 1973-09-16 (a Sunday), 01:03:52.
+    const tm: Tm = .{
+        .tm_sec = 52,
+        .tm_min = 3,
+        .tm_hour = 1,
+        .tm_mday = 16,
+        .tm_mon = 8, // September, 0-based
+        .tm_year = 73,
+        .tm_wday = 0,
+        .tm_yday = 258,
+        .tm_isdst = 0,
+    };
+    try testing.expectEqualStrings("Sun Sep 16 01:03:52 1973\n", asctimeStr(&tm));
+
+    // Single-digit day is space-padded to width 3, not zero-padded.
+    const first: Tm = .{ .tm_year = 70, .tm_mday = 1, .tm_wday = 4 };
+    try testing.expectEqualStrings("Thu Jan  1 00:00:00 1970\n", asctimeStr(&first));
+}
+
+test "asctime tolerates null and garbage fields" {
+    // Null/near-null pointer falls back to the epoch date instead of crashing.
+    const null_result = std.mem.sliceTo(asctime(0), 0);
+    try testing.expectEqualStrings("Thu Jan  1 00:00:00 1970\n", null_result);
+
+    // Out-of-range wday/mon fold into range rather than indexing out of bounds.
+    const weird: Tm = .{ .tm_mday = 4, .tm_mon = 25, .tm_wday = -7 };
+    const s = asctimeStr(&weird);
+    try testing.expect(s.len > 0);
+}
+
+test "mktime interprets tm as UTC and normalizes month overflow" {
+    // 2024-02-29T00:00:00Z exists only on leap years; pin its exact value.
+    const leap_day: Tm = .{ .tm_mday = 29, .tm_mon = 1, .tm_year = 124 };
+    const expected = (civil_time.daysFromCivil(2024, 2, 29) - civil_time.daysFromCivil(1970, 1, 1)) * 86400;
+    try testing.expectEqual(@as(i32, @intCast(expected)), mktime(&leap_day));
+
+    // Month 13 of 2023 rolls into January 2024 like SystemTimeToFileTime.
+    const month13: Tm = .{ .tm_mday = 1, .tm_mon = 12, .tm_year = 123 };
+    const jan: Tm = .{ .tm_mday = 1, .tm_mon = 0, .tm_year = 124 };
+    try testing.expectEqual(mktime(&jan), mktime(&month13));
+}
+
+test "localtime inverts mktime on the UTC guest clock" {
+    var t: i32 = 1709164800; // 2024-02-29T00:00:00Z
+    const tm = localtime(&t);
+    try testing.expectEqual(@as(i32, 2024 - 1900), tm.tm_year);
+    try testing.expectEqual(@as(i32, 1), tm.tm_mon); // February
+    try testing.expectEqual(@as(i32, 29), tm.tm_mday);
+    try testing.expect(mktime(tm) == t);
 }
