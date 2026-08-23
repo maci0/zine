@@ -156,6 +156,30 @@ fn sendError(ws: *std.http.Server.WebSocket, msg: []const u8) void {
     _ = ws.writeMessage(json, .text) catch {};
 }
 
+/// True if the request may talk to this UI. Browsers always send an Origin
+/// header on WebSocket handshakes and on cross-site fetches; without this
+/// check any webpage the user visits could open ws://127.0.0.1:1995/ws,
+/// receive the emulator's screen frames, and drive the guest with synthetic
+/// input (cross-site WebSocket hijacking / DNS rebinding). Non-browser
+/// clients (curl, tests) omit Origin and are allowed.
+fn originAllowed(req: *const std.http.Server.Request) bool {
+    var it = req.iterateHeaders();
+    while (it.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, "origin")) {
+            const allowed = [_][]const u8{
+                "http://127.0.0.1:1995",
+                "http://localhost:1995",
+                "http://[::1]:1995",
+            };
+            for (allowed) |a| {
+                if (std.mem.eql(u8, header.value, a)) return true;
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
 fn handleClientInner(stream: std.Io.net.Stream) !void {
     // Each client handler gets its own arena to avoid thread-safety issues
     // with the shared ArenaAllocator from main.
@@ -181,6 +205,10 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
     const target = req.head.target;
 
     if (std.mem.startsWith(u8, target, "/ws")) {
+        if (!originAllowed(&req)) {
+            try req.respond("Forbidden", .{ .status = .forbidden });
+            return stream.close(runtime.io());
+        }
         const upgrade = req.upgradeRequested();
         if (upgrade != .websocket) {
             try req.respond("Expected websocket upgrade", .{ .status = .bad_request });

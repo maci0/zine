@@ -127,12 +127,16 @@ fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize) !Me
 fn writeMenuItemJson(writer: anytype, item: MenuItem) !void {
     try writer.print("{{\"id\":{d},\"name\":\"", .{item.id});
 
-    // simple json string escape
+    // JSON string escape, including control characters: menu names come from
+    // PE resources, and an unescaped 0x00-0x1F byte produces JSON that
+    // JSON.parse rejects, breaking menu rendering.
     for (item.name) |c| {
         if (c == '"') {
             try writer.writeAll("\\\"");
         } else if (c == '\\') {
             try writer.writeAll("\\\\");
+        } else if (c < 0x20) {
+            try writer.print("\\u{x:0>4}", .{c});
         } else {
             try writer.writeByte(c);
         }
@@ -256,4 +260,22 @@ test "parseMenuResource: truncated input is rejected" {
     try testing.expectError(error.InvalidMenuResource, parseMenuResource(testing.allocator, &.{ 0, 0 }));
     // Header present but first item's flags are cut off.
     try testing.expectError(error.InvalidMenuResource, parseMenuResource(testing.allocator, &.{ 0, 0, 0, 0, 0x80 }));
+}
+
+test "parseMenuResource: control characters are escaped as \\uXXXX" {
+    var data: std.ArrayListUnmanaged(u8) = .empty;
+    defer data.deinit(testing.allocator);
+    try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
+    // Name containing raw ESC (0x1B) and BEL (0x07) from a crafted resource.
+    try appendItem(&data, testing.allocator, 0x0080, 5, &.{ 'A', 0x1B, 'B', 0x07 });
+
+    const json = try parseMenuResource(testing.allocator, data.items);
+    defer testing.allocator.free(json);
+    try testing.expectEqualStrings(
+        "{\"type\":\"menu\",\"menu\":[{\"id\":5,\"name\":\"A\\u001bB\\u0007\",\"flags\":128}]}",
+        json,
+    );
+    // The output must remain valid JSON.
+    var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
 }

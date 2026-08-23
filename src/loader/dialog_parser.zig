@@ -253,7 +253,17 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
 
     try w.writeAll("{\"type\": \"custom_dialog\", \"title\": \"");
     for (title_buf.items) |char| {
-        if (char == '"') try w.writeAll("\\\"") else if (char == '\\') try w.writeAll("\\\\") else try w.writeByte(char);
+        // JSON string escape incl. control chars: dialog strings come from PE
+        // resources and must not be able to break the frontend's JSON.parse.
+        if (char == '"') {
+            try w.writeAll("\\\"");
+        } else if (char == '\\') {
+            try w.writeAll("\\\\");
+        } else if (char < 0x20) {
+            try w.print("\\u{x:0>4}", .{char});
+        } else {
+            try w.writeByte(char);
+        }
     }
     try w.print("\", \"x\": {d}, \"y\": {d}, \"cx\": {d}, \"cy\": {d}, \"items\": [", .{ dlg_x, dlg_y, dlg_cx, dlg_cy });
 
@@ -261,7 +271,17 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
         if (idx > 0) try w.writeAll(", ");
         try w.print("{{\"id\": {d}, \"x\": {d}, \"y\": {d}, \"cx\": {d}, \"cy\": {d}, \"style\": {d}, \"class\": \"{s}\", \"text\": \"", .{ item.id, item.x, item.y, item.cx, item.cy, item.style, item.class });
         for (item.text) |char| {
-            if (char == '\n') try w.writeAll("\\n") else if (char == '"') try w.writeAll("\\\"") else if (char == '\\') try w.writeAll("\\\\") else try w.writeByte(char);
+            if (char == '\n') {
+                try w.writeAll("\\n");
+            } else if (char == '"') {
+                try w.writeAll("\\\"");
+            } else if (char == '\\') {
+                try w.writeAll("\\\\");
+            } else if (char < 0x20) {
+                try w.print("\\u{x:0>4}", .{char});
+            } else {
+                try w.writeByte(char);
+            }
         }
         try w.writeAll("\"}");
     }
