@@ -18,8 +18,6 @@ const w32 = @import("constants.zig");
 
 pub var global_env: ?*env.Environment = null;
 pub var main_module_handle: usize = 0;
-pub var main_exe_dir: [512]u8 = undefined;
-pub var main_exe_dir_len: usize = 0;
 
 /// Bounds of the main PE's executable code (.text section).
 /// Set during PE loading so the SIGSEGV handler can distinguish

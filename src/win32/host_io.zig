@@ -244,11 +244,9 @@ pub fn getFullPath(rel_path: []const u8, buf: []u8) usize {
 /// Search for a file in a set of directories (semicolon-separated Win32 paths).
 /// Also searches the main EXE directory. Returns the full Win32 path or empty.
 pub fn searchPath(filename: []const u8, search_dirs: ?[]const u8, result: []u8) usize {
-    const kernel32 = @import("kernel32.zig");
-
-    // First: check the main EXE's directory
-    if (kernel32.main_exe_dir_len > 0 and filename.len > 0) {
-        const dir = kernel32.main_exe_dir[0..kernel32.main_exe_dir_len];
+    // First: check the main EXE's directory (state owned by runtime.zig)
+    if (runtime.main_exe_dir_len > 0 and filename.len > 0) {
+        const dir = runtime.main_exe_dir[0..runtime.main_exe_dir_len];
         if (dir.len + filename.len < result.len) {
             @memcpy(result[0..dir.len], dir);
             @memcpy(result[dir.len..][0..filename.len], filename);

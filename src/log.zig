@@ -15,11 +15,11 @@
 ///   log.info("Loaded {s} at 0x{X}", .{ name, addr });
 ///   log.err("Failed to open '{s}': {}", .{ path, err });
 ///
-/// The `trace` level is gated by the existing `trace.enable_tracing` flag
-/// so it only emits output when `--trace` / `--trace-api` is active.
+/// The `trace` level is emitted through `src/trace.zig` (`trace.print`),
+/// which owns the `--trace` / `--trace-api` gating flag and calls back into
+/// `log.emit` at this level.
 const std = @import("std");
 const builtin = @import("builtin");
-const trace_mod = @import("trace.zig");
 const runtime = @import("runtime.zig");
 
 /// Whether to emit ANSI color escape codes.  Lazily detected on first use.
@@ -162,12 +162,6 @@ pub fn warn(comptime fmt: []const u8, args: anytype) void {
 /// Log an informational message.
 pub fn info(comptime fmt: []const u8, args: anytype) void {
     emit(.info, fmt, args);
-}
-
-/// Log a trace-level message.  Only emits when tracing is enabled.
-pub fn trace(comptime fmt: []const u8, args: anytype) void {
-    if (!trace_mod.enable_tracing) return;
-    emit(.trace, fmt, args);
 }
 
 /// Initialize log level from ZINE_LOG_LEVEL environment variable.

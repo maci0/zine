@@ -302,8 +302,8 @@ pub fn main(init: std.process.Init) !void {
             win_dir[wlen] = '\\';
             wlen += 1;
         }
-        @memcpy(stubs_kernel32.main_exe_dir[0..wlen], win_dir[0..wlen]);
-        stubs_kernel32.main_exe_dir_len = wlen;
+        @memcpy(runtime.main_exe_dir[0..wlen], win_dir[0..wlen]);
+        runtime.main_exe_dir_len = wlen;
     }
 
     log.info("wasm: loaded PE '{s}' at 0x{X} (size={d})", .{
@@ -663,8 +663,8 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     if (exe_path.len > 0 and std.mem.indexOfScalar(u8, exe_path, '/') == null and
         std.mem.indexOfScalar(u8, exe_path, '\\') == null)
     {
-        if (stubs_kernel32.main_exe_dir_len > 0) {
-            const dir = stubs_kernel32.main_exe_dir[0..stubs_kernel32.main_exe_dir_len];
+        if (runtime.main_exe_dir_len > 0) {
+            const dir = runtime.main_exe_dir[0..runtime.main_exe_dir_len];
             const dir_posix_len = path_utils.win32ToPosix(dir, &resolved_buf) catch 0;
             if (dir_posix_len > 0) {
                 @memcpy(resolved_buf[dir_posix_len..][0..exe_path.len], exe_path);

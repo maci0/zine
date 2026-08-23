@@ -360,15 +360,15 @@ pub fn main(init: std.process.Init) !void {
             // Convert the exe directory to Win32 path
             var win_dir_buf: [1024]u8 = undefined;
             const win_dir_len = try path_utils.posixToWin32(dir, &win_dir_buf);
-            const copy_len = @min(win_dir_len, stubs_kernel32.main_exe_dir.len - 2);
-            @memcpy(stubs_kernel32.main_exe_dir[0..copy_len], win_dir_buf[0..copy_len]);
+            const copy_len = @min(win_dir_len, runtime.main_exe_dir.len - 2);
+            @memcpy(runtime.main_exe_dir[0..copy_len], win_dir_buf[0..copy_len]);
             var pos = copy_len;
             // Ensure trailing backslash
-            if (pos > 0 and stubs_kernel32.main_exe_dir[pos - 1] != '\\') {
-                stubs_kernel32.main_exe_dir[pos] = '\\';
+            if (pos > 0 and runtime.main_exe_dir[pos - 1] != '\\') {
+                runtime.main_exe_dir[pos] = '\\';
                 pos += 1;
             }
-            stubs_kernel32.main_exe_dir_len = pos;
+            runtime.main_exe_dir_len = pos;
 
             // Set virtual CWD to the actual host process CWD (not exe dir)
             // This ensures relative file opens (e.g. "hello.c") resolve against where the user invoked zine

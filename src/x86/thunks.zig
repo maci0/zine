@@ -11,6 +11,7 @@ const std = @import("std");
 const cpu_mod = @import("cpu.zig");
 const profiler = @import("../profiler.zig");
 const log = @import("../log.zig");
+const runtime = @import("../runtime.zig");
 const Cpu = cpu_mod.Cpu;
 
 /// A registered thunk entry.
@@ -38,8 +39,8 @@ pub const ThunkEntry = struct {
     native_va_fixed: u8 = 0,
 };
 
-/// Maximum number of thunks.
-pub const MAX_THUNKS = 4096;
+/// Maximum number of thunks. Canonical value lives in `runtime.zig`.
+pub const MAX_THUNKS = runtime.MAX_THUNKS;
 
 /// Global thunk table (populated during PE loading).
 var thunk_entries: [MAX_THUNKS]?ThunkEntry = .{null} ** MAX_THUNKS;

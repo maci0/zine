@@ -13,6 +13,21 @@ var io_instance: std.Io = std.Options.debug_io;
 var gpa_instance: ?std.mem.Allocator = null;
 var environ_instance: std.process.Environ = .empty;
 
+/// Maximum number of registered guest->host thunks.
+///
+/// Lives here (not in `x86/thunks.zig`) so both the thunk registry and the
+/// profiler's parallel stats tables can size from one constant without the
+/// profiler importing x86-core internals.
+pub const MAX_THUNKS = 4096;
+
+/// Directory of the main executable as a Win32 path (backslash-separated),
+/// terminated with a trailing `\`. Set at startup, before guest code runs;
+/// `main_exe_dir_len` is 0 until then. Lives here rather than in the
+/// kernel32 stub facade so low-level bridges (`win32/host_io.zig`) can read
+/// it without importing API stub modules.
+pub var main_exe_dir: [512]u8 = undefined;
+pub var main_exe_dir_len: usize = 0;
+
 /// Install the process-wide Io + allocator. Call once from main.
 pub fn init(io_value: std.Io, gpa_value: std.mem.Allocator, env: std.process.Environ) void {
     io_instance = io_value;

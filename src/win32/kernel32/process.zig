@@ -1230,7 +1230,8 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
         // Capture the pre-swap TLS base/selector for the defer above.
         if (comptime builtin_mod.os.tag == .linux and platform.is_native) {
             if (comptime builtin_mod.target.cpu.arch == .x86_64) {
-                asm volatile ("syscall"
+                // ARCH_GET_FS writes through arg2; rax return (0 or -errno) unused.
+                _ = asm volatile ("syscall"
                     : [ret] "={rax}" (-> usize),
                     : [num] "{rax}" (@as(usize, 158)), // __NR_arch_prctl
                       [arg1] "{rdi}" (@as(usize, 0x1003)), // ARCH_GET_FS
@@ -1620,7 +1621,7 @@ pub fn GetModuleFileNameA_Full(hModule: usize, lpFilename: usize, nSize: u32) ca
         if (result > 0) return result;
 
         // Fallback to exe dir + generic name
-        const dir = kernel32.main_exe_dir[0..kernel32.main_exe_dir_len];
+        const dir = runtime.main_exe_dir[0..runtime.main_exe_dir_len];
         const exe_name = "program.exe";
         const total = dir.len + exe_name.len;
         if (total < nSize) {
@@ -1636,7 +1637,7 @@ pub fn GetModuleFileNameA_Full(hModule: usize, lpFilename: usize, nSize: u32) ca
         var it = genv.registry.modules.valueIterator();
         while (it.next()) |m| {
             if (@intFromPtr(m.*.mapped_memory.ptr) == hModule) {
-                const dir = kernel32.main_exe_dir[0..kernel32.main_exe_dir_len];
+                const dir = runtime.main_exe_dir[0..runtime.main_exe_dir_len];
                 const mname = m.*.name;
                 const total = dir.len + mname.len;
                 if (total < nSize) {
@@ -1650,8 +1651,8 @@ pub fn GetModuleFileNameA_Full(hModule: usize, lpFilename: usize, nSize: u32) ca
     }
 
     // Last resort fallback: use main_exe_dir if available
-    if (kernel32.main_exe_dir_len > 0) {
-        const dir = kernel32.main_exe_dir[0..kernel32.main_exe_dir_len];
+    if (runtime.main_exe_dir_len > 0) {
+        const dir = runtime.main_exe_dir[0..runtime.main_exe_dir_len];
         const exe_name = "program.exe";
         const total = dir.len + exe_name.len;
         if (total < nSize) {

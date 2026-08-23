@@ -9,6 +9,7 @@ const pe = @import("../pe.zig");
 const Module = @import("module.zig").Module;
 const builtin = @import("builtin");
 const log = @import("../log.zig");
+const trace = @import("../trace.zig");
 const is_wasi = builtin.os.tag == .wasi;
 
 /// On WASI, resolve an absolute path through preopened directories.
@@ -288,7 +289,7 @@ pub const Registry = struct {
 
         if (file_path == null) {
             for (self.search_paths.items) |path| {
-                log.trace("Searching for {s} in {s}", .{ name, path });
+                trace.print("Searching for {s} in {s}", .{ name, path });
                 // Check exact match first
                 const full_path_exact = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, name });
                 defer self.allocator.free(full_path_exact);
