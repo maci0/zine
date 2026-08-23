@@ -181,12 +181,12 @@ pub fn CreateDirectoryA(lpPathName: usize, lpSecurityAttributes: usize) callconv
     if (lpPathName == 0) return 0;
     const path = trace.c_span(lpPathName);
     if (trace.enable_tracing) trace.print("KERNEL32: CreateDirectoryA('{s}')\n", .{path});
-    var fixed: [1024]u8 = undefined;
-    const len = @min(path.len, 1023);
-    @memcpy(fixed[0..len], path[0..len]);
-    std.mem.replaceScalar(u8, fixed[0..len], '\\', '/');
-    fixed[len] = 0;
-    std.Io.Dir.cwd().createDirPath(runtime.io(), fixed[0..len]) catch return 0;
+    var host_buf: [1024]u8 = undefined;
+    // toHostPath maps Win32 paths into drive_c/ and anchors ".." there, so a
+    // guest cannot create directories outside the virtual drive.
+    const len = path_utils.toHostPath(path, &host_buf);
+    if (len == 0) return 0;
+    std.Io.Dir.cwd().createDirPath(runtime.io(), host_buf[0..len]) catch return 0;
     return 1;
 }
 

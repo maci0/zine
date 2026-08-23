@@ -109,10 +109,12 @@ pub fn LoadLibraryA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: LoadLibraryA('{s}')\n", .{name});
 
     if (kernel32.global_env) |genv| {
-        // Convert Win32 path (e.g. C:\Desktop\Guild\MP3DEC.ASI) to POSIX
+        // Convert Win32 path (e.g. C:\Desktop\Guild\MP3DEC.ASI) to POSIX.
+        // toHostPath anchors ".." inside drive_c/ so LoadLibrary cannot point
+        // the PE loader at arbitrary host files outside the virtual drive.
         const path_utils = @import("../../path_utils.zig");
         var posix_buf: [1024]u8 = undefined;
-        const posix_len = path_utils.win32ToPosix(name, &posix_buf) catch return 0;
+        const posix_len = path_utils.toHostPath(name, &posix_buf);
         var load_name = if (posix_len > 0) posix_buf[0..posix_len] else name;
 
         // Strip "./" or ".\" prefix — Windows apps use ".\foo.dll" meaning "same dir as me"
@@ -798,10 +800,13 @@ pub fn CreateProcessA(
         return 0;
     }
 
-    // Convert Win32 path to POSIX
+    // Convert Win32 path to POSIX. toHostPath anchors ".." inside drive_c/
+    // (win32ToPosix does not normalize), keeping child launches inside the
+    // virtual drive.
     const path_utils = @import("../../path_utils.zig");
     var posix_buf: [1024]u8 = undefined;
-    const posix_len = path_utils.win32ToPosix(target_path_buf[0..target_path_len], &posix_buf) catch return 0;
+    const posix_len = path_utils.toHostPath(target_path_buf[0..target_path_len], &posix_buf);
+    if (posix_len == 0) return 0;
 
     if (trace.enable_tracing) trace.print("KERNEL32: CreateProcessA -> spawning '{s}'\n", .{posix_buf[0..posix_len]});
 

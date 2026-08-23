@@ -96,7 +96,10 @@ pub fn CreateFileA(lpFileName_ptr: usize, dwDesiredAccess: u32, dwShareMode: u32
 
     const path_utils = @import("../../path_utils.zig");
     var fixed_path: [1024]u8 = undefined;
-    const len = path_utils.win32ToPosix(name, &fixed_path) catch return w32.INVALID_HANDLE_VALUE;
+    // toHostPath (not win32ToPosix): resolves ".." inside the drive_c anchor
+    // so a guest cannot escape the virtual drive via C:\..\..\ paths.
+    const len = path_utils.toHostPath(name, &fixed_path);
+    if (len == 0) return w32.INVALID_HANDLE_VALUE;
     const fixed_slice = fixed_path[0..len];
     fixed_path[len] = 0;
 
@@ -595,7 +598,10 @@ fn deleteFileWin32(name: []const u8) i32 {
 
     const path_utils = @import("../../path_utils.zig");
     var fixed_path: [1024]u8 = undefined;
-    const len = path_utils.win32ToPosix(name, &fixed_path) catch return 0;
+    // toHostPath anchors ".." inside drive_c/ so a guest cannot delete
+    // arbitrary host files outside the virtual drive.
+    const len = path_utils.toHostPath(name, &fixed_path);
+    if (len == 0) return 0;
 
     if (!host_io.deleteFilePosix(fixed_path[0..len])) {
         // Try case-insensitive: lowercase the filename portion
@@ -803,10 +809,12 @@ pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: *align(1) w32.W
     const filename = trace.c_span(lpFileName_ptr);
     if (trace.enable_tracing) trace.print("KERNEL32: FindFirstFileA('{s}')\n", .{filename});
 
-    // Convert path using win32ToPosix
+    // Convert path using toHostPath: anchors ".." inside drive_c/ so a guest
+    // cannot enumerate host directories outside the virtual drive.
     const path_utils = @import("../../path_utils.zig");
     var fixed_buf: [1024]u8 = undefined;
-    const len = path_utils.win32ToPosix(filename, &fixed_buf) catch return w32.INVALID_HANDLE_VALUE;
+    const len = path_utils.toHostPath(filename, &fixed_buf);
+    if (len == 0) return w32.INVALID_HANDLE_VALUE;
     const fixed_slice = fixed_buf[0..len];
 
     // Split into directory and file pattern at last slash
@@ -1260,9 +1268,13 @@ pub fn CopyFileA(lpExistingFileName: usize, lpNewFileName: usize, bFailIfExists:
 
     const path_utils = @import("../../path_utils.zig");
     var src_buf: [1024]u8 = undefined;
-    const src_len = path_utils.win32ToPosix(src_name, &src_buf) catch return 0;
+    // toHostPath anchors ".." inside drive_c/ so a guest cannot copy
+    // arbitrary host files in or out of the virtual drive.
+    const src_len = path_utils.toHostPath(src_name, &src_buf);
+    if (src_len == 0) return 0;
     var dst_buf: [1024]u8 = undefined;
-    const dst_len = path_utils.win32ToPosix(dst_name, &dst_buf) catch return 0;
+    const dst_len = path_utils.toHostPath(dst_name, &dst_buf);
+    if (dst_len == 0) return 0;
 
     // Win32 contract: fail when the destination exists and bFailIfExists is TRUE
     if (bFailIfExists != 0 and fileExistsPosix(dst_buf[0..dst_len])) return 0;
@@ -1281,9 +1293,11 @@ pub fn CopyFileW(lpExistingFileName_ptr: usize, lpNewFileName_ptr: usize, bFailI
 
     const path_utils = @import("../../path_utils.zig");
     var src_buf: [1024]u8 = undefined;
-    const src_len = path_utils.win32ToPosix(std.mem.span(@as([*:0]const u8, @ptrCast(&src_narrow))), &src_buf) catch return 0;
+    const src_len = path_utils.toHostPath(std.mem.span(@as([*:0]const u8, @ptrCast(&src_narrow))), &src_buf);
+    if (src_len == 0) return 0;
     var dst_buf: [1024]u8 = undefined;
-    const dst_len = path_utils.win32ToPosix(std.mem.span(@as([*:0]const u8, @ptrCast(&dst_narrow))), &dst_buf) catch return 0;
+    const dst_len = path_utils.toHostPath(std.mem.span(@as([*:0]const u8, @ptrCast(&dst_narrow))), &dst_buf);
+    if (dst_len == 0) return 0;
 
     // Win32 contract: fail when the destination exists and bFailIfExists is TRUE
     if (bFailIfExists != 0 and fileExistsPosix(dst_buf[0..dst_len])) return 0;
