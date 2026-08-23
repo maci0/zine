@@ -4,6 +4,7 @@ const trace = @import("../../trace.zig");
 const user32 = @import("../user32.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
+const kernel32_time = @import("../kernel32/time.zig");
 
 pub fn PeekMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32, wRemoveMsg: u32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
@@ -1653,7 +1654,20 @@ fn dtpStateOf(hwnd: usize) *DtpState {
         dtp_hwnds[dtp_state_count] = hwnd;
         const st = &dtp_states[dtp_state_count];
         dtp_state_count += 1;
-        st.* = .{};
+        // A freshly created control shows today's date on the UTC guest
+        // clock, not a fixed 2000-01-01 epoch (see kernel32/time.zig).
+        var now: w32.SYSTEMTIME = .{};
+        kernel32_time.GetLocalTime(@intFromPtr(&now));
+        st.* = .{
+            .year = now.wYear,
+            .month = now.wMonth,
+            .day_of_week = now.wDayOfWeek,
+            .day = now.wDay,
+            .hour = now.wHour,
+            .minute = now.wMinute,
+            .second = now.wSecond,
+            .milliseconds = now.wMilliseconds,
+        };
         return st;
     }
     return &dtp_states[0];
@@ -1744,4 +1758,31 @@ pub fn stub_SetWindowsHookExA(idHook: i32, lpfn: usize, hmod: usize, dwThreadId:
 pub fn stub_UnhookWindowsHookEx(hhk: usize) callconv(w32cc.WINAPI) i32 {
     _ = hhk;
     return 1;
+}
+
+// -------------------------------------------------------------------------
+// Tests
+// -------------------------------------------------------------------------
+
+const testing = std.testing;
+
+test "fresh DateTimePicker state shows today's date, not a fixed epoch" {
+    var now: w32.SYSTEMTIME = .{};
+    kernel32_time.GetLocalTime(@intFromPtr(&now));
+
+    const first = dtpStateOf(0xd001);
+    // Seeded from the live UTC guest clock rather than hardcoded 2000-01-01.
+    // A year may roll over between sampling and seeding.
+    try testing.expect(first.year == now.wYear or first.year == now.wYear + 1);
+    try testing.expect(first.month >= 1 and first.month <= 12);
+    try testing.expect(first.day >= 1 and first.day <= 31);
+    try testing.expect(first.milliseconds < 1000);
+
+    // The same hwnd maps back to the same state slot.
+    const again = dtpStateOf(0xd001);
+    try testing.expectEqual(first.year, again.year);
+
+    // A different hwnd gets its own state.
+    const other = dtpStateOf(0xd002);
+    try testing.expect(other != first);
 }

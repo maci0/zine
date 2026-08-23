@@ -583,42 +583,124 @@ pub fn GetThreadLocale() callconv(w32cc.WINAPI) u32 {
     return 1033; // en-US
 }
 
-/// Formats a date as a date string for a specified locale.
-/// Implementation status: No-op fallback
-pub fn stub_GetDateFormatA(Locale: u32, dwFlags: u32, lpDate: usize, lpFormat: usize, lpDateStr: usize, cchDate: i32) callconv(w32cc.WINAPI) i32 {
-    _ = Locale;
-    _ = dwFlags;
-    _ = lpDate;
-    _ = lpFormat;
-    if (trace.enable_tracing) trace.print("KERNEL32: GetDateFormatA\n", .{});
-    const date = "01/01/2000";
-    if (cchDate == 0) return @intCast(date.len + 1);
-    if (lpDateStr != 0 and cchDate > date.len) {
-        const buf = @as([*]u8, @ptrFromInt(lpDateStr));
-        @memcpy(buf[0..date.len], date);
-        buf[date.len] = 0;
-        return @intCast(date.len + 1);
+const kernel32_time = @import("time.zig");
+const w32 = @import("../constants.zig");
+
+const full_day_names = [_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+const full_month_names = [_][]const u8{
+    "January", "February", "March",     "April",   "May",      "June",
+    "July",    "August",   "September", "October", "November", "December",
+};
+
+/// SYSTEMTIME the caller asked to format; null lpDate means "now" on the UTC
+/// guest clock (same policy as GetLocalTime).
+fn formatInputSystemTime(lpSystemTime: usize) w32.SYSTEMTIME {
+    if (lpSystemTime != 0) {
+        const st = @as(*const w32.SYSTEMTIME, @ptrFromInt(lpSystemTime));
+        return st.*;
     }
-    return 0;
+    var now = w32.SYSTEMTIME{};
+    kernel32_time.GetLocalTime(@intFromPtr(&now));
+    return now;
 }
 
-/// Formats time as a time string for a specified locale.
-/// Implementation status: No-op fallback
+/// Month/day indices folded into range so guest garbage cannot index out of
+/// bounds. Windows validates and fails; zine folds like mktime/asctime do.
+fn monthIndex(st: *const w32.SYSTEMTIME) usize {
+    return @intCast(@mod(@as(i64, st.wMonth) - 1, 12));
+}
+fn dayOfWeekIndex(st: *const w32.SYSTEMTIME) usize {
+    return @intCast(@mod(@as(i64, st.wDayOfWeek), 7));
+}
+
+/// Copy `formatted` into the guest NUL-terminated output buffer with Win32
+/// buffer semantics: cch==0 queries the size, a too-small buffer fails with 0,
+/// success returns chars written including the NUL.
+fn writeFormattedOut(out_ptr: usize, cch: i32, formatted: []const u8) i32 {
+    if (cch == 0) return @intCast(formatted.len + 1);
+    if (out_ptr == 0 or cch <= 0 or @as(usize, @intCast(cch)) <= formatted.len) return 0;
+    const buf = @as([*]u8, @ptrFromInt(out_ptr));
+    @memcpy(buf[0..formatted.len], formatted);
+    buf[formatted.len] = 0;
+    return @intCast(formatted.len + 1);
+}
+
+/// Formats a date as a date string for the fixed en-US locale
+/// (short "M/d/yyyy", long "dddd, MMMM dd, yyyy"). A custom lpFormat picture
+/// string is not interpreted and falls back to the default short format.
+/// Implementation status: Partially implemented
+pub fn stub_GetDateFormatA(Locale: u32, dwFlags: u32, lpDate: usize, lpFormat: usize, lpDateStr: usize, cchDate: i32) callconv(w32cc.WINAPI) i32 {
+    _ = Locale;
+    if (trace.enable_tracing) trace.print("KERNEL32: GetDateFormatA(flags={x})\n", .{dwFlags});
+    const st = formatInputSystemTime(lpDate);
+
+    var buf: [64]u8 = undefined;
+    // DATE_LONGDATE 0x2, DATE_YEARMONTH 0x8; anything else is the default
+    // short date (DATE_SHORTDATE).
+    const formatted = if (dwFlags & 0x2 != 0) blk: {
+        break :blk std.fmt.bufPrint(&buf, "{s}, {s} {d}, {d:0>4}", .{
+            full_day_names[dayOfWeekIndex(&st)],
+            full_month_names[monthIndex(&st)],
+            st.wDay,
+            st.wYear,
+        }) catch return 0;
+    } else if (dwFlags & 0x8 != 0) blk: {
+        break :blk std.fmt.bufPrint(&buf, "{s} {d:0>4}", .{
+            full_month_names[monthIndex(&st)],
+            st.wYear,
+        }) catch return 0;
+    } else blk: {
+        _ = lpFormat;
+        break :blk std.fmt.bufPrint(&buf, "{d}/{d}/{d:0>4}", .{ st.wMonth, st.wDay, st.wYear }) catch return 0;
+    };
+    return writeFormattedOut(lpDateStr, cchDate, formatted);
+}
+
+/// Formats time as a time string for the fixed en-US locale ("h:mm:ss tt").
+/// Honors TIME_NOMINUTESORSECONDS, TIME_NOSECONDS, TIME_NOTIMEMARKER and
+/// TIME_FORCE24HOURFORMAT; a custom lpFormat picture string falls back to the
+/// default format.
+/// Implementation status: Partially implemented
 pub fn stub_GetTimeFormatA(Locale: u32, dwFlags: u32, lpTime: usize, lpFormat: usize, lpTimeStr: usize, cchTime: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
-    _ = dwFlags;
-    _ = lpTime;
+    if (trace.enable_tracing) trace.print("KERNEL32: GetTimeFormatA(flags={x})\n", .{dwFlags});
     _ = lpFormat;
-    if (trace.enable_tracing) trace.print("KERNEL32: GetTimeFormatA\n", .{});
-    const time_str = "12:00:00";
-    if (cchTime == 0) return @intCast(time_str.len + 1);
-    if (lpTimeStr != 0 and cchTime > time_str.len) {
-        const buf = @as([*]u8, @ptrFromInt(lpTimeStr));
-        @memcpy(buf[0..time_str.len], time_str);
-        buf[time_str.len] = 0;
-        return @intCast(time_str.len + 1);
+    const st = formatInputSystemTime(lpTime);
+
+    // TIME_FORCE24HOURFORMAT 0x8 implies no AM/PM marker on real Windows.
+    const force24 = dwFlags & 0x8 != 0;
+    const show_marker = !force24 and dwFlags & 0x4 == 0; // TIME_NOTIMEMARKER 0x4
+
+    var buf: [64]u8 = undefined;
+    var formatted: []const u8 = "";
+    if (dwFlags & 0x1 != 0) { // TIME_NOMINUTESORSECONDS
+        formatted = if (force24)
+            std.fmt.bufPrint(&buf, "{d:0>2}", .{st.wHour}) catch return 0
+        else
+            std.fmt.bufPrint(&buf, "{d}{s}", .{ hour12(st.wHour), ampmSuffix(&st, show_marker) }) catch return 0;
+    } else if (dwFlags & 0x2 != 0) { // TIME_NOSECONDS
+        formatted = if (force24)
+            std.fmt.bufPrint(&buf, "{d:0>2}:{d:0>2}", .{ st.wHour, st.wMinute }) catch return 0
+        else
+            std.fmt.bufPrint(&buf, "{d}:{d:0>2}{s}", .{ hour12(st.wHour), st.wMinute, ampmSuffix(&st, show_marker) }) catch return 0;
+    } else if (force24) {
+        formatted = std.fmt.bufPrint(&buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ st.wHour, st.wMinute, st.wSecond }) catch return 0;
+    } else {
+        formatted = std.fmt.bufPrint(&buf, "{d}:{d:0>2}:{d:0>2}{s}", .{
+            hour12(st.wHour), st.wMinute, st.wSecond, ampmSuffix(&st, show_marker),
+        }) catch return 0;
     }
-    return 0;
+    return writeFormattedOut(lpTimeStr, cchTime, formatted);
+}
+
+fn hour12(wHour: u16) u16 {
+    const h = wHour % 12;
+    return if (h == 0) 12 else h;
+}
+
+fn ampmSuffix(st: *const w32.SYSTEMTIME, show: bool) []const u8 {
+    if (!show) return "";
+    return if (st.wHour < 12) " AM" else " PM";
 }
 
 /// --- String functions (lstr*) ---
@@ -797,4 +879,67 @@ pub fn lstrcmpiW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 
     if (s1[i] == 0 and s2[i] != 0) return -1;
     if (s1[i] != 0 and s2[i] == 0) return 1;
     return 0;
+}
+
+// -------------------------------------------------------------------------
+// Tests
+// -------------------------------------------------------------------------
+
+const testing = std.testing;
+
+fn formatDate(st: *const w32.SYSTEMTIME, flags: u32, buf: []u8) []const u8 {
+    const n = stub_GetDateFormatA(0, flags, @intFromPtr(st), 0, @intFromPtr(buf.ptr), @intCast(buf.len));
+    return std.mem.sliceTo(buf[0..@intCast(n - 1)], 0);
+}
+
+fn formatTime(st: *const w32.SYSTEMTIME, flags: u32, buf: []u8) []const u8 {
+    const n = stub_GetTimeFormatA(0, flags, @intFromPtr(st), 0, @intFromPtr(buf.ptr), @intCast(buf.len));
+    return std.mem.sliceTo(buf[0..@intCast(n - 1)], 0);
+}
+
+test "GetDateFormatA honors the caller's SYSTEMTIME" {
+    // Leap day pins the calendar arithmetic; wDayOfWeek 4 = Thursday.
+    const st: w32.SYSTEMTIME = .{ .wYear = 2024, .wMonth = 2, .wDayOfWeek = 4, .wDay = 29 };
+
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("2/29/2024", formatDate(&st, 0, &buf)); // DATE_SHORTDATE
+    try testing.expectEqualStrings("Thursday, February 29, 2024", formatDate(&st, 0x2, &buf)); // DATE_LONGDATE
+    try testing.expectEqualStrings("February 2024", formatDate(&st, 0x8, &buf)); // DATE_YEARMONTH
+}
+
+test "GetDateFormatA buffer semantics follow Win32" {
+    const st: w32.SYSTEMTIME = .{ .wYear = 2024, .wMonth = 2, .wDay = 29 };
+    var buf: [64]u8 = undefined;
+
+    // cchDate == 0 queries the required size including the NUL.
+    try testing.expectEqual(@as(i32, "2/29/2024".len + 1), stub_GetDateFormatA(0, 0, @intFromPtr(&st), 0, 0, 0));
+
+    // A buffer that cannot hold text + NUL fails without touching it.
+    try testing.expectEqual(@as(i32, 0), stub_GetDateFormatA(0, 0, @intFromPtr(&st), 0, @intFromPtr(&buf), "2/29/2024".len));
+
+    // Exactly text + NUL succeeds.
+    try testing.expectEqual(@as(i32, "2/29/2024".len + 1), stub_GetDateFormatA(0, 0, @intFromPtr(&st), 0, @intFromPtr(&buf), "2/29/2024".len + 1));
+    try testing.expectEqualStrings("2/29/2024", std.mem.sliceTo(&buf, 0));
+
+    // Out-of-range month folds into range instead of indexing out of bounds.
+    const weird: w32.SYSTEMTIME = .{ .wYear = 2024, .wMonth = 25, .wDay = 1 };
+    _ = formatDate(&weird, 0x2, &buf);
+}
+
+test "GetTimeFormatA formats en-US 12-hour clock with AM/PM" {
+    var buf: [64]u8 = undefined;
+
+    const afternoon: w32.SYSTEMTIME = .{ .wHour = 13, .wMinute = 5, .wSecond = 9 };
+    try testing.expectEqualStrings("1:05:09 PM", formatTime(&afternoon, 0, &buf));
+
+    // Midnight is hour 12 AM, noon is hour 12 PM on a 12-hour clock.
+    const midnight: w32.SYSTEMTIME = .{ .wHour = 0, .wMinute = 15 };
+    try testing.expectEqualStrings("12:15:00 AM", formatTime(&midnight, 0, &buf));
+    const noon: w32.SYSTEMTIME = .{ .wHour = 12 };
+    try testing.expectEqualStrings("12:00:00 PM", formatTime(&noon, 0, &buf));
+
+    // TIME_NOSECONDS 0x2 / TIME_NOMINUTESORSECONDS 0x1 / TIME_FORCE24HOURFORMAT 0x8
+    try testing.expectEqualStrings("1:05 PM", formatTime(&afternoon, 0x2, &buf));
+    try testing.expectEqualStrings("1 PM", formatTime(&afternoon, 0x1, &buf));
+    try testing.expectEqualStrings("13:05:09", formatTime(&afternoon, 0x8, &buf));
 }
