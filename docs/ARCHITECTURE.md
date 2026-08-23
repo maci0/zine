@@ -75,7 +75,7 @@ The native entry point handles:
 
 **WASM** — [`src/wasm_main.zig`](../src/wasm_main.zig)
 
-The WASM entry point runs under a WASI runtime (e.g. wasmtime). It always uses the software interpreter since there is no way to directly execute x86 machine code in WebAssembly. It allocates a combined memory buffer laid out as `[PE image] [stack (64 KB)] [thunks (32 KB)] [heap (32 MB)]`, keeping thunks in a separate region beyond the PE's `SizeOfImage` so they don't overwrite import tables or data sections.
+The WASM entry point runs under a WASI runtime (e.g. wasmtime). It always uses the software interpreter since there is no way to directly execute x86 machine code in WebAssembly. It allocates a combined memory buffer laid out as `[PE image] [stack (64 KB)] [thunks (32 KB)] [heap (512 MB)]`, keeping thunks in a separate region beyond the PE's `SizeOfImage` so they don't overwrite import tables or data sections.
 
 ---
 
@@ -161,7 +161,7 @@ On WASM and x86_64, Win32 API calls can't be dispatched by jumping to native fun
 
 [`src/win32/`](../src/win32/)
 
-Zine implements 37 DLL stub modules that provide Win32 API compatibility (35 always registered, plus 2 WASM-only). Each module exports a `register()` function that adds its exports to the `Environment`. Unresolved functions fall back to `not_implemented`, which prints a diagnostic and exits.
+Zine implements 37 DLL stub modules that provide Win32 API compatibility (36 always registered, plus 1 WASM-only). Each module exports a `register()` function that adds its exports to the `Environment`. Unresolved functions fall back to `not_implemented`, which prints a diagnostic and exits.
 
 | Category | Stubs |
 |----------|-------|
@@ -172,7 +172,7 @@ Zine implements 37 DLL stub modules that provide Win32 API compatibility (35 alw
 | **Audio/Input** | `dsound.zig` (DirectSound), `winmm.zig` (Windows Multimedia), `dinput.zig` (DirectInput), `dinput8.zig` (DirectInput8), `mss32.zig` (Miles Sound System) |
 | **Security/RPC** | `advapi32.zig`, `rpcrt4.zig` (RPC — Remote Procedure Call), `ole32.zig` (OLE — Object Linking and Embedding), `oleaut32.zig` (OLE Automation) |
 | **Networking** | `wsock32.zig`, `ws2_32.zig`, `icmp.zig` |
-| **Other** | `imm32.zig`, `version.zig`, `winspool.zig`, `setupapi.zig`, `shlwapi.zig`, `msvcp60.zig`, `mpr.zig`, `nddeapi.zig`, `imagehlp.zig`, `mfc42.zig`, `cards.zig`, `vdmdbg.zig`, `mag_hook.zig`, `mspdb60.zig` (WASM), `rcdll.zig` (WASM) |
+| **Other** | `imm32.zig`, `version.zig`, `winspool.zig`, `setupapi.zig`, `shlwapi.zig`, `msvcp60.zig`, `mpr.zig`, `nddeapi.zig`, `imagehlp.zig`, `mfc42.zig`, `cards.zig`, `vdmdbg.zig`, `mag_hook.zig`, `rcdll.zig`; `mspdb60.zig` (WASM-only) |
 
 #### Calling Convention
 
@@ -348,7 +348,7 @@ preferred_base
      ├──────────────────────┤
      │ Thunks (32 KB)       │ ← INT 0xFE stubs (CD FE + 4-byte ID), filled with 0xCC
      ├──────────────────────┤
-     │ Heap (32 MB)         │ ← Guest heap for VirtualAlloc, HeapAlloc, malloc, etc.
+     │ Heap (512 MB)       │ ← Guest heap for VirtualAlloc, HeapAlloc, malloc, etc.
      └──────────────────────┘
 ```
 
@@ -399,7 +399,7 @@ The build system includes a `test` step that runs embedded unit tests in the x86
 zig build test
 ```
 
-Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `decode_cache.zig`, `execute.zig`, `thunks.zig`, `jit/compiler.zig`, `profiler.zig`, `path_utils.zig`, `bat.zig`, `win32/user32.zig`, `win32/ntdll/ntapi.zig`, `win32/advapi32/services.zig`, `win32/advapi32/security.zig`.
+Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `decode_cache.zig`, `execute.zig`, `sse.zig`, `thunks.zig`, `jit/compiler.zig`, `loader/menu_parser.zig`, `loader/module.zig`, `profiler.zig`, `path_utils.zig`, `bat.zig`, `pe.zig`, `runner.zig`, `win32/user32.zig`, `win32/civil_time.zig`, `win32/kernel32/{time,file,sync,process}.zig`, `win32/ntdll/ntapi.zig`, `win32/advapi32/{services,security}.zig`, `win32/gdi32/{drawing,object,dc}.zig`.
 
 ---
 

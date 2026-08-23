@@ -70,9 +70,15 @@ The interpreter uses a 1024-entry hash-indexed **instruction decode cache** (`de
 
 ## Handling Self-Modifying Code (SMC)
 
-Self-Modifying Code is historically the hardest problem for x86 recompilers (especially for games and legacy DRM which use it heavily). When guest code overwrites an instruction that has already been compiled to WebAssembly, the JIT must guarantee that the stale WASM block is never executed again. 
+Self-Modifying Code is historically the hardest problem for x86 recompilers (especially for games and legacy DRM which use it heavily). When guest code overwrites an instruction that has already been compiled to WebAssembly, the JIT must guarantee that the stale WASM block is never executed again.
 
-Zine handles this with **Page Protection and Memory Watchers**:
+Current state:
+
+1. **Interpreter decode cache**: each entry is validated by its EIP tag plus the first 4 bytes of the instruction stream, so a write to cached code causes a tag mismatch and a re-decode on the next fetch. This covers the interpreter path.
+2. **JIT block cache**: keyed by guest EIP only (`block_cache_keys`/`block_cache_vals` in `compiler.zig`) with no write detection — a block modified after translation can currently execute stale code. This is a known limitation.
+
+Planned design (not yet implemented):
+
 1. **Marking Translated Pages:** When the JIT translates a block of memory, it marks the underlying guest memory page (usually 4KB) as "Translated" in the MMU (Memory Management Unit).
 2. **Write Intercepts:** The MMU enforces soft "Read-Only" permissions on these Translated pages.
 3. **Cache Eviction:** If a guest `MOV` or `STOSD` instruction attempts to write to a Translated page, the MMU intercepts the trap. The JIT looks up which cached WebAssembly blocks overlap with the modified bytes, invalidates those specific function references from the cache map, and allows the write to proceed.
@@ -132,7 +138,7 @@ The final phase lifts the JIT from compiling one-off instruction structures into
 
 ### 5. JIT Host Interface (`host.zig` / `host_wasm.zig`)
 Manages CPU state transfer between the interpreter and JIT-compiled blocks:
-- **`JitCpuState`**: A 64-byte struct in linear memory containing all 8 GPRs, EIP, and flags — used to pass state between the host and compiled WASM modules.
+- **`JitCpuState`**: A 64-byte struct in linear memory containing all 8 GPRs, EIP, packed EFLAGS, an execution status code, `mem_base` (guest VA → linear memory offset adjustment), and the FS segment base — used to pass state between the host and compiled WASM modules.
 - **`host.zig`**: Defines the `JitCpuState` struct and state transfer functions (`cpuToJitState` / `jitStateToCpu`).
 - **`host_wasm.zig`**: WASM-side imports for `jit_compile` and `jit_call` that communicate with the host runtime (wasmer/wasmtime) to compile and execute JIT blocks.
 

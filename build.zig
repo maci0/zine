@@ -161,7 +161,7 @@ pub fn build(b: *std.Build) void {
     const arch = b.option(std.Target.Cpu.Arch, "arch", "Target architecture (x86, x86_64, wasm32, or wasm64)");
     const build_all = b.option(bool, "all", "Build all targets (x86 + x86_64 + wasm32 + wasm64)") orelse false;
 
-    const use_fltk = b.option(bool, "fltk", "Enable FLTK native GUI backend (x86 only)") orelse false;
+    const use_fltk = b.option(bool, "fltk", "Enable FLTK native GUI backend (requires -Darch=x86_64)") orelse false;
     const embed_stubs = !(b.option(bool, "external-stubs", "Load Win32 stubs from external DLLs instead of embedding them") orelse false);
     const enable_jit_host = b.option(bool, "jit_host", "Enable JIT host imports (requires zine-host or browser)") orelse false;
 
