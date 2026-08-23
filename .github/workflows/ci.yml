@@ -18,5 +18,14 @@ jobs:
       # Canonical formatter check (mirrors the in-build gate; kept explicit so
       # a formatting failure is reported before any compile work).
       - run: zig fmt --check src build.zig
+      # Shell helpers: every tracked script must stay shellcheck-clean.
+      - run: git ls-files '*.sh' | xargs -r shellcheck -x
+      # Compile every shipped target, not just the default: the compiler is
+      # this repo's analyzer, so an error on x86_64/wasm32/wasm64 must block
+      # merges exactly like one on x86. Separate steps keep peak memory at a
+      # single wasm compile and attribute failures per target.
       - run: zig build --summary all
+      - run: zig build -Darch=x86_64 --summary all
+      - run: zig build -Darch=wasm32 --summary all
+      - run: zig build -Darch=wasm64 --summary all
       - run: zig build test --summary all

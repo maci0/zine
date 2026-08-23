@@ -65,6 +65,7 @@ run_app() {
         FAIL=$((FAIL + 1))
         return
     fi
+    # shellcheck disable=SC2086  # libs is an intentional space-separated list of .lib args
     if ! "$X86" "$VC_BIN/LINK.EXE" /NOLOGO "/OUT:$base.exe" /LIBPATH:"$VC_LIB" "$base.obj" $libs > link.txt 2>&1; then
         echo "FAIL  $base: LINK ($(tail -2 link.txt | tr '\n' ' '))"
         FAIL=$((FAIL + 1))
