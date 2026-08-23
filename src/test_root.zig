@@ -20,6 +20,7 @@ comptime {
     // Loader tests
     _ = @import("loader/menu_parser.zig");
     _ = @import("loader/module.zig");
+    _ = @import("loader/loader.zig");
 
     // Profiler tests
     _ = @import("profiler.zig");

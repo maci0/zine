@@ -407,7 +407,7 @@ pub fn main(init: std.process.Init) !void {
     // preferred ImageBase. Module.load applied relocations for that host address.
     // Reverse relocations: undo Module.load's adjustments so absolute
     // addresses match preferred_base (= GuestMemory virtual addresses).
-    runner.applyReverseRelocations(
+    loader.applyReverseRelocations(
         combined_buf,
         &main_module.parser,
         image_size,
@@ -567,7 +567,7 @@ pub fn main(init: std.process.Init) !void {
     };
     cpu.eip = preferred_base +% ep_rva;
 
-    runner.protectRsrc(main_module.parser.sections, &cpu.memory, preferred_base, image_size);
+    loader.protectRsrc(main_module.parser.sections, &cpu.memory, preferred_base, image_size);
 
     // Wire up guest heap for all stubs (VirtualAlloc, HeapAlloc, malloc, etc.)
     // (stub_common was already imported above for the pre-resolveAllImports setup)
@@ -774,8 +774,8 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
 
     @memcpy(child_buf[0..child_image_size], child_module.mapped_memory[0..child_image_size]);
 
-    runner.applyReverseRelocations(child_buf, &child_module.parser, child_image_size, @truncate(child_module.image_base), child_preferred);
-    runner.zeroFillBss(child_buf, child_module.parser.sections);
+    loader.applyReverseRelocations(child_buf, &child_module.parser, child_image_size, @truncate(child_module.image_base), child_preferred);
+    loader.zeroFillBss(child_buf, child_module.parser.sections);
 
     // Build argv as host-allocated null-terminated strings.
     // ensureGuestArgs() reads these via std.mem.span() and copies them
@@ -811,7 +811,7 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
 
     x86_memory.guest_memory = &child_cpu.memory;
 
-    runner.protectRsrc(child_module.parser.sections, &child_cpu.memory, child_preferred, child_image_size);
+    loader.protectRsrc(child_module.parser.sections, &child_cpu.memory, child_preferred, child_image_size);
 
     log.info("wasm: child PE '{s}' at EIP=0x{X}, ESP=0x{X}", .{ exe_name, child_cpu.eip, child_cpu.esp });
 

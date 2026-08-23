@@ -2,7 +2,9 @@
 //!
 //! This module handles loading PE files into guest memory, mapping sections,
 //! resolving DLL imports, and setting up thunks for Win32 API calls. It also
-//! manages the thunk code region used on WASM to bridge guest and host.
+//! manages the thunk code region used on WASM to bridge guest and host, plus
+//! image placement helpers (reverse relocation, BSS zero-fill, .rsrc
+//! protection) shared by both entry points.
 
 const std = @import("std");
 const pe = @import("../pe.zig");
@@ -85,15 +87,14 @@ pub fn copyModuleToGuest(mod: *Module) void {
     // mod.image_base (the host mapped address). We need to re-relocate
     // from that base to the guest VA.
     const actual_base: u32 = @truncate(mod.image_base);
-    const runner = @import("../runner.zig");
-    runner.applyReverseRelocations(
+    applyReverseRelocations(
         gmem.base[offset..][0..image_size],
         &mod.parser,
         image_size,
         actual_base,
         guest_va,
     );
-    runner.zeroFillBss(gmem.base[offset..][0..image_size], mod.parser.sections);
+    zeroFillBss(gmem.base[offset..][0..image_size], mod.parser.sections);
 
     // Update image_base so getExport() returns guest VAs.
     // Keep mapped_memory pointing at original buffer so parser references
@@ -101,6 +102,134 @@ pub fn copyModuleToGuest(mod: *Module) void {
     mod.image_base = guest_va;
 
     log.info("copyModuleToGuest: {s} at guest 0x{X}-0x{X} ({d} bytes), heap_cursor now 0x{X}", .{ mod.name, guest_va, guest_va + image_size, image_size, gmem.heap_cursor + gmem.base_addr });
+}
+
+// -----------------------------------------------------------------------
+// Reverse Relocation (WASM only)
+// -----------------------------------------------------------------------
+
+/// Apply reverse base relocations to a PE image buffer, skipping IAT slots.
+/// Used in WASM mode where the PE is copied into a combined buffer at a
+/// different base address than where Module.load mapped it.
+pub fn applyReverseRelocations(
+    buf: []u8,
+    parser: anytype,
+    image_size: u32,
+    actual_base: u32,
+    preferred_base: u32,
+) void {
+    if (actual_base == preferred_base) return;
+    const reverse_delta = preferred_base -% actual_base;
+    const opt_header = &parser.getNtHeaders().OptionalHeader;
+
+    // Collect IAT ranges to skip (resolveImports already wrote correct thunk addresses)
+    const import_dir_entry = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_IMPORT];
+    var iat_ranges: [32][2]u32 = undefined;
+    var iat_range_count: usize = 0;
+    if (import_dir_entry.Size > 0) {
+        var imp_off = import_dir_entry.VirtualAddress;
+        while (imp_off + 20 <= image_size) {
+            const imp_name = @as(*align(1) const u32, @ptrCast(buf[imp_off + 12 ..].ptr)).*;
+            if (imp_name == 0) break;
+            const first_thunk_rva = @as(*align(1) const u32, @ptrCast(buf[imp_off + 16 ..].ptr)).*;
+            const orig_thunk_rva_raw = @as(*align(1) const u32, @ptrCast(buf[imp_off..].ptr)).*;
+            const ilt_rva = if (orig_thunk_rva_raw == 0) first_thunk_rva else orig_thunk_rva_raw;
+            var count: u32 = 0;
+            while (ilt_rva + (count + 1) * 4 <= image_size) {
+                const e_val = @as(*align(1) const u32, @ptrCast(buf[ilt_rva + count * 4 ..].ptr)).*;
+                if (e_val == 0) break;
+                count += 1;
+            }
+            if (iat_range_count < iat_ranges.len) {
+                // IAT RVAs in buf are in actual_base terms (from Module.load relocation),
+                // but .reloc entries use preferred_base terms. Adjust to match.
+                const adj_start = first_thunk_rva +% reverse_delta;
+                iat_ranges[iat_range_count] = .{ adj_start, adj_start + count * 4 };
+                iat_range_count += 1;
+            }
+            imp_off += 20;
+        }
+    }
+
+    const reloc_dir = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC];
+    if (reloc_dir.Size > 0) {
+        var reloc_offset = reloc_dir.VirtualAddress;
+        // Clamp the reloc table to the buffer; malformed PEs may declare a
+        // directory extending past the image.
+        const buf_end: u64 = @min(@as(u64, reloc_offset) + reloc_dir.Size, image_size);
+        while (@as(u64, reloc_offset) + 8 <= buf_end) {
+            const block_va = @as(*align(1) const u32, @ptrCast(buf[reloc_offset..].ptr)).*;
+            const block_size = @as(*align(1) const u32, @ptrCast(buf[reloc_offset + 4 ..].ptr)).*;
+            if (block_size < 8) break;
+            if (@as(u64, reloc_offset) + block_size > image_size) break;
+            const entries_count = (block_size - 8) / 2;
+            for (0..entries_count) |e| {
+                const entry = @as(*align(1) const u16, @ptrCast(buf[reloc_offset + 8 + e * 2 ..].ptr)).*;
+                const IMAGE_REL_BASED_HIGHLOW = 3;
+                if (entry >> 12 == IMAGE_REL_BASED_HIGHLOW) {
+                    const patch_addr = block_va + (entry & 0x0FFF);
+                    var in_iat = false;
+                    for (iat_ranges[0..iat_range_count]) |range| {
+                        if (patch_addr >= range[0] and patch_addr < range[1]) {
+                            in_iat = true;
+                            break;
+                        }
+                    }
+                    if (in_iat) continue;
+                    if (patch_addr + 4 <= image_size) {
+                        const ptr = @as(*align(1) u32, @ptrCast(buf[patch_addr..].ptr));
+                        ptr.* = ptr.* +% reverse_delta;
+                    }
+                }
+            }
+            reloc_offset += block_size;
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// BSS Zero-Fill
+// -----------------------------------------------------------------------
+
+/// Zero-fill BSS regions in PE sections (VirtualSize > SizeOfRawData).
+pub fn zeroFillBss(buf: []u8, sections: anytype) void {
+    for (sections) |sec| {
+        const vsize = sec.Misc.VirtualSize;
+        if (vsize > sec.SizeOfRawData) {
+            const bss_start = sec.VirtualAddress + sec.SizeOfRawData;
+            const bss_end = sec.VirtualAddress + vsize;
+            if (bss_end <= buf.len) {
+                @memset(buf[bss_start..bss_end], 0);
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// .rsrc Write Protection
+// -----------------------------------------------------------------------
+
+/// Protect the .rsrc section from guest buffer overflows.
+/// Only .rsrc is protected — .rdata/.text must remain writable because
+/// some CRT startup code writes to IAT slots and other "read-only" areas.
+pub fn protectRsrc(
+    sections: anytype,
+    memory: *x86_memory.GuestMemory,
+    preferred_base: u32,
+    image_size: u32,
+) void {
+    for (sections) |sec| {
+        if (std.mem.startsWith(u8, &sec.Name, ".rsrc")) {
+            memory.pe_image_end = preferred_base +% image_size;
+            const rsrc_start = preferred_base +% sec.VirtualAddress;
+            const rsrc_end = rsrc_start +% sec.Misc.VirtualSize;
+            if (rsrc_start > preferred_base)
+                memory.addWritableSection(preferred_base, rsrc_start);
+            if (rsrc_end < preferred_base +% image_size)
+                memory.addWritableSection(rsrc_end, preferred_base +% image_size);
+            break;
+        }
+    }
 }
 
 /// Allocate a guest thunk for a builtin export resolved at runtime (e.g. via
@@ -427,4 +556,72 @@ pub fn attachLoadedDlls(env: *Environment) void {
             _ = DllMain(@intFromPtr(mod.mapped_memory.ptr), 1, 0);
         }
     }
+}
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
+
+const testing = @import("std").testing;
+
+const FakeParser = struct {
+    nt: *const pe.IMAGE_NT_HEADERS32,
+    pub fn getNtHeaders(self: *const FakeParser) *const pe.IMAGE_NT_HEADERS32 {
+        return self.nt;
+    }
+};
+
+fn makeNtHeaders() pe.IMAGE_NT_HEADERS32 {
+    var nt = std.mem.zeroes(pe.IMAGE_NT_HEADERS32);
+    nt.OptionalHeader.Magic = 0x10b;
+    return nt;
+}
+
+test "applyReverseRelocations: patches HIGHLOW entries" {
+    var nt = comptime makeNtHeaders();
+    const parser = FakeParser{ .nt = &nt };
+
+    // Image with one reloc block at RVA 0 patching the u32 at RVA 12.
+    var buf = [_]u8{0} ** 16;
+    std.mem.writeInt(u32, buf[0..4], 0, .little); // block VirtualAddress
+    std.mem.writeInt(u32, buf[4..8], 10, .little); // block SizeOfBlock (1 entry)
+    const entry: u16 = (3 << 12) | 0xC; // HIGHLOW, offset 12 -> patch RVA 12
+    std.mem.writeInt(u16, buf[8..10], entry, .little);
+    std.mem.writeInt(u32, buf[12..16], 0x0000_0001, .little);
+
+    nt.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC] =
+        .{ .VirtualAddress = 0, .Size = 10 };
+
+    applyReverseRelocations(&buf, &parser, buf.len, 0x0001_0000, 0x0002_0000);
+
+    // reverse_delta = preferred - actual = 0x10000
+    try testing.expectEqual(@as(u32, 0x0001_0001), std.mem.readInt(u32, buf[12..16], .little));
+}
+
+test "applyReverseRelocations: reloc directory beyond image is clamped" {
+    var nt = comptime makeNtHeaders();
+    const parser = FakeParser{ .nt = &nt };
+    nt.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC] =
+        .{ .VirtualAddress = 0x1000, .Size = 0x100 }; // entirely past image_size
+
+    var buf = [_]u8{0xAB} ** 64;
+    // Must not read out of bounds or panic.
+    applyReverseRelocations(&buf, &parser, buf.len, 0x0001_0000, 0x0002_0000);
+}
+
+test "applyReverseRelocations: out-of-bounds HIGHLOW entry is skipped" {
+    var nt = comptime makeNtHeaders();
+    const parser = FakeParser{ .nt = &nt };
+
+    // Reloc block claims an entry pointing past the end of the image.
+    var buf = [_]u8{0} ** 16;
+    std.mem.writeInt(u32, buf[0..4], 0, .little); // block VirtualAddress
+    std.mem.writeInt(u32, buf[4..8], 10, .little); // block SizeOfBlock (1 entry)
+    const entry: u16 = (3 << 12) | 0xFC; // patch RVA 252 — far beyond 16 bytes
+    std.mem.writeInt(u16, buf[8..10], entry, .little);
+
+    nt.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC] =
+        .{ .VirtualAddress = 0, .Size = 10 };
+
+    applyReverseRelocations(&buf, &parser, buf.len, 0x0001_0000, 0x0002_0000);
 }
