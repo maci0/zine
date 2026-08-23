@@ -213,6 +213,70 @@ pub const GuestMemory = struct {
         }
         return true;
     }
+
+    /// True when every byte in [addr, addr+len) reads as in-bounds guest
+    /// memory. Used to gate bulk copies; a false result means element-wise
+    /// handling is required (partial ranges no-op per byte).
+    pub fn readRangeInBounds(self: *const GuestMemory, addr: u32, len: u64) bool {
+        if (len == 0) return true;
+        // Reject ranges that wrap the 32-bit address space.
+        if (@as(u64, addr) + len > 0x100000000) return false;
+        if (self.native_linear) return addr >= 4096;
+        const a = addr -% self.base_addr;
+        return a < self.base.len and len <= @as(u64, self.base.len) - a;
+    }
+
+    /// True when every byte in [addr, addr+len) can be written: in bounds and
+    /// not inside a write-protected PE region. Walks the writable-section
+    /// intervals to cover the range exactly.
+    pub fn writeRangeAllowed(self: *const GuestMemory, addr: u32, len: u64) bool {
+        if (len == 0) return true;
+        if (@as(u64, addr) + len > 0x100000000) return false;
+        if (self.native_linear) return addr >= 4096;
+        const start = addr -% self.base_addr;
+        if (start >= self.base.len) return false;
+        if (len > self.base.len - start) return false;
+        // Outside the protected image window everything is writable.
+        if (self.pe_image_end == 0) return true;
+        const win_start = self.base_addr;
+        const win_end = self.pe_image_end;
+        if (addr >= win_end or addr + len <= win_start) return true;
+        // Range intersects the image: require full coverage by writable
+        // sections. Greedy interval walk over at most 8 sections.
+        var cur: u64 = if (addr < win_start) win_start else addr;
+        const end: u64 = @min(@as(u64, addr) + len, win_end);
+        var covered = true;
+        while (cur < end) {
+            var next: ?u64 = null;
+            for (self.writable_sections[0..self.writable_section_count]) |r| {
+                if (r[0] <= cur and cur < r[1]) {
+                    next = @max(next orelse 0, r[1]);
+                }
+            }
+            if (next) |n| {
+                cur = n;
+            } else {
+                covered = false;
+                break;
+            }
+        }
+        return covered;
+    }
+
+    /// Mutable slice over an already-validated in-bounds guest range
+    /// (see readRangeInBounds/writeRangeAllowed).
+    pub fn mutRange(self: *GuestMemory, addr: u32, len: usize) []u8 {
+        if (self.native_linear) return @as([*]u8, @ptrFromInt(addr))[0..len];
+        const a = addr -% self.base_addr;
+        return self.base[a..][0..len];
+    }
+
+    /// Read-only slice over an already-validated in-bounds guest range.
+    pub fn range(self: *const GuestMemory, addr: u32, len: usize) []const u8 {
+        if (self.native_linear) return @as([*]const u8, @ptrFromInt(addr))[0..len];
+        const a = addr -% self.base_addr;
+        return self.base[a..][0..len];
+    }
 };
 
 // -----------------------------------------------------------------------

@@ -33,4 +33,5 @@ comptime {
     _ = @import("win32/ntdll/ntapi.zig");
     _ = @import("win32/advapi32/services.zig");
     _ = @import("win32/advapi32/security.zig");
+    _ = @import("win32/gdi32/drawing.zig");
 }

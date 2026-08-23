@@ -2211,6 +2211,20 @@ fn execShift(cpu: *Cpu, insn: *const Instruction) void {
 fn execMovsb(cpu: *Cpu, insn: *const Instruction) void {
     const df = cpu.flags.getDF();
     if (insn.rep) {
+        // Bulk path: forward REP MOVSB is a byte copy; when the whole range
+        // is in-bounds and writable, one memcpy replaces ECX checked bytes.
+        // copyForwards preserves the forward-copy overlap semantics.
+        if (!df and cpu.memory.readRangeInBounds(cpu.esi, cpu.ecx) and
+            cpu.memory.writeRangeAllowed(cpu.edi, cpu.ecx))
+        {
+            const dst = cpu.memory.mutRange(cpu.edi, @intCast(cpu.ecx));
+            const src = cpu.memory.range(cpu.esi, @intCast(cpu.ecx));
+            std.mem.copyForwards(u8, dst, src);
+            cpu.esi +%= cpu.ecx;
+            cpu.edi +%= cpu.ecx;
+            cpu.ecx = 0;
+            return;
+        }
         while (cpu.ecx > 0) : (cpu.ecx -= 1) {
             cpu.memory.write8(cpu.edi, cpu.memory.read8(cpu.esi));
             if (df) {
@@ -2237,6 +2251,21 @@ fn execMovsb(cpu: *Cpu, insn: *const Instruction) void {
 fn execMovsd(cpu: *Cpu, insn: *const Instruction) void {
     const df = cpu.flags.getDF();
     if (insn.rep) {
+        // Bulk path for the common forward case (see execMovsb).
+        if (!df) {
+            const total: u64 = @as(u64, cpu.ecx) * 4;
+            if (cpu.memory.readRangeInBounds(cpu.esi, total) and
+                cpu.memory.writeRangeAllowed(cpu.edi, total))
+            {
+                const dst = cpu.memory.mutRange(cpu.edi, @intCast(total));
+                const src = cpu.memory.range(cpu.esi, @intCast(total));
+                std.mem.copyForwards(u8, dst, src);
+                cpu.esi +%= @as(u32, @truncate(total));
+                cpu.edi +%= @as(u32, @truncate(total));
+                cpu.ecx = 0;
+                return;
+            }
+        }
         while (cpu.ecx > 0) : (cpu.ecx -= 1) {
             cpu.memory.write32(cpu.edi, cpu.memory.read32(cpu.esi));
             if (df) {
@@ -2264,6 +2293,13 @@ fn execStosb(cpu: *Cpu, insn: *const Instruction) void {
     const df = cpu.flags.getDF();
     const val = cpu.getReg8(0);
     if (insn.rep) {
+        // Bulk path: forward REP STOSB is a memset.
+        if (!df and cpu.memory.writeRangeAllowed(cpu.edi, cpu.ecx)) {
+            @memset(cpu.memory.mutRange(cpu.edi, @intCast(cpu.ecx)), val);
+            cpu.edi +%= cpu.ecx;
+            cpu.ecx = 0;
+            return;
+        }
         while (cpu.ecx > 0) : (cpu.ecx -= 1) {
             cpu.memory.write8(cpu.edi, val);
             if (df) cpu.edi -%= 1 else cpu.edi +%= 1;
@@ -2278,6 +2314,24 @@ fn execStosb(cpu: *Cpu, insn: *const Instruction) void {
 fn execStosd(cpu: *Cpu, insn: *const Instruction) void {
     const df = cpu.flags.getDF();
     if (insn.rep) {
+        // Bulk path: forward REP STOSD fills with the repeated EAX pattern.
+        if (!df) {
+            const total: u64 = @as(u64, cpu.ecx) * 4;
+            if (total > 0 and cpu.memory.writeRangeAllowed(cpu.edi, total)) {
+                const buf = cpu.memory.mutRange(cpu.edi, @intCast(total));
+                std.mem.writeInt(u32, buf[0..4], cpu.eax, .little);
+                var off: usize = 4;
+                // Double the known prefix; copy it forward for the remainder.
+                while (off < buf.len) {
+                    const chunk = @min(off, buf.len - off);
+                    @memcpy(buf[off..][0..chunk], buf[0..chunk]);
+                    off += chunk;
+                }
+                cpu.edi +%= @as(u32, @truncate(total));
+                cpu.ecx = 0;
+                return;
+            }
+        }
         while (cpu.ecx > 0) : (cpu.ecx -= 1) {
             cpu.memory.write32(cpu.edi, cpu.eax);
             if (df) cpu.edi -%= 4 else cpu.edi +%= 4;
