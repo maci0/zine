@@ -162,6 +162,19 @@ pub fn getKernelObject(handle: usize) ?*KernelObject {
     return null;
 }
 
+/// Release a kernel object handle via CloseHandle, freeing its registry slot.
+/// Returns true when the handle belonged to this registry. Named objects are
+/// not refcounted: the first close frees the object.
+pub fn closeKernelObject(handle: usize) bool {
+    for (&kernel_objects) |*ko| {
+        if (ko.handle == handle) {
+            ko.* = .{};
+            return true;
+        }
+    }
+    return false;
+}
+
 fn findByName(obj_type: KernelObjectType, name: []const u8) ?*KernelObject {
     if (name.len == 0) return null;
     for (&kernel_objects) |*ko| {
@@ -836,4 +849,27 @@ pub fn FlsFree(dwFlsIndex: u32) callconv(w32cc.WINAPI) i32 {
     fls_values[dwFlsIndex] = 0;
     fls_callbacks[dwFlsIndex] = 0;
     return 1; // TRUE
+}
+
+// -------------------------------------------------------------------------
+// Tests
+// -------------------------------------------------------------------------
+
+test "CloseHandle frees kernel object slots" {
+    kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
+
+    const h = CreateEventA(0, 0, 0, 0);
+    try std.testing.expect(h != 0);
+    try std.testing.expect(getKernelObject(h) != null);
+
+    // Closing must free the slot: a fresh create succeeds and the old handle
+    // is gone from the registry.
+    try std.testing.expect(closeKernelObject(h));
+    try std.testing.expect(getKernelObject(h) == null);
+    try std.testing.expect(CreateEventA(0, 0, 0, 0) != 0);
+}
+
+test "closeKernelObject ignores unknown handles" {
+    kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
+    try std.testing.expect(!closeKernelObject(0xE0000001));
 }

@@ -183,6 +183,34 @@ var view_sizes: [MAX_VIEWS]usize = [_]usize{0} ** MAX_VIEWS;
 var view_offsets: [MAX_VIEWS]u64 = [_]u64{0} ** MAX_VIEWS;
 var view_writable: [MAX_VIEWS]bool = [_]bool{false} ** MAX_VIEWS;
 
+// Native hosts mmap real address ranges; UnmapViewOfFile must munmap them or
+// every mapping leaks address space until process exit.
+const MAX_NATIVE_MAPS = 64;
+var native_map_addrs: [MAX_NATIVE_MAPS]usize = [_]usize{0} ** MAX_NATIVE_MAPS;
+var native_map_sizes: [MAX_NATIVE_MAPS]usize = [_]usize{0} ** MAX_NATIVE_MAPS;
+
+fn registerNativeMap(addr: usize, size: usize) void {
+    const page_rounded = (size + 0xFFF) & ~@as(usize, 0xFFF);
+    for (&native_map_addrs, &native_map_sizes) |*a, *s| {
+        if (a.* == 0) {
+            a.* = addr;
+            s.* = page_rounded;
+            return;
+        }
+    }
+}
+
+fn unregisterNativeMap(addr: usize) void {
+    for (&native_map_addrs, &native_map_sizes) |*a, *s| {
+        if (a.* == addr) {
+            platform.munmap(@as([*]align(4096) u8, @ptrFromInt(a.*))[0..s.*]);
+            a.* = 0;
+            s.* = 0;
+            return;
+        }
+    }
+}
+
 fn alloc_mapping(fd: i32) ?usize {
     for (0..MAX_MAPPINGS) |i| {
         if (mapping_fds[i] == -1) {
@@ -291,6 +319,7 @@ pub fn MapViewOfFileEx(hFileMappingObject: usize, dwDesiredAccess: u32, dwFileOf
                     }
                     trace.print("]\n", .{});
                 }
+                registerNativeMap(@intFromPtr(memory.ptr), map_size);
                 return @intFromPtr(memory.ptr);
             }
         }
@@ -335,6 +364,8 @@ pub fn DeviceIoControl(hDevice: usize, dwIoControlCode: u32, lpInBuffer: usize, 
 /// Implementation status: Partially implemented
 pub fn UnmapViewOfFile(lpBaseAddress: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: UnmapViewOfFile({x})\n", .{lpBaseAddress});
+    // Native host: release the real mapping.
+    unregisterNativeMap(lpBaseAddress);
     for (0..MAX_VIEWS) |vi| {
         if (view_fds[vi] != -1 and view_addrs[vi] == lpBaseAddress) {
             if (view_writable[vi]) {
@@ -361,9 +392,24 @@ pub fn UnmapViewOfFile(lpBaseAddress: usize) callconv(w32cc.WINAPI) i32 {
 pub fn CloseHandle(hObject: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: CloseHandle({x})\n", .{hObject});
 
-    // Don't close synthetic handles (events, mutexes, process handles, etc.)
-    // Real file descriptors are small integers; synthetic handles use high ranges.
-    if (hObject >= 0x10000) return 1; // synthetic handle, no-op
+    // File mapping handles carry the 0x40000000 marker (see alloc_mapping).
+    // Closing one frees its slot; the fd itself stays owned by the file handle
+    // the mapping was created from.
+    if ((hObject & 0xFFFF0000) == 0x40000000) {
+        const idx = hObject & 0xFFFF;
+        if (idx < MAX_MAPPINGS) mapping_fds[idx] = -1;
+        return 1;
+    }
+
+    // Registries with per-handle release paths (thread, child process,
+    // event/mutex/semaphore). Each returns true only if it owned the handle.
+    const process_mod = @import("process.zig");
+    if (process_mod.closeThreadHandle(hObject)) return 1;
+    if (process_mod.closeChildProcHandle(hObject)) return 1;
+    if (@import("sync.zig").closeKernelObject(hObject)) return 1;
+
+    // Don't close other synthetic handles
+    if (hObject >= 0x10000) return 1;
 
     // Don't close stdin/stdout/stderr
     const fd = @as(i32, @bitCast(@as(u32, @truncate(hObject))));
@@ -884,8 +930,9 @@ pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: *align(1) w32.W
         @memcpy(find_data.cFileName[0..copy_len], fname[0..copy_len]);
         find_data.cFileName[copy_len] = 0;
 
-        // Allocate a dummy handle for literal matches
-        return allocFindHandle() orelse FIND_HANDLE_BASE;
+        // Allocate a dummy handle for literal matches. When the pool is
+        // exhausted, fail rather than alias slot 0 of an active search.
+        return allocFindHandle() orelse w32.INVALID_HANDLE_VALUE;
     }
 
     if (trace.enable_tracing) trace.print("  -> FindFirstFileA: not found\n", .{});
@@ -1426,4 +1473,35 @@ pub fn stub_OpenFile(lpFileName: usize, lpReOpenBuff: usize, uStyle: u32) callco
         trace.print("KERNEL32: OpenFile('{s}')\n", .{name});
     }
     return -1; // HFILE_ERROR
+}
+
+// -------------------------------------------------------------------------
+// Tests
+// -------------------------------------------------------------------------
+
+test "CloseHandle frees file mapping slots" {
+    mapping_fds = [_]i32{-1} ** MAX_MAPPINGS;
+    defer mapping_fds = [_]i32{-1} ** MAX_MAPPINGS;
+
+    var handles: [MAX_MAPPINGS]usize = undefined;
+    for (0..MAX_MAPPINGS) |i| {
+        handles[i] = alloc_mapping(@intCast(100 + i)) orelse return error.TestUnexpectedResult;
+    }
+    // Pool is exhausted now.
+    try std.testing.expect(alloc_mapping(999) == null);
+    // Closing each mapping handle must free its slot.
+    for (handles) |h| _ = CloseHandle(h);
+    try std.testing.expect(alloc_mapping(999) != null);
+}
+
+test "native map registry unmaps registered views" {
+    native_map_addrs = [_]usize{0} ** MAX_NATIVE_MAPS;
+    native_map_sizes = [_]usize{0} ** MAX_NATIVE_MAPS;
+
+    registerNativeMap(0x1234000, 0x2001); // page-rounded to 0x3000
+    try std.testing.expect(native_map_sizes[0] == 0x3000);
+
+    // Unknown addresses are ignored without panicking.
+    unregisterNativeMap(0xDEAD000);
+    try std.testing.expect(native_map_addrs[0] == 0x1234000);
 }

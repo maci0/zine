@@ -597,6 +597,19 @@ pub fn getWindowInfo(hwnd: usize) ?*WindowInfo {
     return null;
 }
 
+/// Drops a destroyed window's entry so create/destroy cycles don't exhaust
+/// the 128-slot table (after which WndProc lookup silently fails).
+pub fn removeWindowInfo(hwnd: usize) void {
+    for (window_info_table[0..window_info_count], 0..) |*entry, i| {
+        if (entry.hwnd == hwnd) {
+            window_info_table[i] = window_info_table[window_info_count - 1];
+            window_info_table[window_info_count - 1] = .{};
+            window_info_count -= 1;
+            return;
+        }
+    }
+}
+
 pub fn setWndProc(hwnd: usize, proc_addr: usize) void {
     if (proc_addr == 0) return;
     if (getWindowInfo(hwnd)) |info| {
@@ -653,6 +666,19 @@ pub fn getHwndText(hwnd: usize) []const u8 {
         if (e.hwnd == hwnd) return e.text[0..e.len];
     }
     return "";
+}
+
+/// Drops a destroyed window's text entry so the 64-slot store doesn't fill
+/// with entries for windows that no longer exist.
+pub fn removeHwndText(hwnd: usize) void {
+    for (hwnd_texts[0..hwnd_text_count], 0..) |*e, i| {
+        if (e.hwnd == hwnd) {
+            hwnd_texts[i] = hwnd_texts[hwnd_text_count - 1];
+            hwnd_texts[hwnd_text_count - 1] = .{ .hwnd = 0, .text = [_]u8{0} ** 512, .len = 0 };
+            hwnd_text_count -= 1;
+            return;
+        }
+    }
 }
 
 pub var window_style: u32 = 0;
@@ -1221,4 +1247,56 @@ fn stub_CallWindowProcA(lpPrevWndFunc: usize, hWnd: usize, Msg: u32, wParam: usi
     if (lpPrevWndFunc == 0) return 0;
     var err_flag: u32 = 0;
     return callWndProcSafe(lpPrevWndFunc, hWnd, Msg, wParam, lParam, &err_flag);
+}
+
+// Window info / hwnd text registry lifecycle: entries must be removed on
+// destroy so create/destroy cycles stay bounded.
+test "removeWindowInfo drops destroyed windows" {
+    const saved_table = window_info_table;
+    const saved_count = window_info_count;
+    defer {
+        window_info_table = saved_table;
+        window_info_count = saved_count;
+    }
+
+    window_info_count = 0;
+    _ = getWindowInfo(0x1111).?;
+    _ = getWindowInfo(0x2222).?;
+    _ = getWindowInfo(0x3333).?;
+    try std.testing.expectEqual(@as(usize, 3), window_info_count);
+
+    setWndProc(0x1111, 0xBEEF);
+    removeWindowInfo(0x2222);
+    try std.testing.expectEqual(@as(usize, 2), window_info_count);
+    for (window_info_table[0..window_info_count]) |*e| {
+        try std.testing.expect(e.hwnd != 0x2222);
+    }
+
+    // Remaining lookups still resolve.
+    try std.testing.expectEqual(@as(usize, 0xBEEF), getWndProc(0x1111).?);
+
+    removeWindowInfo(0x1111);
+    removeWindowInfo(0x3333);
+    try std.testing.expectEqual(@as(usize, 0), window_info_count);
+}
+
+test "removeHwndText drops destroyed windows" {
+    const saved_texts = hwnd_texts;
+    const saved_count = hwnd_text_count;
+    defer {
+        hwnd_texts = saved_texts;
+        hwnd_text_count = saved_count;
+    }
+
+    hwnd_text_count = 0;
+    setHwndText(0x4444, "hello");
+    setHwndText(0x5555, "world");
+    try std.testing.expectEqual(@as(usize, 2), hwnd_text_count);
+
+    removeHwndText(0x4444);
+    try std.testing.expectEqual(@as(usize, 1), hwnd_text_count);
+    try std.testing.expectEqualStrings("world", getHwndText(0x5555));
+
+    removeHwndText(0x4444); // unknown hwnd is a no-op
+    try std.testing.expectEqual(@as(usize, 1), hwnd_text_count);
 }

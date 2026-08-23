@@ -1,4 +1,5 @@
 //! GDI Device Context (DC) management.
+const std = @import("std");
 const trace = @import("../../trace.zig");
 const gdi32 = @import("../gdi32.zig");
 const w32 = @import("../constants.zig");
@@ -36,9 +37,9 @@ pub fn CreateCompatibleDC(hdc: usize) callconv(w32cc.WINAPI) usize {
 }
 
 /// Deletes the specified device context (DC).
-/// Implementation status: No-op fallback (returns 1)
+/// Implementation status: Fully implemented (removes the DC from the global table)
 pub fn stub_DeleteDC(hdc: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hdc;
+    _ = gdi32.unregisterDc(hdc);
     return 1;
 }
 
@@ -415,7 +416,7 @@ pub fn SetViewportOrgEx(hdc: usize, x: i32, y: i32, lppt: usize) callconv(w32cc.
     return 1;
 }
 
-/// GetTextFaceA — returns the face name of the font selected into the DC.
+/// Retrieves the face name of the font selected into the DC.
 pub fn GetTextFaceA(hdc: usize, c: i32, lpName: usize) callconv(w32cc.WINAPI) i32 {
     const fd = getSelectedFont(hdc);
     const face = if (fd.face_len > 0) fd.face_name[0..fd.face_len] else "MS Sans Serif";
@@ -427,4 +428,43 @@ pub fn GetTextFaceA(hdc: usize, c: i32, lpName: usize) callconv(w32cc.WINAPI) i3
         return @intCast(copy_len);
     }
     return @intCast(face.len);
+}
+
+test "DeleteDC removes DC entries so create/delete cycles stay bounded" {
+    const saved_dcs = gdi32.dc_entries;
+    const saved_count = gdi32.dc_count;
+    defer {
+        gdi32.dc_entries = saved_dcs;
+        gdi32.dc_count = saved_count;
+    }
+
+    gdi32.dc_entries = [_]gdi32.DeviceContext{.{
+        .handle = 0,
+        .bitmap = 0,
+        .brush = 0,
+        .pen = 0,
+        .font = 0,
+        .bk_mode = 2,
+        .bk_color = 0x00FFFFFF,
+        .text_color = 0x00000000,
+        .rop2 = 13,
+        .stretch_mode = 1,
+        .text_align = 0,
+        .map_mode = 1,
+    }} ** gdi32.dc_entries.len;
+    gdi32.dc_count = 0;
+
+    var first_hdc: usize = 0;
+    for (0..gdi32.dc_entries.len) |i| {
+        _ = CreateCompatibleDC(0);
+        if (i == 0) first_hdc = gdi32.dc_entries[0].handle;
+    }
+    try std.testing.expectEqual(gdi32.dc_entries.len, gdi32.dc_count);
+
+    // Delete the DCs; each delete must free a slot.
+    while (gdi32.dc_count > 0) {
+        const h = gdi32.dc_entries[0].handle;
+        _ = stub_DeleteDC(h);
+    }
+    try std.testing.expectEqual(@as(usize, 0), gdi32.dc_count);
 }

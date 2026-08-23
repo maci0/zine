@@ -646,15 +646,30 @@ var child_procs: [max_child_procs]ChildProc = [_]ChildProc{.{}} ** max_child_pro
 var next_process_handle: usize = 0xCA000001;
 
 fn allocChildProc(child: if (platform.is_native) std.process.Child else void) ?usize {
+    var slot: ?*ChildProc = null;
     for (&child_procs) |*cp| {
         if (cp.handle == 0) {
-            const h = next_process_handle;
-            next_process_handle += 1;
-            cp.handle = h;
-            cp.child = child;
-            cp.exit_code = null;
-            return h;
+            slot = cp;
+            break;
         }
+    }
+    // Evict an already-reaped child so repeated spawn/wait cycles don't
+    // exhaust the table with finished entries.
+    if (slot == null) {
+        for (&child_procs) |*cp| {
+            if (cp.exit_code != null) {
+                slot = cp;
+                break;
+            }
+        }
+    }
+    if (slot) |cp| {
+        const h = next_process_handle;
+        next_process_handle += 1;
+        cp.handle = h;
+        cp.child = child;
+        cp.exit_code = null;
+        return h;
     }
     return null;
 }
@@ -993,7 +1008,56 @@ fn allocThreadInfo() ?*ThreadInfo {
     for (&thread_registry) |*ti| {
         if (ti.handle == 0) return ti;
     }
+    // Recycle a finished thread's slot so sequential CreateThread cycles
+    // don't exhaust the registry with exited entries.
+    for (&thread_registry) |*ti| {
+        if (!ti.running) {
+            if (comptime platform.is_native) {
+                if (ti.thread) |t| t.detach();
+                ti.thread = null;
+            }
+            ti.handle = 0;
+            return ti;
+        }
+    }
     return null;
+}
+
+/// Release a thread handle via CloseHandle.
+/// Returns true when the handle belonged to this registry.
+pub fn closeThreadHandle(handle: usize) bool {
+    thread_registry_mutex.lock();
+    defer thread_registry_mutex.unlock();
+    for (&thread_registry) |*ti| {
+        if (ti.handle == handle) {
+            if (comptime platform.is_native) {
+                // Detach any unjoined OS thread so its resources are freed at
+                // exit. A still-running thread keeps its slot reserved until
+                // threadWrapper clears running, so the slot is never reused
+                // while the detached thread still writes it.
+                if (ti.thread) |t| t.detach();
+                ti.thread = null;
+                if (ti.running) return true;
+            }
+            ti.handle = 0;
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Release a child-process handle via CloseHandle.
+/// Returns true when the handle belonged to this registry. A live child keeps
+/// its slot so WaitForSingleObject can still reap it later; only reaped
+/// children free their slot immediately.
+pub fn closeChildProcHandle(handle: usize) bool {
+    for (&child_procs) |*cp| {
+        if (cp.handle == handle) {
+            if (cp.exit_code != null) cp.handle = 0;
+            return true;
+        }
+    }
+    return false;
 }
 
 /// Look up a ThreadInfo entry by its Win32 handle.
@@ -1488,4 +1552,90 @@ pub fn ExpandEnvironmentStringsA(lpSrc: usize, lpDst: usize, nSize: u32) callcon
         dst[copy_len] = 0;
     }
     return @intCast(src.len + 1);
+}
+
+// -------------------------------------------------------------------------
+// Tests
+// -------------------------------------------------------------------------
+
+fn testDummyChild() if (platform.is_native) std.process.Child else void {
+    if (comptime platform.is_native) {
+        return .{
+            .id = null,
+            .thread_handle = {},
+            .stdin = null,
+            .stdout = null,
+            .stderr = null,
+            .request_resource_usage_statistics = false,
+        };
+    } else {
+        return {};
+    }
+}
+
+test "child proc table recycles reaped slots" {
+    child_procs = [_]ChildProc{.{}} ** max_child_procs;
+
+    const dummy = testDummyChild();
+    var first_handle: usize = 0;
+    for (0..max_child_procs) |i| {
+        const h = allocChildProc(dummy) orelse return error.TestUnexpectedResult;
+        if (i == 0) first_handle = h;
+    }
+    // Table full of live children — no free slot.
+    try std.testing.expect(allocChildProc(dummy) == null);
+
+    // Once the first child is reaped, its slot is evictable.
+    getChildProc(first_handle).?.exit_code = 0;
+    try std.testing.expect(allocChildProc(dummy) != null);
+}
+
+test "closeChildProcHandle frees reaped slots only" {
+    child_procs = [_]ChildProc{.{}} ** max_child_procs;
+
+    const dummy = testDummyChild();
+    const h_live = allocChildProc(dummy) orelse return error.TestUnexpectedResult;
+    const h_done = allocChildProc(dummy) orelse return error.TestUnexpectedResult;
+    getChildProc(h_done).?.exit_code = 7;
+
+    try std.testing.expect(closeChildProcHandle(h_done));
+    try std.testing.expect(getChildProc(h_done) == null);
+    // Live children keep their slot so they can still be waited on.
+    try std.testing.expect(closeChildProcHandle(h_live));
+    try std.testing.expect(getChildProc(h_live) != null);
+}
+
+test "thread registry recycles finished slots" {
+    thread_registry_mutex.lock();
+    for (&thread_registry) |*ti| ti.* = .{};
+    for (&thread_registry, 0..) |*ti, i| {
+        ti.handle = 0xA0010000 + i;
+        ti.running = false;
+    }
+    thread_registry_mutex.unlock();
+
+    // Every slot holds a finished thread — allocation must recycle, not fail.
+    try std.testing.expect(allocThreadInfo() != null);
+}
+
+test "closeThreadHandle releases finished entries and reserves running ones" {
+    thread_registry_mutex.lock();
+    for (&thread_registry) |*ti| ti.* = .{};
+    thread_registry_mutex.unlock();
+
+    const done = allocThreadInfo() orelse return error.TestUnexpectedResult;
+    done.handle = 0xA0010042;
+    done.running = false;
+
+    const live = allocThreadInfo() orelse return error.TestUnexpectedResult;
+    live.handle = 0xA0010043;
+    live.running = true;
+    live.thread = if (platform.is_native) null else {};
+
+    try std.testing.expect(closeThreadHandle(0xA0010042));
+    try std.testing.expect(getThreadInfo(0xA0010042) == null);
+
+    try std.testing.expect(closeThreadHandle(0xA0010043));
+    // A running (detached) thread keeps its slot until it finishes.
+    try std.testing.expect(getThreadInfo(0xA0010043) != null);
 }

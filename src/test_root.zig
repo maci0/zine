@@ -30,8 +30,13 @@ comptime {
     _ = @import("win32/user32.zig");
     _ = @import("win32/civil_time.zig");
     _ = @import("win32/kernel32/time.zig");
+    _ = @import("win32/kernel32/file.zig");
+    _ = @import("win32/kernel32/sync.zig");
+    _ = @import("win32/kernel32/process.zig");
     _ = @import("win32/ntdll/ntapi.zig");
     _ = @import("win32/advapi32/services.zig");
     _ = @import("win32/advapi32/security.zig");
     _ = @import("win32/gdi32/drawing.zig");
+    _ = @import("win32/gdi32/object.zig");
+    _ = @import("win32/gdi32/dc.zig");
 }

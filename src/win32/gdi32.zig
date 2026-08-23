@@ -128,6 +128,20 @@ pub fn findObject(handle: usize) ?*const GdiObject {
     return null;
 }
 
+/// Removes an object from the table (DeleteObject). Swap-remove keeps the
+/// array compact so create/delete cycles don't exhaust the 512 slots.
+pub fn unregisterObject(handle: usize) bool {
+    for (gdi_objects[0..gdi_object_count], 0..) |*obj, i| {
+        if (obj.handle == handle) {
+            gdi_objects[i] = gdi_objects[gdi_object_count - 1];
+            gdi_objects[gdi_object_count - 1] = .{ .handle = 0, .obj_type = .Bitmap, .data = .{ .none = {} } };
+            gdi_object_count -= 1;
+            return true;
+        }
+    }
+    return false;
+}
+
 pub fn registerDib(handle: usize, buffer: usize, width: u32, height: u32, bpp: u16) void {
     registerObject(.{
         .handle = handle,
@@ -203,6 +217,32 @@ pub fn getDc(handle: usize) ?*DeviceContext {
         if (dc_entry.handle == handle) return dc_entry;
     }
     return null;
+}
+
+/// Removes a DC from the table (DeleteDC). Returns true when found.
+pub fn unregisterDc(handle: usize) bool {
+    for (dc_entries[0..dc_count], 0..) |*dc_entry, i| {
+        if (dc_entry.handle == handle) {
+            dc_entries[i] = dc_entries[dc_count - 1];
+            dc_entries[dc_count - 1] = .{
+                .handle = 0,
+                .bitmap = 0,
+                .brush = 0,
+                .pen = 0,
+                .font = 0,
+                .bk_mode = 2,
+                .bk_color = 0x00FFFFFF,
+                .text_color = 0x00000000,
+                .rop2 = 13,
+                .stretch_mode = 1,
+                .text_align = 0,
+                .map_mode = 1,
+            };
+            dc_count -= 1;
+            return true;
+        }
+    }
+    return false;
 }
 
 /// Registers a new DeviceContext handle in the global table.

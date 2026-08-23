@@ -69,9 +69,12 @@ pub fn SelectObject(hdc: usize, h: usize) callconv(w32cc.WINAPI) usize {
 }
 
 /// Delete a logical pen, brush, font, bitmap, region, or palette.
-/// Implementation status: Stub
+/// Implementation status: Partially implemented (removes the object from the table)
 pub fn stub_DeleteObject(h: usize) callconv(w32cc.WINAPI) i32 {
-    _ = h;
+    if (trace.enable_tracing) trace.print("GDI32: DeleteObject(0x{x})\n", .{h});
+    // Stock objects may be "deleted" legally; GetStockObject re-registers
+    // them lazily on next use.
+    _ = gdi32.unregisterObject(h);
     return 1;
 }
 
@@ -81,6 +84,30 @@ pub fn CreateSolidBrush(crColor: u32) callconv(w32cc.WINAPI) usize {
     const handle = gdi32.nextHandle();
     gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = crColor, .style = 0 } } });
     return handle;
+}
+
+test "DeleteObject removes entries so create/delete cycles stay bounded" {
+    // Snapshot and restore the shared table around the test.
+    const saved_objects = gdi32.gdi_objects;
+    const saved_count = gdi32.gdi_object_count;
+    defer {
+        gdi32.gdi_objects = saved_objects;
+        gdi32.gdi_object_count = saved_count;
+    }
+
+    gdi32.gdi_object_count = 0;
+
+    for (0..gdi32.gdi_objects.len) |i| {
+        _ = CreateSolidBrush(@intCast(i));
+    }
+    try std.testing.expectEqual(gdi32.gdi_objects.len, gdi32.gdi_object_count);
+
+    // Delete every object; each delete must free a slot.
+    while (gdi32.gdi_object_count > 0) {
+        const h = gdi32.gdi_objects[0].handle;
+        _ = stub_DeleteObject(h);
+    }
+    try std.testing.expectEqual(@as(usize, 0), gdi32.gdi_object_count);
 }
 
 /// Create a logical pen with the specified style, width, and color.

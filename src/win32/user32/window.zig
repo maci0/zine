@@ -696,6 +696,10 @@ pub fn stub_DestroyWindow(hWnd: usize) callconv(w32cc.WINAPI) i32 {
         var err: u32 = 0;
         _ = user32.callWndProcSafe(@intFromPtr(wndproc), hWnd, w32.WM_DESTROY, 0, 0, &err);
     }
+    // Release the per-window registry entries so create/destroy cycles don't
+    // exhaust the fixed tables.
+    user32.removeWindowInfo(hWnd);
+    user32.removeHwndText(hWnd);
     return 1;
 }
 
