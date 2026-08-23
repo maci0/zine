@@ -1,0 +1,22 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned by commit SHA (third-party actions execute repo-owned code);
+      # update the SHA deliberately when bumping the commented version.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: mlugg/setup-zig@53fc45b17fe98b52f92ee5ea08ff48a85a3e7eb7 # v1
+        with:
+          zig-version: 0.16.0
+      # Canonical formatter check (mirrors the in-build gate; kept explicit so
+      # a formatting failure is reported before any compile work).
+      - run: zig fmt --check src build.zig
+      - run: zig build --summary all
+      - run: zig build test --summary all
