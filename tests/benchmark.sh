@@ -31,7 +31,6 @@ TIMEOUT_INTERP=30 # interpreter
 TIMEOUT_WASM=30   # WASM interpreted
 
 RED='\033[0;31m'
-GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'

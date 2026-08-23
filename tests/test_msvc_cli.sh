@@ -1353,7 +1353,9 @@ if [ -f cxt_app.obj ]; then
     fi
 fi
 if [ -f cxt_app.exe ]; then
-    rc=$(run cxt_out.txt "${WINLOADER_CMD[@]}" ${ZINE_FLAGS[@]+${ZINE_FLAGS[@]}} $([ "$IS_WASM" = "false" ] && echo --no-gui) ./cxt_app.exe)
+    no_gui=""
+    [ "$IS_WASM" = "false" ] && no_gui="--no-gui"
+    rc=$(run cxt_out.txt "${WINLOADER_CMD[@]}" ${ZINE_FLAGS[@]+${ZINE_FLAGS[@]}} $no_gui ./cxt_app.exe)
     if grep -q "cxt-check: ok" cxt_out.txt 2>/dev/null; then
         pass "CXT: run cxt_app.exe" "(popup menu + flags, TrackPopupMenu non-blocking)"
     elif [ "$WASM_RUNS_OUTPUT" = "true" ]; then

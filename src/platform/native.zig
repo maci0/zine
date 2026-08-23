@@ -125,64 +125,52 @@ pub fn mmap(
     shared: bool,
     fixed: bool,
 ) ![]align(4096) u8 {
-    if (comptime builtin.os.tag == .windows) {
-        // Windows path currently unused — host is Linux-only. Zig 0.16 removed
-        // std.os.windows.VirtualAlloc; reintroduce via kernel32 FFI if needed.
-        _ = .{ hint, size, executable, file_fd, file_offset, shared, fixed };
-        return error.OutOfMemory;
-    } else {
-        var prot: std.posix.PROT = .{ .READ = true, .WRITE = true };
-        if (executable) prot.EXEC = true;
+    var prot: std.posix.PROT = .{ .READ = true, .WRITE = true };
+    if (executable) prot.EXEC = true;
 
-        var flags: std.posix.MAP = if (shared) .{ .TYPE = .SHARED } else .{ .TYPE = .PRIVATE };
-        if (comptime is_x86_64 and builtin.os.tag == .linux) {
-            // MAP_32BIT constrains anonymous allocations to the low 2GB.
-            // Don't set it for fixed-address mappings (the address is already
-            // known) — it can interfere with MAP_FIXED_NOREPLACE.
-            if (!fixed) {
-                flags.@"32BIT" = true;
+    var flags: std.posix.MAP = if (shared) .{ .TYPE = .SHARED } else .{ .TYPE = .PRIVATE };
+    if (comptime is_x86_64 and builtin.os.tag == .linux) {
+        // MAP_32BIT constrains anonymous allocations to the low 2GB.
+        // Don't set it for fixed-address mappings (the address is already
+        // known) — it can interfere with MAP_FIXED_NOREPLACE.
+        if (!fixed) {
+            flags.@"32BIT" = true;
+        }
+    }
+    if (file_fd == -1) {
+        flags.ANONYMOUS = true;
+    }
+    if (fixed) {
+        // Use MAP_FIXED_NOREPLACE to avoid silently destroying existing
+        // mappings (including the Zig host process itself).  If the
+        // requested address is already occupied, the kernel returns
+        // EEXIST and we fall back to a non-fixed mapping.
+        flags.FIXED_NOREPLACE = true;
+    }
+
+    const ptr_hint: ?[*]align(4096) u8 = @ptrCast(@alignCast(hint));
+    const result = std.posix.mmap(ptr_hint, size, prot, flags, file_fd, file_offset);
+
+    if (result) |slice| {
+        return slice;
+    } else |err| {
+        if (fixed and (err == error.MappingAlreadyExists or err == error.OutOfMemory)) {
+            // The fixed address is occupied. Fall back to a non-fixed mapping.
+            log.warn("MAP_FIXED_NOREPLACE failed at 0x{X}, falling back to any address", .{@intFromPtr(hint)});
+            var fallback_flags = flags;
+            fallback_flags.FIXED_NOREPLACE = false;
+            if (comptime is_x86_64 and builtin.os.tag == .linux) {
+                fallback_flags.@"32BIT" = true; // ensure fallback stays in low 4GB
             }
+            return std.posix.mmap(null, size, prot, fallback_flags, file_fd, file_offset);
         }
-        if (file_fd == -1) {
-            flags.ANONYMOUS = true;
-        }
-        if (fixed) {
-            // Use MAP_FIXED_NOREPLACE to avoid silently destroying existing
-            // mappings (including the Zig host process itself).  If the
-            // requested address is already occupied, the kernel returns
-            // EEXIST and we fall back to a non-fixed mapping.
-            flags.FIXED_NOREPLACE = true;
-        }
-
-        const ptr_hint: ?[*]align(4096) u8 = @ptrCast(@alignCast(hint));
-        const result = std.posix.mmap(ptr_hint, size, prot, flags, file_fd, file_offset);
-
-        if (result) |slice| {
-            return slice;
-        } else |err| {
-            if (fixed and (err == error.MappingAlreadyExists or err == error.OutOfMemory)) {
-                // The fixed address is occupied. Fall back to a non-fixed mapping.
-                log.warn("MAP_FIXED_NOREPLACE failed at 0x{X}, falling back to any address", .{@intFromPtr(hint)});
-                var fallback_flags = flags;
-                fallback_flags.FIXED_NOREPLACE = false;
-                if (comptime is_x86_64 and builtin.os.tag == .linux) {
-                    fallback_flags.@"32BIT" = true; // ensure fallback stays in low 4GB
-                }
-                return std.posix.mmap(null, size, prot, fallback_flags, file_fd, file_offset);
-            }
-            return err;
-        }
+        return err;
     }
 }
 
 /// Unmaps a memory region.
 pub fn munmap(slice: []align(4096) u8) void {
-    if (comptime builtin.os.tag == .windows) {
-        const os = std.os.windows;
-        os.VirtualFree(slice.ptr, 0, os.MEM_RELEASE) catch {};
-    } else {
-        std.posix.munmap(slice);
-    }
+    std.posix.munmap(slice);
 }
 
 // -------------------------------------------------------------------------

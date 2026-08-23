@@ -39,7 +39,7 @@ fi
 
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
-cd "$WORKDIR"
+cd "$WORKDIR" || exit 1
 
 PASS=0
 FAIL=0
