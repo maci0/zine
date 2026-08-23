@@ -183,16 +183,6 @@ pub fn dispatchFromSignal(uctx: *@import("../platform/native.zig").ucontext_t, t
         trace.print("compat: thunk {d} ({s}) ret=0x{X} esp=0x{X} args=[{X},{X},{X},{X}] va={d}\n", .{ thunk_id, entry.name, ret_addr, guest_esp, args[0], args[1], args[2], args[3], entry.native_va_fixed });
     }
 
-    if (args[1] == 0x10000) {
-        trace.print("\n\n>>> CAUGHT 64KB ARGUMENT ON THE GUEST STACK <<<\n", .{});
-        trace.print("Guest Backtrace Dump (ESP=0x{X}):\n", .{guest_esp});
-        for (0..16) |j| {
-            const ptr = @as(*const u32, @ptrFromInt(@as(usize, guest_esp) + j * 4));
-            trace.print("  [ESP+0x{X}] = 0x{X}\n", .{ j * 4, ptr.* });
-        }
-        trace.print("\n", .{});
-    }
-
     if (std.mem.eql(u8, entry.name, "RaiseException")) {
         const code = args[0];
         if (code == 0xE0005031) {

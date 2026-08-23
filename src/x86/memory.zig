@@ -429,3 +429,52 @@ test "guest memory: writeSlice returns mutable view" {
     // Out of bounds returns null
     try testing.expect(mem.writeSlice(100, 4) == null);
 }
+
+test "guest memory: readRangeInBounds rejects OOB and wrapping ranges" {
+    var buf: [256]u8 = .{0} ** 256;
+    var mem = GuestMemory{ .base = &buf, .base_addr = 0x0001_0000 };
+
+    try testing.expect(mem.readRangeInBounds(0x0001_0000, 0)); // empty range
+    try testing.expect(mem.readRangeInBounds(0x0001_0000, 256)); // exact fit
+    try testing.expect(mem.readRangeInBounds(0x0001_00FF, 1)); // last byte
+    try testing.expect(!mem.readRangeInBounds(0x0001_00FF, 2)); // straddles end
+    try testing.expect(!mem.readRangeInBounds(0x0002_0000, 1)); // past end
+    // Ranges wrapping the 32-bit address space must be rejected outright.
+    try testing.expect(!mem.readRangeInBounds(0xFFFF_FFFC, 8));
+}
+
+test "guest memory: writeRangeAllowed without image protection" {
+    var buf: [256]u8 = .{0} ** 256;
+    var mem = GuestMemory{ .base = &buf, .base_addr = 0x0001_0000 };
+
+    // No PE image window configured: every in-bounds byte is writable.
+    try testing.expect(mem.writeRangeAllowed(0x0001_0000, 0));
+    try testing.expect(mem.writeRangeAllowed(0x0001_0000, 256));
+    try testing.expect(!mem.writeRangeAllowed(0x0001_0100, 1));
+    try testing.expect(!mem.writeRangeAllowed(0xFFFF_FFFC, 8));
+}
+
+test "guest memory: writeRangeAllowed requires full writable-section cover in image" {
+    var buf: [256]u8 = .{0} ** 256;
+    var mem = GuestMemory{ .base = &buf, .base_addr = 0x0001_0000, .pe_image_end = 0x0001_0080 };
+    // Image window is [0x10000, 0x10080); only [0x10020, 0x10060) is writable.
+    mem.addWritableSection(0x0001_0020, 0x0001_0060);
+
+    try testing.expect(mem.writeRangeAllowed(0x0001_0030, 8)); // inside section
+    try testing.expect(mem.writeRangeAllowed(0x0001_0020, 64)); // exact section span
+    try testing.expect(mem.writeRangeAllowed(0x0001_0080, 16)); // fully past image end
+    try testing.expect(!mem.writeRangeAllowed(0x0001_0010, 4)); // protected head
+    try testing.expect(!mem.writeRangeAllowed(0x0001_0060, 4)); // protected tail gap
+    try testing.expect(!mem.writeRangeAllowed(0x0001_0050, 32)); // straddles section edge
+    try testing.expect(!mem.writeRangeAllowed(0x0001_0078, 16)); // crosses image end uncovered
+}
+
+test "guest memory: writeRangeAllowed chains adjacent writable sections" {
+    var buf: [256]u8 = .{0} ** 256;
+    var mem = GuestMemory{ .base = &buf, .base_addr = 0x0001_0000, .pe_image_end = 0x0001_0080 };
+    mem.addWritableSection(0x0001_0020, 0x0001_0040);
+    mem.addWritableSection(0x0001_0040, 0x0001_0060);
+
+    try testing.expect(mem.writeRangeAllowed(0x0001_0020, 64)); // both sections chained
+    try testing.expect(!mem.writeRangeAllowed(0x0001_0020, 65)); // one byte past the chain
+}

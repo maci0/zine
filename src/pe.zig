@@ -427,3 +427,35 @@ test "parse: accepts well-formed minimal PE" {
     defer parser.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 1), parser.sections.len);
 }
+
+test "parse: rejects a buffer without the MZ signature" {
+    const data = [_]u8{ 'X', 'Y' } ++ ([_]u8{0} ** 62);
+    try testing.expectError(error.InvalidDOSSignature, PEParser.parse(testing.allocator, @constCast(&data)));
+}
+
+test "parse: rejects an e_lfanew pointing past the buffer" {
+    // DOS header valid, but the NT headers would start beyond the data.
+    var buf: [64]u8 align(8) = undefined;
+    @memset(&buf, 0);
+
+    const dos: *IMAGE_DOS_HEADER = @ptrCast(@alignCast(&buf));
+    dos.e_magic = IMAGE_DOS_SIGNATURE;
+    dos.e_lfanew = 128;
+
+    try testing.expectError(error.BufferTooSmall, PEParser.parse(testing.allocator, &buf));
+}
+
+test "parse: rejects a wrong NT signature" {
+    // Valid DOS header whose e_lfanew points at a non-PE signature.
+    var buf: [64 + @sizeOf(IMAGE_NT_HEADERS32)]u8 align(8) = undefined;
+    @memset(&buf, 0);
+
+    const dos: *IMAGE_DOS_HEADER = @ptrCast(@alignCast(&buf));
+    dos.e_magic = IMAGE_DOS_SIGNATURE;
+    dos.e_lfanew = 64;
+
+    const nt: *IMAGE_NT_HEADERS32 = @ptrCast(@alignCast(buf[64..].ptr));
+    nt.Signature = 0x454C4946; // "FILE" — plausible garbage, not "PE\0\0"
+
+    try testing.expectError(error.InvalidPESignature, PEParser.parse(testing.allocator, &buf));
+}

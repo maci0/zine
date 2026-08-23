@@ -83,7 +83,9 @@ pub inline fn tickOpcode(opcode: u16) void {
 // -----------------------------------------------------------------------
 // 3. Stub / Thunk Call Counter
 // -----------------------------------------------------------------------
-const MAX_THUNKS = 512;
+// Sized from the thunk registry: registerThunkName() receives every ID
+// thunks.zig hands out, so both tables must cover the same range.
+const MAX_THUNKS = @import("x86/thunks.zig").MAX_THUNKS;
 
 var thunk_counts: [MAX_THUNKS]u64 = .{0} ** MAX_THUNKS;
 

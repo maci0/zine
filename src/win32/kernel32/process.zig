@@ -260,6 +260,21 @@ pub fn LoadLibraryA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
     return 0;
 }
 
+/// Cache of resolved builtin-export lookups, keyed by (module handle, name).
+/// Win32 returns a stable pointer for a given (module, name) pair; without
+/// this cache every lookup allocates a fresh thunk (WASM/x86_64 pool) or
+/// import-registry entry, so an app querying the same export repeatedly
+/// exhausts those fixed-size tables.
+const ProcCacheEntry = struct { hmodule: usize, name: []u8, addr: usize };
+var proc_cache: std.ArrayListUnmanaged(ProcCacheEntry) = .empty;
+
+fn lookupCachedProcAddress(hModule: usize, name: []const u8) ?usize {
+    for (proc_cache.items) |*entry| {
+        if (entry.hmodule == hModule and std.mem.eql(u8, entry.name, name)) return entry.addr;
+    }
+    return null;
+}
+
 /// Retrieves the address of an exported function or variable from the specified DLL.
 /// Implementation status: Partially implemented (supports builtin exports and mapped modules)
 pub fn GetProcAddress(hModule: usize, lpProcName_ptr: usize) callconv(w32cc.WINAPI) usize {
@@ -273,6 +288,10 @@ pub fn GetProcAddress(hModule: usize, lpProcName_ptr: usize) callconv(w32cc.WINA
     if (kernel32.global_env) |genv| {
         if (!is_ordinal) {
             const name = trace.c_span(lpProcName_ptr);
+            if (lookupCachedProcAddress(hModule, name)) |cached| {
+                if (trace.enable_tracing) trace.print("KERNEL32: GetProcAddress('{s}') -> {x} (cached)\n", .{ name, cached });
+                return cached;
+            }
             var it = genv.builtins.iterator();
             while (it.next()) |entry| {
                 const builtin = entry.value_ptr.*;
@@ -280,6 +299,13 @@ pub fn GetProcAddress(hModule: usize, lpProcName_ptr: usize) callconv(w32cc.WINA
                     if (builtin.exports.get(name)) |exp| {
                         const loader_mod = @import("../../loader/loader.zig");
                         const result = loader_mod.allocThunkForExport(exp, entry.key_ptr.*, name);
+                        // Cache successful results; names must be duped because
+                        // c_span points into mutable guest memory.
+                        if (result != 0) {
+                            if (genv.allocator.dupe(u8, name)) |owned| {
+                                proc_cache.append(genv.allocator, .{ .hmodule = hModule, .name = owned, .addr = result }) catch genv.allocator.free(owned);
+                            } else |_| {}
+                        }
                         if (trace.enable_tracing) trace.print("KERNEL32: GetProcAddress('{s}') -> {x} (from builtin)\n", .{ name, result });
                         return result;
                     }
@@ -1710,4 +1736,36 @@ test "closeThreadHandle releases finished entries and reserves running ones" {
     try std.testing.expect(closeThreadHandle(0xA0010043));
     // A running (detached) thread keeps its slot until it finishes.
     try std.testing.expect(getThreadInfo(0xA0010043) != null);
+}
+
+test "GetProcAddress returns a stable cached address per module+name" {
+    const saved_env = kernel32.global_env;
+    defer kernel32.global_env = saved_env;
+
+    const alloc = std.heap.page_allocator;
+    var environment = env.Environment.init(alloc);
+    defer {
+        // Cache entries own their (page_allocator) name copies.
+        for (proc_cache.items) |*e| alloc.free(e.name);
+        proc_cache.clearRetainingCapacity();
+        environment.deinit();
+    }
+    try environment.addBuiltinExport("TESTDLL.dll", "FakeApi", 0x00F00D00);
+    kernel32.global_env = &environment;
+
+    const hmod = environment.getBuiltinHandle("TESTDLL.dll") orelse return error.TestUnexpectedResult;
+    const name_z: [*:0]const u8 = "FakeApi";
+
+    const first = GetProcAddress(hmod, @intFromPtr(name_z));
+    try std.testing.expect(first != 0);
+    // Second lookup must return the SAME address (Win32 semantics), not
+    // allocate another thunk.
+    const second = GetProcAddress(hmod, @intFromPtr(name_z));
+    try std.testing.expectEqual(first, second);
+
+    // A miss is not cached and must not disturb cached entries.
+    const missing = GetProcAddress(hmod, @intFromPtr(@as([*:0]const u8, "NoSuchApi")));
+    try std.testing.expectEqual(@as(usize, 0), missing);
+    const third = GetProcAddress(hmod, @intFromPtr(name_z));
+    try std.testing.expectEqual(first, third);
 }

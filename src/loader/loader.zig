@@ -605,8 +605,10 @@ test "applyReverseRelocations: reloc directory beyond image is clamped" {
         .{ .VirtualAddress = 0x1000, .Size = 0x100 }; // entirely past image_size
 
     var buf = [_]u8{0xAB} ** 64;
-    // Must not read out of bounds or panic.
+    // Must not read out of bounds or panic, and must not patch anything:
+    // every byte stays untouched when the directory lies past the image.
     applyReverseRelocations(&buf, &parser, buf.len, 0x0001_0000, 0x0002_0000);
+    for (buf) |byte| try testing.expectEqual(@as(u8, 0xAB), byte);
 }
 
 test "applyReverseRelocations: out-of-bounds HIGHLOW entry is skipped" {
@@ -623,5 +625,9 @@ test "applyReverseRelocations: out-of-bounds HIGHLOW entry is skipped" {
     nt.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC] =
         .{ .VirtualAddress = 0, .Size = 10 };
 
+    // The out-of-bounds patch address must be skipped without writing:
+    // the image must come back byte-for-byte identical.
+    const expected = buf;
     applyReverseRelocations(&buf, &parser, buf.len, 0x0001_0000, 0x0002_0000);
+    try testing.expectEqualSlices(u8, &expected, &buf);
 }

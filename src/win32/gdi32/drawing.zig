@@ -1054,6 +1054,19 @@ test "blitDIBToBufferAt: SRCPAINT ORs into destination" {
 test "StretchBlt: 2x upscale maps source by floor(dx*wSrc/wd)" {
     const gdi = @import("../gdi32.zig");
 
+    // Snapshot and restore the shared object/DC tables so this test cannot
+    // leak registrations into other tests.
+    const saved_objects = gdi.gdi_objects;
+    const saved_object_count = gdi.gdi_object_count;
+    const saved_dcs = gdi.dc_entries;
+    const saved_dc_count = gdi.dc_count;
+    defer {
+        gdi.gdi_objects = saved_objects;
+        gdi.gdi_object_count = saved_object_count;
+        gdi.dc_entries = saved_dcs;
+        gdi.dc_count = saved_dc_count;
+    }
+
     // 2x1 source scaled to 4x2: sx(dx) = xSrc + floor(dx*2/4) -> 0,0,1,1.
     var src_px = [_]u32{ 0xFF111111, 0xFF222222 };
     var dest_px = [_]u32{0} ** (4 * 2);
@@ -1079,6 +1092,18 @@ test "StretchBlt: negative source origin is a no-op" {
     // The old per-pixel code would have panicked casting a negative xSrc to
     // u32; the incremental version must skip drawing instead.
     const gdi = @import("../gdi32.zig");
+
+    const saved_objects = gdi.gdi_objects;
+    const saved_object_count = gdi.gdi_object_count;
+    const saved_dcs = gdi.dc_entries;
+    const saved_dc_count = gdi.dc_count;
+    defer {
+        gdi.gdi_objects = saved_objects;
+        gdi.gdi_object_count = saved_object_count;
+        gdi.dc_entries = saved_dcs;
+        gdi.dc_count = saved_dc_count;
+    }
+
     var src_px = [_]u32{0xFF111111};
     var dest_px = [_]u32{0} ** (2 * 2);
 

@@ -1291,6 +1291,33 @@ test "decode: NOP (0x90)" {
     try testing.expectEqual(@as(u8, 1), insn.length);
 }
 
+test "decode: truncated instruction streams decode defensively" {
+    // The decoder must never read past the slice or panic: it consumes what
+    // is present, reports that as `length`, and leaves missing operands at
+    // their defaults.
+    const empty = decode(&.{});
+    try testing.expectEqual(@as(u8, 0), empty.length);
+
+    // Prefix byte with nothing after it.
+    const prefix_only = decode(&.{0x66});
+    try testing.expectEqual(@as(u8, 1), prefix_only.length);
+
+    // 0x0F escape with no second opcode byte.
+    const lone_escape = decode(&.{0x0F});
+    try testing.expectEqual(@as(u8, 1), lone_escape.length);
+
+    // MOV EAX, imm32 truncated mid-immediate: no immediate consumed.
+    const trunc_imm = decode(&.{ 0xB8, 0x78, 0x56 });
+    try testing.expectEqual(@as(u16, 0xB8), trunc_imm.opcode);
+    try testing.expectEqual(@as(u32, 0), trunc_imm.imm);
+    try testing.expectEqual(@as(u8, 1), trunc_imm.length);
+
+    // Opcode that needs a ModR/M byte with none present.
+    const no_modrm = decode(&.{0x83});
+    try testing.expectEqual(@as(u16, 0x83), no_modrm.opcode);
+    try testing.expectEqual(@as(u8, 1), no_modrm.length);
+}
+
 test "decode: MOV EAX, imm32 (B8 + dword)" {
     const insn = decode(&.{ 0xB8, 0x78, 0x56, 0x34, 0x12 });
     try testing.expectEqual(@as(u16, 0xB8), insn.opcode);

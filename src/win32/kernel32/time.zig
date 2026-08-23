@@ -292,7 +292,20 @@ test "GetLocalTime and GetSystemTime agree (UTC guest clock policy)" {
     var system: w32.SYSTEMTIME = .{};
     GetLocalTime(@intFromPtr(&local));
     GetSystemTime(@intFromPtr(&system));
-    try testing.expect(local.wYear == system.wYear);
-    try testing.expect(local.wHour == system.wHour);
+    // The two calls sample the clock separately, so comparing broken-down
+    // fields directly flakes when a sample straddles an hour/year boundary.
+    // Convert both to FILETIME and require agreement within 2s instead:
+    // real skew here would be whole time-zone offsets (>= 30 minutes).
+    const local_ft = fileTimeOf(local);
+    const system_ft = fileTimeOf(system);
+    const as_u64 = struct {
+        fn f(ft: w32.FILETIME) u64 {
+            return @as(u64, ft.dwHighDateTime) << 32 | ft.dwLowDateTime;
+        }
+    }.f;
+    const lu = as_u64(local_ft);
+    const su = as_u64(system_ft);
+    const diff = if (lu > su) lu - su else su - lu;
+    try testing.expect(diff <= 2 * 10_000_000);
     try testing.expect(local.wMilliseconds < 1000);
 }

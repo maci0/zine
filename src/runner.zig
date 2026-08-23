@@ -303,3 +303,29 @@ pub fn runWithJit(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator) void {
 
     log.info("JIT: compiled {d} unique basic blocks", .{blocks_compiled});
 }
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
+
+const testing = std.testing;
+
+test "scanBlock: block ends at the terminating instruction, inclusive" {
+    // NOP; NOP; RET — the RET must be part of the returned block.
+    try testing.expectEqual(@as(usize, 3), scanBlock(&.{ 0x90, 0x90, 0xC3 }));
+    // NOP; JMP rel8 (2 bytes) — block includes the JMP and its operand.
+    try testing.expectEqual(@as(usize, 3), scanBlock(&.{ 0x90, 0xEB, 0x05 }));
+    // HLT alone terminates immediately.
+    try testing.expectEqual(@as(usize, 1), scanBlock(&.{0xF4}));
+}
+
+test "scanBlock: unterminated code runs to the end of the buffer" {
+    try testing.expectEqual(@as(usize, 0), scanBlock(&.{}));
+    try testing.expectEqual(@as(usize, 3), scanBlock(&.{ 0x90, 0x90, 0x55 }));
+}
+
+test "scanBlock: non-terminator opcodes do not end the block" {
+    // CALL rel32 (E8) continues the block; the following RET ends it.
+    const code = [_]u8{ 0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3 };
+    try testing.expectEqual(@as(usize, 6), scanBlock(&code));
+}

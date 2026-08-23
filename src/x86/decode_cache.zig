@@ -99,7 +99,8 @@ inline fn readTag(code: []const u8) u32 {
 // Tests
 // -----------------------------------------------------------------------
 
-const testing = @import("std").testing;
+const std = @import("std");
+const testing = std.testing;
 
 test "decode_cache: miss on empty cache" {
     var cache = DecodeCache{};
@@ -147,15 +148,20 @@ test "decode_cache: invalidate clears entries" {
 
 test "decode_cache: invalidateAddr clears single entry" {
     var cache = DecodeCache{};
+    const eip_a = 0x401000;
+    const eip_b = 0x402000;
+    // Different buckets is what lets the second lookup below prove that
+    // invalidateAddr touched only its own slot.
+    comptime std.debug.assert(DecodeCache.index(eip_a) != DecodeCache.index(eip_b));
+
     const code1 = [_]u8{ 0x90, 0x00, 0x00, 0x00 };
     const code2 = [_]u8{ 0xF4, 0x00, 0x00, 0x00 };
-    cache.store(0x401000, &code1, decoder.decode(&code1));
-    cache.store(0x402000, &code2, decoder.decode(&code2));
+    cache.store(eip_a, &code1, decoder.decode(&code1));
+    cache.store(eip_b, &code2, decoder.decode(&code2));
 
-    cache.invalidateAddr(0x401000);
-    try testing.expect(cache.lookup(0x401000, &code1) == null);
-    // Other entry should still be present (different hash bucket)
-    // (may or may not be present depending on hash collision, so don't assert)
+    cache.invalidateAddr(eip_a);
+    try testing.expect(cache.lookup(eip_a, &code1) == null);
+    try testing.expect(cache.lookup(eip_b, &code2) != null);
 }
 
 test "decode_cache: hit/miss counters" {

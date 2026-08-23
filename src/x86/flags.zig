@@ -336,6 +336,38 @@ test "lazy flags: evaluate condition codes" {
     try testing.expect(f.evaluateCC(0x6)); // JBE — CF=1 or ZF=1 (ZF=1)
 }
 
+test "lazy flags: signed condition codes L/NL/LE/NLE" {
+    var f = LazyFlags{};
+    // cmp 5, 10 -> result -5: SF=1 OF=0 ZF=0, so signed 5 < 10.
+    f.update(.sub, .dword, 0xFFFFFFFB, 5, 10);
+    try testing.expect(f.evaluateCC(0xC)); // JL
+    try testing.expect(!f.evaluateCC(0xD)); // JNL
+    try testing.expect(f.evaluateCC(0xE)); // JLE
+    try testing.expect(!f.evaluateCC(0xF)); // JNLE/JG
+
+    // cmp 10, 5 -> result +5: SF=0 OF=0 ZF=0, so signed 10 > 5.
+    f.update(.sub, .dword, 5, 10, 5);
+    try testing.expect(!f.evaluateCC(0xC));
+    try testing.expect(f.evaluateCC(0xD));
+    try testing.expect(!f.evaluateCC(0xE));
+    try testing.expect(f.evaluateCC(0xF));
+
+    // Equal operands: only LE and NL may fire (ZF=1).
+    f.update(.sub, .dword, 0, 42, 42);
+    try testing.expect(!f.evaluateCC(0xC));
+    try testing.expect(f.evaluateCC(0xD));
+    try testing.expect(f.evaluateCC(0xE));
+    try testing.expect(!f.evaluateCC(0xF));
+
+    // Signed overflow must drive JL even when SF=0:
+    // cmp 0x80000000, 1 wraps to 0x7FFFFFFF with OF=1, and INT_MIN < 1.
+    f.update(.sub, .dword, 0x7FFFFFFF, 0x80000000, 1);
+    try testing.expect(f.getOF());
+    try testing.expect(!f.getSF());
+    try testing.expect(f.evaluateCC(0xC)); // JL — SF != OF
+    try testing.expect(!f.evaluateCC(0xD));
+}
+
 test "lazy flags: parity" {
     var f = LazyFlags{};
     f.update(.logic, .byte, 0x03, 0x03, 0x03); // 0x03 = 0b11, 2 bits set = even parity

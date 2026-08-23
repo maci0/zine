@@ -71,8 +71,11 @@ pub fn getEntry(id: u32) ?*const ThunkEntry {
 /// Register a thunk and return its ID.
 pub fn registerThunk(entry: ThunkEntry) u32 {
     if (thunk_count >= MAX_THUNKS) {
-        log.err("x86 thunks: thunk table full", .{});
-        return 0;
+        // Returning an ID is mandatory, and 0 is a live thunk: a "full"
+        // return of 0 would alias the first registration and silently
+        // dispatch every later import to it. Abort instead.
+        log.fatal("x86 thunks: thunk table full ({d} entries)", .{MAX_THUNKS});
+        std.process.exit(1);
     }
     const id = thunk_count;
     thunk_entries[id] = entry;
@@ -381,7 +384,20 @@ pub fn comPtr(comptime func: anytype, comptime name: []const u8) u32 {
 /// Register a resolved import address with its stdcall parameter byte count.
 /// Called from loader.zig during import resolution.
 pub fn registerNativeImport(addr: usize, dll_name: []const u8, func_name: []const u8, param_bytes: u32) void {
-    if (import_count >= MAX_IMPORTS) return;
+    // Dedupe: repeated registrations of the same address (e.g. every
+    // GetProcAddress for one builtin export) would otherwise burn registry
+    // slots with identical entries.
+    for (import_registry[0..import_count]) |*existing| {
+        if (existing.addr == addr) return;
+    }
+
+    if (import_count >= MAX_IMPORTS) {
+        // A dropped entry leaves the IAT pointing at host code that
+        // isNativeImport() no longer recognizes, so step() would decode
+        // host machine bytes as guest x86: silent corruption. Abort instead.
+        log.fatal("x86 thunks: native import registry full ({d} entries)", .{MAX_IMPORTS});
+        std.process.exit(1);
+    }
     const is_msvcrt = std.ascii.eqlIgnoreCase(dll_name, "MSVCRT.dll") or std.ascii.eqlIgnoreCase(dll_name, "MSVCP60.dll");
 
     // Check for @N suffix (decorated stdcall names)
@@ -619,4 +635,13 @@ test "thunks: register and dispatch" {
     try testing.expectEqual(@as(u32, 10), cpu.eax); // 3 + 7
     // ESP should be adjusted by 2*4 = 8 for stdcall
     try testing.expectEqual(@as(u32, 200), cpu.esp);
+}
+
+test "thunks: duplicate native import registration keeps first entry" {
+    reset();
+    defer reset();
+    registerNativeImport(0x12345000, "KERNEL32.dll", "FakeA", 12);
+    registerNativeImport(0x12345000, "KERNEL32.dll", "FakeB", 20);
+    // The second registration of the same address must be ignored.
+    try testing.expectEqual(@as(u32, 12), getParamBytes(0x12345000));
 }
