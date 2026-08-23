@@ -168,7 +168,7 @@ Zine implements 37 DLL stub modules that provide Win32 API compatibility (36 alw
 | **CRT (C Runtime)** | `msvcrt.zig` (argc/argv/envp, malloc/free, stdio, string functions) |
 | **Kernel** | `kernel32.zig` (process, memory, file I/O, heap, threading, registry), `ntdll.zig` (NT system information queries) |
 | **User Interface** | `user32.zig`, `comctl32.zig`, `comdlg32.zig`, `shell32.zig` |
-| **Graphics** | `gdi32.zig` (GDI — Graphics Device Interface), `ddraw.zig` (DirectDraw), `d3d8.zig` (Direct3D 8) |
+| **Graphics** | `gdi32.zig` (GDI — Graphics Device Interface), `ddraw.zig` (DirectDraw), `d3d7/d3d7.zig` (Direct3D 3/7 interfaces reached via DirectDraw's `QueryInterface`, with a software rasterizer), `d3d8.zig` (Direct3D 8) |
 | **Audio/Input** | `dsound.zig` (DirectSound), `winmm.zig` (Windows Multimedia), `dinput.zig` (DirectInput), `dinput8.zig` (DirectInput8), `mss32.zig` (Miles Sound System) |
 | **Security/RPC** | `advapi32.zig`, `rpcrt4.zig` (RPC — Remote Procedure Call), `ole32.zig` (OLE — Object Linking and Embedding), `oleaut32.zig` (OLE Automation) |
 | **Networking** | `wsock32.zig`, `ws2_32.zig`, `icmp.zig` |
@@ -399,7 +399,7 @@ The build system includes a `test` step that runs embedded unit tests in the x86
 zig build test
 ```
 
-Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `decode_cache.zig`, `execute.zig`, `sse.zig`, `thunks.zig`, `jit/compiler.zig`, `loader/menu_parser.zig`, `loader/module.zig`, `profiler.zig`, `path_utils.zig`, `bat.zig`, `pe.zig`, `runner.zig`, `win32/user32.zig`, `win32/civil_time.zig`, `win32/kernel32/{time,file,sync,process}.zig`, `win32/ntdll/ntapi.zig`, `win32/advapi32/{services,security}.zig`, `win32/gdi32/{drawing,object,dc}.zig`.
+Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `decode_cache.zig`, `execute.zig`, `sse.zig`, `thunks.zig`, `jit/compiler.zig`, `loader/menu_parser.zig`, `loader/module.zig`, `loader/loader.zig`, `profiler.zig`, `path_utils.zig`, `bat.zig`, `pe.zig`, `runner.zig`, `win32/user32.zig`, `win32/civil_time.zig`, `win32/kernel32/{time,file,sync,process}.zig`, `win32/ntdll/ntapi.zig`, `win32/advapi32/{services,security}.zig`, `win32/gdi32/{drawing,object,dc}.zig`.
 
 ---
 
@@ -486,6 +486,7 @@ zine/
 │   │   ├── ddraw.zig, ddraw/         # DirectDraw COM vtable emulation
 │   │   ├── dsound.zig, dsound/       # DirectSound COM vtable stubs
 │   │   ├── d3d8.zig, d3d8/           # Direct3D 8 COM vtable stubs
+│   │   ├── d3d7/d3d7.zig, rasterizer.zig # Direct3D 3/7 interfaces (via ddraw) + software rasterizer
 │   │   ├── dinput.zig, dinput/       # DirectInput COM vtable stubs
 │   │   ├── dinput8.zig               # DirectInput8 stubs
 │   │   ├── shell32.zig, shell32/     # Shell API stubs
