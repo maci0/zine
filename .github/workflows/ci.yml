@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: mlugg/setup-zig@53fc45b17fe98b52f92ee5ea08ff48a85a3e7eb7 # v1
         with:
-          zig-version: 0.16.0
+          version: 0.16.0
       # Canonical formatter check (mirrors the in-build gate; kept explicit so
       # a formatting failure is reported before any compile work).
       - run: zig fmt --check src build.zig
