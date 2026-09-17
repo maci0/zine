@@ -1,5 +1,14 @@
 # Cross-Boundary Data Handling: Arguments, Paths, Environment, and Memory Addresses
 
+> **Status: partially implemented migration design.** Status checked 2026-09-18.
+> The architecture and examples below describe the target design, not a completed
+> migration. [Phase 2](#phase-2-convert-stub-signatures-from-usize-to-pointer-types-partial)
+> records the current typed-pointer, legacy-integer, and variadic thunk behavior.
+> PE64 rows are proposals blocked on [Phase 4](#phase-4-pe64-support-partially-blocked);
+> a wasm64 host still executes a 32-bit guest. Standalone DLL build status is
+> tracked separately in [Phase 6](#phase-6-real-windows-dll-compilation-done) and
+> does not imply that the loader-independence constraint is satisfied.
+
 ## Problem Statement
 
 The Win32 PE loader runs PE executables across five execution contexts: **native x86**, **interpret**, **WASM**, **JIT**, and — in the future — **real Windows DLL** (where our stubs compile into actual .dll files that Windows loads natively). Each context has a different relationship between the x86 guest code's address space and the host's.
@@ -460,14 +469,26 @@ Goal: Stubs use `[*]u8`, `*T`, `?[*:0]const u8` instead of `usize`. The comptime
 Status: NOT fully done. 116 `trace.addr()` call sites remain across
 `src/win32/` (concentrated in `user32/message.zig`, `comdlg32/dialogs.zig`,
 `advapi32/registry.zig`, `kernel32/locale.zig`/`path.zig`/`mem.zig`, and the
-msvcrt modules below). `castArg` still passes `usize` through untranslated
-(stubs do their own `trace.addr()` translation), i.e. sub-phases 2a/2e never
-landed. Verify with: `rg -c "trace\.addr\(" src/win32`.
+msvcrt modules below; this count is the 2026-08 snapshot).
+Verify current counts with: `rg -c "trace\.addr\(" src/win32`.
 
-**Sub-phase 2a: Re-enable `usize` auto-translation in `castArg`**
-- [ ] In `src/loader/env.zig` `castArg`, re-add `usize` translation: `if (T == usize and comptime !platform.is_native) break :blk translateGuestAddr(val, cpu);`
-- [ ] This makes both mechanisms active temporarily (stubs still have `trace.addr()`)
-- [ ] Run tests — may have double-translation issues. Note which tests break.
+Current thunk behavior in [`src/loader/env.zig`](../src/loader/env.zig):
+- `addBuiltinExportComptime` translates typed pointer parameters on WASM,
+  but passes integer parameters, including `usize`, without address translation.
+  Legacy stubs remain responsible for translating their guest-pointer integers.
+- `addBuiltinExportComptimeVA` has a separate WASM handler: its fixed `usize`
+  parameters still use `translateGuestAddr`, and its final `ap` argument is a
+  host pointer to the variadic arguments on the guest stack. Registrations such
+  as `printf` and `sprintf` in [`msvcrt.zig`](../src/win32/msvcrt.zig) use this path.
+
+**Sub-phase 2a: Re-enable `usize` auto-translation in `castArg` [HISTORICAL, not applied to the current non-variadic handler]**
+
+The original proposal temporarily enabled both thunk translation and stub-side
+`trace.addr()`. The non-variadic handler deliberately leaves integers untranslated
+because overlapping guest and host address ranges would cause double translation
+(see commit `11b4da3` and the handler's integer branch). This is not a prerequisite
+for migrating individual signatures. The separate variadic behavior above remains
+an exception to the target design.
 
 **Sub-phase 2b: Convert MSVCRT stubs (highest impact)**
 - [ ] `msvcrt/path.zig`: `splitpath`, `makepath`, `fullpath`, `searchenv`, `getcwd`, `tempnam`, `mktemp`
@@ -511,11 +532,10 @@ landed. Verify with: `rg -c "trace\.addr\(" src/win32`.
 - [ ] `rpcrt4.zig` (4 sites), `ole32/com.zig` (1 site), `comdlg32/dialogs.zig` (11 sites) remain; `shell32.zig` clean
 - [x] All remaining DLL stubs registered through the comptime thunk handler where pointer-typed
 
-**Sub-phase 2e: Remove `usize` auto-translation**
-- [ ] In `castArg`, remove the `usize` → `translateGuestAddr` code added in 2a
-- [ ] Now ONLY pointer types are translated (the intended final state)
-- [ ] `usize` params that are truly integer values pass through unchanged
-- [ ] `usize` params that are HANDLE values pass through unchanged (correct — HANDLEs are opaque, not dereferenceable)
+**Sub-phase 2e: Remove `usize` auto-translation [PARTIAL]**
+- [x] Non-variadic `castArg` translates only pointer-typed parameters; integer and HANDLE values pass through without address translation.
+- [ ] Complete the variadic signature migration before removing fixed-parameter `usize` translation from `addBuiltinExportComptimeVA`.
+- [ ] Verify that migrated stubs never translate an already-translated pointer; the final variadic `ap` remains a host pointer.
 - [ ] Run full test suite (current counts tracked in [`STATUS.md`](STATUS.md))
 
 ### Phase 3: Fix static data returns for WASM [DONE via different mechanism]
@@ -645,7 +665,11 @@ mspdb60, msvcp60, rcdll, mfc42, cards, icmp, nddeapi, vdmdbg, mag_hook
 
 ## Appendix: Source File Audit
 
-Results of auditing every `src/win32/` file for code that violates the "stubs must be pure" principle.
+Historical pre-migration audit of `src/win32/` against the "stubs must be pure"
+principle. Counts, line numbers, and signatures below are not current status;
+use the [Detailed Implementation Plan](#detailed-implementation-plan) for phase
+status and [`phase0-audit-results.md`](phase0-audit-results.md) for the dated
+baseline.
 
 ### A. Files with `trace.addr()` calls (233 total — all must be removed in Phase 2)
 
