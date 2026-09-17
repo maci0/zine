@@ -7,6 +7,10 @@ const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
 const platform = @import("../../platform.zig");
 const host_io = @import("../host_io.zig");
+const kernel32_error = @import("error.zig");
+
+const ERROR_WRITE_FAULT = 29;
+const ERROR_INVALID_ADDRESS = 487;
 
 // KERNEL32.dll file I/O functions.
 /// Retrieves file system attributes for a specified file or directory.
@@ -384,14 +388,26 @@ pub fn UnmapViewOfFile(lpBaseAddress: usize) callconv(w32cc.WINAPI) i32 {
     for (0..MAX_VIEWS) |vi| {
         if (view_fds[vi] != -1 and view_addrs[vi] == lpBaseAddress) {
             if (view_writable[vi]) {
-                if (kernel32_mem.guest_memory()) |gmem| {
-                    const offset = lpBaseAddress - gmem.base_addr;
-                    if (offset < gmem.base.len) {
-                        const slice = gmem.base[offset..][0..@min(view_sizes[vi], gmem.base.len - offset)];
-                        const map_file = host_io.fileFromFd(view_fds[vi]);
-                        host_io.writePositional(map_file, slice, view_offsets[vi]) catch {};
-                    }
+                const gmem = kernel32_mem.guest_memory() orelse {
+                    kernel32_error.SetLastError(ERROR_INVALID_ADDRESS);
+                    return 0;
+                };
+                if (lpBaseAddress < gmem.base_addr) {
+                    kernel32_error.SetLastError(ERROR_INVALID_ADDRESS);
+                    return 0;
                 }
+                const offset = lpBaseAddress - gmem.base_addr;
+                if (offset > gmem.base.len or view_sizes[vi] > gmem.base.len - offset) {
+                    kernel32_error.SetLastError(ERROR_INVALID_ADDRESS);
+                    return 0;
+                }
+                const slice = gmem.base[offset..][0..view_sizes[vi]];
+                const map_file = host_io.fileFromFd(view_fds[vi]);
+                host_io.writePositional(map_file, slice, view_offsets[vi]) catch |err| {
+                    trace.print("KERNEL32: UnmapViewOfFile({x}) writeback failed (fd={d}, offset={d}, bytes={d}): {}\n", .{ lpBaseAddress, view_fds[vi], view_offsets[vi], slice.len, err });
+                    kernel32_error.SetLastError(ERROR_WRITE_FAULT);
+                    return 0;
+                };
             }
             view_fds[vi] = -1;
             view_addrs[vi] = 0;
@@ -1518,6 +1534,57 @@ test "CloseHandle frees file mapping slots" {
     // Closing each mapping handle must free its slot.
     for (handles) |h| _ = CloseHandle(h);
     try std.testing.expect(alloc_mapping(999) != null);
+}
+
+test "guest view writeback failure preserves the view for retry" {
+    const x86_memory = @import("../../x86/memory.zig");
+    const saved_memory = x86_memory.guest_memory;
+    const saved_error = kernel32_error.GetLastError();
+    var backing: [256]u8 = @splat(0);
+    var memory: x86_memory.GuestMemory = .{
+        .base = &backing,
+        .base_addr = 0x400000,
+        .heap_start = 16,
+        .heap_cursor = 16,
+    };
+    x86_memory.guest_memory = &memory;
+    defer {
+        x86_memory.guest_memory = saved_memory;
+        kernel32_error.SetLastError(saved_error);
+        view_fds = @splat(-1);
+        view_addrs = @splat(0);
+        view_sizes = @splat(0);
+        view_offsets = @splat(0);
+        view_writable = @splat(false);
+    }
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(runtime.io(), .{ .sub_path = "mapped.bin", .data = "original" });
+    const read_only = try tmp.dir.openFile(runtime.io(), "mapped.bin", .{});
+    defer host_io.closeFile(read_only);
+    const writable = try tmp.dir.openFile(runtime.io(), "mapped.bin", .{ .mode = .read_write });
+    defer host_io.closeFile(writable);
+    const mapping = alloc_mapping(@intCast(read_only.handle)) orelse return error.TestUnexpectedResult;
+    defer _ = CloseHandle(mapping);
+    const address = MapViewOfFileEx(mapping, 2, 0, 0, 8, 0);
+    try std.testing.expect(address != 0);
+    @memcpy(backing[address - memory.base_addr ..][0..8], "modified");
+
+    kernel32_error.SetLastError(0);
+    try std.testing.expectEqual(@as(i32, 0), UnmapViewOfFile(address));
+    try std.testing.expectEqual(@as(u32, 29), kernel32_error.GetLastError());
+    var contents: [8]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 8), try host_io.readPositional(read_only, &contents, 0));
+    try std.testing.expectEqualStrings("original", &contents);
+
+    const vi = std.mem.indexOfScalar(usize, &view_addrs, address) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 8), view_sizes[vi]);
+    view_fds[vi] = @intCast(writable.handle);
+    try std.testing.expectEqual(@as(i32, 1), UnmapViewOfFile(address));
+    try std.testing.expectEqual(@as(i32, -1), view_fds[vi]);
+    try std.testing.expectEqual(@as(usize, 8), try host_io.readPositional(read_only, &contents, 0));
+    try std.testing.expectEqualStrings("modified", &contents);
 }
 
 test "native map registry unmaps registered views" {
