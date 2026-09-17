@@ -1,0 +1,5 @@
+enable=add-default-case
+enable=avoid-negated-conditions
+enable=avoid-nullary-conditions
+enable=check-unassigned-uppercase
+enable=deprecate-which

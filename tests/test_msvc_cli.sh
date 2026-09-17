@@ -62,6 +62,8 @@ should_run() {
 
 # --both: re-invoke native + interpreted
 if [ "$MODE" = "--both" ] || [ "$MODE" = "both" ]; then
+    native_rc=0
+    interp_rc=0
     echo "===== Running in NATIVE mode ====="
     # Guard each run (don't rely on $?): set -e would abort on the first
     # failing sub-suite before its status could be captured.
