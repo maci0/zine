@@ -82,12 +82,35 @@ pub fn IsBadStringPtrW(lpsz: usize, ucchMax: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 /// Multiplies two 32-bit values and then divides the 64-bit result by a third 32-bit value.
-/// Implementation status: Partially implemented
+/// Rounds to nearest (ties away from zero) and returns -1 on overflow or a
+/// zero denominator, matching Win32.
+/// Implementation status: Fully implemented
 pub fn MulDiv(nNumber: i32, nNumerator: i32, nDenominator: i32) callconv(w32cc.WINAPI) i32 {
     if (nDenominator == 0) return -1;
-    const result = @divTrunc(@as(i64, nNumber) * @as(i64, nNumerator), @as(i64, nDenominator));
-    if (result > 0x7FFFFFFF or result < -0x80000000) return -1;
-    return @intCast(result);
+    const numerator = @as(i64, nNumber) * @as(i64, nNumerator);
+    const denominator = @as(i64, nDenominator);
+    // Half-up on magnitudes keeps the quotient sign intact; a plain
+    // @divFloor((2*n + d) / 2d) formulation would overflow at i64 extremes.
+    const half_denominator = @divTrunc(denominator, 2);
+    const rounded = @divTrunc(numerator + (if (numerator < 0) -half_denominator else half_denominator), denominator);
+    if (rounded > 0x7FFFFFFF or rounded < -0x80000000) return -1;
+    return @intCast(rounded);
+}
+
+test "MulDiv rounds half away from zero like Win32" {
+    try std.testing.expectEqual(@as(i32, 5), MulDiv(10, 50, 100)); // 5.0 stays 5
+    try std.testing.expectEqual(@as(i32, 4), MulDiv(10, 49, 100)); // 4.9 -> 4
+    try std.testing.expectEqual(@as(i32, 5), MulDiv(10, 45, 100)); // 4.5 -> 5
+    try std.testing.expectEqual(@as(i32, 17), MulDiv(10, 16, 10)); // 1.6 -> 2
+    try std.testing.expectEqual(@as(i32, -5), MulDiv(-10, 45, 100)); // -4.5 -> -5
+    try std.testing.expectEqual(@as(i32, -1), MulDiv(std.math.maxInt(i32), 2, 1)); // overflow
+    try std.testing.expectEqual(@as(i32, -1), MulDiv(1, 1, 0)); // divide by zero
+}
+
+test "MulDiv avoids intermediate overflow for huge inputs" {
+    // 2147483647 * 2^15 / 2^31 would overflow a (n * num) * 2 / den ordering.
+    try std.testing.expectEqual(@as(i32, 65535), MulDiv(std.math.maxInt(i32), 1 << 15, 1 << 16));
+    try std.testing.expectEqual(@as(i32, -65535), MulDiv(std.math.minInt(i32) + 1, 1 << 15, 1 << 16));
 }
 
 /// Retrieves the size of a memory block allocated from a heap.
