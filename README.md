@@ -26,13 +26,18 @@ reproducing a build; `--version` alone does not distinguish post-milestone chang
 
 ### Unreleased changes since v1
 
-#### Breaking build requirements and migration
+#### Breaking build and runtime requirements and migration
 
 - Zig **0.16.0** replaces **0.15.2** as the minimum toolchain. Upgrade Zig before
   rebuilding; the source now uses the 0.16 process and I/O APIs.
 - For the native FLTK GUI, use `zig build -Darch=x86_64 -Dfltk` instead of the
   old x86 `zig build -Dfltk` recipe, then run `zig-out/bin/zine.x86_64 --fltk`.
   Guest executables remain 32-bit Windows PEs.
+- WASI guest heap reservations increase from 32 MiB to 512 MiB for the main
+  executable and from 16 MiB to 128 MiB for each spawned child. Hosts with
+  memory limits sized for `v1` can now fail to load the same guest. Raise the
+  runtime's memory allowance to cover these reservations plus PE images,
+  stacks, and runtime overhead; the module's 2 GiB maximum is unchanged.
 
 #### Security fixes and migration
 
@@ -63,6 +68,13 @@ reproducing a build; `--version` alone does not distinguish post-milestone chang
   `zine-host`, preserving shell capture and piping after the Zig migration.
   Native informational commands no longer attempt guest memory setup or emit
   null-page mapping warnings. Invalid options still return status 2 on stderr.
+  Failed writes to stdout now return status 1 instead of silently succeeding;
+  scripts must handle output errors when redirecting these commands.
+- `zine-host` now returns status 1 for unrecognized traps escaping WASM `_start`
+  and propagates recognized WASI `proc_exit` codes in the range 0–255. At `v1`,
+  both traps and nonzero guest exits could return host status 0. Scripts using
+  `set -e` or `&&` now stop on these failures; handle the nonzero status and
+  check stderr rather than treating incomplete guest output as success.
 - Win32 `MulDiv` rounds to nearest instead of truncating, and `lstrcmpiW`
   preserves non-ASCII UTF-16 units rather than truncating them to bytes.
 
