@@ -36,12 +36,11 @@ const build_options = @import("build_options");
 const pe = @import("pe.zig");
 const runtime = @import("runtime.zig");
 
-fn writeStdout(bytes: []const u8) error{}!void {
-    const io = runtime.io();
-    var buf: [256]u8 = undefined;
-    var w = std.Io.File.stdout().writer(io, &buf);
-    w.interface.writeAll(bytes) catch {};
-    w.interface.flush() catch {};
+fn writeStdout(bytes: []const u8) void {
+    std.Io.File.stdout().writeStreamingAll(runtime.io(), bytes) catch {
+        std.debug.print("{s}", .{"Error: failed to write to stdout.\n"});
+        std.process.exit(1);
+    };
 }
 
 fn buildCmdLineString(allocator: std.mem.Allocator, app_args_items: []const ?[*:0]u8) !usize {
@@ -177,11 +176,11 @@ pub fn main(init: std.process.Init) !void {
                 \\  zine --argv0 editor notepad.exe file.txt
                 \\  zine -- -weird-name.exe
                 \\
-            ) catch {};
+            );
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
-            writeStdout("zine " ++ version.string ++ "\n") catch {};
+            writeStdout("zine " ++ version.string ++ "\n");
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--argv0") or std.mem.startsWith(u8, arg, "--argv0="))) {

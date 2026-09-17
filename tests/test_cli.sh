@@ -24,6 +24,12 @@ for flag in --version -v --help -h; do
     else
         grep -q '^Usage: ' "$workdir/stdout"
     fi
+    status=0
+    timeout 60 "$@" "$flag" >/dev/full 2>"$workdir/stderr" || status=$?
+    if [[ "$status" != 1 || ! -s "$workdir/stderr" ]]; then
+        printf '%s must report stdout write failure with status 1 (got %s)\n' "$flag" "$status" >&2
+        exit 1
+    fi
 done
 
 status=0
