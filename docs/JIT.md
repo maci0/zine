@@ -6,7 +6,7 @@ The JIT compiler is designed to be fully self-contained in the `src/jit` directo
 
 ## Architecture and Components
 
-The JIT pipeline consists of four main components:
+The JIT pipeline consists of five main components:
 
 ### 1. WebAssembly Definitions (`wasm.zig`)
 Contains constants and enums defining the binary structure of WASM.

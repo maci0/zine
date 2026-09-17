@@ -9,7 +9,7 @@ Zine is a Win32 PE binary interpreter that runs 32-bit Windows executables on Li
 ### Constraints
 
 - **Architecture**: x86 interpreter runs on x86/x86_64 Linux and WASM, must maintain all three targets
-- **ABI**: Win32 stubs use C calling convention with raw usize parameters, new APIs must follow this pattern
+- **ABI**: Win32 stubs use `callconv(w32cc.WINAPI)` (stdcall/Win64 on native x86/x86_64, C elsewhere). Pointer arguments are translated at the thunk boundary, not inside stubs; legacy stubs still take raw `usize` and call `trace.addr()` (see `docs/cross-boundary-data-design.md`)
 - **Memory model**: Guest binaries live in a 32-bit address space with host address translation via `trace.addr()`
 - **Zig version**: Must compile with Zig 0.16.0
 
@@ -58,7 +58,7 @@ Zine is a Win32 PE binary interpreter that runs 32-bit Windows executables on Li
 Use `.scratch/` (project root) for all temporary, experimental, and bisect files. Never litter `src/` or the project root with ad-hoc temp files. `.scratch/` is gitignored.
 
 ### Stub Functions
-Stub functions are plain C-callable functions. They receive host-accessible pointers. They return host-accessible pointers. They never translate addresses. They never check what platform they're on. The thunk/boundary layer handles ALL translation, width conversion, and address space mapping.
+Stub functions are plain C-callable functions. They receive host-accessible pointers. They return host-accessible pointers. They never translate addresses. They never check what platform they're on. The thunk/boundary layer handles ALL translation, width conversion, and address space mapping. (Legacy stubs that still take raw `usize` and call `trace.addr()` are being migrated; see `docs/cross-boundary-data-design.md`.)
 
 ### Language Style
 - **Zig 0.16.0** -- Uses latest Zig idioms (comptime, error unions, tagged unions)
@@ -67,8 +67,8 @@ Stub functions are plain C-callable functions. They receive host-accessible poin
 
 ### Win32 Stub Patterns
 - Win32 stubs use `callconv(w32cc.WINAPI)` (stdcall on x86, C on other platforms)
-- Stub functions receive raw `usize` parameters (guest pointers)
-- `trace.addr()` translates guest addresses to host addresses
+- Legacy stubs receive raw `usize` parameters (guest pointers); migrated stubs take typed pointer parameters instead
+- `trace.addr()` translates guest addresses to host addresses (legacy pattern)
 - String parameters: `@as([*:0]const u8, @ptrFromInt(trace.addr(ptr)))`
 
 ### Address Translation
@@ -96,8 +96,8 @@ Stub functions are plain C-callable functions. They receive host-accessible poin
 
 #### x86 Interpreter (`src/x86/`)
 - `cpu.zig` -- CPU state (registers, flags, EIP, segments)
-- `decoder.zig` -- x86 instruction decoder (41K)
-- `execute.zig` -- Instruction execution engine (89K, largest file)
+- `decoder.zig` -- x86 instruction decoder (44K)
+- `execute.zig` -- Instruction execution engine (96K, largest file)
 - `flags.zig` -- EFLAGS computation
 - `memory.zig` -- Guest memory with address translation
 - `sse.zig` -- SSE/SSE2 instruction support (50K)
@@ -114,7 +114,7 @@ Stub functions are plain C-callable functions. They receive host-accessible poin
 - `dialog_parser.zig`, `menu_parser.zig`, `icon_parser.zig` -- Win32 resource parsers
 
 #### Win32 API Stubs (`src/win32/`)
-- 43 top-level `.zig` files + 18 subdirectories
+- 44 top-level `.zig` files + 20 subdirectories
 - Each DLL module has a `register()` function called from `src/runner.zig`
 - `shared.zig` -- Common stub generation (`stub_args(N)` comptime helper), memory allocator
 - `calling_convention.zig` -- WINAPI/stdcall ABI definition
@@ -122,20 +122,24 @@ Stub functions are plain C-callable functions. They receive host-accessible poin
 - `host_io.zig` -- Bridge between guest file operations and host filesystem
 
 #### JIT Compiler (`src/jit/`)
-- `compiler.zig` -- x86 to WASM basic block compiler (60K)
+- `compiler.zig` -- x86 to WASM basic block compiler (75K)
 - `translate.zig` -- x86 instruction to WASM opcode mapping
 - `emitter.zig` -- WASM binary module emitter
 - `wasm.zig` -- WASM format definitions
-- Currently validation-only (interprets all code, compiles WASM for verification)
+- `host.zig` / `host_wasm.zig` -- JitCpuState state transfer and WASM-side JIT host imports
+- On native builds, `--jit` is validation-only (compiles blocks alongside the
+  interpreter for verification). On WASM with `-Djit_host=true` plus a host
+  runtime (zine-host), compiled blocks execute end-to-end via `jit_compile`/
+  `jit_call` imports.
 
 #### GUI & Rendering (`src/gui/`)
-- `renderer.zig` -- Shared rendering state, framebuffer management (45K)
+- `renderer.zig` -- Shared rendering state, framebuffer management (56K)
 - `web_ui.zig` -- Web-based UI with HTTP server for browser rendering
 - `fltk_ui.zig` / `fltk_bridge.cpp` -- Native FLTK desktop window
 - `app.js` + `index.html` + `win2k.css` -- Browser frontend (Win2K aesthetic)
 
 #### Platform Abstraction (`src/platform/`)
-- `native.zig` -- Linux-specific: mmap, mprotect, signals, host threading (45K)
+- `native.zig` -- Linux-specific: mmap, mprotect, signals, host threading (53K)
 - `wasm.zig` -- WASM-specific: host imports, memory stubs
 - `src/platform.zig` -- Compile-time platform selection
 

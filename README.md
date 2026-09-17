@@ -85,6 +85,6 @@ src/
   wasm_main.zig  WASM entry point
 ```
 
-~70K lines of Zig.
+~65K lines of Zig.
 
 See `docs/` for detailed design notes on memory layout, JIT strategy, native execution, and Win32 API coverage.

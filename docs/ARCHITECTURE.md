@@ -35,13 +35,14 @@ Zine is a Win32 PE (Portable Executable) emulator written in Zig that runs 32-bi
 
 ## Build Targets
 
-The build system (`build.zig`) supports three target architectures:
+The build system (`build.zig`) supports four target architectures:
 
 | Target | Architecture | Description |
 |--------|-------------|-------------|
 | **x86** (default) | `i386-linux` | Native 32-bit execution. Sets image base to `0x70000000` so the low address space (`0x00400000+`) is free for guest PEs — the same approach Wine uses. Disables SSE/AVX (Streaming SIMD Extensions / Advanced Vector Extensions) to match legacy MSVC6 (Microsoft Visual C++ 6.0) expectations. |
 | **x86_64** | `x86_64-linux` | Native 64-bit host running 32-bit PEs in CPU compatibility mode (CS=0x23). API calls use `INT 0xFE` → SIGSEGV signal dispatch to call 64-bit Zig stubs. All guest memory is in the low 4GB via `MAP_32BIT`. |
 | **wasm32** | `wasm32-wasi` | WASM (WebAssembly) output, running under a WASI (WebAssembly System Interface) runtime. All x86 code is run through the software interpreter. Initial memory is 256 MB, max 2 GB. |
+| **wasm64** | `wasm64-wasi` | Experimental 64-bit WASM output of the same WASI entry point (`wasm_main.zig`). Same interpreter path as wasm32; not covered by the test suites. |
 
 ---
 
@@ -234,7 +235,7 @@ A comptime-selected backend that abstracts OS-specific functionality:
 | `getStackBounds` | Reads `/proc/self/maps` | Returns zeros (not available on WASM) |
 | `installSegfaultHandler` | `sigaction(SIGSEGV, SIGFPE)` | No-op |
 | `mapNullPage` | `mmap` at address 0 | No-op |
-| `raiseStackLimit` | Sets `RLIMIT_STACK` to 64 MB | No-op |
+| `raiseStackLimit` | Raises `RLIMIT_STACK` to its hard limit | No-op |
 | `exitProcess` | `std.process.exit` | `std.process.exit` |
 | `timestamp` | `std.time.timestamp` (epoch seconds) | Returns 0 |
 | `mprotect`/`mprotectExec` | Linux `mprotect` | No-op |
@@ -247,7 +248,7 @@ A comptime-selected backend that abstracts OS-specific functionality:
 
 [`src/gui/`](../src/gui/)
 
-The GUI subsystem presents Win32 GUI applications in a web browser.
+The GUI subsystem presents Win32 GUI applications in a web browser (web backend) or in a native FLTK window (FLTK backend, see [`FLTK_PLAN.md`](FLTK_PLAN.md)). Both are reached through one shared command surface in `renderer.zig`; the diagram below shows the web path.
 
 #### Backend Architecture
 
@@ -306,6 +307,7 @@ On native targets, Zine installs a `SIGSEGV`/`SIGFPE` handler that implements:
 | Module | Path | Purpose |
 |--------|------|---------|
 | **runner.zig** | [`src/runner.zig`](../src/runner.zig) | Shared PE loading and execution pipeline used by both native and WASM entry points. Handles stub registration, search path setup, import resolution, reverse relocations, and JIT execution loops. |
+| **runtime.zig** | [`src/runtime.zig`](../src/runtime.zig) | Process-global singletons (`std.Io`, allocator, environment, main-exe dir) for code that cannot take parameters: Win32 stubs called from guest code, signal handlers, and thunks. |
 | **bat.zig** | [`src/bat.zig`](../src/bat.zig) | Parses `.bat`/`.cmd` launcher scripts, expands `%VARIABLE%` references, and extracts the final command to execute. |
 | **log.zig** | [`src/log.zig`](../src/log.zig) | Structured diagnostic logging with colored level prefixes (`[FATAL]`, `[ERROR]`, `[WARN]`, `[INFO]`, `[TRACE]`). Auto-detects TTY for color; respects `NO_COLOR` env var. |
 | **trace.zig** | [`src/trace.zig`](../src/trace.zig) | Conditional debug printing. Activated by `--trace`, `--trace-api`, `--trace-insn` flags or `ZINE_TRACE`/`ZINE_TRACE_INSN` environment variables. |
@@ -399,7 +401,7 @@ The build system includes a `test` step that runs embedded unit tests in the x86
 zig build test
 ```
 
-Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `decode_cache.zig`, `execute.zig`, `sse.zig`, `thunks.zig`, `jit/compiler.zig`, `loader/menu_parser.zig`, `loader/module.zig`, `loader/loader.zig`, `profiler.zig`, `path_utils.zig`, `bat.zig`, `pe.zig`, `runner.zig`, `win32/user32.zig`, `win32/civil_time.zig`, `win32/kernel32/{time,file,sync,process}.zig`, `win32/ntdll/ntapi.zig`, `win32/advapi32/{services,security}.zig`, `win32/gdi32/{drawing,object,dc}.zig`.
+Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `decode_cache.zig`, `execute.zig`, `sse.zig`, `thunks.zig`, `jit/compiler.zig`, `loader/menu_parser.zig`, `loader/module.zig`, `loader/loader.zig`, `profiler.zig`, `path_utils.zig`, `bat.zig`, `pe.zig`, `runner.zig`, `win32/user32.zig`, `win32/civil_time.zig`, `win32/kernel32/{time,file,sync,process}.zig`, `win32/msvcrt/{io,time}.zig`, `win32/ntdll/ntapi.zig`, `win32/advapi32/{services,security}.zig`, `win32/gdi32/{drawing,object,dc}.zig`.
 
 ---
 
@@ -438,6 +440,7 @@ zine/
 │   ├── log.zig              # Structured diagnostic logging with colored prefixes
 │   ├── path_utils.zig       # POSIX ↔ Win32 path conversion
 │   ├── platform.zig         # Platform abstraction (re-export)
+│   ├── runtime.zig          # Process-global Io/allocator/env + exe dir
 │   ├── profiler.zig         # Profiling (EIP heat map, opcodes, stubs)
 │   ├── version.zig          # Single source of truth for version string
 │   ├── platform/
@@ -508,7 +511,8 @@ zine/
 │   ├── gui/
 │   │   ├── renderer.zig     # Rendering API surface & state cache
 │   │   ├── web_ui.zig       # WebSocket server & HTTP file serving
-│   │   ├── fltk_ui.zig      # FLTK native GUI backend (experimental)
+│   │   ├── fltk_ui.zig      # FLTK native GUI backend
+│   │   ├── fltk_bridge.h/.cpp # C/C++ bridge to FLTK 1.3 widgets
 │   │   ├── app.js           # Frontend JavaScript
 │   │   ├── index.html       # Frontend HTML
 │   │   └── win2k.css        # Windows 2000 theme CSS

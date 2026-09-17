@@ -3,9 +3,8 @@
 Current implementation + verification status for the Zine Win32 PE interpreter
 (x86 software CPU + PE loader + Win32 API compatibility layer, native FLTK and
 web-based GUI backends). Companion docs: [`ARCHITECTURE.md`](ARCHITECTURE.md),
-[`TODO.md`](TODO.md) (remaining work), [`CLI_STATUS.md`](CLI_STATUS.md) (MSVC
-CLI toolchain), and `handover.md` at the repo root (per-slice implementation
-notes and lessons).
+[`TODO.md`](TODO.md) (remaining work), and [`CLI_STATUS.md`](CLI_STATUS.md)
+(MSVC CLI toolchain).
 
 *Last verified: 2026-08-08 (native 158/0, native64 158/0, wasmtime 128/0, FLTK smoke 20/0)*
 
@@ -213,8 +212,7 @@ whole CLI suite (158/0), including LINK.EXE (ReadSymbolTable) and LIB.EXE
   ADVAPI32 (registry via `registry.toml`), SHELL32, COMCTL32, SHLWAPI,
   DDRAW/D3D7, D3D8, DSOUND, DINPUT(8), WINMM, WS2_32/WSOCK32, OLEAUT32, MSS32,
   MFC42 (dummy), IMAGEHLP, RPCRT4, and ~40 other DLLs (stub or implemented).
-  Detailed per-API table history was folded into `handover.md`; see
-  `ARCHITECTURE.md` for the module map.
+  See `ARCHITECTURE.md` for the module map.
 - **MSVC CLI toolchain** — CL, LINK, RC (incl. `NAME ICON "file.ico"` →
   RT_ICON + RT_GROUP_ICON), CVTRES, DUMPBIN, LIB, NMAKE, UNDNAME, EDITBIN,
   PSTAT, MIDL, MC, and more; `.bat`/`.cmd` wrappers (VCVARS32.BAT) parsed

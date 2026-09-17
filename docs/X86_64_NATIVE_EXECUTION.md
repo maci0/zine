@@ -164,7 +164,7 @@ On 32-bit Windows, SEH uses a dynamic linked list stored in `FS:0`. On 64-bit Wi
 ### Phase 2: Calling Convention & API Stubs
 - [ ] Update `stubs/calling_convention.zig` to define `WINAPI` as `callconv(.Win64)` for 64-bit builds.
 - [ ] Audit `loader/env.zig` to ensure function pointers for unresolved stubs match the `.Win64` calling convention.
-- [ ] Review all 31 Win32 stub modules to ensure no hardcoded 32-bit types are used where pointers or handle-sized integers should scale to 64-bit.
+- [ ] Review all 37 Win32 stub modules to ensure no hardcoded 32-bit types are used where pointers or handle-sized integers should scale to 64-bit.
 - [ ] Ensure Zig correctly allocates 32-byte shadow space when Zine's `.Win64` functions call back into native Windows code (e.g., callbacks in GUI/Event loops).
 
 ### Phase 3: TEB, PEB, and GS Segment

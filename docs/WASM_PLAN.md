@@ -319,9 +319,9 @@ a browser runtime).
 - [x] mem_base translation (guest VA → WASM linear address)
 - [x] Control flow detection (stop at branches, let interpreter handle)
 - [x] JitHost interface + WASM guest implementation
-- [x] zine-host skeleton (wasmtime C API)
+- [x] zine-host skeleton (wasmer C API)
 - [x] Benchmark mode 8 (zine-host + JIT)
-- [x] Implement zine-host wasmtime C API integration (WASI + JIT host in `src/host_main.zig`; end-to-end via `zine-host --jit`)
+- [x] Implement zine-host wasmer C API integration (WASI + JIT host in `src/host_main.zig`; end-to-end via `zine-host --jit`)
 - [ ] Browser JS JIT glue (WebAssembly.instantiate for compiled blocks)
 - [x] Hot block detection and execution counting (per-block counters, 4096-entry ring; live milestone logs + end-of-run top-8 report)
 - [x] JIT invalidation on code page writes (SMC hook: `stub_common.smc_invalidate_cache` → `flushJitCache`)

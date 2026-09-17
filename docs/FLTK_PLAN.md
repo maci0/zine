@@ -60,7 +60,7 @@ graph TD
 ### Phase 1: Renderer Abstraction ✅ COMPLETE
 
 - `Backend` enum has `.web_ui`, `.fltk`, `.none` variants
-- All ~25 output functions have a 3-way switch dispatch
+- All output functions have a 3-way switch dispatch
 - JSON building only runs on `.web_ui` path
 
 ### Phase 2: FLTK Bindings ✅ COMPLETE

@@ -1,7 +1,7 @@
 # Zine — TODO / Remaining Work
 
 Open items, prioritized. Current state and what is already implemented:
-see [`STATUS.md`](STATUS.md). Detailed per-slice notes: `handover.md` (repo root).
+see [`STATUS.md`](STATUS.md).
 
 Verified baseline (2026-08-08): native **158/0**, native64 **158/0**,
 wasmtime **128/0**, FLTK smoke **20/0** — all suites green.
