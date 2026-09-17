@@ -370,7 +370,7 @@ pub fn build(b: *std.Build) void {
     // compiling anywhere (there is no other CI gate for this).
     // -----------------------------------------------------------------------
     const fmt_check = b.addFmt(.{
-        .paths = &.{ "src", "build.zig" },
+        .paths = &.{ "src", "build.zig", "build.zig.zon" },
         .check = true,
     });
     b.getInstallStep().dependOn(&fmt_check.step);

@@ -22,7 +22,7 @@ jobs:
           version: 0.16.0
       # Canonical formatter check (mirrors the in-build gate; kept explicit so
       # a formatting failure is reported before any compile work).
-      - run: zig fmt --check src build.zig
+      - run: zig fmt --check src build.zig build.zig.zon
       # Shell helpers: every tracked script must stay shellcheck-clean.
       - run: git ls-files '*.sh' | xargs -r shellcheck -x
       # Compile every shipped target, not just the default: the compiler is

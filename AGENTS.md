@@ -17,7 +17,7 @@ Run from the repository root:
 
 - Unit tests: `zig build test` (also checks formatting).
 - Native CLI tests: `zig build test-cli`, then `zig build test-cli -Darch=x86_64`; no guest binaries required.
-- Formatting: `zig fmt --check src build.zig`.
+- Formatting: `zig fmt --check src build.zig build.zig.zon`.
 - Compile/typecheck each target, sequentially to limit peak memory: `zig build`, `zig build -Darch=x86_64`, `zig build -Darch=wasm32`, `zig build -Darch=wasm64`.
 - Shell lint: `shellcheck -x tests/*.sh`.
 - Keep the formatting, shell lint, and cross-target gates in `build.zig` and `.github/workflows/ci.yml`; fix failing code rather than weakening checks or dropping targets.
