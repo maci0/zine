@@ -2401,29 +2401,41 @@ test "execute: PUSH/POP" {
 }
 
 test "execute: ADD and flags" {
-    var mem: [256]u8 = .{0} ** 256;
-    // ADD EAX, 5:   05 05 00 00 00
-    // CMP EAX, 7:   3D 07 00 00 00
-    // HLT:          F4
-    mem[0] = 0x05;
-    mem[1] = 0x05;
-    mem[2] = 0x00;
-    mem[3] = 0x00;
-    mem[4] = 0x00;
-    mem[5] = 0x3D;
-    mem[6] = 0x07;
-    mem[7] = 0x00;
-    mem[8] = 0x00;
-    mem[9] = 0x00;
-    mem[10] = 0xF4;
+    const status_mask = flags_mod.FLAG_CF | flags_mod.FLAG_PF | flags_mod.FLAG_AF |
+        flags_mod.FLAG_ZF | flags_mod.FLAG_SF | flags_mod.FLAG_OF;
+    const cases = [_]struct { lhs: u32, rhs: u32, result: u32, flags: u32 }{
+        .{ .lhs = 2, .rhs = 5, .result = 7, .flags = 0 },
+        .{ .lhs = 0x7FFFFFFF, .rhs = 0x7FFFFFFF, .result = 0xFFFFFFFE, .flags = flags_mod.FLAG_OF | flags_mod.FLAG_SF | flags_mod.FLAG_AF },
+        .{ .lhs = 0x80000000, .rhs = 0x80000000, .result = 0, .flags = flags_mod.FLAG_OF | flags_mod.FLAG_CF | flags_mod.FLAG_ZF | flags_mod.FLAG_PF },
+    };
 
-    var cpu = makeCpu(&mem);
-    cpu.eax = 2;
-    cpu.esp = 200;
-    run(&cpu);
+    for (cases) |case| {
+        var mem: [256]u8 = .{0} ** 256;
+        mem[0] = 0x05;
+        std.mem.writeInt(u32, mem[1..5], case.rhs, .little);
+        mem[5] = 0x3D;
+        std.mem.writeInt(u32, mem[6..10], case.result, .little);
+        mem[10] = 0xF4;
 
-    try testing.expectEqual(@as(u32, 7), cpu.eax); // 2 + 5
-    try testing.expect(cpu.flags.getZF()); // CMP 7, 7 -> ZF=1
+        var cpu = makeCpu(&mem);
+        cpu.eax = case.lhs;
+        cpu.esp = 200;
+        cpu.flags.fromEflags(status_mask ^ case.flags);
+        step(&cpu);
+
+        try testing.expectEqual(@as(u32, 5), cpu.eip);
+        try testing.expectEqual(case.result, cpu.eax);
+        try testing.expectEqual(case.flags, cpu.flags.toEflags() & status_mask);
+
+        step(&cpu);
+        try testing.expectEqual(@as(u32, 10), cpu.eip);
+        try testing.expectEqual(case.result, cpu.eax);
+        try testing.expectEqual(flags_mod.FLAG_ZF | flags_mod.FLAG_PF, cpu.flags.toEflags() & status_mask);
+
+        step(&cpu);
+        try testing.expect(cpu.halted);
+        try testing.expectEqual(@as(u32, 11), cpu.eip);
+    }
 }
 
 test "execute: CALL and RET" {
