@@ -106,7 +106,7 @@ pub const JitCompiler = struct {
             const insn = decoder.decode(x86_code[offset..]);
             if (insn.length == 0) break;
             if (isControlFlow(&insn)) break;
-            try self.translateInstruction(&body, &insn);
+            try translateInstruction(&body, &insn);
             offset += insn.length;
         }
 
@@ -327,8 +327,7 @@ pub const JitCompiler = struct {
 
     /// Translates a single non-control-flow x86 instruction into equivalent WASM operations.
     /// It appends the resulting WASM bytecode to the execution `body`.
-    fn translateInstruction(self: *JitCompiler, body: *Body, insn: *const decoder.Instruction) !void {
-        _ = self;
+    fn translateInstruction(body: *Body, insn: *const decoder.Instruction) !void {
         switch (insn.opcode) {
             // ===== NOP =====
             0x90 => try body.appendOpcode(.nop),
