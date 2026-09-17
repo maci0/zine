@@ -2483,26 +2483,27 @@ test "execute: CALL and RET" {
 }
 
 test "execute: conditional jump" {
-    var mem: [256]u8 = .{0} ** 256;
-    // 0x00: CMP EAX, EAX (39 C0) — sets ZF=1
-    mem[0] = 0x39;
-    mem[1] = 0xC0;
-    // 0x02: JE +2 (74 02) — jump to 0x06
-    mem[2] = 0x74;
-    mem[3] = 0x02;
-    // 0x04: MOV EAX, 1 (skip this)
-    mem[4] = 0xB8;
-    mem[5] = 0x01;
-    // 0x06: HLT
-    mem[6] = 0xF4;
+    const cases = [_]struct { rhs: u32, zero: bool, result: u32 }{
+        .{ .rhs = 42, .zero = true, .result = 42 },
+        .{ .rhs = 43, .zero = false, .result = 1 },
+    };
+    for (cases) |case| {
+        var mem: [256]u8 = .{0} ** 256;
+        @memcpy(mem[0..10], &[_]u8{ 0x39, 0xD8, 0x74, 0x05, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xF4 });
+        var cpu = makeCpu(&mem);
+        cpu.eax = 42;
+        cpu.ebx = case.rhs;
+        cpu.esp = 200;
 
-    var cpu = makeCpu(&mem);
-    cpu.eax = 42;
-    cpu.esp = 200;
-    run(&cpu);
-
-    // Should have jumped over MOV, so EAX should still be 42
-    try testing.expectEqual(@as(u32, 42), cpu.eax);
+        for (0..4) |_| {
+            if (cpu.halted) break;
+            step(&cpu);
+        }
+        try testing.expect(cpu.halted);
+        try testing.expectEqual(@as(u32, 10), cpu.eip);
+        try testing.expectEqual(case.result, cpu.eax);
+        try testing.expectEqual(case.zero, cpu.flags.getZF());
+    }
 }
 
 test "execute: LEA" {

@@ -1607,8 +1607,9 @@ test "GetFileTime preserves file timestamps before the Unix epoch" {
 }
 
 test "CloseHandle frees file mapping slots" {
+    const saved_fds = mapping_fds;
+    defer mapping_fds = saved_fds;
     mapping_fds = [_]i32{-1} ** MAX_MAPPINGS;
-    defer mapping_fds = [_]i32{-1} ** MAX_MAPPINGS;
 
     var handles: [MAX_MAPPINGS]usize = undefined;
     for (0..MAX_MAPPINGS) |i| {
@@ -1617,8 +1618,12 @@ test "CloseHandle frees file mapping slots" {
     // Pool is exhausted now.
     try std.testing.expect(alloc_mapping(999) == null);
     // Closing each mapping handle must free its slot.
-    for (handles) |h| _ = CloseHandle(h);
-    try std.testing.expect(alloc_mapping(999) != null);
+    for (handles) |h| {
+        try std.testing.expectEqual(@as(i32, 1), CloseHandle(h));
+        const replacement = alloc_mapping(999) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(h, replacement);
+        try std.testing.expect(alloc_mapping(999) == null);
+    }
 }
 
 test "guest view writeback failure preserves the view for retry" {
