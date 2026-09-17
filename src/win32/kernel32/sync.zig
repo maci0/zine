@@ -24,7 +24,7 @@ const MAX_CRITICAL_SECTIONS = 256;
 
 const CriticalSection = struct {
     mutex: runtime.Mutex = .{},
-    owner: std.Thread.Id = 0,
+    owner: std.atomic.Value(std.Thread.Id) = std.atomic.Value(std.Thread.Id).init(0),
     recursion: u32 = 0,
     addr: usize = 0,
 };
@@ -35,7 +35,11 @@ var cs_table: [MAX_CRITICAL_SECTIONS]CriticalSection = init_cs: {
     break :init_cs arr;
 };
 
+var cs_table_mutex: runtime.Mutex = .{};
+
 fn getOrCreateCS(addr: usize) ?*CriticalSection {
+    cs_table_mutex.lock();
+    defer cs_table_mutex.unlock();
     for (&cs_table) |*cs| {
         if (cs.addr == addr) return cs;
     }
@@ -59,13 +63,13 @@ pub fn EnterCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) voi
     if (lpCriticalSection == 0) return;
     const cs = getOrCreateCS(lpCriticalSection) orelse return;
     const tid = std.Thread.getCurrentId();
-    if (cs.owner == tid) {
+    if (cs.owner.load(.monotonic) == tid) {
         // Recursive entry — same thread, just bump count
         cs.recursion += 1;
         return;
     }
     cs.mutex.lock();
-    cs.owner = tid;
+    cs.owner.store(tid, .monotonic);
     cs.recursion = 1;
 }
 
@@ -77,7 +81,7 @@ pub fn LeaveCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) voi
         cs.recursion -= 1;
         return;
     }
-    cs.owner = 0;
+    cs.owner.store(0, .monotonic);
     cs.recursion = 0;
     cs.mutex.unlock();
 }
@@ -86,6 +90,8 @@ pub fn LeaveCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) voi
 pub fn DeleteCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: DeleteCriticalSection({x})\n", .{lpCriticalSection});
     if (lpCriticalSection == 0) return;
+    cs_table_mutex.lock();
+    defer cs_table_mutex.unlock();
     for (&cs_table) |*cs| {
         if (cs.addr == lpCriticalSection) {
             cs.* = .{};
@@ -859,6 +865,54 @@ pub fn FlsFree(dwFlsIndex: u32) callconv(w32cc.WINAPI) i32 {
 // -------------------------------------------------------------------------
 // Tests
 // -------------------------------------------------------------------------
+
+test "critical sections serialize recursive access during concurrent registration" {
+    const saved_sections = cs_table;
+    defer cs_table = saved_sections;
+    cs_table = [_]CriticalSection{.{}} ** MAX_CRITICAL_SECTIONS;
+
+    const Context = struct {
+        start: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        count: usize = 0,
+
+        fn run(ctx: *@This(), addr: usize) void {
+            while (!ctx.start.load(.acquire)) std.atomic.spinLoopHint();
+            for (0..1000) |_| {
+                InitializeCriticalSection(addr);
+                EnterCriticalSection(addr);
+                EnterCriticalSection(1);
+                EnterCriticalSection(1);
+                ctx.count += 1;
+                LeaveCriticalSection(1);
+                LeaveCriticalSection(1);
+                LeaveCriticalSection(addr);
+                DeleteCriticalSection(addr);
+            }
+        }
+    };
+    var ctx: Context = .{};
+    InitializeCriticalSection(1);
+    var threads: [8]std.Thread = undefined;
+    var spawned: usize = 0;
+    {
+        defer {
+            ctx.start.store(true, .release);
+            for (threads[0..spawned]) |thread| thread.join();
+        }
+        for (&threads, 0..) |*thread, i| {
+            thread.* = try std.Thread.spawn(.{}, Context.run, .{ &ctx, i + 2 });
+            spawned += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 8000), ctx.count);
+    const cs = getOrCreateCS(1).?;
+    try std.testing.expectEqual(@as(std.Thread.Id, 0), cs.owner.load(.monotonic));
+    try std.testing.expectEqual(@as(u32, 0), cs.recursion);
+    try std.testing.expect(cs.mutex.tryLock());
+    cs.mutex.unlock();
+    DeleteCriticalSection(1);
+    for (&cs_table) |*entry| try std.testing.expectEqual(@as(usize, 0), entry.addr);
+}
 
 test "CloseHandle frees kernel object slots" {
     const saved_objects = kernel_objects;
