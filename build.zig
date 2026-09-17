@@ -208,6 +208,10 @@ pub fn build(b: *std.Build) void {
         if (a == archs_to_build[0]) {
             const toml_license = b.addInstallFileWithDir(toml_dep.path("LICENSE"), .prefix, "share/licenses/zine/zig-toml.LICENSE");
             b.getInstallStep().dependOn(&toml_license.step);
+            // VanJS is vendored into the binary (van.min.js); shipping the full
+            // license text alongside it keeps the attribution grant traceable.
+            const van_license = b.addInstallFileWithDir(b.path("src/gui/van.LICENSE"), .prefix, "share/licenses/zine/van.LICENSE");
+            b.getInstallStep().dependOn(&van_license.step);
         }
 
         if (a == .wasm32 or a == .wasm64) {
