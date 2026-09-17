@@ -35,6 +35,7 @@ comptime {
     _ = @import("win32/user32.zig");
     _ = @import("win32/civil_time.zig");
     _ = @import("win32/kernel32/time.zig");
+    _ = @import("win32/kernel32/locale.zig");
     _ = @import("win32/kernel32/file.zig");
     _ = @import("win32/kernel32/sync.zig");
     _ = @import("win32/kernel32/process.zig");

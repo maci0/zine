@@ -871,8 +871,8 @@ pub fn lstrcmpiW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 
     const s2 = @as([*]const u16, @ptrFromInt(lpString2));
     var i: usize = 0;
     while (s1[i] != 0 and s2[i] != 0) : (i += 1) {
-        const c1: u8 = if (s1[i] < 128) std.ascii.toLower(@intCast(s1[i])) else @intCast(s1[i] & 0xFF);
-        const c2: u8 = if (s2[i] < 128) std.ascii.toLower(@intCast(s2[i])) else @intCast(s2[i] & 0xFF);
+        const c1: u16 = if (s1[i] < 128) std.ascii.toLower(@intCast(s1[i])) else s1[i];
+        const c2: u16 = if (s2[i] < 128) std.ascii.toLower(@intCast(s2[i])) else s2[i];
         if (c1 < c2) return -1;
         if (c1 > c2) return 1;
     }
@@ -895,6 +895,28 @@ fn formatDate(st: *const w32.SYSTEMTIME, flags: u32, buf: []u8) []const u8 {
 fn formatTime(st: *const w32.SYSTEMTIME, flags: u32, buf: []u8) []const u8 {
     const n = stub_GetTimeFormatA(0, flags, @intFromPtr(st), 0, @intFromPtr(buf.ptr), @intCast(buf.len));
     return std.mem.sliceTo(buf[0..@intCast(n - 1)], 0);
+}
+
+test "lstrcmpiW preserves non-ASCII UTF-16 code units" {
+    const pairs = .{
+        .{ [_:0]u16{0x0101}, [_:0]u16{0x0201} },
+        .{ [_:0]u16{0x0161}, [_:0]u16{'a'} },
+        .{ [_:0]u16{ 0xD83D, 0xDE00 }, [_:0]u16{ 0xD83D, 0xDF00 } },
+    };
+    inline for (pairs) |pair| {
+        var first_text = pair[0];
+        var second_text = pair[1];
+        const first = @intFromPtr(&first_text);
+        const second = @intFromPtr(&second_text);
+        try testing.expect(lstrcmpiW(first, second) != 0);
+        try testing.expectEqual(-lstrcmpiW(first, second), lstrcmpiW(second, first));
+        try testing.expectEqual(@as(i32, 0), lstrcmpiW(first, first));
+    }
+
+    const upper = [_:0]u16{ 'A', 0x0101, 'Z' };
+    const lower = [_:0]u16{ 'a', 0x0101, 'z' };
+    try testing.expectEqual(@as(i32, 0), lstrcmpiW(@intFromPtr(&upper), @intFromPtr(&lower)));
+    try testing.expect(lstrcmpiW(@intFromPtr(&[_:0]u16{}), @intFromPtr(&lower)) < 0);
 }
 
 test "GetDateFormatA honors the caller's SYSTEMTIME" {
