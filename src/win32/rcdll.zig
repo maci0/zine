@@ -1409,49 +1409,6 @@ fn parseDialogControl(text: []const u8, idx: *usize, out: *DlgItem) bool {
     return true;
 }
 
-/// Returns 0 if the menu's END/} comes right after the popup at `start`
-/// (i.e. the popup is the last top-level item), non-zero otherwise.
-fn findMenuEnd(text: []const u8, start: usize) i32 {
-    var i = start;
-    var depth: i32 = 0;
-    while (i < text.len) {
-        while (i < text.len and (std.ascii.isWhitespace(text[i]) or text[i] == ',')) i += 1;
-        if (i >= text.len) break;
-        if (text[i] == '{') {
-            depth += 1;
-            i += 1;
-        } else if (text[i] == '}') {
-            if (depth == 0) {
-                // popup closed — check the next token
-                var j = i + 1;
-                while (j < text.len and std.ascii.isWhitespace(text[j])) j += 1;
-                if (j >= text.len) return 0;
-                if (startsWithIgnoreCase(text[j..], "END")) return 0;
-                if (text[j] == '}') return 0;
-                return 1;
-            }
-            depth -= 1;
-            i += 1;
-        } else if (startsWithIgnoreCase(text[i..], "BEGIN")) {
-            depth += 1;
-            i += 5;
-        } else if (startsWithIgnoreCase(text[i..], "END")) {
-            if (depth == 0) {
-                var j = i + 3;
-                while (j < text.len and std.ascii.isWhitespace(text[j])) j += 1;
-                if (j >= text.len) return 0;
-                if (text[j] == '}' or startsWithIgnoreCase(text[j..], "END")) return 0;
-                return 1;
-            }
-            depth -= 1;
-            i += 3;
-        } else {
-            i += 1;
-        }
-    }
-    return 0;
-}
-
 /// Emits one MENUITEM line: "MENUITEM "text", id [, flags]" or "MENUITEM SEPARATOR".
 /// Returns false if the line isn't a menu item.
 fn emitMenuItem(text: []const u8, idx: *usize, ctx: *const MenuCtx) bool {
