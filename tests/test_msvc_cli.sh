@@ -184,7 +184,11 @@ if [ "${SKIP_BUILD:-}" != "1" ]; then
         (cd "$SCRIPT_DIR/.." && zig build -Darch=wasm32) || { echo "FATAL: zig build -Darch=wasm32 failed"; exit 1; }
     elif $IS_EXTERNAL; then
         echo "Building DLLs + zine with external stubs..."
-        (cd "$SCRIPT_DIR/.." && zig build -Ddll=true && zig build -Dexternal-stubs=true -Darch=x86) || { echo "FATAL: zig build -Dexternal-stubs failed"; exit 1; }
+        EXTERNAL_ARCH=x86
+        if $IS_NATIVE64; then
+            EXTERNAL_ARCH=x86_64
+        fi
+        (cd "$SCRIPT_DIR/.." && zig build -Ddll=true && zig build -Dexternal-stubs=true -Darch="$EXTERNAL_ARCH") || { echo "FATAL: zig build -Dexternal-stubs failed"; exit 1; }
     elif $IS_NATIVE64; then
         echo "Building zine for x86_64 (compat mode)..."
         (cd "$SCRIPT_DIR/.." && zig build -Darch=x86_64) || { echo "FATAL: zig build -Darch=x86_64 failed"; exit 1; }
