@@ -185,9 +185,9 @@ pub fn getCwd(buf: []u8) usize {
         // Raw getcwd syscall: std.process.currentPathAlloc goes through
         // std.Io (TLS), which faults inside the compat signal dispatch.
         const n = std.os.linux.getcwd(buf.ptr, buf.len);
-        if (n == 0) return 0;
+        if (std.os.linux.errno(n) != .SUCCESS or n == 0) return 0;
         var win_buf: [1024]u8 = undefined;
-        const win_len = path_utils.posixToWin32(buf[0..n], &win_buf) catch return 0;
+        const win_len = path_utils.posixToWin32(buf[0 .. n - 1], &win_buf) catch return 0;
         if (win_len == 0 or win_len >= buf.len) return 0;
         @memcpy(buf[0..win_len], win_buf[0..win_len]);
         buf[win_len] = 0;
@@ -203,6 +203,30 @@ pub fn getCwd(buf: []u8) usize {
     @memcpy(buf[0..win_len], win_buf[0..win_len]);
     buf[win_len] = 0;
     return win_len;
+}
+
+test "getCwd excludes the terminator and resolves relative paths" {
+    const cwd = try std.process.currentPathAlloc(runtime.io(), std.testing.allocator);
+    defer std.testing.allocator.free(cwd);
+    var expected: [1024]u8 = undefined;
+    const expected_len = try path_utils.posixToWin32(cwd, &expected);
+    var actual: [1024]u8 = undefined;
+    const actual_len = getCwd(&actual);
+    try std.testing.expectEqual(expected_len, actual_len);
+    try std.testing.expectEqualStrings(expected[0..expected_len], actual[0..actual_len]);
+    try std.testing.expectEqual(@as(u8, 0), actual[actual_len]);
+
+    const full_len = getFullPath("child.txt", &actual);
+    const separator: []const u8 = if (expected[expected_len - 1] == '\\') "" else "\\";
+    const full = try std.fmt.allocPrint(std.testing.allocator, "{s}{s}child.txt", .{ expected[0..expected_len], separator });
+    defer std.testing.allocator.free(full);
+    try std.testing.expectEqualStrings(full, actual[0..full_len]);
+}
+
+test "getCwd rejects undersized buffers" {
+    var buf: [1]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 0), getCwd(&buf));
+    try std.testing.expectEqual(@as(usize, 0), getCwd(buf[0..0]));
 }
 
 /// Resolve a relative Win32 path to an absolute Win32 path.
