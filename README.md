@@ -30,6 +30,13 @@ reproducing a build; `--version` alone does not distinguish post-milestone chang
 
 - Zig **0.16.0** replaces **0.15.2** as the minimum toolchain. Upgrade Zig before
   rebuilding; the source now uses the 0.16 process and I/O APIs.
+- Empty or unknown `ZINE_LOG_LEVEL` values now stop native and WASI startup
+  with status 2, including `--help` and `--version`. At `v1`, native builds
+  silently ignored invalid values and WASI ignored the variable entirely.
+  Unset it to retain the default, or use `fatal`, `error` (alias `err`), `warn`,
+  `info`, or `trace`. Replace empty assignments and unsupported values such as
+  `debug` in launch scripts and runtime environment settings. WASI now honors
+  valid levels too; unset the variable to retain its previous unfiltered logs.
 - For the native FLTK GUI, use `zig build -Darch=x86_64 -Dfltk` instead of the
   old x86 `zig build -Dfltk` recipe, then run `zig-out/bin/zine.x86_64 --fltk`.
   Guest executables remain 32-bit Windows PEs.
