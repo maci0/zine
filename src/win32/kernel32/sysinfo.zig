@@ -91,26 +91,39 @@ pub fn MulDiv(nNumber: i32, nNumerator: i32, nDenominator: i32) callconv(w32cc.W
     const denominator = @as(i64, nDenominator);
     // Half-up on magnitudes keeps the quotient sign intact; a plain
     // @divFloor((2*n + d) / 2d) formulation would overflow at i64 extremes.
-    const half_denominator = @divTrunc(denominator, 2);
+    const half_denominator = @divTrunc(if (denominator < 0) -denominator else denominator, 2);
     const rounded = @divTrunc(numerator + (if (numerator < 0) -half_denominator else half_denominator), denominator);
     if (rounded > 0x7FFFFFFF or rounded < -0x80000000) return -1;
     return @intCast(rounded);
 }
 
+test "MulDiv rounds with negative denominators" {
+    try std.testing.expectEqual(@as(i32, -2), MulDiv(3, 1, -2));
+    try std.testing.expectEqual(@as(i32, 2), MulDiv(-3, 1, -2));
+    try std.testing.expectEqual(@as(i32, -2), MulDiv(5, 1, -3));
+    try std.testing.expectEqual(@as(i32, 2), MulDiv(5, -1, -3));
+    try std.testing.expectEqual(@as(i32, -3), MulDiv(6, 1, -2));
+    try std.testing.expectEqual(@as(i32, 0), MulDiv(0, 1, -2));
+    try std.testing.expectEqual(@as(i32, 1), MulDiv(std.math.minInt(i32), 1, std.math.minInt(i32)));
+    try std.testing.expectEqual(@as(i32, -1), MulDiv(std.math.minInt(i32), 1, -1));
+}
+
 test "MulDiv rounds half away from zero like Win32" {
     try std.testing.expectEqual(@as(i32, 5), MulDiv(10, 50, 100)); // 5.0 stays 5
-    try std.testing.expectEqual(@as(i32, 4), MulDiv(10, 49, 100)); // 4.9 -> 4
+    try std.testing.expectEqual(@as(i32, 5), MulDiv(10, 49, 100));
     try std.testing.expectEqual(@as(i32, 5), MulDiv(10, 45, 100)); // 4.5 -> 5
-    try std.testing.expectEqual(@as(i32, 17), MulDiv(10, 16, 10)); // 1.6 -> 2
+    try std.testing.expectEqual(@as(i32, 16), MulDiv(10, 16, 10));
     try std.testing.expectEqual(@as(i32, -5), MulDiv(-10, 45, 100)); // -4.5 -> -5
     try std.testing.expectEqual(@as(i32, -1), MulDiv(std.math.maxInt(i32), 2, 1)); // overflow
     try std.testing.expectEqual(@as(i32, -1), MulDiv(1, 1, 0)); // divide by zero
 }
 
 test "MulDiv avoids intermediate overflow for huge inputs" {
-    // 2147483647 * 2^15 / 2^31 would overflow a (n * num) * 2 / den ordering.
-    try std.testing.expectEqual(@as(i32, 65535), MulDiv(std.math.maxInt(i32), 1 << 15, 1 << 16));
-    try std.testing.expectEqual(@as(i32, -65535), MulDiv(std.math.minInt(i32) + 1, 1 << 15, 1 << 16));
+    try std.testing.expectEqual(@as(i32, 1073741824), MulDiv(std.math.maxInt(i32), 1 << 15, 1 << 16));
+    try std.testing.expectEqual(@as(i32, -1073741824), MulDiv(std.math.minInt(i32) + 1, 1 << 15, 1 << 16));
+    try std.testing.expectEqual(std.math.maxInt(i32), MulDiv(std.math.maxInt(i32), 1 << 16, 1 << 16));
+    try std.testing.expectEqual(std.math.maxInt(i32), MulDiv(std.math.maxInt(i32), std.math.maxInt(i32), std.math.maxInt(i32)));
+    try std.testing.expectEqual(std.math.minInt(i32), MulDiv(std.math.minInt(i32), std.math.minInt(i32), std.math.minInt(i32)));
 }
 
 /// Retrieves the size of a memory block allocated from a heap.
