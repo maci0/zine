@@ -34,6 +34,7 @@ comptime {
     // Win32 stub tests
     _ = @import("win32/user32.zig");
     _ = @import("win32/host_io.zig");
+    _ = @import("win32/comdlg32/dialogs.zig");
     _ = @import("win32/civil_time.zig");
     _ = @import("win32/kernel32/time.zig");
     _ = @import("win32/kernel32/locale.zig");

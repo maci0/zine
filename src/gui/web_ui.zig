@@ -299,13 +299,7 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                                     const path = std.fmt.bufPrint(&path_buf, "drive_c/{s}/{s}", .{ dir_path, file_val.string }) catch null;
                                     if (path) |p| {
                                         if (renderer.on_file_uploaded) |cb| {
-                                            // Own the string: the comdlg stub
-                                            // keeps the slice indefinitely, and
-                                            // this handler runs on a per-client
-                                            // thread, so a shared buffer would
-                                            // race with concurrent uploads.
-                                            const owned = g_allocator.dupe(u8, p) catch continue;
-                                            cb(owned);
+                                            cb(p);
                                         }
                                     }
                                 }
@@ -341,9 +335,7 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                                     const path = std.fmt.bufPrint(&path_buf, "drive_c/{s}", .{req_path}) catch null;
                                     if (path) |p| {
                                         if (renderer.on_file_uploaded) |cb| {
-                                            // Owned copy, same reasoning as above.
-                                            const owned = g_allocator.dupe(u8, p) catch continue;
-                                            cb(owned);
+                                            cb(p);
                                         }
                                     }
                                 }

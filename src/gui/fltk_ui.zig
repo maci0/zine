@@ -526,10 +526,7 @@ fn fileCallback(path: [*c]const u8, cancelled: c_int) callconv(.c) void {
     }
     const path_slice = std.mem.span(@as([*:0]const u8, @ptrCast(path)));
     if (renderer.on_file_uploaded) |cb| {
-        // The comdlg stub keeps the slice without freeing, so hand it an
-        // allocated copy.
-        const owned = g_allocator.dupe(u8, path_slice) catch return;
-        cb(owned);
+        cb(path_slice);
     }
 }
 

@@ -29,6 +29,7 @@ var dlg_result_mutex: runtime.Mutex = .{};
 
 var dialog_cancelled: bool = false;
 var pending_file_path: ?[]const u8 = null;
+const file_path_allocator = if (@import("builtin").is_test) std.testing.allocator else std.heap.page_allocator;
 
 fn fileDialogDone() bool {
     dlg_result_mutex.lock();
@@ -69,14 +70,51 @@ fn handleCancelDialog() void {
 fn handleFileUploaded(path: []const u8) void {
     dlg_result_mutex.lock();
     defer dlg_result_mutex.unlock();
-    pending_file_path = path;
+    const owned = file_path_allocator.dupe(u8, path) catch return;
+    clearPendingFilePathLocked();
+    pending_file_path = owned;
+}
+
+fn clearPendingFilePathLocked() void {
+    if (pending_file_path) |p| file_path_allocator.free(p);
+    pending_file_path = null;
+}
+
+fn takePendingFilePath() ?[]const u8 {
+    dlg_result_mutex.lock();
+    defer dlg_result_mutex.unlock();
+    const path = pending_file_path;
+    pending_file_path = null;
+    return path;
+}
+
+test "file dialog paths own borrowed input and release replaced results" {
+    defer clearPendingFilePathLocked();
+    var input = "drive_c/first.txt".*;
+    handleFileUploaded(&input);
+    @memset(&input, 'x');
+    try std.testing.expectEqualStrings("drive_c/first.txt", pending_file_path.?);
+
+    for (0..128) |_| {
+        handleFileUploaded("drive_c/replacement.txt");
+    }
+    const taken = takePendingFilePath().?;
+    defer file_path_allocator.free(taken);
+    try std.testing.expect(pending_file_path == null);
+    try std.testing.expectEqualStrings("drive_c/replacement.txt", taken);
+
+    handleFileUploaded("drive_c/next.txt");
+    clearPendingFilePathLocked();
+    try std.testing.expect(pending_file_path == null);
+    try std.testing.expectEqualStrings("drive_c/replacement.txt", taken);
+    try std.testing.expect(takePendingFilePath() == null);
 }
 
 fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
     {
         dlg_result_mutex.lock();
         defer dlg_result_mutex.unlock();
-        pending_file_path = null;
+        clearPendingFilePathLocked();
         dialog_cancelled = false;
     }
 
@@ -105,12 +143,8 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
 
     renderer.closeDialog();
 
-    const path_opt: ?[]const u8 = blk: {
-        dlg_result_mutex.lock();
-        defer dlg_result_mutex.unlock();
-        break :blk pending_file_path;
-    };
-    if (path_opt) |path| {
+    if (takePendingFilePath()) |path| {
+        defer file_path_allocator.free(path);
         if (lpofn_ptr != 0) {
             const ofn = @as(*w32.OPENFILENAMEA, @ptrFromInt(lpofn_ptr));
 
@@ -174,11 +208,6 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
                     }
                 }
 
-                {
-                    dlg_result_mutex.lock();
-                    defer dlg_result_mutex.unlock();
-                    pending_file_path = null;
-                }
                 return 1;
             }
         }
@@ -205,7 +234,7 @@ fn commonFileDialogW(lpofn_ptr: usize, is_save: bool) i32 {
     {
         dlg_result_mutex.lock();
         defer dlg_result_mutex.unlock();
-        pending_file_path = null;
+        clearPendingFilePathLocked();
         dialog_cancelled = false;
     }
 
@@ -234,12 +263,8 @@ fn commonFileDialogW(lpofn_ptr: usize, is_save: bool) i32 {
 
     renderer.closeDialog();
 
-    const path_opt: ?[]const u8 = blk: {
-        dlg_result_mutex.lock();
-        defer dlg_result_mutex.unlock();
-        break :blk pending_file_path;
-    };
-    if (path_opt) |path| {
+    if (takePendingFilePath()) |path| {
+        defer file_path_allocator.free(path);
         if (lpofn_ptr != 0) {
             const ofn = @as(*w32.OPENFILENAMEA, @ptrFromInt(lpofn_ptr));
 
@@ -309,11 +334,6 @@ fn commonFileDialogW(lpofn_ptr: usize, is_save: bool) i32 {
                     }
                 }
 
-                {
-                    dlg_result_mutex.lock();
-                    defer dlg_result_mutex.unlock();
-                    pending_file_path = null;
-                }
                 return 1;
             }
         }
