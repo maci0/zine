@@ -282,14 +282,48 @@ pub fn getFullPath(rel_path: []const u8, buf: []u8) usize {
         cwd_buf[pos] = '\\';
         pos += 1;
     }
-    if (pos + rel_path.len >= buf.len) return 0;
-    @memcpy(cwd_buf[pos..][0..rel_path.len], rel_path);
+    if (pos >= buf.len or rel_path.len >= buf.len - pos) return 0;
+    const dest = buf[pos..][0..rel_path.len];
+    if (@intFromPtr(dest.ptr) > @intFromPtr(rel_path.ptr)) {
+        std.mem.copyBackwards(u8, dest, rel_path);
+    } else {
+        std.mem.copyForwards(u8, dest, rel_path);
+    }
+    @memcpy(buf[0..pos], cwd_buf[0..pos]);
     pos += rel_path.len;
 
-    @memcpy(buf[0..pos], cwd_buf[0..pos]);
     std.mem.replaceScalar(u8, buf[0..pos], '/', '\\');
     buf[pos] = 0;
     return pos;
+}
+
+test "getFullPath builds long relative paths in the caller buffer" {
+    var cwd: [1024]u8 = undefined;
+    const cwd_len = getCwd(&cwd);
+    try std.testing.expect(cwd_len > 0);
+    const separator: []const u8 = if (cwd[cwd_len - 1] == '\\') "" else "\\";
+    const relative = "folder/" ** 160 ++ "file.txt";
+    const expected = try std.fmt.allocPrint(std.testing.allocator, "{s}{s}{s}", .{ cwd[0..cwd_len], separator, relative });
+    defer std.testing.allocator.free(expected);
+    std.mem.replaceScalar(u8, expected, '/', '\\');
+
+    var buf: [4096]u8 = @splat(0xaa);
+    try std.testing.expectEqual(@as(usize, 0), getFullPath(relative, buf[0..expected.len]));
+    const len = getFullPath(relative, buf[0 .. expected.len + 1]);
+    try std.testing.expectEqualStrings(expected, buf[0..len]);
+    try std.testing.expectEqual(@as(u8, 0), buf[len]);
+    try std.testing.expectEqual(@as(u8, 0xaa), buf[len + 1]);
+
+    @memcpy(buf[0..relative.len], relative);
+    const aliased_len = getFullPath(buf[0..relative.len], &buf);
+    try std.testing.expectEqualStrings(expected, buf[0..aliased_len]);
+    try std.testing.expectEqual(@as(u8, 0), buf[aliased_len]);
+
+    const source_offset = cwd_len + 16;
+    @memcpy(buf[source_offset..][0..relative.len], relative);
+    const overlapping_len = getFullPath(buf[source_offset..][0..relative.len], &buf);
+    try std.testing.expectEqualStrings(expected, buf[0..overlapping_len]);
+    try std.testing.expectEqual(@as(u8, 0), buf[overlapping_len]);
 }
 
 /// Search for a file in a set of directories (semicolon-separated Win32 paths).
