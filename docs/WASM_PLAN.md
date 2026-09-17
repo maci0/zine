@@ -117,9 +117,8 @@ WASM modules with:
 - State-via-memory prologue/epilogue using `JitCpuState` (64-byte struct)
 - `mem_base` local for guest VA → WASM linear address translation
 
-The `--jit` flag enables compile-only mode (validates JIT output alongside
-the interpreter). Full JIT execution requires the `--jit_host` build flag
-and a host that provides `jit_compile`/`jit_call` imports.
+See [JIT usage](JIT.md#usage) for compile-only mode and the
+`-Djit_host=true` build option required for host execution.
 
 ### Target: Browser-Hosted
 
