@@ -289,7 +289,8 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
 
     // Step 1: Normalize into a scratch buffer (\ → /, strip ./ prefix)
     var scratch: [1024]u8 = undefined;
-    const initial_len = @min(win_path.len, scratch.len - 1);
+    if (win_path.len >= scratch.len) return 0;
+    const initial_len = win_path.len;
     @memcpy(scratch[0..initial_len], win_path[0..initial_len]);
     std.mem.replaceScalar(u8, scratch[0..initial_len], '\\', '/');
 
@@ -308,26 +309,20 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
 
         if (letter == 'Z') {
             // Z: → host filesystem root
+            if (1 + rest.len >= out.len) return 0;
             out[0] = '/';
-            const copy_len = @min(rest.len, out.len - 1);
-            @memcpy(out[1 .. 1 + copy_len], rest[0..copy_len]);
-            const total = 1 + copy_len;
-            if (total < out.len) out[total] = 0;
+            @memcpy(out[1 .. 1 + rest.len], rest);
+            const total = 1 + rest.len;
+            out[total] = 0;
             // Normalize but anchor at "/" so .. can't escape root
             return normalizePath(out, total, 1);
         } else {
             // C: (or other) → drive_c/
-            const prefix = DRIVE_ROOT;
-            var pos: usize = 0;
-            for (prefix) |c| {
-                if (pos >= out.len) break;
-                out[pos] = c;
-                pos += 1;
-            }
-            const copy_len = @min(rest.len, out.len - pos);
-            @memcpy(out[pos .. pos + copy_len], rest[0..copy_len]);
-            pos += copy_len;
-            if (pos < out.len) out[pos] = 0;
+            if (drive_root_len + rest.len >= out.len) return 0;
+            @memcpy(out[0..drive_root_len], DRIVE_ROOT);
+            @memcpy(out[drive_root_len .. drive_root_len + rest.len], rest);
+            const pos = drive_root_len + rest.len;
+            out[pos] = 0;
             // Normalize with anchor at drive_c/ so .. can't escape sandbox
             return normalizePath(out, pos, drive_root_len);
         }
@@ -335,7 +330,8 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
 
     // Step 4: Absolute POSIX path — pass through
     if (src.len > 0 and src[0] == '/') {
-        const abs_len = @min(src.len, out.len - 1);
+        if (src.len >= out.len) return 0;
+        const abs_len = src.len;
         @memcpy(out[0..abs_len], src[0..abs_len]);
         out[abs_len] = 0;
         return abs_len;
@@ -343,7 +339,8 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
 
     // Step 5: already inside drive_c/
     if (isInsideDriveC(src)) {
-        const dc_len = @min(src.len, out.len - 1);
+        if (src.len >= out.len) return 0;
+        const dc_len = src.len;
         @memcpy(out[0..dc_len], src[0..dc_len]);
         out[dc_len] = 0;
         // Normalize with anchor at drive_c/ so .. can't escape sandbox
@@ -375,10 +372,12 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
                 @as(usize, 0);
             return normalizePath(out, total, anchor);
         }
+        return 0;
     }
 
     // Final fallback: just return the relative path with slashes fixed
-    const fb_len = @min(src.len, out.len - 1);
+    if (src.len >= out.len) return 0;
+    const fb_len = src.len;
     @memcpy(out[0..fb_len], src[0..fb_len]);
     out[fb_len] = 0;
     return fb_len;
@@ -574,6 +573,52 @@ test "toHostPath: empty string returns 0" {
     var buf: [256]u8 = undefined;
     const len = toHostPath("", &buf);
     try testing.expectEqual(@as(usize, 0), len);
+}
+
+test "toHostPath: insufficient capacity never returns a partial path" {
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "C:\\file.txt", .expected = "drive_c/file.txt" },
+        .{ .input = "C:\\", .expected = "drive_c/" },
+        .{ .input = "Z:\\file.txt", .expected = "/file.txt" },
+        .{ .input = "/file.txt", .expected = "/file.txt" },
+        .{ .input = "drive_c/file.txt", .expected = "drive_c/file.txt" },
+        .{ .input = "file.txt", .expected = "file.txt" },
+    };
+    var buf: [64]u8 = undefined;
+    for (cases) |case| {
+        for (0..case.expected.len + 1) |capacity| {
+            try testing.expectEqual(@as(usize, 0), toHostPath(case.input, buf[0..capacity]));
+        }
+        const len = toHostPath(case.input, buf[0 .. case.expected.len + 1]);
+        try testing.expectEqualStrings(case.expected, buf[0..len]);
+        try testing.expectEqual(@as(u8, 0), buf[len]);
+    }
+}
+
+test "toHostPath: oversized input is rejected before truncation" {
+    const input = [_]u8{'a'} ** 1024;
+    var buf: [2048]u8 = undefined;
+    try testing.expectEqual(@as(usize, 0), toHostPath(&input, &buf));
+}
+
+test "toHostPath: insufficient capacity does not discard virtual CWD" {
+    const saved_directory = current_directory;
+    const saved_len = current_directory_len;
+    defer {
+        current_directory = saved_directory;
+        current_directory_len = saved_len;
+    }
+    const cwd = "C:\\game";
+    @memcpy(current_directory[0..cwd.len], cwd);
+    current_directory_len = cwd.len;
+    var buf: [64]u8 = undefined;
+    const expected = "drive_c/game/file.txt";
+    for (0..expected.len + 1) |capacity| {
+        try testing.expectEqual(@as(usize, 0), toHostPath("file.txt", buf[0..capacity]));
+    }
+    const len = toHostPath("file.txt", buf[0 .. expected.len + 1]);
+    try testing.expectEqualStrings(expected, buf[0..len]);
+    try testing.expectEqual(@as(u8, 0), buf[len]);
 }
 
 test "toHostPath: dot-backslash prefix stripped" {
