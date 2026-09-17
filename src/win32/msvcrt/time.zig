@@ -269,8 +269,7 @@ test "asctime tolerates null and garbage fields" {
 
     // Out-of-range wday/mon fold into range rather than indexing out of bounds.
     const weird: Tm = .{ .tm_mday = 4, .tm_mon = 25, .tm_wday = -7 };
-    const s = asctimeStr(&weird);
-    try testing.expect(s.len > 0);
+    try testing.expectEqualStrings("Sun Feb  4 00:00:00 1900\n", asctimeStr(&weird));
 }
 
 test "mktime interprets tm as UTC and normalizes month overflow" {
