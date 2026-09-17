@@ -14,7 +14,7 @@ var clients_mutex: if (platform.is_native) runtime.Mutex else struct {
 var g_allocator: std.mem.Allocator = undefined;
 
 /// Initializes the Web UI backend.
-pub fn init(allocator: std.mem.Allocator) !void {
+pub fn init() !void {
     // Use page allocator for internal web UI data to avoid alignment issues
     // with the game's custom HeapAlloc-based allocator
     g_allocator = std.heap.page_allocator;
@@ -31,7 +31,7 @@ pub fn init(allocator: std.mem.Allocator) !void {
     }
 
     if (comptime platform.is_native) {
-        const thread = try std.Thread.spawn(.{}, serverLoop, .{allocator});
+        const thread = try std.Thread.spawn(.{}, serverLoop, .{});
         thread.detach();
     }
 }
@@ -120,7 +120,7 @@ pub fn pushAudio(data: []const u8) void {
     }
 }
 
-fn serverLoop(allocator: std.mem.Allocator) void {
+fn serverLoop() void {
     const io = runtime.io();
     const address: std.Io.net.IpAddress = std.Io.net.IpAddress.parseLiteral("127.0.0.1:1995") catch |err| {
         std.debug.print("WebUI: failed to parse address: {}\n", .{err});
@@ -136,7 +136,7 @@ fn serverLoop(allocator: std.mem.Allocator) void {
 
     while (true) {
         const stream = server.accept(io) catch continue;
-        const client_thread = std.Thread.spawn(.{}, handleClient, .{ stream, allocator }) catch {
+        const client_thread = std.Thread.spawn(.{}, handleClient, .{stream}) catch {
             stream.close(io);
             continue;
         };
@@ -144,7 +144,7 @@ fn serverLoop(allocator: std.mem.Allocator) void {
     }
 }
 
-fn handleClient(stream: std.Io.net.Stream, _: std.mem.Allocator) void {
+fn handleClient(stream: std.Io.net.Stream) void {
     // handleClientInner closes the stream on its success paths. On an error
     // return (failed respond, handshake, or file read) nothing else owns the
     // fd: close it here or every failed request leaks one until exit.

@@ -375,7 +375,7 @@ pub fn init(allocator: std.mem.Allocator) !void {
         global_framebuf[i + 3] = 0xFF; // A
     }
     switch (active_backend) {
-        .web_ui => try web_ui.init(allocator),
+        .web_ui => try web_ui.init(),
         .fltk => try fltk_ui.init(allocator),
         .none => {},
     }
