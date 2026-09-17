@@ -2154,7 +2154,7 @@ fn execGroup5(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 fn execShift(cpu: *Cpu, insn: *const Instruction) void {
     if (!insn.has_modrm) return;
     const sub_op = insn.modrm_reg;
-    var val = readOperand(cpu, insn, 0);
+    const val = readOperand(cpu, insn, 0);
     const count: u5 = switch (insn.opcode) {
         0xD0, 0xD1 => 1,
         0xD2, 0xD3 => @truncate(cpu.ecx),
@@ -2172,7 +2172,6 @@ fn execShift(cpu: *Cpu, insn: *const Instruction) void {
         else => val,
     };
 
-    val = result;
     if (insn.op_size == .byte) writeOperand8(cpu, insn, 0, @truncate(result)) else writeOperand(cpu, insn, 0, result);
 
     const fop: FlagOp = switch (sub_op) {
@@ -2382,6 +2381,26 @@ test "execute: cached instruction observes a changed immediate tail" {
     cpu.eip = 0;
     step(&cpu);
     try testing.expectEqual(@as(u32, 0x56345678), cpu.eax);
+}
+
+test "execute: shifts retain the last bit shifted out in carry" {
+    const cases = [_]struct { modrm: u8, input: u32, result: u32, carry: bool }{
+        .{ .modrm = 0xE0, .input = 0x80000000, .result = 0, .carry = true },
+        .{ .modrm = 0xE0, .input = 0x40000000, .result = 0x80000000, .carry = false },
+        .{ .modrm = 0xE8, .input = 1, .result = 0, .carry = true },
+        .{ .modrm = 0xE8, .input = 2, .result = 1, .carry = false },
+        .{ .modrm = 0xF8, .input = 0x80000001, .result = 0xC0000000, .carry = true },
+        .{ .modrm = 0xF8, .input = 0x80000002, .result = 0xC0000001, .carry = false },
+    };
+    for (cases) |case| {
+        var mem: [256]u8 = .{0} ** 256;
+        @memcpy(mem[0..4], &[_]u8{ 0xC1, case.modrm, 1, 0xF4 });
+        var cpu = makeCpu(&mem);
+        cpu.eax = case.input;
+        run(&cpu);
+        try testing.expectEqual(case.result, cpu.eax);
+        try testing.expectEqual(case.carry, cpu.flags.getCF());
+    }
 }
 
 test "execute: PUSH/POP" {
