@@ -29,14 +29,7 @@ pub const RegIndex = enum(u3) {
 };
 
 /// Segment register.
-pub const Segment = enum(u3) {
-    es = 0,
-    cs = 1,
-    ss = 2,
-    ds = 3,
-    fs = 4,
-    gs = 5,
-};
+pub const Segment = @import("decoder.zig").Segment;
 
 pub const Cpu = struct {
     /// General purpose register EAX (accumulator).

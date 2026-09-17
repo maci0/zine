@@ -15,8 +15,16 @@
 //! The decoder is designed as a standalone component used by the x86
 //! execution engine (`execute.zig`) and cached by `decode_cache.zig`.
 
-const cpu_mod = @import("cpu.zig");
-const Segment = cpu_mod.Segment;
+const OpSize = @import("flags.zig").OpSize;
+
+pub const Segment = enum(u3) {
+    es = 0,
+    cs = 1,
+    ss = 2,
+    ds = 3,
+    fs = 4,
+    gs = 5,
+};
 
 /// Operand kind tag — eliminates tagged-union overhead.
 pub const OpKind = enum(u3) {
@@ -31,7 +39,7 @@ pub const OpKind = enum(u3) {
 pub const Instruction = struct {
     opcode: u16 = 0,
     length: u8 = 0,
-    op_size: cpu_mod.OpSize = .dword,
+    op_size: OpSize = .dword,
 
     // Operand layout (flat, eliminates tagged union overhead)
     op0_kind: OpKind = .none,
@@ -186,7 +194,7 @@ pub fn decode(bytes: []const u8) Instruction {
         // PUSH imm8 (sign-extended)
         0x6A => {
             if (pos < bytes.len) {
-                insn.imm = cpu_mod.signExtend8to32(bytes[pos]);
+                insn.imm = @bitCast(@as(i32, @as(i8, @bitCast(bytes[pos]))));
                 insn.op0_kind = .imm;
                 pos += 1;
             }
@@ -250,7 +258,7 @@ pub fn decode(bytes: []const u8) Instruction {
         0x83 => {
             pos = decodeModRM(bytes, pos, &insn, .rm_only);
             if (pos < bytes.len) {
-                insn.imm = cpu_mod.signExtend8to32(bytes[pos]);
+                insn.imm = @bitCast(@as(i32, @as(i8, @bitCast(bytes[pos]))));
                 pos += 1;
             }
         },
@@ -629,7 +637,7 @@ pub fn decode(bytes: []const u8) Instruction {
         0x6B => {
             pos = decodeModRM(bytes, pos, &insn, .reg_rm);
             if (pos < bytes.len) {
-                insn.imm = cpu_mod.signExtend8to32(bytes[pos]);
+                insn.imm = @bitCast(@as(i32, @as(i8, @bitCast(bytes[pos]))));
                 pos += 1;
             }
         },
@@ -1164,7 +1172,7 @@ fn readDisp32(bytes: []const u8, start_pos: usize, disp: *i32) usize {
 }
 
 /// Read an immediate value and store in insn.imm; set insn.op1_kind = .imm.
-fn readImmOperand(bytes: []const u8, start_pos: usize, op_size: cpu_mod.OpSize, insn: *Instruction) usize {
+fn readImmOperand(bytes: []const u8, start_pos: usize, op_size: OpSize, insn: *Instruction) usize {
     var pos = start_pos;
     switch (op_size) {
         .byte => {
@@ -1196,7 +1204,7 @@ fn readImmOperand(bytes: []const u8, start_pos: usize, op_size: cpu_mod.OpSize, 
 }
 
 /// Read an immediate value directly (without setting op1_kind).
-fn readImmDirect(bytes: []const u8, start_pos: usize, op_size: cpu_mod.OpSize, insn: *Instruction) usize {
+fn readImmDirect(bytes: []const u8, start_pos: usize, op_size: OpSize, insn: *Instruction) usize {
     var pos = start_pos;
     switch (op_size) {
         .byte => {
@@ -1225,7 +1233,7 @@ fn readImmDirect(bytes: []const u8, start_pos: usize, op_size: cpu_mod.OpSize, i
 }
 
 /// Read a relative offset (for CALL/JMP).
-fn readRelOperand(bytes: []const u8, start_pos: usize, op_size: cpu_mod.OpSize, insn: *Instruction) usize {
+fn readRelOperand(bytes: []const u8, start_pos: usize, op_size: OpSize, insn: *Instruction) usize {
     var pos = start_pos;
     switch (op_size) {
         .byte => {
@@ -1350,7 +1358,31 @@ test "decode: SUB ESP, 0x10 (83 EC 10)" {
     try testing.expectEqual(@as(u8, 3), insn.length);
     try testing.expectEqual(OpKind.reg, insn.op0_kind);
     try testing.expectEqual(@as(u3, 4), insn.op0_reg); // ESP
-    try testing.expectEqual(cpu_mod.signExtend8to32(0x10), insn.imm);
+    try testing.expectEqual(@as(u32, 0x10), insn.imm);
+}
+
+test "decode: signed byte immediates preserve their 32-bit values" {
+    for (0..256) |value| {
+        const byte: u8 = @intCast(value);
+        const expected: u32 = if (value < 128) byte else 0xFFFFFF00 | @as(u32, byte);
+        const push = decode(&.{ 0x6A, byte });
+        const sub = decode(&.{ 0x83, 0xEC, byte });
+        const imul = decode(&.{ 0x6B, 0xC0, byte });
+        try testing.expectEqual(expected, push.imm);
+        try testing.expectEqual(expected, sub.imm);
+        try testing.expectEqual(expected, imul.imm);
+    }
+}
+
+test "decode: segment overrides preserve register encodings" {
+    const prefixes = [_]u8{ 0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65 };
+    for (prefixes, 0..) |prefix, index| {
+        const insn = decode(&.{ prefix, 0xA1, 0x00, 0x00, 0x00, 0x00 });
+        const expected: u3 = @intCast(index);
+        try testing.expectEqual(expected, @intFromEnum(insn.seg_override.?));
+        try testing.expectEqual(expected, @intFromEnum(insn.mem_seg));
+        try testing.expectEqual(@as(u8, 6), insn.length);
+    }
 }
 
 test "decode: CALL rel32 (E8 xx xx xx xx)" {
