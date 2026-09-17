@@ -205,6 +205,10 @@ pub fn FileTimeToSystemTime(lpFileTime: usize, lpSystemTime: usize) callconv(w32
     const st = @as(*w32.SYSTEMTIME, @ptrFromInt(lpSystemTime));
 
     const total_100ns: u64 = (@as(u64, ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+    if (total_100ns > std.math.maxInt(i64)) {
+        kernel32_error.SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
     const total_secs: i64 = @intCast(total_100ns / 10_000_000);
     const remaining_100ns = total_100ns % 10_000_000;
 
@@ -215,7 +219,7 @@ pub fn FileTimeToSystemTime(lpFileTime: usize, lpSystemTime: usize) callconv(w32
     const cd = civil_time.civilFromDays(@divFloor(unix_secs, 86400));
     const secs_into_day: u17 = @intCast(@mod(unix_secs, 86400));
 
-    st.wYear = @intCast(std.math.clamp(cd.year, 1601, 30827));
+    st.wYear = @intCast(cd.year);
     st.wMonth = @intCast(cd.month);
     st.wDayOfWeek = @intCast(@mod(@divFloor(unix_secs, 86400) + 4, 7));
     st.wDay = @intCast(cd.day);
@@ -315,6 +319,37 @@ test "SystemTimeToFileTime rejects invalid dates without changing output" {
         try testing.expectEqual(@as(i32, 0), SystemTimeToFileTime(@intFromPtr(&st), @intFromPtr(&ft)));
         try testing.expectEqual(ERROR_INVALID_PARAMETER, kernel32_error.GetLastError());
         try testing.expectEqual(sentinel, ft);
+    }
+}
+
+test "FileTimeToSystemTime preserves the last valid FILETIME date" {
+    const ft: w32.FILETIME = .{ .dwLowDateTime = 0xFFFFFFFF, .dwHighDateTime = 0x7FFFFFFF };
+    var st: w32.SYSTEMTIME = .{};
+    try testing.expectEqual(@as(i32, 1), FileTimeToSystemTime(@intFromPtr(&ft), @intFromPtr(&st)));
+    try testing.expectEqualDeep(w32.SYSTEMTIME{
+        .wYear = 30828,
+        .wMonth = 9,
+        .wDay = 14,
+        .wDayOfWeek = 4,
+        .wHour = 2,
+        .wMinute = 48,
+        .wSecond = 5,
+        .wMilliseconds = 477,
+    }, st);
+}
+
+test "FileTimeToSystemTime rejects high-bit timestamps without changing output" {
+    const invalid = [_]w32.FILETIME{
+        .{ .dwLowDateTime = 0, .dwHighDateTime = 0x80000000 },
+        .{ .dwLowDateTime = 0xFFFFFFFF, .dwHighDateTime = 0xFFFFFFFF },
+    };
+    const sentinel: w32.SYSTEMTIME = .{ .wYear = 2024, .wMonth = 2, .wDay = 29 };
+    for (invalid) |ft| {
+        var st = sentinel;
+        kernel32_error.SetLastError(0);
+        try testing.expectEqual(@as(i32, 0), FileTimeToSystemTime(@intFromPtr(&ft), @intFromPtr(&st)));
+        try testing.expectEqual(ERROR_INVALID_PARAMETER, kernel32_error.GetLastError());
+        try testing.expectEqualDeep(sentinel, st);
     }
 }
 
