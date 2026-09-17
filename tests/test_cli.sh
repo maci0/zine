@@ -40,6 +40,25 @@ timeout 60 "$@" --invalid-option >"$workdir/stdout" 2>"$workdir/stderr" || statu
 grep -q 'unknown option' "$workdir/stderr"
 
 if [[ "$expected_version" == zine\ * ]]; then
+    timeout 60 "$@" --help >"$workdir/stdout" 2>"$workdir/stderr"
+    if grep --quiet -- '--jit-max-eip=' "$workdir/stdout"; then
+        for value in '' invalid 0x 0x100000000 4294967296 -1 ' 42' '42 '; do
+            status=0
+            timeout 60 "$@" "--jit-max-eip=$value" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+            if [[ "$status" != 2 || -s "$workdir/stdout" ]]; then
+                printf 'Invalid --jit-max-eip value <%s> must exit with status 2 and no stdout (got %s)\n' "$value" "$status" >&2
+                exit 1
+            fi
+            grep --quiet -- 'Error: --jit-max-eip requires' "$workdir/stderr"
+            grep --quiet -- "Try 'zine --help'" "$workdir/stderr"
+        done
+        for value in 0 42 0x00400000 4294967295 0xFFFFFFFF; do
+            timeout 60 "$@" "--jit-max-eip=$value" --version >"$workdir/stdout" 2>"$workdir/stderr"
+            [[ ! -s "$workdir/stderr" ]]
+            printf '%s\n' "$expected_version" >"$workdir/expected"
+            cmp "$workdir/expected" "$workdir/stdout"
+        done
+    fi
     for level in fatal error err warn info trace '' debug INFO ' warn' 'trace '; do
         config_cmd=(env "ZINE_LOG_LEVEL=$level" "$@")
         if [[ "$1" == wasmtime ]]; then

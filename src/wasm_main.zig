@@ -111,9 +111,22 @@ pub fn main(init: std.process.Init) !void {
             use_jit = true;
             continue;
         }
+        if (!end_of_options and std.mem.eql(u8, arg, "--jit-max-eip")) {
+            std.debug.print("{s}", .{"Error: --jit-max-eip requires a value.\nTry 'zine --help' for more information.\n"});
+            std.process.exit(2);
+        }
         if (!end_of_options and std.mem.startsWith(u8, arg, "--jit-max-eip=")) {
             const val = arg["--jit-max-eip=".len..];
-            jit_max_eip = std.fmt.parseInt(u32, val, 0) catch 0xFFFFFFFF;
+            if (val.len == 0) {
+                std.debug.print("{s}", .{"Error: --jit-max-eip requires a non-empty value.\nTry 'zine --help' for more information.\n"});
+                std.process.exit(2);
+            }
+            jit_max_eip = std.fmt.parseInt(u32, val, 0) catch {
+                var err_buf: [512]u8 = undefined;
+                const msg = std.fmt.bufPrint(&err_buf, "Error: --jit-max-eip requires a u32 value (decimal or 0x-prefixed hex), got '{s}'.\nTry 'zine --help' for more information.\n", .{val}) catch "Error: --jit-max-eip requires a u32 value.\nTry 'zine --help' for more information.\n";
+                std.debug.print("{s}", .{msg});
+                std.process.exit(2);
+            };
             continue;
         }
         if (!end_of_options and std.mem.eql(u8, arg, "--profile")) {
