@@ -17,6 +17,7 @@ pub const BatEnv = struct {
             .allocator = allocator,
             .env = std.StringHashMap([]const u8).init(allocator),
         };
+        errdefer self.deinit();
         // Load initial env
         var it = runtime.environ().createMap(allocator) catch |e| {
             std.debug.print("bat: failed to load environment: {}\n", .{e});
@@ -26,11 +27,11 @@ pub const BatEnv = struct {
 
         var env_it = it.iterator();
         while (env_it.next()) |entry| {
-            try self.env.put(try self.allocator.dupe(u8, entry.key_ptr.*), try self.allocator.dupe(u8, entry.value_ptr.*));
+            try self.setVariable(entry.key_ptr.*, entry.value_ptr.*);
         }
 
         // Default MSVC environment expectations
-        try self.env.put("OS", "Windows_NT");
+        try self.setVariable("OS", "Windows_NT");
         return self;
     }
 
@@ -42,6 +43,32 @@ pub const BatEnv = struct {
             self.allocator.free(entry.value_ptr.*);
         }
         self.env.deinit();
+    }
+
+    fn setVariable(self: *BatEnv, name: []const u8, value: []const u8) !void {
+        if (value.len == 0) {
+            self.removeVariable(name);
+            return;
+        }
+        const key_copy = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(key_copy);
+        const value_copy = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(value_copy);
+        const gop = try self.env.getOrPut(key_copy);
+        if (gop.found_existing) {
+            self.allocator.free(gop.key_ptr.*);
+            self.allocator.free(gop.value_ptr.*);
+        }
+        gop.key_ptr.* = key_copy;
+        gop.value_ptr.* = value_copy;
+    }
+
+    /// Removes a variable, freeing its owned key and value.
+    fn removeVariable(self: *BatEnv, name: []const u8) void {
+        if (self.env.fetchRemove(name)) |kv| {
+            self.allocator.free(kv.key);
+            self.allocator.free(kv.value);
+        }
     }
 
     fn expand(self: *BatEnv, input: []const u8, args: [][]const u8, current_bat_dir: []const u8) ![]const u8 {
@@ -195,11 +222,7 @@ pub const BatEnv = struct {
                     const val = std.mem.trim(u8, assign[eq_idx + 1 ..], " \t");
 
                     // Windows SET can just unset variable if value is empty
-                    if (val.len == 0) {
-                        _ = self.env.remove(key);
-                    } else {
-                        try self.env.put(try self.allocator.dupe(u8, key), try self.allocator.dupe(u8, val));
-                    }
+                    try self.setVariable(key, val);
                 }
                 continue;
             }
@@ -378,7 +401,10 @@ test "parseFile: state machine and env tracking" {
     const bat_name = "test_script.bat";
     const bat_content =
         \\@echo off
+        \\set TEST_VAR=old
         \\set TEST_VAR=123
+        \\set REMOVED_VAR=value
+        \\set REMOVED_VAR=
         \\if "%TEST_VAR%"=="123" set COND_VAR=success
         \\if not "%TEST_VAR%"=="456" set NOT_VAR=yes
         \\final_target.exe "arg1"
@@ -404,6 +430,8 @@ test "parseFile: state machine and env tracking" {
     const test_var = bat.env.get("TEST_VAR");
     try testing.expect(test_var != null);
     try testing.expectEqualStrings("123", test_var.?);
+
+    try testing.expect(bat.env.get("REMOVED_VAR") == null);
 
     const cond_var = bat.env.get("COND_VAR");
     try testing.expect(cond_var != null);
