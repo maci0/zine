@@ -31,6 +31,7 @@ comptime {
     _ = @import("bat.zig");
     _ = @import("pe.zig");
     _ = @import("runner.zig");
+    _ = @import("gui/web_ui.zig");
 
     // Win32 stub tests
     _ = @import("win32/user32.zig");

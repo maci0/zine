@@ -603,13 +603,118 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
             return stream.close(runtime.io());
         };
         const bytes_read = try file.readPositionalAll(runtime.io(), content, 0);
-        try req.respond(content[0..bytes_read], .{ .extra_headers = &.{
-            .{ .name = "content-type", .value = content_type },
-            .{ .name = "x-content-type-options", .value = "nosniff" },
-            .{ .name = "x-frame-options", .value = "DENY" },
-            .{ .name = "content-security-policy", .value = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:1995" },
-        } });
+        try respondStaticContent(&req, content[0..bytes_read], content_type);
         return stream.close(runtime.io());
+    }
+}
+
+fn staticContentNotModified(req: *const std.http.Server.Request, etag: []const u8) bool {
+    if (req.head.method != .GET and req.head.method != .HEAD) return false;
+    var headers = req.iterateHeaders();
+    while (headers.next()) |header| {
+        if (!std.ascii.eqlIgnoreCase(header.name, "if-none-match")) continue;
+        var tags = std.mem.splitScalar(u8, header.value, ',');
+        while (tags.next()) |value| {
+            var tag = std.mem.trim(u8, value, " \t");
+            if (std.mem.eql(u8, tag, "*")) return true;
+            if (std.mem.startsWith(u8, tag, "W/")) tag = tag[2..];
+            if (std.mem.eql(u8, tag, etag)) return true;
+        }
+    }
+    return false;
+}
+
+fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, content_type: []const u8) !void {
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(content, &digest, .{});
+    var etag_buf: [digest.len * 2 + 2]u8 = undefined;
+    const etag = try std.fmt.bufPrint(&etag_buf, "\"{s}\"", .{std.fmt.bytesToHex(digest, .lower)});
+
+    if (staticContentNotModified(req, etag)) {
+        try req.respond("", .{
+            .status = .not_modified,
+            .keep_alive = false,
+            .transfer_encoding = .none,
+            .extra_headers = &.{
+                .{ .name = "etag", .value = etag },
+                .{ .name = "cache-control", .value = "private, no-cache" },
+            },
+        });
+        return;
+    }
+
+    try req.respond(content, .{ .keep_alive = false, .extra_headers = &.{
+        .{ .name = "content-type", .value = content_type },
+        .{ .name = "etag", .value = etag },
+        .{ .name = "cache-control", .value = "private, no-cache" },
+        .{ .name = "x-content-type-options", .value = "nosniff" },
+        .{ .name = "x-frame-options", .value = "DENY" },
+        .{ .name = "content-security-policy", .value = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:1995" },
+    } });
+}
+
+test "static asset responses carry an etag and 304 on a matching If-None-Match" {
+    const content = @embedFile("app.js");
+    const content_type = "application/javascript";
+    var input = std.Io.Reader.fixed("GET /app.js HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    var server = std.http.Server.init(&input, &output.writer);
+    var req = try server.receiveHead();
+    try respondStaticContent(&req, content, content_type);
+    const response = output.written();
+    try std.testing.expect(std.mem.startsWith(u8, response, "HTTP/1.1 200 OK\r\n"));
+    const initial_body_start = (std.mem.indexOf(u8, response, "\r\n\r\n") orelse return error.TestUnexpectedResult) + 4;
+    try std.testing.expectEqualStrings(content, response[initial_body_start..]);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\r\netag: \"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\r\ncache-control: private, no-cache\r\n") != null);
+
+    const etag_start = (std.mem.indexOf(u8, response, "\r\netag: ") orelse return error.TestUnexpectedResult) + "\r\netag: ".len;
+    const etag_end = std.mem.indexOfPos(u8, response, etag_start, "\r\n") orelse return error.TestUnexpectedResult;
+    const etag = response[etag_start..etag_end];
+    const conditional = try std.fmt.allocPrint(std.testing.allocator, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nIf-None-Match: {s}\r\n\r\n", .{etag});
+    defer std.testing.allocator.free(conditional);
+    var conditional_input = std.Io.Reader.fixed(conditional);
+    var conditional_output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer conditional_output.deinit();
+    var conditional_server = std.http.Server.init(&conditional_input, &conditional_output.writer);
+    var conditional_req = try conditional_server.receiveHead();
+    try respondStaticContent(&conditional_req, content, content_type);
+    const revalidated = conditional_output.written();
+    try std.testing.expect(std.mem.startsWith(u8, revalidated, "HTTP/1.1 304 Not Modified\r\n"));
+    const body_start = (std.mem.indexOf(u8, revalidated, "\r\n\r\n") orelse return error.TestUnexpectedResult) + 4;
+    try std.testing.expectEqual(@as(usize, 0), revalidated[body_start..].len);
+    try std.testing.expect(std.mem.indexOf(u8, revalidated, etag) != null);
+    try std.testing.expect(std.mem.indexOf(u8, revalidated, "\r\ncache-control: private, no-cache\r\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, revalidated, "\r\ncontent-length:") == null);
+    var changed_input = std.Io.Reader.fixed(conditional);
+    var changed_output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer changed_output.deinit();
+    var changed_server = std.http.Server.init(&changed_input, &changed_output.writer);
+    var changed_req = try changed_server.receiveHead();
+    try respondStaticContent(&changed_req, "updated asset", content_type);
+    const changed = changed_output.written();
+    try std.testing.expect(std.mem.startsWith(u8, changed, "HTTP/1.1 200 OK\r\n"));
+    try std.testing.expect(std.mem.endsWith(u8, changed, "\r\n\r\nupdated asset"));
+    try std.testing.expect(std.mem.indexOf(u8, changed, etag) == null);
+}
+
+test "static asset revalidation accepts weak tags and the * matcher" {
+    const cases = [_]struct { header: []const u8, expect_304: bool }{
+        .{ .header = "W/\"abcd\"", .expect_304 = true },
+        .{ .header = "\"abcd\", \"ffff\"", .expect_304 = true },
+        .{ .header = "*", .expect_304 = true },
+        .{ .header = "\"beef\"", .expect_304 = false },
+    };
+    for (cases) |case| {
+        var input_buf: [128]u8 = undefined;
+        const request = try std.fmt.bufPrint(&input_buf, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nIf-None-Match: {s}\r\n\r\n", .{case.header});
+        var input = std.Io.Reader.fixed(request);
+        var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer output.deinit();
+        var server = std.http.Server.init(&input, &output.writer);
+        const req = try server.receiveHead();
+        try std.testing.expectEqual(case.expect_304, staticContentNotModified(&req, "\"abcd\""));
     }
 }
 
