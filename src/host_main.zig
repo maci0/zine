@@ -166,7 +166,7 @@ pub fn main(init: std.process.Init) !void {
 
     while (sys_args.next()) |arg| {
         if (!past_separator and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
-            std.debug.print("{s}", .{
+            try std.Io.File.stdout().writeStreamingAll(init.io,
                 \\Usage: zine-host [options] <zine.wasm> [-- args...]
                 \\
                 \\Run zine.wasm with a native WASM runtime and JIT support.
@@ -180,11 +180,11 @@ pub fn main(init: std.process.Init) !void {
                 \\  zine-host zine.wasm -- myapp.exe
                 \\  zine-host zine.wasm -- --trace myapp.exe
                 \\
-            });
+            );
             std.process.exit(0);
         }
         if (!past_separator and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
-            std.debug.print("{s}", .{"zine-host " ++ version.string ++ "\n"});
+            try std.Io.File.stdout().writeStreamingAll(init.io, "zine-host " ++ version.string ++ "\n");
             std.process.exit(0);
         }
         if (!past_separator and std.mem.eql(u8, arg, "--")) {

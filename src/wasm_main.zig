@@ -118,7 +118,7 @@ pub fn main(init: std.process.Init) !void {
             continue;
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
-            std.debug.print("{s}", .{
+            try std.Io.File.stdout().writeStreamingAll(init.io,
                 \\Usage: zine [options] [--] <target.exe> [args...]
                 \\
                 \\Run a Win32 PE executable in a WebAssembly environment.
@@ -148,11 +148,11 @@ pub fn main(init: std.process.Init) !void {
                 \\  wasmtime --dir=. zine.wasm32.wasm -- --trace myapp.exe
                 \\  wasmtime --dir=. zine.wasm32.wasm -- --argv0 editor notepad.exe
                 \\
-            });
+            );
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
-            std.debug.print("{s}", .{"zine " ++ version.string ++ "\n"});
+            try std.Io.File.stdout().writeStreamingAll(init.io, "zine " ++ version.string ++ "\n");
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--argv0") or std.mem.startsWith(u8, arg, "--argv0="))) {

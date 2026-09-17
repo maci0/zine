@@ -73,10 +73,6 @@ pub fn main(init: std.process.Init) !void {
     _ = platform.timestamp();
     log.initFromEnv();
 
-    platform.installSegfaultHandler();
-    platform.mapNullPage();
-    platform.raiseStackLimit();
-
     // Windows processes essentially never cleanly free all memory before ExitProcess or exit()
     // Using GPA will always report thousands of leaks because the process terminates.
     const allocator = init.arena.allocator();
@@ -261,6 +257,10 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("{s}", .{"Error: missing required argument <target.exe>.\nTry 'zine --help' for more information.\n"});
         std.process.exit(2);
     }
+    platform.installSegfaultHandler();
+    platform.mapNullPage();
+    platform.raiseStackLimit();
+
     var target_exe = target_exe_opt.?;
     var final_envp: ?[*]?[*:0]u8 = null;
     var bat_env_opt: ?BatEnv = null;

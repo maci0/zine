@@ -15,6 +15,44 @@ No Windows installation, no Wine.
 - Web GUI with Win2K-style desktop, or native FLTK window
 - Virtual filesystem rooted at `drive_c/`
 
+## Releases and upgrades
+
+The `v1` tag (2026-03-22) names the **Win32 Compatibility Milestone**, not
+SemVer 1.0.0. Its package version and the current version are both `0.1.0`.
+History therefore indicates milestone tagging during 0.x development, not a
+stable 1.x compatibility promise. There is no documented SemVer bump,
+deprecation, support-window, or security-backport policy. Pin a commit when
+reproducing a build; `--version` alone does not distinguish post-milestone changes.
+
+### Unreleased changes since v1
+
+#### Breaking build requirements and migration
+
+- Zig **0.16.0** replaces **0.15.2** as the minimum toolchain. Upgrade Zig before
+  rebuilding; the source now uses the 0.16 process and I/O APIs.
+- For the native FLTK GUI, use `zig build -Darch=x86_64 -Dfltk` instead of the
+  old x86 `zig build -Dfltk` recipe, then run `zig-out/bin/zine.x86_64 --fltk`.
+  Guest executables remain 32-bit Windows PEs.
+
+#### Added
+
+- Native x86_64 FLTK support and expanded Win32 controls and common dialogs.
+- Per-application `registry.toml` overrides with `app:<MODULE>:<KEY>` sections.
+  Existing global sections remain usable; overrides take precedence for the
+  matching executable basename.
+
+#### Fixed
+
+- `--help`/`-h` and `--version`/`-v` once again write to stdout on WASI and
+  `zine-host`, preserving shell capture and piping after the Zig migration.
+  Native informational commands no longer attempt guest memory setup or emit
+  null-page mapping warnings. Invalid options still return status 2 on stderr.
+- Win32 `MulDiv` rounds to nearest instead of truncating, and `lstrcmpiW`
+  preserves non-ASCII UTF-16 units rather than truncating them to bytes.
+
+See [implementation status](docs/STATUS.md) for subsystem coverage and remaining
+limitations. These notes do not designate a new release or retag `v1`.
+
 ## Build
 
 Requires [Zig 0.16.0](https://ziglang.org/download/).
@@ -72,6 +110,12 @@ zig build test
 # Focus on one module or test-name substring
 zig build test -Dtest-filter=x86.decoder --summary all
 
+# CLI output and exit status (no Windows binaries needed)
+zig build test-cli
+zig build test-cli -Darch=x86_64
+zig build test-cli -Darch=wasm32  # requires wasmtime
+zig build test-cli -Dhost       # also checks zine-host; requires Wasmer headers/libs
+
 # Optional integration suite (requires MSVC fixtures described above)
 ./tests/test_msvc_cli.sh --native
 ./tests/test_msvc_cli.sh --native64
@@ -80,6 +124,12 @@ zig build test -Dtest-filter=x86.decoder --summary all
 # FLTK smoke tests (requires Xvfb)
 ./tests/fltk_smoke.sh
 ```
+
+The CLI gate checks the built executable's version against `build.zig.zon`,
+stdout/stderr separation, help aliases, and invalid-option status. Every build
+also rejects disagreement between the manifest and `src/version.zig`.
+`test-cli` supports native and plain wasm32 builds; wasm64's 64-bit WASI imports
+and `-Djit_host` builds require a custom runtime and are not executed by this gate.
 
 ## Architecture
 

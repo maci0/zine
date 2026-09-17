@@ -1,4 +1,11 @@
 const std = @import("std");
+const package_version = @import("build.zig.zon").version;
+
+comptime {
+    if (!std.mem.eql(u8, package_version, @import("src/version.zig").string)) {
+        @compileError("build.zig.zon version must match src/version.zig");
+    }
+}
 
 fn queryForArch(arch: std.Target.Cpu.Arch) std.Target.Query {
     return switch (arch) {
@@ -166,6 +173,7 @@ pub fn build(b: *std.Build) void {
     const enable_jit_host = b.option(bool, "jit_host", "Enable JIT host imports (requires zine-host or browser)") orelse false;
 
     const optimize = b.standardOptimizeOption(.{});
+    const cli_test_step = b.step("test-cli", "Check native and wasm32 CLI output (wasm32 requires wasmtime)");
 
     const archs_to_build: []const std.Target.Cpu.Arch = if (build_all)
         &.{ .x86, .x86_64, .wasm32, .wasm64 }
@@ -186,9 +194,24 @@ pub fn build(b: *std.Build) void {
         if (a == .wasm32 or a == .wasm64) {
             const wasm_lib = addWasmExe(b, a, target, optimize, toml_dep.module("toml"), embed_stubs, enable_jit_host);
             b.installArtifact(wasm_lib);
+            if (a == .wasm32 and !enable_jit_host) {
+                const cli_test = b.addSystemCommand(&.{"bash"});
+                cli_test.addFileArg(b.path("tests/test_cli.sh"));
+                cli_test.addArgs(&.{ "zine " ++ package_version, "wasmtime", "run" });
+                cli_test.addArtifactArg(wasm_lib);
+                cli_test_step.dependOn(&cli_test.step);
+            } else {
+                const cli_test = b.addFail("test-cli requires a native or plain wasm32 target; wasm64 and jit_host need a custom runtime");
+                cli_test_step.dependOn(&cli_test.step);
+            }
         } else {
             const exe = addNativeExe(b, a, target, optimize, toml_dep.module("toml"), use_fltk, embed_stubs);
             b.installArtifact(exe);
+            const cli_test = b.addSystemCommand(&.{"bash"});
+            cli_test.addFileArg(b.path("tests/test_cli.sh"));
+            cli_test.addArg("zine " ++ package_version);
+            cli_test.addArtifactArg(exe);
+            cli_test_step.dependOn(&cli_test.step);
 
             // Only add run step for the default (x86) target
             if (a == .x86 and !build_all) {
@@ -327,6 +350,11 @@ pub fn build(b: *std.Build) void {
         const install_host = b.addInstallFileWithDir(host_out, .{ .custom = "bin" }, "zine-host");
         install_host.step.dependOn(&host_link.step);
         b.getInstallStep().dependOn(&install_host.step);
+        const cli_test = b.addSystemCommand(&.{"bash"});
+        cli_test.addFileArg(b.path("tests/test_cli.sh"));
+        cli_test.addArg("zine-host " ++ package_version);
+        cli_test.addFileArg(host_out);
+        cli_test_step.dependOn(&cli_test.step);
     }
 
     // -----------------------------------------------------------------------
@@ -346,6 +374,7 @@ pub fn build(b: *std.Build) void {
         .check = true,
     });
     b.getInstallStep().dependOn(&fmt_check.step);
+    cli_test_step.dependOn(&fmt_check.step);
 
     const test_step = b.step("test", "Run unit tests");
     const test_filter = b.option([]const u8, "test-filter", "Run unit tests whose names contain this substring");
