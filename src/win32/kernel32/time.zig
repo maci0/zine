@@ -5,6 +5,8 @@ const platform = @import("../../platform.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
 const civil_time = @import("../civil_time.zig");
+const kernel32_error = @import("error.zig");
+const ERROR_INVALID_PARAMETER: u32 = 87;
 
 /// Implementation status: Partially implemented
 pub fn GetTimeZoneInformation(lpTimeZoneInformation: usize) callconv(w32cc.WINAPI) u32 {
@@ -170,11 +172,18 @@ pub fn SystemTimeToFileTime(lpSystemTime: usize, lpFileTime: usize) callconv(w32
     const st = @as(*const w32.SYSTEMTIME, @ptrFromInt(lpSystemTime));
     const ft = @as(*w32.FILETIME, @ptrFromInt(lpFileTime));
 
+    if (st.wYear < 1601 or st.wYear > 30827 or
+        st.wMonth < 1 or st.wMonth > 12 or
+        st.wDay < 1 or st.wDay > std.time.epoch.getDaysInMonth(st.wYear, @enumFromInt(st.wMonth)) or
+        st.wHour > 23 or st.wMinute > 59 or st.wSecond > 59 or st.wMilliseconds > 999)
+    {
+        kernel32_error.SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
     // Days from 1601-01-01 to the given date, exact Gregorian calendar.
-    // SYSTEMTIME months outside [1, 12] are normalized like mktime does.
-    const y: i64 = st.wYear + @divFloor(@as(i64, st.wMonth) - 1, 12);
-    const m: i64 = @mod(@as(i64, st.wMonth) - 1, 12) + 1;
-    const days: i64 = civil_time.daysFromCivil(y, m, st.wDay) - civil_time.daysFromCivil(1601, 1, 1);
+    // Leap-year-correct day counts come from daysFromCivil; the FILETIME
+    // epoch 1601 is the lower validity bound checked above.
+    const days = civil_time.daysFromCivil(st.wYear, st.wMonth, st.wDay) - civil_time.daysFromCivil(1601, 1, 1);
 
     const total_100ns_i64: i64 = days * 24 * 60 * 60 * 10_000_000 +
         @as(i64, st.wHour) * 60 * 60 * 10_000_000 +
@@ -182,9 +191,7 @@ pub fn SystemTimeToFileTime(lpSystemTime: usize, lpFileTime: usize) callconv(w32
         @as(i64, st.wSecond) * 10_000_000 +
         @as(i64, st.wMilliseconds) * 10_000;
 
-    // FILETIME is unsigned; dates before 1601 saturate at the epoch instead
-    // of panicking on the cast.
-    const total_100ns: u64 = if (total_100ns_i64 < 0) 0 else @intCast(total_100ns_i64);
+    const total_100ns: u64 = @intCast(total_100ns_i64);
 
     ft.dwLowDateTime = @intCast(total_100ns & 0xFFFFFFFF);
     ft.dwHighDateTime = @intCast(total_100ns >> 32);
@@ -267,6 +274,8 @@ test "SYSTEMTIME/FILETIME round trip across year, leap-day and DST boundaries" {
         .{ .wYear = 2000, .wMonth = 2, .wDay = 29 },
         .{ .wYear = 2024, .wMonth = 2, .wDay = 29, .wHour = 23, .wMinute = 59, .wSecond = 59, .wMilliseconds = 999 },
         .{ .wYear = 2100, .wMonth = 3, .wDay = 1 }, // non-leap century year
+        .{ .wYear = 2400, .wMonth = 2, .wDay = 29, .wDayOfWeek = 65535 },
+        .{ .wYear = 30827, .wMonth = 12, .wDay = 31, .wHour = 23, .wMinute = 59, .wSecond = 59, .wMilliseconds = 999 },
     };
     for (samples) |st| {
         const back = systemTimeOf(fileTimeOf(st));
@@ -280,11 +289,33 @@ test "SYSTEMTIME/FILETIME round trip across year, leap-day and DST boundaries" {
     }
 }
 
-test "SystemTimeToFileTime normalizes out-of-range months like mktime" {
-    // Month 13 of 2023 is January 2024.
-    const st: w32.SYSTEMTIME = .{ .wYear = 2023, .wMonth = 13, .wDay = 1 };
-    const jan: w32.SYSTEMTIME = .{ .wYear = 2024, .wMonth = 1, .wDay = 1 };
-    try testing.expectEqual(fileTimeOf(jan), fileTimeOf(st));
+test "SystemTimeToFileTime rejects invalid dates without changing output" {
+    const invalid = [_]w32.SYSTEMTIME{
+        .{ .wYear = 2023, .wMonth = 2, .wDay = 29 },
+        .{ .wYear = 1900, .wMonth = 2, .wDay = 29 },
+        .{ .wYear = 2100, .wMonth = 2, .wDay = 29 },
+        .{ .wYear = 2024, .wMonth = 2, .wDay = 30 },
+        .{ .wYear = 2024, .wMonth = 4, .wDay = 31 },
+        .{ .wYear = 2024, .wMonth = 0, .wDay = 1 },
+        .{ .wYear = 2023, .wMonth = 13, .wDay = 1 },
+        .{ .wYear = 2024, .wMonth = 1, .wDay = 0 },
+        .{ .wYear = 2024, .wMonth = 1, .wDay = 32 },
+        .{ .wYear = 1600, .wMonth = 12, .wDay = 31 },
+        .{ .wYear = 30828, .wMonth = 1, .wDay = 1 },
+        .{ .wYear = 65535, .wMonth = 1, .wDay = 1 },
+        .{ .wYear = 2024, .wMonth = 1, .wDay = 1, .wHour = 24 },
+        .{ .wYear = 2024, .wMonth = 1, .wDay = 1, .wMinute = 60 },
+        .{ .wYear = 2024, .wMonth = 1, .wDay = 1, .wSecond = 60 },
+        .{ .wYear = 2024, .wMonth = 1, .wDay = 1, .wMilliseconds = 1000 },
+    };
+    const sentinel: w32.FILETIME = .{ .dwLowDateTime = 123, .dwHighDateTime = 456 };
+    for (invalid) |st| {
+        var ft = sentinel;
+        kernel32_error.SetLastError(0);
+        try testing.expectEqual(@as(i32, 0), SystemTimeToFileTime(@intFromPtr(&st), @intFromPtr(&ft)));
+        try testing.expectEqual(ERROR_INVALID_PARAMETER, kernel32_error.GetLastError());
+        try testing.expectEqual(sentinel, ft);
+    }
 }
 
 test "GetLocalTime and GetSystemTime agree (UTC guest clock policy)" {
