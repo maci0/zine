@@ -184,6 +184,10 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
+        if (a == archs_to_build[0]) {
+            const toml_license = b.addInstallFileWithDir(toml_dep.path("LICENSE"), .prefix, "share/licenses/zine/zig-toml.LICENSE");
+            b.getInstallStep().dependOn(&toml_license.step);
+        }
 
         if (a == .wasm32 or a == .wasm64) {
             const wasm_lib = addWasmExe(b, a, target, optimize, toml_dep.module("toml"), embed_stubs, enable_jit_host);
