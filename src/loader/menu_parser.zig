@@ -34,7 +34,8 @@ pub fn parseMenuResource(allocator: std.mem.Allocator, data: []const u8) ![]cons
     }
 
     while (offset < data.len) {
-        const item = try parseItem(allocator, data, &offset);
+        var item = try parseItem(allocator, data, &offset);
+        errdefer freeMenuItem(allocator, &item);
         try root_items.append(allocator, item);
         if ((item.flags & 0x0080) != 0) { // MF_END
             break;
@@ -52,6 +53,7 @@ pub fn parseMenuResource(allocator: std.mem.Allocator, data: []const u8) ![]cons
     try writer.writeAll("]}");
 
     var list = aw.toArrayList();
+    errdefer list.deinit(allocator);
     return list.toOwnedSlice(allocator);
 }
 
@@ -69,40 +71,28 @@ fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize) !Me
         offset.* += 2;
     }
 
-    // Read null-terminated UTF-16 string
-    var name_bytes: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer name_bytes.deinit(allocator);
+    var name_u16: std.ArrayListUnmanaged(u16) = .empty;
+    defer name_u16.deinit(allocator);
 
-    while (offset.* + 2 <= data.len) {
+    while (true) {
+        if (data.len - offset.* < 2) return error.InvalidMenuResource;
         const c = std.mem.readInt(u16, data[offset.*..][0..2], .little);
         offset.* += 2;
         if (c == 0) break;
-        // Basic UTF-16 to UTF-8 (assuming mostly ascii/latin1 for older games, or simple 1-1 mapping for simplicity)
-        if (c < 0x80) {
-            try name_bytes.append(allocator, @intCast(c));
-        } else {
-            // Very simple fallback, just append '?'
-            try name_bytes.append(allocator, '?');
-        }
-    }
-
-    // Simplify tabs (like "\t" to "   ")
-    var clean_name: std.ArrayListUnmanaged(u8) = .empty;
-    for (name_bytes.items) |c| {
         if (c == '\t') {
-            try clean_name.appendSlice(allocator, "   ");
+            try name_u16.appendNTimes(allocator, std.mem.nativeToLittle(u16, ' '), 3);
         } else {
-            try clean_name.append(allocator, c);
+            try name_u16.append(allocator, std.mem.nativeToLittle(u16, c));
         }
     }
-    name_bytes.deinit(allocator);
 
     var item = MenuItem{
         .id = id,
-        .name = try clean_name.toOwnedSlice(allocator),
+        .name = try std.unicode.utf16LeToUtf8Alloc(allocator, name_u16.items),
         .flags = flags,
         .popup = null,
     };
+    errdefer freeMenuItem(allocator, &item);
 
     if (is_popup) {
         var children: std.ArrayListUnmanaged(MenuItem) = .empty;
@@ -112,7 +102,8 @@ fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize) !Me
         }
 
         while (offset.* < data.len) {
-            const child = try parseItem(allocator, data, offset);
+            var child = try parseItem(allocator, data, offset);
+            errdefer freeMenuItem(allocator, &child);
             try children.append(allocator, child);
             if ((child.flags & 0x0080) != 0) { // MF_END
                 break;
@@ -241,18 +232,55 @@ test "parseMenuResource: tabs widen and JSON metacharacters escape" {
     );
 }
 
-test "parseMenuResource: non-ASCII UTF-16 becomes question mark" {
+test "parseMenuResource: UTF-16 astral text survives as UTF-8" {
     var data: std.ArrayListUnmanaged(u8) = .empty;
     defer data.deinit(testing.allocator);
     try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
-    try appendItem(&data, testing.allocator, 0x0080, 9, &.{0xE9}); // é
+    try appendItem(&data, testing.allocator, 0x0080, 9, &.{ 0xE9, 0xD801, 0xDC00, 'e', 0x301 });
 
     const json = try parseMenuResource(testing.allocator, data.items);
     defer testing.allocator.free(json);
     try testing.expectEqualStrings(
-        "{\"type\":\"menu\",\"menu\":[{\"id\":9,\"name\":\"?\",\"flags\":128}]}",
+        "{\"type\":\"menu\",\"menu\":[{\"id\":9,\"name\":\"\u{00e9}\u{10400}e\u{301}\",\"flags\":128}]}",
         json,
     );
+    var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+    try testing.expectEqualStrings("\u{00e9}\u{10400}e\u{301}", parsed.value.object.get("menu").?.array.items[0].object.get("name").?.string);
+}
+
+test "parseMenuResource: malformed UTF-16 is rejected without leaking popup names" {
+    const cases = .{
+        .{ &[_]u16{0xD801}, error.DanglingSurrogateHalf },
+        .{ &[_]u16{ 0xD801, 'a' }, error.ExpectedSecondSurrogateHalf },
+        .{ &[_]u16{0xDC00}, error.UnexpectedSecondSurrogateHalf },
+    };
+    inline for (cases) |case| {
+        var data: std.ArrayListUnmanaged(u8) = .empty;
+        defer data.deinit(testing.allocator);
+        try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
+        try appendItem(&data, testing.allocator, 0x0090, null, &.{0xE9});
+        try appendItem(&data, testing.allocator, 0, 1, &.{'a'});
+        try appendItem(&data, testing.allocator, 0x0080, 2, case[0]);
+        try testing.expectError(case[1], parseMenuResource(testing.allocator, data.items));
+    }
+}
+
+fn checkMenuAllocationFailures(allocator: std.mem.Allocator) !void {
+    var data: std.ArrayListUnmanaged(u8) = .empty;
+    defer data.deinit(allocator);
+    try data.appendSlice(allocator, &.{ 0, 0, 0, 0 });
+    try appendItem(&data, allocator, 0x0090, null, &.{ 0xE9, '\t' });
+    try appendItem(&data, allocator, 0x0080, 1, &.{ 0xD801, 0xDC00 });
+    const json = parseMenuResource(allocator, data.items) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+        else => return err,
+    };
+    defer allocator.free(json);
+}
+
+test "parseMenuResource: Unicode menus release every allocation on failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, checkMenuAllocationFailures, .{});
 }
 
 test "parseMenuResource: truncated input is rejected" {
@@ -260,6 +288,13 @@ test "parseMenuResource: truncated input is rejected" {
     try testing.expectError(error.InvalidMenuResource, parseMenuResource(testing.allocator, &.{ 0, 0 }));
     // Header present but first item's flags are cut off.
     try testing.expectError(error.InvalidMenuResource, parseMenuResource(testing.allocator, &.{ 0, 0, 0, 0, 0x80 }));
+    for ([_][]const u8{ &.{}, &.{0xE9}, &.{ 0xE9, 0 }, &.{ 0xE9, 0, 0 } }) |name| {
+        var data: std.ArrayListUnmanaged(u8) = .empty;
+        defer data.deinit(testing.allocator);
+        try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0, 0x80, 0, 1, 0 });
+        try data.appendSlice(testing.allocator, name);
+        try testing.expectError(error.InvalidMenuResource, parseMenuResource(testing.allocator, data.items));
+    }
 }
 
 test "parseMenuResource: control characters are escaped as \\uXXXX" {
