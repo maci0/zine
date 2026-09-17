@@ -103,13 +103,40 @@ pub fn readPositional(file: std.Io.File, buf: []u8, offset: u64) error{ReadFaile
         var off: usize = 0;
         while (off < buf.len) {
             const rc = std.os.linux.pread(file.handle, buf.ptr + off, buf.len - off, @as(i64, @intCast(offset + off)));
+            if (std.os.linux.errno(rc) == .INTR) continue;
             const signed: isize = @bitCast(rc);
-            if (signed <= 0) return error.ReadFailed;
+            if (signed < 0) return error.ReadFailed;
+            if (rc == 0) break;
             off += rc;
         }
         return off;
     }
     return file.readPositionalAll(runtime.io(), buf, offset) catch return error.ReadFailed;
+}
+
+test "readPositional returns partial data and EOF without moving the file position" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(runtime.io(), .{ .sub_path = "input.bin", .data = "abcdef" });
+    const file = try tmp.dir.openFile(runtime.io(), "input.bin", .{});
+    defer closeFile(file);
+
+    var buf: [8]u8 = @splat(0xCC);
+    try std.testing.expectEqual(@as(usize, 4), try readPositional(file, &buf, 2));
+    try std.testing.expectEqualStrings("cdef", buf[0..4]);
+    try std.testing.expectEqualSlices(u8, &@as([4]u8, @splat(0xCC)), buf[4..]);
+    try std.testing.expectEqual(@as(usize, 0), try readPositional(file, &buf, 6));
+    try std.testing.expectEqual(@as(usize, 0), try readPositional(file, &buf, 20));
+    try std.testing.expectEqual(@as(usize, 0), try readPositional(file, buf[0..0], 0));
+    try std.testing.expectEqual(@as(usize, 3), try readPositional(file, buf[0..3], 1));
+    try std.testing.expectEqualStrings("bcd", buf[0..3]);
+    try std.testing.expectEqual(@as(usize, 6), try readFromFile(file, &buf));
+    try std.testing.expectEqualStrings("abcdef", buf[0..6]);
+}
+
+test "readPositional reports read errors" {
+    var buf: [1]u8 = undefined;
+    try std.testing.expectError(error.ReadFailed, readPositional(fileFromFd(-1), &buf, 0));
 }
 
 /// Raw pwrite on Linux; std.Io elsewhere (see readPositional).
