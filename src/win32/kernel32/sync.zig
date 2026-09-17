@@ -509,6 +509,7 @@ pub fn WaitForMultipleObjects(nCount: u32, lpHandles: usize, bWaitAll: i32, dwMi
 // -----------------------------------------------------------------------
 // Per-thread TLS using thread ID as key
 
+var tls_mutex: runtime.Mutex = .{};
 var tls_next: u32 = 0;
 const MAX_TLS_SLOTS = 64;
 const MAX_TLS_THREADS = 16;
@@ -546,6 +547,8 @@ fn getOrCreateTlsEntry() *TlsThreadEntry {
 
 /// Implementation status: Partially implemented
 pub fn TlsAlloc() callconv(w32cc.WINAPI) u32 {
+    tls_mutex.lock();
+    defer tls_mutex.unlock();
     if (tls_next >= MAX_TLS_SLOTS) return 0xFFFFFFFF; // TLS_OUT_OF_INDEXES
     const idx = tls_next;
     tls_next += 1;
@@ -554,6 +557,8 @@ pub fn TlsAlloc() callconv(w32cc.WINAPI) u32 {
 
 /// Implementation status: Partially implemented
 pub fn TlsGetValue(dwTlsIndex: u32) callconv(w32cc.WINAPI) usize {
+    tls_mutex.lock();
+    defer tls_mutex.unlock();
     if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;
     const entry = getOrCreateTlsEntry();
     return entry.slots[dwTlsIndex];
@@ -561,6 +566,8 @@ pub fn TlsGetValue(dwTlsIndex: u32) callconv(w32cc.WINAPI) usize {
 
 /// Implementation status: Partially implemented
 pub fn TlsSetValue(dwTlsIndex: u32, lpTlsValue: usize) callconv(w32cc.WINAPI) i32 {
+    tls_mutex.lock();
+    defer tls_mutex.unlock();
     if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;
     const entry = getOrCreateTlsEntry();
     entry.slots[dwTlsIndex] = lpTlsValue;
@@ -569,6 +576,8 @@ pub fn TlsSetValue(dwTlsIndex: u32, lpTlsValue: usize) callconv(w32cc.WINAPI) i3
 
 /// Implementation status: Partially implemented
 pub fn TlsFree(dwTlsIndex: u32) callconv(w32cc.WINAPI) i32 {
+    tls_mutex.lock();
+    defer tls_mutex.unlock();
     if (dwTlsIndex >= MAX_TLS_SLOTS) return 0;
     // Clear the value in all thread entries
     for (&tls_threads) |*entry| {
@@ -912,6 +921,57 @@ test "critical sections serialize recursive access during concurrent registratio
     cs.mutex.unlock();
     DeleteCriticalSection(1);
     for (&cs_table) |*entry| try std.testing.expectEqual(@as(usize, 0), entry.addr);
+}
+
+test "TLS allocation and values remain isolated across concurrent threads" {
+    const saved_next = tls_next;
+    const saved_threads = tls_threads;
+    defer {
+        tls_next = saved_next;
+        tls_threads = saved_threads;
+    }
+    tls_next = 0;
+    for (&tls_threads) |*entry| entry.* = .{ .thread_id = 0, .slots = [_]usize{0} ** MAX_TLS_SLOTS };
+
+    const Context = struct {
+        start: std.atomic.Value(bool) = .init(false),
+        indices: [8][8]u32 = undefined,
+        valid: [8]bool = [_]bool{true} ** 8,
+
+        fn run(ctx: *@This(), worker: usize) void {
+            while (!ctx.start.load(.acquire)) std.atomic.spinLoopHint();
+            for (&ctx.indices[worker]) |*index| index.* = TlsAlloc();
+            for (0..1000) |iteration| {
+                const value = (worker + 1) * 1000 + iteration;
+                if (TlsSetValue(0, value) != 1 or TlsGetValue(0) != value) ctx.valid[worker] = false;
+                _ = TlsFree(1);
+            }
+        }
+    };
+    var ctx: Context = .{};
+    var threads: [8]std.Thread = undefined;
+    var spawned: usize = 0;
+    {
+        defer {
+            ctx.start.store(true, .release);
+            for (threads[0..spawned]) |thread| thread.join();
+        }
+        for (&threads, 0..) |*thread, worker| {
+            thread.* = try std.Thread.spawn(.{}, Context.run, .{ &ctx, worker });
+            spawned += 1;
+        }
+    }
+    var seen: [MAX_TLS_SLOTS]bool = [_]bool{false} ** MAX_TLS_SLOTS;
+    for (ctx.indices, ctx.valid) |indices, valid| {
+        try std.testing.expect(valid);
+        for (indices) |index| {
+            try std.testing.expect(index < MAX_TLS_SLOTS);
+            try std.testing.expect(!seen[index]);
+            seen[index] = true;
+        }
+    }
+    try std.testing.expectEqual(@as(u32, MAX_TLS_SLOTS), tls_next);
+    try std.testing.expectEqual(@as(u32, 0xFFFFFFFF), TlsAlloc());
 }
 
 test "CloseHandle frees kernel object slots" {
