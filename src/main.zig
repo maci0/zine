@@ -343,8 +343,8 @@ pub fn main(init: std.process.Init) !void {
             const sections = main_module.parser.sections;
             for (sections) |sec| {
                 if (sec.Characteristics & pe.IMAGE_SCN_CNT_CODE != 0) {
-                    stubs_kernel32.app_code_start = pe_base + sec.VirtualAddress;
-                    stubs_kernel32.app_code_end = pe_base + sec.VirtualAddress + sec.Misc.VirtualSize;
+                    runtime.app_code_start = pe_base + sec.VirtualAddress;
+                    runtime.app_code_end = pe_base + sec.VirtualAddress + sec.Misc.VirtualSize;
                     break;
                 }
             }

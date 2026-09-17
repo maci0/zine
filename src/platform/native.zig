@@ -689,12 +689,11 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
         return;
     }
 
-    const k32 = @import("../win32/kernel32.zig");
-    const is_app_code = (ip >= k32.app_code_start and ip < k32.app_code_end);
+    const is_app_code = (ip >= runtime.app_code_start and ip < runtime.app_code_end);
     // Detect execution in PE data/BSS sections — this means a bad jump
     // (e.g., NULL function pointer from corrupt data). These should be
     // treated as crashes, not valid code.
-    const is_pe_data = (ip >= k32.app_code_end and ip < k32.app_code_end + 0x200000 and ip >= 0x400000);
+    const is_pe_data = (ip >= runtime.app_code_end and ip < runtime.app_code_end + 0x200000 and ip >= 0x400000);
     // VirtualAlloc'd code (Delphi runtime, JIT trampolines) lives in the
     // low address space outside the main PE. Treat any mapped memory in
     // the 0x10000–0x70000000 range as potentially valid guest code.
@@ -780,8 +779,8 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
             if (esp_r > 0x10000 and esp_r < 0xFFFFF000) {
                 // Pop the return address (pushed by the CALL instruction)
                 const ret_addr = @as(*align(1) const u32, @ptrFromInt(esp_r)).*;
-                if (trace.enable_tracing) trace.print("  [ESP] = 0x{X}, app_code={d}\n", .{ ret_addr, @as(u8, if (ret_addr >= k32.app_code_start and ret_addr < k32.app_code_end) 1 else 0) });
-                if (ret_addr >= k32.app_code_start and ret_addr < k32.app_code_end) {
+                if (trace.enable_tracing) trace.print("  [ESP] = 0x{X}, app_code={d}\n", .{ ret_addr, @as(u8, if (ret_addr >= runtime.app_code_start and ret_addr < runtime.app_code_end) 1 else 0) });
+                if (ret_addr >= runtime.app_code_start and ret_addr < runtime.app_code_end) {
                     uctx.mcontext.gregs[reg_sp] = @bitCast(esp_r + 4);
                     uctx.mcontext.gregs[reg_ax] = 0;
                     uctx.mcontext.gregs[reg_bx] = 0; // Clear corrupt EBX
@@ -813,7 +812,7 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
             var found_idx: usize = 0;
             for (0..200) |si| {
                 const val = stack[si];
-                if (val >= k32.app_code_start and val < k32.app_code_end) {
+                if (val >= runtime.app_code_start and val < runtime.app_code_end) {
                     // Skip addresses in the same function we keep recovering to
                     if (BadIPState.last_recover_addr != 0 and
                         BadIPState.recover_count > 3)
@@ -886,7 +885,7 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
             var found_idx: usize = 0;
             for (0..200) |si| {
                 const val = stack[si];
-                if (val >= k32.app_code_start and val < k32.app_code_end) {
+                if (val >= runtime.app_code_start and val < runtime.app_code_end) {
                     if (found_ret == null) {
                         found_ret = val;
                         found_idx = si;

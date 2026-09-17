@@ -2,8 +2,7 @@
 //!
 //! This module provides the registration logic for KERNEL32 API stubs.
 //! Most implementations are delegated to sub-modules in `win32/kernel32/`.
-//! It also maintains global state such as the main module handle and
-//! application code bounds for error recovery.
+//! It also maintains global state such as the main module handle.
 //!
 //! Stubs are categorized into:
 //! - File I/O: CreateFile, ReadFile, WriteFile, etc.
@@ -18,12 +17,6 @@ const w32 = @import("constants.zig");
 
 pub var global_env: ?*env.Environment = null;
 pub var main_module_handle: usize = 0;
-
-/// Bounds of the main PE's executable code (.text section).
-/// Set during PE loading so the SIGSEGV handler can distinguish
-/// code addresses from data addresses during stack recovery.
-pub var app_code_start: usize = 0x401000;
-pub var app_code_end: usize = 0x700000;
 
 const kernel32_file = @import("kernel32/file.zig");
 const kernel32_mem = @import("kernel32/mem.zig");

@@ -73,8 +73,7 @@ pub fn step(cpu: *Cpu) void {
     // x86-only, and compat thunk stubs in low 4GB must be interpreted.
     if (comptime @import("../platform.zig").is_x86) {
         if (cpu.memory.native_linear) {
-            const k32 = @import("../win32/kernel32.zig");
-            const is_main_exe = (eip >= k32.app_code_start and eip < k32.app_code_end);
+            const is_main_exe = (eip >= runtime.app_code_start and eip < runtime.app_code_end);
             if (!is_main_exe and eip >= 0x10000 and eip < 0x70000000) {
                 callDllNative(cpu);
                 return;

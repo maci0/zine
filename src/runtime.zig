@@ -28,6 +28,12 @@ pub const MAX_THUNKS = 4096;
 pub var main_exe_dir: [512]u8 = undefined;
 pub var main_exe_dir_len: usize = 0;
 
+/// Bounds of the main PE's executable code (.text section).
+/// Set during PE loading so the SIGSEGV handler can distinguish
+/// code addresses from data addresses during stack recovery.
+pub var app_code_start: usize = 0x401000;
+pub var app_code_end: usize = 0x700000;
+
 /// Install the process-wide Io + allocator. Call once from main.
 pub fn init(io_value: std.Io, gpa_value: std.mem.Allocator, env: std.process.Environ) void {
     io_instance = io_value;
