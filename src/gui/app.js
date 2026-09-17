@@ -1122,6 +1122,7 @@ function connect() {
                                     class: 'file-item',
                                     'data-name': f,
                                     'data-type': 'folder',
+                                    onclick: () => selectFile(f),
                                     ondblclick: () => navigateTo(currentPath + '/' + f)
                                 }, img({src: 'assets/folder.svg', width: 16, height: 16}), f);
                                 van.add(fileListEl, item);

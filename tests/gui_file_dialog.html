@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>File dialog regression tests</title>
+</head>
+<body>
+    <pre id="result">RUNNING</pre>
+    <canvas id="screen"></canvas>
+    <div id="status"></div>
+    <div id="menu-bar"></div>
+    <div id="main-window"><div id="main-titlebar"></div></div>
+    <div id="dialog-overlay">
+        <div id="dialog-titlebar"><span id="dialog-title"></span></div>
+        <div id="dialog-content"></div>
+    </div>
+    <div id="taskbar-clock"></div>
+    <div id="taskbar-app-btn"></div>
+    <div id="taskbar-context-menu"></div>
+    <div id="volume-popup"></div>
+    <div id="tray-volume"></div>
+    <script>
+        const sent = [];
+        let socket;
+        window.WebSocket = class {
+            static OPEN = 1;
+            readyState = 1;
+            constructor() { socket = this; }
+            send(data) { sent.push(JSON.parse(data)); }
+        };
+    </script>
+    <script src="../src/gui/van.min.js"></script>
+    <script src="../src/gui/app.js"></script>
+    <script>
+        function assert(condition, message) {
+            if (!condition) throw new Error(message);
+        }
+        function receive(message) {
+            socket.onmessage({data: JSON.stringify(message)});
+        }
+        try {
+            for (const mode of ['open', 'save']) {
+                sent.length = 0;
+                receive({type: 'open_file_dialog', mode, path: 'Desktop', folders: ['Documents'], files: ['old.txt']});
+                const filename = document.getElementById('dialog_filename');
+                const action = [...document.querySelectorAll('#dialog-content button')]
+                    .find(el => el.textContent === (mode === 'save' ? 'Save' : 'Open'));
+                document.querySelector('[data-type="file"]').click();
+                assert(filename.value === 'old.txt', 'File selection must set the filename');
+                const folder = document.querySelector('[data-type="folder"]');
+                folder.click();
+                assert(filename.value === 'Documents', 'Folder click must replace the previous filename');
+                assert(folder.classList.contains('selected'), 'Folder must be highlighted');
+                assert(document.querySelectorAll('.file-item.selected').length === 1, 'Only the folder must be selected');
+                action.click();
+                assert(sent.length === 1 && sent[0].type === 'browse_directory' && sent[0].path === 'Desktop/Documents', 'Open/Save must navigate into the selected folder');
+                assert(filename.value === '', 'Navigation must clear the selection');
+                receive({type: 'directory_listing', path: 'Desktop/Documents', folders: [], files: ['note.txt']});
+                document.querySelector('[data-type="file"]').click();
+                action.click();
+                assert(sent.length === 2 && sent[1].type === 'open_file' && sent[1].filename === 'note.txt' && sent[1].dir === 'Desktop/Documents', 'File selection must use the new directory');
+                closeDialog();
+            }
+            document.getElementById('result').textContent = 'PASS: folder selection in Open and Save dialogs';
+        } catch (error) {
+            document.getElementById('result').textContent = 'FAIL: ' + error.message;
+        }
+    </script>
+</body>
+</html>
