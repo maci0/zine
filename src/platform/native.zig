@@ -418,7 +418,9 @@ pub fn lseek(fd: i32, offset: i64, whence: u32) i64 {
     if (comptime builtin.target.cpu.arch.isWasm()) return -1;
     if (@sizeOf(usize) == 8) {
         const rc = std.os.linux.lseek(fd, offset, whence);
-        return @bitCast(rc);
+        const signed: isize = @bitCast(rc);
+        if (signed < 0) return -1;
+        return signed;
     } else {
         var result: u64 = 0;
         const rc = std.os.linux.llseek(fd, @bitCast(offset), &result, whence);
@@ -426,6 +428,23 @@ pub fn lseek(fd: i32, offset: i64, whence: u32) i64 {
         if (signed < 0) return -1;
         return @bitCast(result);
     }
+}
+
+test "lseek normalizes native errors and preserves file positions" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file = try tmp.dir.createFile(runtime.io(), "seek.bin", .{});
+    defer file.close(runtime.io());
+
+    try std.testing.expectEqual(@as(i64, 7), lseek(file.handle, 7, 0));
+    try std.testing.expectEqual(@as(i64, -1), lseek(file.handle, -1, 0));
+    try std.testing.expectEqual(@as(i64, 7), lseek(file.handle, 0, 1));
+    try std.testing.expectEqual(@as(i64, -1), lseek(-1, 0, 0));
+    try std.testing.expectEqual(@as(i64, -1), lseek(file.handle, 0, 3));
+
+    const large_offset: i64 = 0x1_0000_0001;
+    try std.testing.expectEqual(large_offset, lseek(file.handle, large_offset, 0));
+    try std.testing.expectEqual(large_offset - 1, lseek(file.handle, -1, 1));
 }
 
 /// Creates a unidirectional data channel.
