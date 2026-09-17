@@ -12,6 +12,8 @@ const kernel32_error = @import("error.zig");
 const ERROR_WRITE_FAULT = 29;
 const ERROR_INVALID_PARAMETER = 87;
 const ERROR_INVALID_ADDRESS = 487;
+const ERROR_INVALID_HANDLE = 6;
+const ERROR_DISK_FULL = 112;
 
 // KERNEL32.dll file I/O functions.
 /// Retrieves file system attributes for a specified file or directory.
@@ -1227,9 +1229,29 @@ pub fn FlushFileBuffers(hFile: usize) callconv(w32cc.WINAPI) i32 {
         const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
         const file = host_io.fileFromFd(fd);
         if (comptime builtin.os.tag == .linux) {
-            _ = std.os.linux.fsync(file.handle);
+            while (true) {
+                const err = std.os.linux.errno(std.os.linux.fsync(file.handle));
+                switch (err) {
+                    .SUCCESS => break,
+                    .INTR => continue,
+                    else => {
+                        kernel32_error.SetLastError(switch (err) {
+                            .BADF => ERROR_INVALID_HANDLE,
+                            .INVAL => ERROR_INVALID_PARAMETER,
+                            .NOSPC, .DQUOT => ERROR_DISK_FULL,
+                            else => ERROR_WRITE_FAULT,
+                        });
+                        trace.print("KERNEL32: FlushFileBuffers({d}) failed: {t}\n", .{ fd, err });
+                        return 0;
+                    },
+                }
+            }
         } else {
-            file.sync(runtime.io()) catch {};
+            file.sync(runtime.io()) catch |err| {
+                kernel32_error.SetLastError(ERROR_WRITE_FAULT);
+                trace.print("KERNEL32: FlushFileBuffers({d}) failed: {t}\n", .{ fd, err });
+                return 0;
+            };
         }
     }
     return 1; // TRUE
@@ -1526,6 +1548,38 @@ pub fn stub_OpenFile(lpFileName: usize, lpReOpenBuff: usize, uStyle: u32) callco
 // -------------------------------------------------------------------------
 // Tests
 // -------------------------------------------------------------------------
+
+test "FlushFileBuffers reports native sync failures" {
+    if (comptime !platform.is_native) return error.SkipZigTest;
+    const saved_error = kernel32_error.GetLastError();
+    defer kernel32_error.SetLastError(saved_error);
+
+    kernel32_error.SetLastError(0);
+    try std.testing.expectEqual(@as(i32, 0), FlushFileBuffers(w32.INVALID_HANDLE_VALUE));
+    try std.testing.expectEqual(@as(u32, 6), kernel32_error.GetLastError());
+
+    if (comptime builtin.os.tag == .linux) {
+        const fds = try platform.pipe();
+        defer host_io.closeFile(host_io.fileFromFd(fds[0]));
+        defer host_io.closeFile(host_io.fileFromFd(fds[1]));
+        kernel32_error.SetLastError(0);
+        try std.testing.expectEqual(@as(i32, 0), FlushFileBuffers(@intCast(fds[1])));
+        try std.testing.expectEqual(@as(u32, 87), kernel32_error.GetLastError());
+    }
+}
+
+test "FlushFileBuffers succeeds for a writable native file" {
+    if (comptime !platform.is_native) return error.SkipZigTest;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file = try tmp.dir.createFile(runtime.io(), "flush.bin", .{ .read = true });
+    defer host_io.closeFile(file);
+    try host_io.writeAllToFile(file, "persisted");
+    try std.testing.expectEqual(@as(i32, 1), FlushFileBuffers(@intCast(file.handle)));
+    var data: [9]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, data.len), try host_io.readPositional(file, &data, 0));
+    try std.testing.expectEqualStrings("persisted", &data);
+}
 
 test "GetFileTime preserves file timestamps before the Unix epoch" {
     var tmp = std.testing.tmpDir(.{});
