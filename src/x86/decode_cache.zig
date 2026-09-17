@@ -4,26 +4,23 @@
 //! addresses to previously decoded instructions. This eliminates redundant
 //! decoding in loops, where the same instructions execute thousands of times.
 //!
-//! Each entry is validated by both the EIP tag and the first 4 bytes of the
-//! instruction stream, which catches both hash collisions and self-modifying
-//! code (though we don't currently support SMC).
+//! Entries validate the EIP and the complete decode input, including its
+//! length, so guest code writes and changed fetch bounds cannot reuse a
+//! stale decode.
 
 const decoder = @import("decoder.zig");
+const std = @import("std");
 const Instruction = decoder.Instruction;
 
-/// Number of cache entries — must be a power of 2.
-/// With the compact Instruction struct (~28 bytes), 1024 entries ≈ 36KB,
-/// fitting well within L1 cache on most CPUs.
 const CACHE_SIZE = 1024;
+const MAX_CODE_BYTES = 16;
 const CACHE_MASK = CACHE_SIZE - 1;
 
-/// A single cache entry: EIP tag + content tag + decoded instruction.
+/// A single cache entry keyed by EIP with the exact decoded bytes.
 const CacheEntry = struct {
-    /// Guest EIP that produced this entry (0xFFFFFFFF = empty).
-    eip: u32 = 0xFFFFFFFF,
-    /// First 4 bytes of the instruction stream at this EIP.
-    /// Used to detect stale entries (e.g. self-modifying code).
-    tag_bytes: u32 = 0,
+    eip: u32 = 0,
+    code: [MAX_CODE_BYTES]u8 = .{0} ** MAX_CODE_BYTES,
+    code_len: u8 = 0,
     /// The decoded instruction.
     insn: Instruction = .{},
 };
@@ -42,7 +39,9 @@ pub const DecodeCache = struct {
     pub inline fn lookup(self: *DecodeCache, eip: u32, code: []const u8) ?Instruction {
         const idx = index(eip);
         const entry = &self.entries[idx];
-        if (entry.eip == eip and entry.tag_bytes == readTag(code)) {
+        if (entry.code_len != 0 and entry.eip == eip and entry.code_len == code.len and
+            std.mem.eql(u8, entry.code[0..entry.code_len], code))
+        {
             self.hits +%= 1;
             return entry.insn;
         }
@@ -53,11 +52,13 @@ pub const DecodeCache = struct {
     /// Store a decoded instruction in the cache.
     pub inline fn store(self: *DecodeCache, eip: u32, code: []const u8, insn: Instruction) void {
         const idx = index(eip);
-        self.entries[idx] = .{
-            .eip = eip,
-            .tag_bytes = readTag(code),
-            .insn = insn,
-        };
+        self.entries[idx] = .{};
+        if (code.len == 0 or code.len > MAX_CODE_BYTES or insn.length == 0) return;
+        const entry = &self.entries[idx];
+        entry.eip = eip;
+        entry.code_len = @intCast(code.len);
+        @memcpy(entry.code[0..code.len], code);
+        entry.insn = insn;
     }
 
     /// Invalidate the entire cache (e.g. after detecting self-modifying code).
@@ -68,7 +69,7 @@ pub const DecodeCache = struct {
     /// Invalidate a single entry by EIP.
     pub fn invalidateAddr(self: *DecodeCache, eip: u32) void {
         const idx = index(eip);
-        self.entries[idx].eip = 0xFFFFFFFF;
+        self.entries[idx].code_len = 0;
     }
 
     /// Hash function: multiplicative hash with Knuth's golden ratio constant
@@ -79,27 +80,10 @@ pub const DecodeCache = struct {
     }
 };
 
-/// Read the first 4 bytes of a code slice as a u32 tag for validation.
-/// If the slice is shorter than 4 bytes, pads with zeros.
-inline fn readTag(code: []const u8) u32 {
-    if (code.len >= 4) {
-        return @as(u32, code[0]) |
-            (@as(u32, code[1]) << 8) |
-            (@as(u32, code[2]) << 16) |
-            (@as(u32, code[3]) << 24);
-    }
-    var tag: u32 = 0;
-    for (code, 0..) |byte, i| {
-        tag |= @as(u32, byte) << @intCast(i * 8);
-    }
-    return tag;
-}
-
 // -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------
 
-const std = @import("std");
 const testing = std.testing;
 
 test "decode_cache: miss on empty cache" {
@@ -180,9 +164,54 @@ test "decode_cache: hit/miss counters" {
     try testing.expectEqual(@as(u64, 1), cache.misses);
 }
 
+test "decode_cache: validates every fetched byte" {
+    var cache = DecodeCache{};
+    var code: [MAX_CODE_BYTES]u8 = .{0x90} ** MAX_CODE_BYTES;
+    const insn = decoder.decode(&code);
+    cache.store(0x401000, &code, insn);
+
+    for (&code) |*byte| {
+        byte.* = 0xCC;
+        try testing.expect(cache.lookup(0x401000, &code) == null);
+        byte.* = 0x90;
+    }
+    try testing.expectEqualDeep(insn, cache.lookup(0x401000, &code).?);
+}
+
+test "decode_cache: changed fetch length misses even with zero bytes" {
+    var cache = DecodeCache{};
+    const code = [_]u8{ 0xB8, 0, 0, 0, 0 };
+    cache.store(0x401000, &code, decoder.decode(&code));
+    try testing.expect(cache.lookup(0x401000, code[0..4]) == null);
+    cache.store(0x401000, code[0..4], decoder.decode(code[0..4]));
+    try testing.expect(cache.lookup(0x401000, &code) == null);
+}
+
+test "decode_cache: maximum EIP is distinct from an empty entry" {
+    var cache = DecodeCache{};
+    const code = [_]u8{0};
+    try testing.expect(cache.lookup(0xFFFFFFFF, &code) == null);
+    const insn = decoder.decode(&code);
+    cache.store(0xFFFFFFFF, &code, insn);
+    try testing.expectEqualDeep(insn, cache.lookup(0xFFFFFFFF, &code).?);
+    cache.invalidateAddr(0xFFFFFFFF);
+    try testing.expect(cache.lookup(0xFFFFFFFF, &code) == null);
+    cache.store(0xFFFFFFFF, &code, insn);
+    cache.invalidate();
+    try testing.expect(cache.lookup(0xFFFFFFFF, &code) == null);
+}
+
+test "decode_cache: unsupported fetch sizes are not cached" {
+    var cache = DecodeCache{};
+    const code: [MAX_CODE_BYTES + 1]u8 = .{0x90} ** (MAX_CODE_BYTES + 1);
+    cache.store(0x401000, &code, decoder.decode(&code));
+    try testing.expect(cache.lookup(0x401000, &code) == null);
+    cache.store(0x401000, &.{}, decoder.decode(&.{}));
+    try testing.expect(cache.lookup(0x401000, &.{}) == null);
+}
+
 test "decode_cache: short code slice handled" {
     var cache = DecodeCache{};
-    // Code shorter than 4 bytes — readTag should pad with zeros
     const short_code = [_]u8{0x90};
     const insn = decoder.decode(&short_code);
     cache.store(0x500000, &short_code, insn);

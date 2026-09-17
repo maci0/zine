@@ -2371,6 +2371,19 @@ test "execute: MOV EAX, 0x12345678 + NOP + HLT" {
     try testing.expect(cpu.halted);
 }
 
+test "execute: cached instruction observes a changed immediate tail" {
+    var mem: [32]u8 = .{0x90} ** 32;
+    @memcpy(mem[0..5], &[_]u8{ 0xB8, 0x78, 0x56, 0x34, 0x12 });
+    var cpu = makeCpu(&mem);
+
+    step(&cpu);
+    try testing.expectEqual(@as(u32, 0x12345678), cpu.eax);
+    cpu.memory.write8(4, 0x56);
+    cpu.eip = 0;
+    step(&cpu);
+    try testing.expectEqual(@as(u32, 0x56345678), cpu.eax);
+}
+
 test "execute: PUSH/POP" {
     var mem: [256]u8 = .{0} ** 256;
     mem[0] = 0x50;
