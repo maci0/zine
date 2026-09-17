@@ -65,11 +65,13 @@ if [ "$MODE" = "--both" ] || [ "$MODE" = "both" ]; then
     echo "===== Running in NATIVE mode ====="
     # Guard each run (don't rely on $?): set -e would abort on the first
     # failing sub-suite before its status could be captured.
+    native_rc=0
+    interp_rc=0
     "$0" --native ${FILTER:+--filter "$FILTER"} || native_rc=1
     echo ""
     echo "===== Running in INTERPRET mode ====="
     "$0" --interpret ${FILTER:+--filter "$FILTER"} || interp_rc=1
-    if [ $native_rc -ne 0 ] || [ $interp_rc -ne 0 ]; then
+    if [ "$native_rc" -ne 0 ] || [ "$interp_rc" -ne 0 ]; then
         exit 1
     fi
     exit 0

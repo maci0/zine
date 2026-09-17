@@ -347,8 +347,10 @@ pub fn build(b: *std.Build) void {
     });
     b.getInstallStep().dependOn(&fmt_check.step);
 
-    const test_step = b.step("test", "Run x86 interpreter unit tests");
+    const test_step = b.step("test", "Run unit tests");
+    const test_filter = b.option([]const u8, "test-filter", "Run unit tests whose names contain this substring");
     const t = b.addTest(.{
+        .filters = if (test_filter) |filter| &.{filter} else &.{},
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/test_root.zig"),
             .target = b.graph.host,

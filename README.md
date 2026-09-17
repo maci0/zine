@@ -58,11 +58,21 @@ cp app.exe drive_c/myapp/
 
 ## Testing
 
+The unit suite runs with Zig alone. The optional MSVC integration suite requires
+an existing MSVC 6.0 installation at `tools/MSVC600/`, including `VC98/Bin`,
+`VC98/Include`, `VC98/Lib`, and `Common/`. These proprietary fixtures are not
+included in a clone. The script builds the selected interpreter automatically;
+WASM execution also requires the selected runtime on `PATH`. WebSocket tests
+require Python 3 and the dependencies in `tests/requirements.txt`.
+
 ```sh
-# Unit tests
+# Unit tests (no Windows binaries or GUI dependencies needed)
 zig build test
 
-# Integration suite (requires built binary)
+# Focus on one module or test-name substring
+zig build test -Dtest-filter=x86.decoder --summary all
+
+# Optional integration suite (requires MSVC fixtures described above)
 ./tests/test_msvc_cli.sh --native
 ./tests/test_msvc_cli.sh --native64
 ./tests/test_msvc_cli.sh --wasmtime
