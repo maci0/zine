@@ -1210,3 +1210,32 @@ test "floatToI32: NaN and out-of-range yield integer indefinite" {
     try testing.expectEqual(indefinite, floatToI32(f64, 0b00, -2147483649.0));
     try testing.expectEqual(indefinite, floatToI32(f32, 0b11, 3e9));
 }
+
+test "applyBinOp: division by zero yields zero, not IEEE exception values" {
+    try testing.expectEqual(@as(f32, 0), applyBinOp(f32, 5.0, 0.0, .div));
+    try testing.expectEqual(@as(f64, 0), applyBinOp(f64, -5.0, 0.0, .div));
+    try testing.expectEqual(@as(f32, 2.5), applyBinOp(f32, 5.0, 2.0, .div));
+}
+
+test "execUnaryFloat: reciprocal of zero yields zero, not IEEE inf" {
+    var cpu = Cpu{ .memory = undefined };
+    var mem: [64]u8 = .{0} ** 64;
+    cpu.memory = .{ .base = &mem };
+    const insn = &decoder.Instruction{
+        .opcode = 0x0F53,
+        .length = 4,
+        .has_modrm = true,
+        .modrm_reg = 1,
+        .op0_kind = .reg,
+        .op0_reg = 0,
+        .op1_kind = .mem,
+        .mem_seg = .ds,
+    };
+    cpu.xmm[1] = @bitCast(@as(u128, 0)); // all-zero source: +0.0 in every lane
+    execUnaryFloat(&cpu, insn, .none, .rcp);
+    const r: [4]f32 = @bitCast(cpu.xmm[0]);
+    for (r) |lane| try testing.expectEqual(@as(f32, 0), lane);
+    execUnaryFloat(&cpu, insn, .none, .rsqrt);
+    const q: [4]f32 = @bitCast(cpu.xmm[0]);
+    for (q) |lane| try testing.expectEqual(@as(f32, 0), lane);
+}
