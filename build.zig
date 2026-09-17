@@ -82,13 +82,7 @@ fn addNativeExe(
     // space (0x00400000+) is free for guest Win32 PEs.
     // On x86: 0x70000000 (same approach Wine uses)
     // On x86_64: 0x70000000 (same as x86, within the low 4GB for MAP_32BIT compat)
-    if (arch == .x86) {
-        exe.image_base = 0x70000000;
-    } else if (arch == .x86_64) {
-        // Place above typical PE bases (0x400000, 0x1000000, 0x10300000)
-        // but within the first 4GB so MAP_32BIT allocations don't conflict.
-        exe.image_base = 0x70000000;
-    }
+    exe.image_base = 0x70000000;
 
     // FLTK native GUI backend (optional). Originally x86-only because the
     // bridge targets the 32-bit build, but the x86_64 compat build links the
@@ -122,7 +116,7 @@ fn addNativeExe(
     }
 
     const options = b.addOptions();
-    options.addOption(bool, "use_fltk", use_fltk and arch != .wasm32);
+    options.addOption(bool, "use_fltk", use_fltk);
     options.addOption(bool, "embed_stubs", embed_stubs);
     exe.root_module.addOptions("build_options", options);
 
