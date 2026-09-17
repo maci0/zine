@@ -70,7 +70,10 @@ pub fn main(init: std.process.Init) !void {
     // Warm up the vDSO time path before we rewrite FS segment (TEB).
     // Without this the first clock_gettime after setupFS() faults.
     _ = platform.timestamp();
-    log.initFromEnv();
+    log.initFromEnv(init.environ_map) catch {
+        std.debug.print("{s}", .{"Error: ZINE_LOG_LEVEL must be one of: fatal, error, err, warn, info, trace.\n"});
+        std.process.exit(2);
+    };
 
     // Windows processes essentially never cleanly free all memory before ExitProcess or exit()
     // Using GPA will always report thousands of leaks because the process terminates.
@@ -169,6 +172,7 @@ pub fn main(init: std.process.Init) !void {
                 \\  ZINE_TRACE          Set to any value to enable API tracing
                 \\  ZINE_TRACE_INSN     Set to any value to enable instruction tracing
                 \\  ZINE_PROFILE        Set to any value to enable profiling
+                \\  ZINE_LOG_LEVEL      fatal, error, err, warn, info, trace (default: trace)
                 \\
                 \\Examples:
                 \\  zine myapp.exe

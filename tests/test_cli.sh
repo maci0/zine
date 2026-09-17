@@ -37,6 +37,28 @@ timeout 60 "$@" --invalid-option >"$workdir/stdout" 2>"$workdir/stderr" || statu
 [[ "$status" == 2 && ! -s "$workdir/stdout" && -s "$workdir/stderr" ]]
 grep -q 'unknown option' "$workdir/stderr"
 
+if [[ "$expected_version" == zine\ * ]]; then
+    for level in fatal error err warn info trace '' debug INFO ' warn' 'trace '; do
+        config_cmd=(env "ZINE_LOG_LEVEL=$level" "$@")
+        if [[ "$1" == wasmtime ]]; then
+            config_cmd=("$1" "$2" --env "ZINE_LOG_LEVEL=$level" "${@:3}")
+        fi
+        status=0
+        timeout 60 "${config_cmd[@]}" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+        case "$level" in
+            fatal|error|err|warn|info|trace)
+                [[ "$status" == 0 && ! -s "$workdir/stderr" ]]
+                printf '%s\n' "$expected_version" >"$workdir/expected"
+                cmp "$workdir/expected" "$workdir/stdout"
+                ;;
+            *)
+                [[ "$status" == 2 && ! -s "$workdir/stdout" ]]
+                grep -q 'Error: ZINE_LOG_LEVEL must be one of: fatal, error, err, warn, info, trace.' "$workdir/stderr"
+                ;;
+        esac
+    done
+fi
+
 if [[ "$expected_version" == zine-host\ * ]]; then
     for behavior in return trap exit-zero exit-nonzero; do
         case "$behavior" in

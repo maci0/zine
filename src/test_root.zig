@@ -26,6 +26,7 @@ comptime {
     _ = @import("profiler.zig");
 
     // Core utility tests
+    _ = @import("log.zig");
     _ = @import("path_utils.zig");
     _ = @import("bat.zig");
     _ = @import("pe.zig");

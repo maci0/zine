@@ -111,6 +111,28 @@ cp app.exe drive_c/myapp/
 ./zig-out/bin/zine.x86 drive_c/myapp/app.exe
 ```
 
+## Runtime diagnostics
+
+Native and WASI executables configure diagnostics through environment variables;
+no rebuild is needed. Log level, tracing, and profiling are read at startup;
+color detection is cached on the first diagnostic. Pass WASI variables through
+the runtime's environment options, for example
+`wasmtime run --env ZINE_LOG_LEVEL=warn zig-out/bin/zine.wasm32.wasm --version`.
+
+| Variable | Values and default |
+|---|---|
+| `ZINE_LOG_LEVEL` | `fatal`, `error` (alias `err`), `warn`, `info`, `trace`; default `trace` |
+| `ZINE_TRACE` | Any value, including empty, enables API tracing; unset disables it |
+| `ZINE_TRACE_INSN` | Any value, including empty, enables instruction tracing; unset disables it |
+| `ZINE_PROFILE` | Any value, including empty, enables profiling; unset disables it |
+| `NO_COLOR` | Any value disables native diagnostic colors; WASI never emits colors |
+
+`ZINE_LOG_LEVEL` filters structured diagnostics on stderr. The default does not
+itself enable API or instruction tracing. Values are case-sensitive; empty or
+unknown log levels exit with status 2 and list the accepted values before guest
+loading. `ZINE_LOG_LEVEL=warn ./zig-out/bin/zine.x86 --version` checks startup
+validation without running a guest.
+
 ## Build options
 
 | Flag | Purpose |

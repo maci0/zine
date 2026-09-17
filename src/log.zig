@@ -166,20 +166,45 @@ pub fn info(comptime fmt: []const u8, args: anytype) void {
 
 /// Initialize log level from ZINE_LOG_LEVEL environment variable.
 /// Call during startup, after env vars are available.
-pub fn initFromEnv() void {
-    if (comptime builtin.target.cpu.arch.isWasm()) return;
-    // TODO(windows): see `detectColorImpl`.
-    if (comptime builtin.target.os.tag == .windows) return;
-    const val = runtime.environ().getPosix("ZINE_LOG_LEVEL") orelse return;
-    if (std.mem.eql(u8, val, "fatal")) {
-        min_level = .fatal;
-    } else if (std.mem.eql(u8, val, "error") or std.mem.eql(u8, val, "err")) {
-        min_level = .err;
-    } else if (std.mem.eql(u8, val, "warn")) {
-        min_level = .warn;
-    } else if (std.mem.eql(u8, val, "info")) {
-        min_level = .info;
-    } else if (std.mem.eql(u8, val, "trace")) {
+pub fn initFromEnv(env: *const std.process.Environ.Map) error{InvalidLogLevel}!void {
+    const val = env.get("ZINE_LOG_LEVEL") orelse {
         min_level = .trace;
+        return;
+    };
+    min_level = if (std.mem.eql(u8, val, "error"))
+        .err
+    else
+        std.meta.stringToEnum(Level, val) orelse return error.InvalidLogLevel;
+}
+
+test "log level environment validates values before changing the active level" {
+    const saved_level = min_level;
+    defer min_level = saved_level;
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+
+    min_level = .fatal;
+    try initFromEnv(&env);
+    try std.testing.expectEqual(Level.trace, min_level);
+
+    const cases = .{
+        .{ "fatal", Level.fatal },
+        .{ "error", Level.err },
+        .{ "err", Level.err },
+        .{ "warn", Level.warn },
+        .{ "info", Level.info },
+        .{ "trace", Level.trace },
+    };
+    inline for (cases) |case| {
+        try env.put("ZINE_LOG_LEVEL", case[0]);
+        try initFromEnv(&env);
+        try std.testing.expectEqual(case[1], min_level);
+    }
+
+    min_level = .warn;
+    for ([_][]const u8{ "", "debug", "INFO", " warn", "trace ", "0" }) |val| {
+        try env.put("ZINE_LOG_LEVEL", val);
+        try std.testing.expectError(error.InvalidLogLevel, initFromEnv(&env));
+        try std.testing.expectEqual(Level.warn, min_level);
     }
 }

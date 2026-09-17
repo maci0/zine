@@ -66,7 +66,10 @@ pub fn main(init: std.process.Init) !void {
     var jit_max_eip: u32 = 0xFFFFFFFF;
     var end_of_options = false;
 
-    log.initFromEnv();
+    log.initFromEnv(init.environ_map) catch {
+        std.debug.print("{s}", .{"Error: ZINE_LOG_LEVEL must be one of: fatal, error, err, warn, info, trace.\n"});
+        std.process.exit(2);
+    };
 
     // Check environment variables (WASI runtimes can pass env vars via --env)
     {
@@ -142,6 +145,7 @@ pub fn main(init: std.process.Init) !void {
                 \\  ZINE_TRACE          Set to any value to enable API tracing
                 \\  ZINE_TRACE_INSN     Set to any value to enable instruction tracing
                 \\  ZINE_PROFILE        Set to any value to enable profiling
+                \\  ZINE_LOG_LEVEL      fatal, error, err, warn, info, trace (default: trace)
                 \\
                 \\Examples:
                 \\  wasmtime --dir=. zine.wasm32.wasm -- myapp.exe
