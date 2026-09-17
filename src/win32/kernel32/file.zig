@@ -10,6 +10,7 @@ const host_io = @import("../host_io.zig");
 const kernel32_error = @import("error.zig");
 
 const ERROR_WRITE_FAULT = 29;
+const ERROR_INVALID_PARAMETER = 87;
 const ERROR_INVALID_ADDRESS = 487;
 
 // KERNEL32.dll file I/O functions.
@@ -1240,9 +1241,12 @@ pub fn GetFileTime(hFile: usize, lpCreationTime: usize, lpLastAccessTime: usize,
     if (trace.enable_tracing) trace.print("KERNEL32: GetFileTime({x})\n", .{hFile});
 
     // Get current time as FILETIME
-    const unix_ns: u128 = @bitCast(runtime.nanoTimestamp());
-    const win_offset: u128 = 11644473600 * 10_000_000;
-    const filetime: u64 = @intCast(unix_ns / 100 + win_offset);
+    const unix_ns = runtime.nanoTimestamp();
+    const win_offset: i128 = 11644473600 * 10_000_000;
+    const filetime = std.math.cast(u64, @divFloor(unix_ns, 100) + win_offset) orelse {
+        kernel32_error.SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
     const low: u32 = @intCast(filetime & 0xFFFFFFFF);
     const high: u32 = @intCast(filetime >> 32);
 
@@ -1252,8 +1256,10 @@ pub fn GetFileTime(hFile: usize, lpCreationTime: usize, lpLastAccessTime: usize,
     var actual_low = low;
     var actual_high = high;
     if (host_io.statFile(file)) |st| {
-        const mtime_ns: u128 = @intCast(st.mtime.nanoseconds);
-        const mtime_ft: u64 = @intCast(mtime_ns / 100 + win_offset);
+        const mtime_ft = std.math.cast(u64, @divFloor(st.mtime.nanoseconds, 100) + win_offset) orelse {
+            kernel32_error.SetLastError(ERROR_INVALID_PARAMETER);
+            return 0;
+        };
         actual_low = @intCast(mtime_ft & 0xFFFFFFFF);
         actual_high = @intCast(mtime_ft >> 32);
     }
@@ -1520,6 +1526,31 @@ pub fn stub_OpenFile(lpFileName: usize, lpReOpenBuff: usize, uStyle: u32) callco
 // -------------------------------------------------------------------------
 // Tests
 // -------------------------------------------------------------------------
+
+test "GetFileTime preserves file timestamps before the Unix epoch" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file = try tmp.dir.createFile(runtime.io(), "dated.bin", .{});
+    defer host_io.closeFile(file);
+
+    const samples = [_]struct { ns: i64, ticks: u64 }{
+        .{ .ns = -1_000_000_000, .ticks = 116444735990000000 },
+        .{ .ns = -123_456_789, .ticks = 116444735998765432 },
+        .{ .ns = -1, .ticks = 116444735999999999 },
+        .{ .ns = 0, .ticks = 116444736000000000 },
+        .{ .ns = 123_456_789, .ticks = 116444736001234567 },
+    };
+    for (samples) |sample| {
+        try file.setTimestamps(runtime.io(), .{
+            .modify_timestamp = .{ .new = .{ .nanoseconds = sample.ns } },
+        });
+        const stat = host_io.statFile(file) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(i128, sample.ns), stat.mtime.nanoseconds);
+        var ft: w32.FILETIME = .{};
+        try std.testing.expectEqual(@as(i32, 1), GetFileTime(@intCast(file.handle), 0, 0, @intFromPtr(&ft)));
+        try std.testing.expectEqual(sample.ticks, @as(u64, ft.dwHighDateTime) << 32 | ft.dwLowDateTime);
+    }
+}
 
 test "CloseHandle frees file mapping slots" {
     mapping_fds = [_]i32{-1} ** MAX_MAPPINGS;
