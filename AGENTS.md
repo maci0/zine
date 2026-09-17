@@ -15,7 +15,7 @@ Run Win98/Win2K-era 32-bit Windows executables on Linux and in the browser witho
 
 Run from the repository root:
 
-- Unit tests: `zig build test` (also checks formatting).
+- Unit tests: `zig build test` (also checks formatting). Tests run on the host; `-Darch` does not change the test target.
 - Native CLI tests: `zig build test-cli`, then `zig build test-cli -Darch=x86_64`; no guest binaries required.
 - Formatting: `zig fmt --check src build.zig build.zig.zon`.
 - Compile/typecheck each target, sequentially to limit peak memory: `zig build`, `zig build -Darch=x86_64`, `zig build -Darch=wasm32`, `zig build -Darch=wasm64`.
