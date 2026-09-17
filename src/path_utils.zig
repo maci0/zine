@@ -337,7 +337,7 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
     if (src.len > 0 and src[0] == '/') {
         const abs_len = @min(src.len, out.len - 1);
         @memcpy(out[0..abs_len], src[0..abs_len]);
-        if (abs_len < out.len) out[abs_len] = 0;
+        out[abs_len] = 0;
         return abs_len;
     }
 
@@ -345,7 +345,7 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
     if (isInsideDriveC(src)) {
         const dc_len = @min(src.len, out.len - 1);
         @memcpy(out[0..dc_len], src[0..dc_len]);
-        if (dc_len < out.len) out[dc_len] = 0;
+        out[dc_len] = 0;
         // Normalize with anchor at drive_c/ so .. can't escape sandbox
         return normalizePath(out, dc_len, drive_root_len);
     }
@@ -364,7 +364,7 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
             out[cwd_end] = '/';
             @memcpy(out[cwd_end + 1 .. cwd_end + 1 + src.len], src[0..src.len]);
             const total = cwd_end + 1 + src.len;
-            if (total < out.len) out[total] = 0;
+            out[total] = 0;
             // Normalize: if CWD is inside drive_c, anchor there;
             // if absolute (starts with /), anchor at position 1 to preserve the root slash
             const anchor = if (isInsideDriveC(out[0..total]))
@@ -380,7 +380,7 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
     // Final fallback: just return the relative path with slashes fixed
     const fb_len = @min(src.len, out.len - 1);
     @memcpy(out[0..fb_len], src[0..fb_len]);
-    if (fb_len < out.len) out[fb_len] = 0;
+    out[fb_len] = 0;
     return fb_len;
 }
 
