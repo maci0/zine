@@ -236,7 +236,7 @@ fn dispatchNativeThunk(cpu: *Cpu) void {
     // as "fatal error C1076/C1063: compiler heap exhausted".
     if (std.mem.eql(u8, entry.name, "_ftol")) {
         const fval = cpu.fpu.pop();
-        const ival = @import("execute.zig").safeFloatToInt(i64, fval);
+        const ival = @import("fpu.zig").safeFloatToInt(i64, fval);
         const uval = @as(u64, @bitCast(ival));
         cpu.eax = @truncate(uval);
         cpu.edx = @truncate(uval >> 32);
@@ -636,6 +636,38 @@ test "thunks: register and dispatch" {
     try testing.expectEqual(@as(u32, 10), cpu.eax); // 3 + 7
     // ESP should be adjusted by 2*4 = 8 for stdcall
     try testing.expectEqual(@as(u32, 200), cpu.esp);
+}
+
+test "thunks: _ftol returns EDX:EAX and preserves the caller stack" {
+    reset();
+    defer reset();
+    const id = registerNativeThunk("_ftol", @intFromPtr(&testHandler), 0, true);
+    const cases = [_]struct { value: f64, expected: i64 }{
+        .{ .value = 4294967297.75, .expected = 4294967297 },
+        .{ .value = -1.75, .expected = -1 },
+        .{ .value = std.math.nan(f64), .expected = std.math.minInt(i64) },
+        .{ .value = 9223372036854775808.0, .expected = std.math.minInt(i64) },
+    };
+    for (cases) |case| {
+        var mem: [256]u8 = .{0} ** 256;
+        var cpu = Cpu{ .memory = cpu_mod.GuestMemory{ .base = &mem } };
+        cpu.esp = 200;
+        cpu.push32(0x12345678);
+        cpu.fpu.control_word = 0x0B7F;
+        cpu.fpu.push(42.0);
+        cpu.fpu.push(case.value);
+        cpu.memory.write32(100, id);
+        cpu.eip = 100;
+
+        dispatch(&cpu);
+
+        const result = (@as(u64, cpu.edx) << 32) | cpu.eax;
+        try testing.expectEqual(case.expected, @as(i64, @bitCast(result)));
+        try testing.expectEqual(@as(u32, 0x12345678), cpu.eip);
+        try testing.expectEqual(@as(u32, 200), cpu.esp);
+        try testing.expectEqual(@as(u3, 7), cpu.fpu.top);
+        try testing.expectEqual(@as(f64, 42.0), cpu.fpu.st(0));
+    }
 }
 
 test "thunks: duplicate native import registration keeps first entry" {

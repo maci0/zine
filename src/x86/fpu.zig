@@ -72,6 +72,21 @@ pub fn roundPerRc(rc: u2, val: f64) f64 {
     };
 }
 
+/// Safe float-to-int conversion with masked-x87 semantics: truncate toward
+/// zero; NaN and out-of-range inputs produce the integer indefinite value
+/// (most-negative), matching real FISTP/_ftol instead of saturating.
+pub fn safeFloatToInt(comptime T: type, val: f64) T {
+    comptime std.debug.assert(@typeInfo(T).int.signedness == .signed);
+    if (!std.math.isFinite(val)) return std.math.minInt(T);
+    const t = @trunc(val);
+    const min_f: f64 = @floatFromInt(std.math.minInt(T));
+    // Exact power-of-two upper bound above maxInt avoids f64 rounding
+    // ambiguity near maxInt for wide types.
+    const max_excl: f64 = @floatFromInt(@as(u64, 1) << (@bitSizeOf(T) - 1));
+    if (t < min_f or t >= max_excl) return std.math.minInt(T);
+    return @intFromFloat(t);
+}
+
 fn roundHalfEven(x: f64) f64 {
     const t = @trunc(x);
     const diff = x - t;
@@ -88,6 +103,27 @@ fn roundHalfEven(x: f64) f64 {
 // -----------------------------------------------------------------------
 
 const testing = std.testing;
+
+test "fpu: float-to-int truncates and returns integer indefinite" {
+    inline for (.{ i16, i32, i64 }) |T| {
+        const min = std.math.minInt(T);
+        const min_f: f64 = @floatFromInt(min);
+        const max_excl = -min_f;
+        try testing.expectEqual(@as(T, 0), safeFloatToInt(T, 0.0));
+        try testing.expectEqual(@as(T, 0), safeFloatToInt(T, -0.0));
+        try testing.expectEqual(@as(T, 1), safeFloatToInt(T, 1.9));
+        try testing.expectEqual(@as(T, -1), safeFloatToInt(T, -1.9));
+        try testing.expectEqual(@as(T, min), safeFloatToInt(T, min_f));
+        try testing.expectEqual(@as(T, min), safeFloatToInt(T, min_f * 2));
+        try testing.expectEqual(@as(T, min), safeFloatToInt(T, max_excl));
+        try testing.expectEqual(@as(T, min), safeFloatToInt(T, std.math.nan(f64)));
+        try testing.expectEqual(@as(T, min), safeFloatToInt(T, std.math.inf(f64)));
+        try testing.expectEqual(@as(T, min), safeFloatToInt(T, -std.math.inf(f64)));
+    }
+    try testing.expectEqual(@as(i16, 32767), safeFloatToInt(i16, 32767.9));
+    try testing.expectEqual(@as(i32, 2147483647), safeFloatToInt(i32, 2147483647.9));
+    try testing.expectEqual(@as(i64, 9223372036854774784), safeFloatToInt(i64, 9223372036854774784.0));
+}
 
 test "fpu: init resets state" {
     var fpu = FpuState{};

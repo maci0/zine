@@ -333,7 +333,7 @@ fn dispatchNativeCall(cpu: *Cpu) void {
     const msvcrt_math = @import("../win32/msvcrt/math.zig");
     if (target_addr == @intFromPtr(msvcrt_math.ftol)) {
         const fval = cpu.fpu.pop();
-        const ival = safeFloatToInt(i64, fval);
+        const ival = fpu.safeFloatToInt(i64, fval);
         const uval = @as(u64, @bitCast(ival));
         cpu.eax = @truncate(uval);
         cpu.edx = @truncate(uval >> 32);
@@ -733,26 +733,11 @@ fn executeFpu(cpu: anytype, insn: anytype) void {
     }
 }
 
-/// Safe float-to-int conversion with masked-x87 semantics: truncate toward
-/// zero; NaN and out-of-range inputs produce the integer indefinite value
-/// (most-negative), matching real FISTP/_ftol instead of saturating.
-pub fn safeFloatToInt(comptime T: type, val: f64) T {
-    comptime std.debug.assert(@typeInfo(T).int.signedness == .signed);
-    if (!std.math.isFinite(val)) return std.math.minInt(T);
-    const t = @trunc(val);
-    const min_f: f64 = @floatFromInt(std.math.minInt(T));
-    // Exact power-of-two upper bound above maxInt avoids f64 rounding
-    // ambiguity near maxInt for wide types.
-    const max_excl: f64 = @floatFromInt(@as(u64, 1) << (@bitSizeOf(T) - 1));
-    if (t < min_f or t >= max_excl) return std.math.minInt(T);
-    return @intFromFloat(t);
-}
-
 /// FIST/FISTP conversion: honors the rounding-control field, then applies
 /// the same NaN/out-of-range integer-indefinite rule as real hardware.
 pub fn fistToInt(comptime T: type, control_word: u16, val: f64) T {
     const rc: u2 = @truncate(control_word >> 10);
-    return safeFloatToInt(T, fpu.roundPerRc(rc, val));
+    return fpu.safeFloatToInt(T, fpu.roundPerRc(rc, val));
 }
 
 /// Helper: set x87 condition codes for comparison (C3,C0).
