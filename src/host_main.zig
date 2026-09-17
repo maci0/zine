@@ -460,17 +460,18 @@ pub fn main(init: std.process.Init) !void {
                     const num = std.mem.trim(u8, std.mem.sliceTo(s[colon + 1 ..], 0), " \r\n");
                     exit_code = std.fmt.parseInt(u8, num, 10) catch null;
                 }
-            } else if (std.mem.indexOf(u8, s, "exit") == null) {
+            }
+            if (exit_code == null) {
                 writeErr("Error: WASM trap: ");
-                writeErr(s);
+                writeErr(std.mem.sliceTo(s, 0));
                 writeErr("\n");
             }
-            c.wasm_byte_vec_delete(&msg);
+        } else {
+            writeErr("Error: WASM trap.\n");
         }
+        c.wasm_byte_vec_delete(&msg);
         c.wasm_trap_delete(t);
-        if (exit_code) |code| {
-            std.process.exit(code);
-        }
+        std.process.exit(exit_code orelse 1);
     }
 
     // Clean up JIT blocks
