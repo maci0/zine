@@ -142,6 +142,11 @@ fn rc_main(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(
         }
     }
 
+    return compileResources(arg_list[0..arg_count]);
+}
+
+fn compileResources(arg_list: []const []const u8) i32 {
+    const arg_count = arg_list.len;
     // Parse options: /fo <out> or /fo<out>, /I <dir> or /I<dir>, <input.rc>
     var output: ?[]const u8 = null;
     var input: ?[]const u8 = null;
@@ -191,7 +196,10 @@ fn rc_main(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(
     const rc_file = hio.fileFromFd(rc_fd);
     defer hio.closeFile(rc_file);
     var rc_data: [65536]u8 = undefined;
-    const rc_len = hio.readFromFile(rc_file, &rc_data) catch 0;
+    const rc_len = hio.readFromFile(rc_file, &rc_data) catch |err| {
+        trace.print("RCDLL: cannot read '{s}': {s}\n", .{ rc_host_path, @errorName(err) });
+        return 1;
+    };
     const rc_text = rc_data[0..rc_len];
 
     if (trace.enable_tracing) trace.print("RCDLL: input '{s}' ({d} bytes)\n", .{ rc_host_path, rc_len });
@@ -849,22 +857,22 @@ fn rc_main(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(
             var ico_host_buf: [1024]u8 = undefined;
             const ico_host_len = path_utils.toHostPath(ico_path, &ico_host_buf);
             if (ico_host_len == 0) {
-                while (ii < rc_text.len and rc_text[ii] != '\n') ii += 1;
-                if (ii < rc_text.len) ii += 1;
-                continue;
+                trace.print("RCDLL: cannot resolve icon '{s}'\n", .{ico_path});
+                return 1;
             }
-            var ico_file = std.Io.Dir.cwd().openFile(runtime.io(), ico_host_buf[0..ico_host_len], .{}) catch {
-                while (ii < rc_text.len and rc_text[ii] != '\n') ii += 1;
-                if (ii < rc_text.len) ii += 1;
-                continue;
+            var ico_file = std.Io.Dir.cwd().openFile(runtime.io(), ico_host_buf[0..ico_host_len], .{}) catch |err| {
+                trace.print("RCDLL: cannot open icon '{s}': {s}\n", .{ ico_host_buf[0..ico_host_len], @errorName(err) });
+                return 1;
             };
             defer ico_file.close(runtime.io());
             var ico_data: [8192]u8 = undefined;
-            const ico_len = ico_file.readStreaming(runtime.io(), &.{&ico_data}) catch 0;
+            const ico_len = ico_file.readStreaming(runtime.io(), &.{&ico_data}) catch |err| {
+                trace.print("RCDLL: cannot read icon '{s}': {s}\n", .{ ico_host_buf[0..ico_host_len], @errorName(err) });
+                return 1;
+            };
             if (ico_len < 22) {
-                while (ii < rc_text.len and rc_text[ii] != '\n') ii += 1;
-                if (ii < rc_text.len) ii += 1;
-                continue;
+                trace.print("RCDLL: icon '{s}' too short ({d} bytes)\n", .{ ico_host_buf[0..ico_host_len], ico_len });
+                return 1;
             }
             // ICONDIR: reserved(2) type(2) count(2); first entry at offset 6.
             const count = std.mem.readInt(u16, ico_data[4..6], .little);
@@ -1518,6 +1526,45 @@ fn emitMenuItem(text: []const u8, idx: *usize, ctx: *const MenuCtx) bool {
     tmp2.pos.* += 2;
     ctx.pos.* = tmp2.pos.*;
     return true;
+}
+
+test "resource compilation preserves output when an icon cannot be loaded" {
+    const io = @import("../runtime.zig").io();
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_len = try tmp.dir.realPath(io, &dir_buf);
+    const dir = dir_buf[0..dir_len];
+    const input = try std.fmt.allocPrint(allocator, "Z:{s}/input.rc", .{dir});
+    defer allocator.free(input);
+    const output = try std.fmt.allocPrint(allocator, "{s}/output.res", .{dir});
+    defer allocator.free(output);
+    try tmp.dir.createDir(io, "directory", .default_dir);
+    try tmp.dir.writeFile(io, .{ .sub_path = "short.ico", .data = "short" });
+
+    for ([_][]const u8{ "missing.ico", "directory", "short.ico" }) |icon| {
+        const source = try std.fmt.allocPrint(allocator, "STRINGTABLE\nBEGIN\n1, \"hello\"\nEND\n2 ICON \"{s}/{s}\"\n", .{ dir, icon });
+        defer allocator.free(source);
+        try tmp.dir.writeFile(io, .{ .sub_path = "input.rc", .data = source });
+        try tmp.dir.writeFile(io, .{ .sub_path = "output.res", .data = "previous output" });
+        try std.testing.expectEqual(@as(i32, 1), compileResources(&.{ "rc", "/fo", output, input }));
+        const file = try tmp.dir.openFile(io, "output.res", .{});
+        defer file.close(io);
+        var contents: [32]u8 = undefined;
+        const len = try file.readPositionalAll(io, &contents, 0);
+        try std.testing.expectEqualStrings("previous output", contents[0..len]);
+    }
+
+    try tmp.dir.writeFile(io, .{ .sub_path = "input.rc", .data = "STRINGTABLE\nBEGIN\n1, \"hello\"\nEND\n" });
+    try std.testing.expectEqual(@as(i32, 0), compileResources(&.{ "rc", "/fo", output, input }));
+    const file = try tmp.dir.openFile(io, "output.res", .{});
+    defer file.close(io);
+    var contents: [128]u8 = undefined;
+    const len = try file.readPositionalAll(io, &contents, 0);
+    try std.testing.expectEqual(@as(usize, 76), len);
+    try std.testing.expectEqual(@as(u32, 6), std.mem.readInt(u32, contents[8..12], .little));
+    try std.testing.expectEqualSlices(u8, "h\x00e\x00l\x00l\x00o\x00", contents[36..46]);
 }
 
 fn startsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
