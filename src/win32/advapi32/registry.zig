@@ -3,6 +3,33 @@ const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
 const reg_config = @import("registry_config.zig");
 
+fn wideEqualsAsciiIgnoreCase(wide: []const u16, ascii: []const u8) bool {
+    if (wide.len != ascii.len) return false;
+    for (wide, ascii) |wc, ac| {
+        if (wc > 0x7f or std.ascii.toLower(@as(u8, @intCast(wc))) != std.ascii.toLower(ac)) return false;
+    }
+    return true;
+}
+
+test "wide registry value names do not alias ASCII through their low byte" {
+    const valid = std.unicode.utf8ToUtf16LeStringLiteral("ProcessorNameString");
+    const alias = std.unicode.utf8ToUtf16LeStringLiteral("ŐrocessorNameString");
+    var size: u32 = 0;
+    try std.testing.expectEqual(@as(u32, 0), RegQueryValueExW(CPU_REG_HANDLE, @intFromPtr(valid), 0, 0, 0, @intFromPtr(&size)));
+    try std.testing.expectEqual(@as(u32, 36), size);
+    try std.testing.expectEqual(@as(u32, 2), RegQueryValueExW(CPU_REG_HANDLE, @intFromPtr(alias), 0, 0, 0, @intFromPtr(&size)));
+}
+
+test "wide registry key names preserve non-ASCII code units" {
+    const valid = std.unicode.utf8ToUtf16LeStringLiteral("hardware\\description\\system\\centralprocessor\\0");
+    const alias = std.unicode.utf8ToUtf16LeStringLiteral("ňardware\\description\\system\\centralprocessor\\0");
+    var handle: u32 = 0;
+    try std.testing.expectEqual(@as(u32, 0), RegOpenKeyExW(0x80000002, @intFromPtr(valid), 0, 0, @intFromPtr(&handle)));
+    try std.testing.expectEqual(CPU_REG_HANDLE, handle);
+    try std.testing.expectEqual(@as(u32, 2), RegOpenKeyExW(0x80000002, @intFromPtr(alias), 0, 0, @intFromPtr(&handle)));
+    try std.testing.expectEqual(@as(u32, 0), handle);
+}
+
 var next_reg_handle: u32 = 0xDE000001;
 
 const CPU_REG_HANDLE: u32 = 0xDE00C000;
@@ -323,27 +350,18 @@ pub fn stub_RegOpenKeyA(hKey: usize, lpSubKey: usize, phkResult: usize) callconv
 /// Implementation status: Partially implemented
 pub fn RegQueryValueExW(hKey: usize, lpValueName: usize, lpReserved: usize, lpType: usize, lpData: usize, lpcbData: usize) callconv(w32cc.WINAPI) u32 {
     _ = lpReserved;
-    // Convert wide value name
-    var narrow: [128]u8 = undefined;
-    var nlen: usize = 0;
-    if (lpValueName != 0) {
-        const src = @as([*]const u16, @ptrFromInt(lpValueName));
-        while (nlen < 127 and src[nlen] != 0) : (nlen += 1) {
-            narrow[nlen] = @truncate(src[nlen]);
-        }
-    }
-    const name = narrow[0..nlen];
+    const name = trace.c_span_w(lpValueName);
 
     if (hKey == CPU_REG_HANDLE) {
         const REG_SZ: u32 = 1;
         const REG_DWORD: u32 = 4;
-        if (std.ascii.eqlIgnoreCase(name, "ProcessorNameString")) {
+        if (wideEqualsAsciiIgnoreCase(name, "ProcessorNameString")) {
             return writeRegStringW(lpType, lpData, lpcbData, REG_SZ, "Intel Pentium III");
-        } else if (std.ascii.eqlIgnoreCase(name, "Identifier")) {
+        } else if (wideEqualsAsciiIgnoreCase(name, "Identifier")) {
             return writeRegStringW(lpType, lpData, lpcbData, REG_SZ, "x86 Family 6 Model 8 Stepping 3");
-        } else if (std.ascii.eqlIgnoreCase(name, "VendorIdentifier")) {
+        } else if (wideEqualsAsciiIgnoreCase(name, "VendorIdentifier")) {
             return writeRegStringW(lpType, lpData, lpcbData, REG_SZ, "GenuineIntel");
-        } else if (std.ascii.eqlIgnoreCase(name, "~MHz")) {
+        } else if (wideEqualsAsciiIgnoreCase(name, "~MHz")) {
             return writeRegDword(
                 if (lpType != 0) @as(?*u32, @ptrFromInt(lpType)) else null,
                 if (lpData != 0) @as(?*align(1) u32, @ptrFromInt(lpData)) else null,
@@ -351,7 +369,7 @@ pub fn RegQueryValueExW(hKey: usize, lpValueName: usize, lpReserved: usize, lpTy
                 REG_DWORD,
                 1000,
             );
-        } else if (std.ascii.eqlIgnoreCase(name, "FeatureSet")) {
+        } else if (wideEqualsAsciiIgnoreCase(name, "FeatureSet")) {
             return writeRegDword(
                 if (lpType != 0) @as(?*u32, @ptrFromInt(lpType)) else null,
                 if (lpData != 0) @as(?*align(1) u32, @ptrFromInt(lpData)) else null,
@@ -360,11 +378,11 @@ pub fn RegQueryValueExW(hKey: usize, lpValueName: usize, lpReserved: usize, lpTy
                 0x2FFF,
             );
         }
-        if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExW(CPU, '{s}') -> NOT_FOUND\n", .{name});
+        if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExW(CPU, {any}) -> NOT_FOUND\n", .{name});
         return 2;
     }
 
-    if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExW('{s}') -> ERROR_FILE_NOT_FOUND\n", .{name});
+    if (trace.enable_tracing) trace.print("ADVAPI32: RegQueryValueExW({any}) -> ERROR_FILE_NOT_FOUND\n", .{name});
     return 2; // ERROR_FILE_NOT_FOUND
 }
 
@@ -431,26 +449,24 @@ pub fn stub_RegCreateKeyW(hKey: usize, lpSubKey: usize, phkResult: usize) callco
 pub fn RegOpenKeyExW(hKey: usize, lpSubKey: usize, ulOptions: u32, samDesired: u32, phkResult: usize) callconv(w32cc.WINAPI) u32 {
     _ = ulOptions;
     _ = samDesired;
-    // Convert wide string to narrow for comparison
-    var narrow: [256]u8 = undefined;
-    var nlen: usize = 0;
-    if (lpSubKey != 0) {
-        const src = @as([*]const u16, @ptrFromInt(lpSubKey));
-        while (nlen < 255 and src[nlen] != 0) : (nlen += 1) {
-            narrow[nlen] = @truncate(src[nlen]);
-        }
-    }
-    const key = narrow[0..nlen];
+    const key = trace.c_span_w(lpSubKey);
+    const matches_cpu = isCpuRegKeyWide(hKey, key);
 
-    if (isCpuRegKey(hKey, key)) {
-        if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExW(0x{X}, '{s}') -> OK (CPU)\n", .{ hKey, key });
+    if (matches_cpu) {
+        if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExW(0x{X}, {any}) -> OK (CPU)\n", .{ hKey, key });
         if (phkResult != 0) @as(*u32, @ptrFromInt(trace.addr(phkResult))).* = CPU_REG_HANDLE;
         return 0;
     }
 
-    if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExW(0x{X}, '{s}') -> ERROR_FILE_NOT_FOUND\n", .{ hKey, key });
+    if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExW(0x{X}, {any}) -> ERROR_FILE_NOT_FOUND\n", .{ hKey, key });
     if (phkResult != 0) @as(*u32, @ptrFromInt(trace.addr(phkResult))).* = 0;
     return 2; // ERROR_FILE_NOT_FOUND
+}
+
+fn isCpuRegKeyWide(hKey: usize, key: []const u16) bool {
+    if (hKey != 0x80000002) return false;
+    return wideEqualsAsciiIgnoreCase(key, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0") or
+        wideEqualsAsciiIgnoreCase(key, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor");
 }
 
 /// Implementation status: Partially implemented
