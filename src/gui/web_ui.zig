@@ -624,9 +624,53 @@ fn staticContentNotModified(req: *const std.http.Server.Request, etag: []const u
     return false;
 }
 
+fn acceptsGzip(req: *const std.http.Server.Request) bool {
+    var gzip_quality: ?f32 = null;
+    var wildcard_quality: f32 = 0;
+    var identity_quality: f32 = 0;
+    var headers = req.iterateHeaders();
+    while (headers.next()) |header| {
+        if (!std.ascii.eqlIgnoreCase(header.name, "accept-encoding")) continue;
+        var codings = std.mem.splitScalar(u8, header.value, ',');
+        while (codings.next()) |coding| {
+            var parts = std.mem.splitScalar(u8, coding, ';');
+            const name = std.mem.trim(u8, parts.next().?, " \t");
+            var quality: f32 = 1;
+            while (parts.next()) |parameter| {
+                const param = std.mem.trim(u8, parameter, " \t");
+                if (std.mem.startsWith(u8, param, "q=")) {
+                    quality = std.fmt.parseFloat(f32, param[2..]) catch 0;
+                    if (!std.math.isFinite(quality) or quality < 0 or quality > 1) quality = 0;
+                }
+            }
+            if (std.ascii.eqlIgnoreCase(name, "gzip")) {
+                gzip_quality = quality;
+            } else if (std.mem.eql(u8, name, "*")) {
+                wildcard_quality = quality;
+            } else if (std.ascii.eqlIgnoreCase(name, "identity")) {
+                identity_quality = quality;
+            }
+        }
+    }
+    const quality = gzip_quality orelse wildcard_quality;
+    return quality > 0 and quality >= identity_quality;
+}
+
+fn precompressedContent(digest: [32]u8) ?[]const u8 {
+    const assets = @import("web_assets");
+    inline for (.{ "app.js", "win2k.css", "index.html", "van.min.js" }) |name| {
+        if (std.mem.eql(u8, &digest, &@field(assets, name ++ "_digest"))) return @field(assets, name);
+    }
+    return null;
+}
+
 fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, content_type: []const u8) !void {
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(content, &digest, .{});
+    const candidate = if (acceptsGzip(req)) precompressedContent(digest) else null;
+    const compressed = if (candidate) |bytes| (if (bytes.len < content.len) bytes else null) else null;
+    const body = compressed orelse content;
+    if (compressed != null) std.crypto.hash.sha2.Sha256.hash(body, &digest, .{});
     var etag_buf: [digest.len * 2 + 2]u8 = undefined;
     const etag = try std.fmt.bufPrint(&etag_buf, "\"{s}\"", .{std.fmt.bytesToHex(digest, .lower)});
 
@@ -638,19 +682,23 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
             .extra_headers = &.{
                 .{ .name = "etag", .value = etag },
                 .{ .name = "cache-control", .value = "private, no-cache" },
+                .{ .name = "vary", .value = "Accept-Encoding" },
             },
         });
         return;
     }
 
-    try req.respond(content, .{ .keep_alive = false, .extra_headers = &.{
+    const response_headers = [_]std.http.Header{
         .{ .name = "content-type", .value = content_type },
         .{ .name = "etag", .value = etag },
         .{ .name = "cache-control", .value = "private, no-cache" },
         .{ .name = "x-content-type-options", .value = "nosniff" },
         .{ .name = "x-frame-options", .value = "DENY" },
         .{ .name = "content-security-policy", .value = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:1995" },
-    } });
+        .{ .name = "vary", .value = "Accept-Encoding" },
+        .{ .name = "content-encoding", .value = "gzip" },
+    };
+    try req.respond(body, .{ .keep_alive = false, .extra_headers = response_headers[0 .. response_headers.len - @intFromBool(compressed == null)] });
 }
 
 test "static asset responses carry an etag and 304 on a matching If-None-Match" {
@@ -697,6 +745,114 @@ test "static asset responses carry an etag and 304 on a matching If-None-Match" 
     try std.testing.expect(std.mem.startsWith(u8, changed, "HTTP/1.1 200 OK\r\n"));
     try std.testing.expect(std.mem.endsWith(u8, changed, "\r\n\r\nupdated asset"));
     try std.testing.expect(std.mem.indexOf(u8, changed, etag) == null);
+}
+
+test "static assets negotiate gzip without changing decoded content" {
+    const assets = .{
+        .{ @embedFile("app.js"), "application/javascript" },
+        .{ @embedFile("win2k.css"), "text/css" },
+        .{ @embedFile("index.html"), "text/html" },
+        .{ @embedFile("van.min.js"), "application/javascript" },
+    };
+    inline for (assets) |asset| {
+        var input = std.Io.Reader.fixed("GET /asset HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: br, gzip, zstd\r\n\r\n");
+        var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer output.deinit();
+        var server = std.http.Server.init(&input, &output.writer);
+        var req = try server.receiveHead();
+        try respondStaticContent(&req, asset[0], asset[1]);
+        const response = output.written();
+        try std.testing.expect(std.mem.indexOf(u8, response, "\r\ncontent-encoding: gzip\r\n") != null);
+        try std.testing.expect(std.mem.indexOf(u8, response, "\r\nvary: Accept-Encoding\r\n") != null);
+        const body_start = (std.mem.indexOf(u8, response, "\r\n\r\n") orelse return error.TestUnexpectedResult) + 4;
+        const body = response[body_start..];
+        try std.testing.expect(body.len < asset[0].len);
+        if (std.mem.eql(u8, asset[1], "text/css")) try std.testing.expect(body.len <= 14 * 1024);
+        var compressed = std.Io.Reader.fixed(body);
+        var window: [std.compress.flate.max_window_len]u8 = undefined;
+        var decompressor = std.compress.flate.Decompress.init(&compressed, .gzip, &window);
+        const decoded = try std.testing.allocator.alloc(u8, asset[0].len);
+        defer std.testing.allocator.free(decoded);
+        try decompressor.reader.readSliceAll(decoded);
+        try std.testing.expectError(error.EndOfStream, decompressor.reader.takeByte());
+        try std.testing.expectEqualStrings(asset[0], decoded);
+        const length_header = try std.fmt.allocPrint(std.testing.allocator, "\r\ncontent-length: {d}\r\n", .{body.len});
+        defer std.testing.allocator.free(length_header);
+        try std.testing.expect(std.mem.indexOf(u8, response, length_header) != null);
+    }
+}
+
+test "static asset encoding negotiation preserves identity and edited files" {
+    const cases = [_]struct { encoding: []const u8, gzip: bool }{
+        .{ .encoding = "", .gzip = false },
+        .{ .encoding = "br, zstd", .gzip = false },
+        .{ .encoding = "gzip;q=0", .gzip = false },
+        .{ .encoding = "gzip;q=0, *;q=1", .gzip = false },
+        .{ .encoding = "*;q=0", .gzip = false },
+        .{ .encoding = "gzip;q=0.5, identity;q=1", .gzip = false },
+        .{ .encoding = "gzip;q=invalid", .gzip = false },
+        .{ .encoding = "gzip;q=NaN", .gzip = false },
+        .{ .encoding = "gzip;q=2", .gzip = false },
+        .{ .encoding = "GZip", .gzip = true },
+        .{ .encoding = "br, gzip;q=0.5", .gzip = true },
+        .{ .encoding = "*;q=0.5", .gzip = true },
+    };
+    for (cases) |case| {
+        const request = try std.fmt.allocPrint(std.testing.allocator, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: {s}\r\n\r\n", .{case.encoding});
+        defer std.testing.allocator.free(request);
+        for ([_][]const u8{ @embedFile("app.js"), "edited asset", "" }) |content| {
+            var input = std.Io.Reader.fixed(request);
+            var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+            defer output.deinit();
+            var server = std.http.Server.init(&input, &output.writer);
+            var req = try server.receiveHead();
+            try respondStaticContent(&req, content, "application/javascript");
+            const response = output.written();
+            const encoded = case.gzip and content.len == @embedFile("app.js").len;
+            try std.testing.expectEqual(encoded, std.mem.indexOf(u8, response, "\r\ncontent-encoding: gzip\r\n") != null);
+            try std.testing.expect(std.mem.indexOf(u8, response, "\r\nvary: Accept-Encoding\r\n") != null);
+            if (!encoded) {
+                const body_start = (std.mem.indexOf(u8, response, "\r\n\r\n") orelse return error.TestUnexpectedResult) + 4;
+                try std.testing.expectEqualStrings(content, response[body_start..]);
+            }
+        }
+    }
+}
+
+test "gzip asset validators distinguish representations and HEAD omits the body" {
+    const content = @embedFile("app.js");
+    var input = std.Io.Reader.fixed("GET /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n");
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    var server = std.http.Server.init(&input, &output.writer);
+    var req = try server.receiveHead();
+    try respondStaticContent(&req, content, "application/javascript");
+    const response = output.written();
+    const etag_start = (std.mem.indexOf(u8, response, "\r\netag: ") orelse return error.TestUnexpectedResult) + "\r\netag: ".len;
+    const etag_end = std.mem.indexOfPos(u8, response, etag_start, "\r\n") orelse return error.TestUnexpectedResult;
+    const etag = response[etag_start..etag_end];
+    const cases = .{
+        .{ "GET", "gzip", etag, true, false },
+        .{ "GET", "identity", etag, false, true },
+        .{ "HEAD", "gzip", etag, true, false },
+        .{ "HEAD", "gzip", "\"outdated\"", false, false },
+    };
+    inline for (cases) |case| {
+        const request = try std.fmt.allocPrint(std.testing.allocator, "{s} /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: {s}\r\nIf-None-Match: {s}\r\n\r\n", .{ case[0], case[1], case[2] });
+        defer std.testing.allocator.free(request);
+        var next_input = std.Io.Reader.fixed(request);
+        var next_output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer next_output.deinit();
+        var next_server = std.http.Server.init(&next_input, &next_output.writer);
+        var next_req = try next_server.receiveHead();
+        try respondStaticContent(&next_req, content, "application/javascript");
+        const next = next_output.written();
+        try std.testing.expect(std.mem.startsWith(u8, next, if (case[3]) "HTTP/1.1 304" else "HTTP/1.1 200"));
+        try std.testing.expect(std.mem.indexOf(u8, next, "\r\nvary: Accept-Encoding\r\n") != null);
+        const body_start = (std.mem.indexOf(u8, next, "\r\n\r\n") orelse return error.TestUnexpectedResult) + 4;
+        try std.testing.expectEqualStrings(if (case[4]) content else "", next[body_start..]);
+        if (case[4]) try std.testing.expect(std.mem.indexOf(u8, next, etag) == null);
+    }
 }
 
 test "static asset revalidation accepts weak tags and the * matcher" {

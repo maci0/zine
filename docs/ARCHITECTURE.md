@@ -287,6 +287,7 @@ The GUI subsystem presents Win32 GUI applications in a web browser (web backend)
 - **Input**: Browser keyboard/mouse events are sent back as JSON and dispatched to Win32 stub callbacks.
 - **Audio**: Audio samples are pushed as binary WebSocket messages with an `AUD` prefix. The browser plays them via the Web Audio API.
 - **Reconnection**: The renderer caches the latest state (resolution, menu, title, dialogs, controls) and replays it to newly connected clients.
+- **Static assets**: Native builds embed gzip-compressed HTML, CSS, and JavaScript at build time. HTTP responses negotiate gzip using `Accept-Encoding`, carry representation-specific ETags and `Vary: Accept-Encoding`, and require revalidation. Files are still read from `src/gui/`; a content digest mismatch falls back to the current uncompressed file so edits cannot serve stale compressed bytes.
 
 ---
 

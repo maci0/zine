@@ -64,6 +64,7 @@ fn addNativeExe(
     toml_mod: *std.Build.Module,
     use_fltk: bool,
     embed_stubs: bool,
+    web_assets: *std.Build.Step.Options,
 ) *std.Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = nameForArch(arch),
@@ -119,6 +120,7 @@ fn addNativeExe(
     options.addOption(bool, "use_fltk", use_fltk);
     options.addOption(bool, "embed_stubs", embed_stubs);
     exe.root_module.addOptions("build_options", options);
+    exe.root_module.addOptions("web_assets", web_assets);
 
     return exe;
 }
@@ -158,7 +160,26 @@ fn addWasmExe(
     return wasm_lib;
 }
 
+fn compressedWebAssets(b: *std.Build) !*std.Build.Step.Options {
+    const options = b.addOptions();
+    inline for (.{ "app.js", "win2k.css", "index.html", "van.min.js" }) |name| {
+        const content = @embedFile("src/gui/" ++ name);
+        var output = try std.Io.Writer.Allocating.initCapacity(b.allocator, content.len);
+        defer output.deinit();
+        var window: [std.compress.flate.max_window_len]u8 = undefined;
+        var compressor = try std.compress.flate.Compress.init(&output.writer, &window, .gzip, .best);
+        try compressor.writer.writeAll(content);
+        try compressor.finish();
+        options.addOption([]const u8, name, output.written());
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(content, &digest, .{});
+        options.addOption([32]u8, name ++ "_digest", digest);
+    }
+    return options;
+}
+
 pub fn build(b: *std.Build) void {
+    const web_assets = compressedWebAssets(b) catch @panic("failed to compress Web UI assets");
     const arch = b.option(std.Target.Cpu.Arch, "arch", "Target architecture (x86, x86_64, wasm32, or wasm64)");
     const build_all = b.option(bool, "all", "Build all targets (x86 + x86_64 + wasm32 + wasm64)") orelse false;
 
@@ -203,7 +224,7 @@ pub fn build(b: *std.Build) void {
                 cli_test_step.dependOn(&cli_test.step);
             }
         } else {
-            const exe = addNativeExe(b, a, target, optimize, toml_dep.module("toml"), use_fltk, embed_stubs);
+            const exe = addNativeExe(b, a, target, optimize, toml_dep.module("toml"), use_fltk, embed_stubs, web_assets);
             b.installArtifact(exe);
             const cli_test = b.addSystemCommand(&.{"bash"});
             cli_test.addFileArg(b.path("tests/test_cli.sh"));
@@ -391,6 +412,7 @@ pub fn build(b: *std.Build) void {
     test_options.addOption(bool, "embed_stubs", true);
     test_options.addOption(bool, "enable_jit_host", false);
     t.root_module.addOptions("build_options", test_options);
+    t.root_module.addOptions("web_assets", web_assets);
     test_step.dependOn(&fmt_check.step);
     test_step.dependOn(&b.addRunArtifact(t).step);
 }
