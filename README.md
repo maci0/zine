@@ -34,6 +34,22 @@ reproducing a build; `--version` alone does not distinguish post-milestone chang
   old x86 `zig build -Dfltk` recipe, then run `zig-out/bin/zine.x86_64 --fltk`.
   Guest executables remain 32-bit Windows PEs.
 
+#### Security fixes and migration
+
+- Guest file operations, library loading, and child-process launching now
+  normalize C-drive parent-directory components within `drive_c/` instead of
+  passing them through to the host filesystem. Relative paths resolve against
+  the virtual working directory. Move required guest files under `drive_c/`
+  and update guest paths rather than relying on traversal above the drive root.
+  This is path normalization, not a guest sandbox: host-path access remains
+  available through other mappings.
+- The native web UI now rejects WebSocket requests with foreign `Origin`
+  headers with HTTP 403. Previously, any browser origin could connect. Open
+  the UI at `http://127.0.0.1:1995`, `http://localhost:1995`, or
+  `http://[::1]:1995`; browser frontends on another hostname, scheme, or port
+  are no longer accepted. Non-browser clients without an Origin header remain
+  accepted; the origin check is not authentication.
+
 #### Added
 
 - Native x86_64 FLTK support and expanded Win32 controls and common dialogs.
