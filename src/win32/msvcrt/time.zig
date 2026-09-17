@@ -133,7 +133,7 @@ pub fn stub_futime(fd: i32, times_ptr: usize) callconv(.c) i32 {
 
 /// Convert struct tm to time_t.
 /// Implementation status: Partially implemented
-pub fn mktime(tm: *const Tm) callconv(.c) i32 {
+pub fn mktime(tm: *Tm) callconv(.c) i32 {
     // Normalize the month into [1, 12], carrying overflow into the year.
     // tm_mon is 0-based; @divFloor/@mod handle out-of-range and negative values.
     const y: i64 = @as(i64, tm.tm_year) + 1900 + @divFloor(tm.tm_mon, 12);
@@ -145,6 +145,7 @@ pub fn mktime(tm: *const Tm) callconv(.c) i32 {
     const total_secs = total_days * 86400 + @as(i64, tm.tm_hour) * 3600 + @as(i64, tm.tm_min) * 60 + @as(i64, tm.tm_sec);
 
     if (total_secs < 0 or total_secs > 0x7FFFFFFF) return -1;
+    fillTm(tm, @intCast(total_secs));
     return @intCast(total_secs);
 }
 
@@ -274,14 +275,38 @@ test "asctime tolerates null and garbage fields" {
 
 test "mktime interprets tm as UTC and normalizes month overflow" {
     // 2024-02-29T00:00:00Z exists only on leap years; pin its exact value.
-    const leap_day: Tm = .{ .tm_mday = 29, .tm_mon = 1, .tm_year = 124 };
+    var leap_day: Tm = .{ .tm_mday = 29, .tm_mon = 1, .tm_year = 124 };
     const expected = (civil_time.daysFromCivil(2024, 2, 29) - civil_time.daysFromCivil(1970, 1, 1)) * 86400;
     try testing.expectEqual(@as(i32, @intCast(expected)), mktime(&leap_day));
 
-    // Month 13 of 2023 rolls into January 2024 like SystemTimeToFileTime.
-    const month13: Tm = .{ .tm_mday = 1, .tm_mon = 12, .tm_year = 123 };
-    const jan: Tm = .{ .tm_mday = 1, .tm_mon = 0, .tm_year = 124 };
+    var month13: Tm = .{ .tm_mday = 1, .tm_mon = 12, .tm_year = 123 };
+    var jan: Tm = .{ .tm_mday = 1, .tm_mon = 0, .tm_year = 124 };
     try testing.expectEqual(mktime(&jan), mktime(&month13));
+}
+
+test "mktime updates normalized fields across leap days and year boundaries" {
+    const cases = [_]struct { input: Tm, expected: Tm, timestamp: i32 }{
+        .{
+            .input = .{ .tm_year = 124, .tm_mon = 1, .tm_mday = 29, .tm_hour = 24, .tm_isdst = -1 },
+            .expected = .{ .tm_year = 124, .tm_mon = 2, .tm_mday = 1, .tm_wday = 5, .tm_yday = 60 },
+            .timestamp = 1709251200,
+        },
+        .{
+            .input = .{ .tm_year = 123, .tm_mon = 11, .tm_mday = 31, .tm_hour = 23, .tm_min = 59, .tm_sec = 60 },
+            .expected = .{ .tm_year = 124, .tm_mon = 0, .tm_mday = 1, .tm_wday = 1 },
+            .timestamp = 1704067200,
+        },
+        .{
+            .input = .{ .tm_year = 124, .tm_mon = -1, .tm_mday = 32, .tm_hour = -1 },
+            .expected = .{ .tm_year = 123, .tm_mon = 11, .tm_mday = 31, .tm_hour = 23, .tm_wday = 0, .tm_yday = 364 },
+            .timestamp = 1704063600,
+        },
+    };
+    for (cases) |case| {
+        var tm = case.input;
+        try testing.expectEqual(case.timestamp, mktime(&tm));
+        try testing.expectEqualDeep(case.expected, tm);
+    }
 }
 
 test "localtime inverts mktime on the UTC guest clock" {
