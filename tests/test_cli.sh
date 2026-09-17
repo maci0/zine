@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+unset ZINE_LOG_LEVEL
+
 expected_version=$1
 shift
 workdir=$(mktemp -d)

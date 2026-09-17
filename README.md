@@ -180,6 +180,37 @@ stdout/stderr separation, help aliases, and invalid-option status. Every build
 also rejects disagreement between the manifest and `src/version.zig`.
 `test-cli` supports native and plain wasm32 builds; wasm64's 64-bit WASI imports
 and `-Djit_host` builds require a custom runtime and are not executed by this gate.
+The CLI tests ignore an inherited `ZINE_LOG_LEVEL` and set their own values when
+checking log-level validation.
+
+### Before opening a pull request
+
+Run from the repository root on x86_64 Linux with 32-bit executable support.
+Besides Zig 0.16.0, the CI checks require Bash, ShellCheck, GNU coreutils
+(including `timeout`), `cmp`, and `grep`. Zig fetches the pinned TOML dependency
+on the first build; no Windows fixtures, GUI libraries, or WASM runtime are
+needed for these checks.
+
+The following sequence reproduces the CI checks, stopping at the first failure.
+Build targets sequentially to limit peak memory rather than using `-Dall` for
+this gate.
+
+```sh
+zig fmt --check src build.zig build.zig.zon &&
+shellcheck -x tests/*.sh &&
+zig build --summary all &&
+zig build -Darch=x86_64 --summary all &&
+zig build -Darch=wasm32 --summary all &&
+zig build -Darch=wasm64 --summary all &&
+zig build test --summary all &&
+zig build test-cli --summary all &&
+zig build test-cli -Darch=x86_64 --summary all
+```
+
+For the edit-test loop, use `zig build test -Dtest-filter=<substring>` above;
+`-Darch` does not change the host target of unit tests. Run
+`zig fmt src build.zig build.zig.zon` to fix formatting, and `zig build --help`
+to list build steps and options.
 
 ## Architecture
 
