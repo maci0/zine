@@ -18,13 +18,12 @@ No Windows installation, no Wine.
 ## Releases and upgrades
 
 The `v1` tag (2026-03-22) names the **Win32 Compatibility Milestone**, not
-SemVer 1.0.0. Its package version and the current version are both `0.1.0`.
-History therefore indicates milestone tagging during 0.x development, not a
-stable 1.x compatibility promise. There is no documented SemVer bump,
-deprecation, support-window, or security-backport policy. Pin a commit when
-reproducing a build; `--version` alone does not distinguish post-milestone changes.
+SemVer 1.0.0. Package version **0.2.0** (tag `v0.2.0`) is the first SemVer
+release after that milestone. `v1` stays a historical name; do not treat it as
+1.0.0. There is no documented deprecation, support-window, or security-backport
+policy. Pin a commit when reproducing a build.
 
-### Unreleased changes since v1
+### 0.2.0 (2026-09-18)
 
 #### Breaking build and runtime requirements and migration
 
@@ -68,6 +67,10 @@ reproducing a build; `--version` alone does not distinguish post-milestone chang
 - Per-application `registry.toml` overrides with `app:<MODULE>:<KEY>` sections.
   Existing global sections remain usable; overrides take precedence for the
   matching executable basename.
+- `GetDateFormatA` and `GetTimeFormatA`, with DateTimePicker controls seeded
+  from the clock.
+- Folder selection in open and save dialogs.
+- Precompressed Web UI assets and ETag revalidation for unchanged files.
 
 #### Fixed
 
@@ -84,9 +87,16 @@ reproducing a build; `--version` alone does not distinguish post-milestone chang
   check stderr rather than treating incomplete guest output as success.
 - Win32 `MulDiv` rounds to nearest instead of truncating, and `lstrcmpiW`
   preserves non-ASCII UTF-16 units rather than truncating them to bytes.
+- TLS allocation and thread-value access are serialized.
+- x86 shift instructions preserve carry flags.
+- Decode cache entries are matched against the full instruction bytes.
+- Pre-1970 file timestamps are preserved.
+- Non-ASCII UTF-16 registry names and menu labels are no longer truncated to
+  ASCII bytes.
+- `FlushFileBuffers` reports host sync failures instead of returning success.
 
 See [implementation status](docs/STATUS.md) for subsystem coverage and remaining
-limitations. These notes do not designate a new release or retag `v1`.
+limitations.
 
 ## Build
 
