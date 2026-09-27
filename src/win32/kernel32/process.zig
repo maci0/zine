@@ -282,12 +282,27 @@ const ProcCacheEntry = struct { hmodule: usize, name: []u8, addr: usize };
 var proc_cache: std.ArrayListUnmanaged(ProcCacheEntry) = .empty;
 /// Allocator the cached name copies came from, captured on the first insert.
 var proc_cache_allocator: ?std.mem.Allocator = null;
+/// Guest threads call `GetProcAddress` concurrently. The lookup iterates
+/// `proc_cache.items` by pointer while an insert may realloc the array and
+/// free the old buffer, and two inserts racing in `ensureTotalCapacity`
+/// corrupt it, so every access is serialized here.
+var proc_cache_mutex: runtime.Mutex = .{};
 
 fn lookupCachedProcAddress(hModule: usize, name: []const u8) ?usize {
+    proc_cache_mutex.lock();
+    defer proc_cache_mutex.unlock();
     for (proc_cache.items) |*entry| {
         if (entry.hmodule == hModule and std.mem.eql(u8, entry.name, name)) return entry.addr;
     }
     return null;
+}
+
+fn cacheProcAddress(alloc: std.mem.Allocator, hModule: usize, name: []const u8, addr: usize) void {
+    const owned = alloc.dupe(u8, name) catch return;
+    proc_cache_mutex.lock();
+    defer proc_cache_mutex.unlock();
+    proc_cache_allocator = alloc;
+    proc_cache.append(alloc, .{ .hmodule = hModule, .name = owned, .addr = addr }) catch alloc.free(owned);
 }
 
 /// Drop every cached (module, name) → address entry.
@@ -297,6 +312,8 @@ fn lookupCachedProcAddress(hModule: usize, name: []const u8) ?usize {
 /// switches thunk memory and restores it afterwards; without this the parent
 /// would be handed an address that was emitted into the child's image.
 pub fn resetProcCache() void {
+    proc_cache_mutex.lock();
+    defer proc_cache_mutex.unlock();
     if (proc_cache_allocator) |alloc| {
         for (proc_cache.items) |*entry| alloc.free(entry.name);
     }
@@ -330,10 +347,7 @@ pub fn GetProcAddress(hModule: usize, lpProcName_ptr: usize) callconv(w32cc.WINA
                         // Cache successful results; names must be duped because
                         // c_span points into mutable guest memory.
                         if (result != 0) {
-                            if (genv.allocator.dupe(u8, name)) |owned| {
-                                proc_cache_allocator = genv.allocator;
-                                proc_cache.append(genv.allocator, .{ .hmodule = hModule, .name = owned, .addr = result }) catch genv.allocator.free(owned);
-                            } else |_| {}
+                            cacheProcAddress(genv.allocator, hModule, name, result);
                         }
                         if (trace.enable_tracing) trace.print("KERNEL32: GetProcAddress('{s}') -> {x} (from builtin)\n", .{ name, result });
                         return result;
@@ -451,9 +465,16 @@ var cmdline_w_initialized: bool = false;
 var cmdline_w_host_addr: usize = 0; // Host pointer to the wide command-line buffer
 var cmdline_w_guest_addr: usize = 0; // Guest VA handed back to the x86 code
 
+/// Guards the six globals above. Not reentrant, so `GetCommandLineW` builds the
+/// wide string in a separate critical section after `ensureCommandLineA` has
+/// released it, never nested.
+var cmdline_mutex: runtime.Mutex = .{};
+
 /// Reset command line state so the next GetCommandLineA rebuilds from current argv.
 /// Called by the WASM spawn handler before executing a child PE.
 pub fn resetCommandLine() void {
+    cmdline_mutex.lock();
+    defer cmdline_mutex.unlock();
     cmdline_initialized = false;
     cmdline_host_addr = 0;
     cmdline_guest_addr = 0;
@@ -466,7 +487,17 @@ pub fn resetCommandLine() void {
 /// Implementation status: Partially implemented (constructs command line from guest arguments)
 pub fn GetCommandLineA() callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineA\n", .{});
+    return ensureCommandLineA();
+}
 
+/// Build the narrow command line on first use and return its guest VA.
+///
+/// Any guest thread can reach this, so the check-then-build runs under
+/// `cmdline_mutex`: racing it would let two threads each allocate a buffer,
+/// and the loser would return a VA that no longer names the buffer it filled.
+fn ensureCommandLineA() usize {
+    cmdline_mutex.lock();
+    defer cmdline_mutex.unlock();
     if (!cmdline_initialized) {
         // Determine working buffer: allocate from shared guest heap.
         // raw_alloc returns a HOST pointer; writes below use it directly and
@@ -720,6 +751,13 @@ const max_child_procs = 16;
 const child_still_running: u32 = std.math.maxInt(u32);
 pub const ChildProc = struct {
     handle: usize = 0,
+    /// Claims the slot between `reserveChildSlot` and `adoptReservedChild`.
+    /// The host `spawn` between them cannot hold `child_procs_mutex`, so the
+    /// reservation has to be visible on its own: every scan skips a reserved
+    /// slot, otherwise two concurrent `CreateProcessA` calls both claim the
+    /// same one and the loser's child is never tracked, so never reaped.
+    /// Only touched under `child_procs_mutex`.
+    reserved: bool = false,
     child: if (platform.is_native) ?std.process.Child else ?void = null,
     /// Written by whoever reaps the child (the WaitForSingleObject stub or
     /// `reapExitedChildren`, on whichever guest thread got there first) and
@@ -749,26 +787,38 @@ fn allocChildProc(child: if (platform.is_native) std.process.Child else void) ?u
     return adoptReservedChild(reserveChildSlot() orelse return null, child);
 }
 
-/// Find a free or evictable table slot. The slot stays claimed only once
-/// `adoptReservedChild` fills it, so both run under `child_procs_mutex`.
+/// Find a free or evictable table slot and mark it reserved. Callers hold
+/// `child_procs_mutex` and must pass the slot to `adoptReservedChild` (or
+/// `releaseChildSlot` on a failed spawn) before unlocking.
 fn reserveChildSlot() ?*ChildProc {
     for (&child_procs) |*cp| {
-        if (cp.handle == 0) {
+        if (cp.handle == 0 and !cp.reserved) {
+            cp.reserved = true;
             return cp;
         }
     }
     // Evict an already-reaped child so repeated spawn/wait cycles don't
     // exhaust the table with finished entries.
     for (&child_procs) |*cp| {
-        if (cp.exitCode() != null) {
+        if (!cp.reserved and cp.exitCode() != null) {
+            cp.reserved = true;
             return cp;
         }
     }
     return null;
 }
 
+/// Give a reserved slot back after a failed spawn, so it does not stay
+/// claimed for the life of the process.
+pub fn releaseChildSlot(cp: *ChildProc) void {
+    child_procs_mutex.lock();
+    defer child_procs_mutex.unlock();
+    cp.reserved = false;
+}
+
 fn adoptReservedChild(cp: *ChildProc, child: if (platform.is_native) std.process.Child else void) usize {
     const h = @atomicRmw(usize, &next_process_handle, .Add, 1, .monotonic);
+    cp.reserved = false;
     cp.handle = h;
     cp.child = child;
     cp.setExitCode(null);
@@ -785,7 +835,7 @@ pub fn reapExitedChildren() void {
     child_procs_mutex.lock();
     defer child_procs_mutex.unlock();
     for (&child_procs) |*cp| {
-        if (cp.handle == 0 or cp.exitCode() != null) continue;
+        if (cp.reserved or cp.handle == 0 or cp.exitCode() != null) continue;
         const child = &(cp.child orelse continue);
         const id = child.id orelse continue;
         var status: u32 = 0;
@@ -956,18 +1006,26 @@ pub fn CreateProcessA(
     // a table slot BEFORE spawning: spawning a child we cannot track would
     // leave it permanently unreaped (zombie) and unwaitable.
     reapExitedChildren();
+    child_procs_mutex.lock();
     const reserved_slot = reserveChildSlot() orelse {
+        child_procs_mutex.unlock();
         log.warn("CreateProcessA: child process table full ({d} live children)", .{max_child_procs});
         return 0; // FALSE
     };
+    child_procs_mutex.unlock();
 
-    // Spawn the child process
+    // Spawn the child process. The slot stays reserved across this call, so
+    // a concurrent CreateProcessA cannot claim it and a reaper cannot see the
+    // half-published entry.
     const child = std.process.spawn(rt_io, .{ .argv = argv_buf[0..argc] }) catch |err| {
+        releaseChildSlot(reserved_slot);
         log.warn("CreateProcessA: spawn failed: {}", .{err});
-        return 0; // FALSE: reservation had no handle set, so the slot stays free
+        return 0; // FALSE
     };
 
+    child_procs_mutex.lock();
     const proc_handle = adoptReservedChild(reserved_slot, child);
+    child_procs_mutex.unlock();
 
     if (lpProcessInformation != 0) {
         const pi = @as(*align(1) w32.PROCESS_INFORMATION, @ptrFromInt(lpProcessInformation));
@@ -1522,9 +1580,13 @@ pub fn GetModuleFileNameW(hModule: usize, lpFilename: usize, nSize: u32) callcon
 /// Implementation status: Partially implemented
 pub fn GetCommandLineW() callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCommandLineW\n", .{});
+    // ensureCommandLineA releases `cmdline_mutex` before returning, so taking
+    // it again here is a separate section rather than a recursive acquisition.
+    const narrow_ptr = ensureCommandLineA();
+
+    cmdline_mutex.lock();
+    defer cmdline_mutex.unlock();
     if (!cmdline_w_initialized) {
-        // Get narrow command line and widen it
-        const narrow_ptr = GetCommandLineA();
         const narrow = trace.c_span(narrow_ptr);
 
         const kernel32_mem_mod = @import("mem.zig");
@@ -1764,13 +1826,24 @@ pub fn GetModuleFileNameA_Full(hModule: usize, lpFilename: usize, nSize: u32) ca
     return @intCast(copy_len);
 }
 
+/// Highest atom `GlobalAddAtomA` hands out before it saturates.
+const max_global_atom: u16 = 0xFFFE;
+
 /// Adds a character string to the global atom table and returns a unique value (an atom).
 pub fn GlobalAddAtomA(lpString: usize) callconv(w32cc.WINAPI) u16 {
     const state = struct {
-        var next_atom: u16 = 0xC000;
+        /// An atom is the guest's unique key for a string, so allocation has
+        /// to be one atomic RMW: a read-then-increment hands the same value
+        /// to two concurrent guest threads.
+        var next_atom: std.atomic.Value(u16) = std.atomic.Value(u16).init(0xC000);
     };
-    const atom = state.next_atom;
-    if (state.next_atom < 0xFFFF) state.next_atom += 1;
+    var atom = state.next_atom.fetchAdd(1, .monotonic);
+    if (atom >= max_global_atom) {
+        // Saturate rather than wrap back into the range the guest uses for
+        // its own predefined atoms.
+        state.next_atom.store(max_global_atom, .monotonic);
+        atom = max_global_atom;
+    }
     if (trace.enable_tracing) {
         const name = if (lpString != 0) trace.c_span(lpString) else "(null)";
         trace.print("KERNEL32: GlobalAddAtomA('{s}') -> 0x{X}\n", .{ name, atom });
