@@ -12,6 +12,7 @@ const platform = @import("platform.zig");
 const pe = @import("pe.zig");
 const teb = @import("win32/teb.zig");
 const path_utils = @import("path_utils.zig");
+const text_utils = @import("text_utils.zig");
 const Module = @import("loader/module.zig").Module;
 const Environment = @import("loader/env.zig").Environment;
 const loader = @import("loader/loader.zig");
@@ -488,7 +489,7 @@ pub fn main(init: std.process.Init) !void {
                         combined_buf[cmdline_offset + pos] = ' ';
                         pos += 1;
                     }
-                    const copy_len = @min(span.len, 4095 - pos);
+                    const copy_len = text_utils.truncateUtf8(span, 4095 - pos).len;
                     @memcpy(combined_buf[cmdline_offset + pos ..][0..copy_len], span[0..copy_len]);
                     pos += copy_len;
                 }
@@ -975,7 +976,9 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: 
     // Register SMC invalidation hook globally
     global_jit_ptr = &jit;
     global_block_index_ptr = &block_index;
-    global_jit_host_ptr = &jit_host;
+    // No JitHost instance exists in this build: the compiled blocks call the
+    // host through WASM imports, and the id table lives on the far side.
+    global_jit_host_ptr = null;
     stub_common.smc_invalidate_cache = flushJitCache;
     defer {
         global_jit_ptr = null;

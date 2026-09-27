@@ -8,6 +8,7 @@ const kernel32 = @import("../kernel32.zig");
 const loader = @import("../../loader/loader.zig");
 const kernel32_mem = @import("mem.zig");
 const platform = @import("../../platform.zig");
+const text_utils = @import("../../text_utils.zig");
 const w32 = @import("../constants.zig");
 const x86_thunks = @import("../../x86/thunks.zig");
 const w32cc = @import("../calling_convention.zig");
@@ -491,7 +492,7 @@ pub fn GetCommandLineA() callconv(w32cc.WINAPI) usize {
             // global_argv entries are HOST pointers — read without translation.
             if (msvcrt.global_argv[0]) |argv0| {
                 const span = trace.host_c_span(@intFromPtr(argv0));
-                const copy_len = @min(span.len, 4094);
+                const copy_len = text_utils.truncateUtf8(span, 4094).len;
                 @memcpy(buf[0..copy_len], span[0..copy_len]);
                 pos = copy_len;
             } else {
@@ -526,7 +527,7 @@ pub fn GetCommandLineA() callconv(w32cc.WINAPI) usize {
                         pos += 1;
                     }
 
-                    const copy_len = @min(write_arg.len, 4094 - pos);
+                    const copy_len = text_utils.truncateUtf8(write_arg, 4094 - pos).len;
                     @memcpy(buf[pos .. pos + copy_len], write_arg[0..copy_len]);
                     pos += copy_len;
 

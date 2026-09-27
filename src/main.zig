@@ -28,6 +28,7 @@ const x86_memory = @import("x86/memory.zig");
 const compat_thunks = if (platform.is_x86_64) @import("x86/compat_thunks.zig") else struct {};
 
 const path_utils = @import("path_utils.zig");
+const text_utils = @import("text_utils.zig");
 const trace = @import("trace.zig");
 const config = @import("config.zig");
 const log = @import("log.zig");
@@ -53,7 +54,7 @@ fn buildCmdLineString(allocator: std.mem.Allocator, app_args_items: []const ?[*:
                 cmdline_buf[pos] = ' ';
                 pos += 1;
             }
-            const copy_len = @min(span.len, 4095 - pos);
+            const copy_len = text_utils.truncateUtf8(span, 4095 - pos).len;
             @memcpy(cmdline_buf[pos .. pos + copy_len], span[0..copy_len]);
             pos += copy_len;
         }

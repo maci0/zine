@@ -75,15 +75,6 @@ pub fn fromUtf8(utf8: []const u8, out: []u8) []const u8 {
     return out[0..n];
 }
 
-/// The longest prefix of `text` that fits in `max` bytes without splitting a
-/// UTF-8 sequence. Used to truncate text into fixed-size stores.
-pub fn truncateUtf8(text: []const u8, max: usize) []const u8 {
-    if (text.len <= max) return text;
-    var end = max;
-    while (end > 0 and (text[end] & 0xC0) == 0x80) end -= 1;
-    return text[0..end];
-}
-
 /// Encode a UTF-16 string into `out` as CP1252, the width a wide `W` API
 /// string would have in its narrow form. Surrogate pairs are combined first,
 /// so a character outside the BMP encodes as the default character per code
@@ -160,16 +151,6 @@ test "characters outside cp1252 become the default char" {
     try std.testing.expectEqualStrings("??", fromUtf8("\u{4f60}\u{597d}", &out));
     // The euro sign is representable, so it survives the round trip.
     try std.testing.expectEqualStrings("\x80", fromUtf8("\u{20AC}", &out));
-}
-
-test "truncateUtf8 never splits a code point" {
-    // "ab" + U+00E9 (2 bytes) + U+4F60 (3 bytes)
-    const s = "ab\u{00e9}\u{4f60}";
-    try std.testing.expectEqualStrings("ab", truncateUtf8(s, 3));
-    try std.testing.expectEqualStrings("ab\u{00e9}", truncateUtf8(s, 4));
-    try std.testing.expectEqualStrings("ab\u{00e9}", truncateUtf8(s, 5));
-    try std.testing.expectEqualStrings("ab\u{00e9}", truncateUtf8(s, 6));
-    try std.testing.expectEqualStrings(s, truncateUtf8(s, 100));
 }
 
 test "wideToAnsi keeps Latin-1 characters and substitutes the rest" {

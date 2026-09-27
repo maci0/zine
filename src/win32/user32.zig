@@ -3,6 +3,7 @@ const x86_memory = @import("../x86/memory.zig");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
 const ansi = @import("ansi.zig");
+const text_utils = @import("../text_utils.zig");
 
 // Sub-modules
 const window = @import("user32/window.zig");
@@ -587,7 +588,7 @@ pub fn ansiLen(text: []const u8) i32 {
 /// Store the main window title (copied into the fixed buffer, cut on a
 /// UTF-8 code point boundary so the stored text stays decodable).
 pub fn setMainWindowTitle(title: []const u8) void {
-    const n = ansi.truncateUtf8(title, main_window_title.len - 1);
+    const n = text_utils.truncateUtf8(title, main_window_title.len - 1);
     @memcpy(main_window_title[0..n.len], n);
     main_window_title[n.len] = 0;
     main_window_title_len = n.len;
@@ -666,7 +667,7 @@ pub fn setHwndText(hwnd: usize, text: []const u8) void {
     if (hwnd == 0) return;
     for (hwnd_texts[0..hwnd_text_count]) |*e| {
         if (e.hwnd == hwnd) {
-            const n = ansi.truncateUtf8(text, e.text.len);
+            const n = text_utils.truncateUtf8(text, e.text.len);
             @memcpy(e.text[0..n.len], n);
             e.len = @intCast(n.len);
             return;
@@ -676,7 +677,7 @@ pub fn setHwndText(hwnd: usize, text: []const u8) void {
         const e = &hwnd_texts[hwnd_text_count];
         hwnd_text_count += 1;
         e.hwnd = hwnd;
-        const n = ansi.truncateUtf8(text, e.text.len);
+        const n = text_utils.truncateUtf8(text, e.text.len);
         @memcpy(e.text[0..n.len], n);
         e.len = @intCast(n.len);
     }

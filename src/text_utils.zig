@@ -95,6 +95,26 @@ pub fn utf8ToWide(utf8: []const u8, out: []u16) usize {
     return pos;
 }
 
+/// The longest prefix of `text` that fits in `max` bytes without splitting a
+/// UTF-8 sequence. Used to truncate text into fixed-size stores.
+pub fn truncateUtf8(text: []const u8, max: usize) []const u8 {
+    if (text.len <= max) return text;
+    var end = max;
+    while (end > 0 and (text[end] & 0xC0) == 0x80) end -= 1;
+    return text[0..end];
+}
+
+/// Copy `src` into `dst` as a NUL-terminated string, cutting on a UTF-8 code
+/// point boundary so the C side never sees half a character. `dst` must be
+/// non-empty: one byte is always reserved for the terminator. Returns the
+/// number of bytes copied, excluding the terminator.
+pub fn copyCString(dst: []u8, src: []const u8) usize {
+    const cut = truncateUtf8(src, dst.len - 1);
+    @memcpy(dst[0..cut.len], cut);
+    dst[cut.len] = 0;
+    return cut.len;
+}
+
 /// Case-insensitive UTF-8 comparison, case-folding per code point. Win32
 /// names files case-insensitively, so a guest opening "CAFÉ.TXT" must find
 /// "café.txt" on disk; byte-wise ASCII folding alone misses the accent and
@@ -146,6 +166,30 @@ test "wideToUtf8 stops on a code point boundary" {
     const written = wideToUtf8(&wide, &out);
     try testing.expectEqual(@as(usize, 510), written.len);
     _ = try std.unicode.Utf8View.init(written);
+}
+
+test "truncateUtf8 never splits a code point" {
+    // "ab" + U+00E9 (2 bytes) + U+4F60 (3 bytes)
+    const s = "ab\u{00e9}\u{4f60}";
+    try testing.expectEqualStrings("ab", truncateUtf8(s, 3));
+    try testing.expectEqualStrings("ab\u{00e9}", truncateUtf8(s, 4));
+    try testing.expectEqualStrings("ab\u{00e9}", truncateUtf8(s, 5));
+    try testing.expectEqualStrings("ab\u{00e9}", truncateUtf8(s, 6));
+    try testing.expectEqualStrings(s, truncateUtf8(s, 100));
+}
+
+test "copyCString terminates without splitting a character" {
+    var buf: [4]u8 = undefined;
+    // Three bytes of room: the two-byte é would not fit after "ab", so the
+    // cut lands before it and leaves a decodable string behind.
+    try testing.expectEqual(@as(usize, 2), copyCString(&buf, "ab\u{00e9}cd"));
+    try testing.expectEqualStrings("ab", std.mem.span(@as([*:0]const u8, @ptrCast(&buf))));
+    try testing.expectEqual(@as(usize, 3), copyCString(&buf, "abcde"));
+    try testing.expectEqualStrings("abc", std.mem.span(@as([*:0]const u8, @ptrCast(&buf))));
+    // A single-byte buffer holds nothing but the terminator.
+    var one: [1]u8 = undefined;
+    try testing.expectEqual(@as(usize, 0), copyCString(&one, "abc"));
+    try testing.expectEqual(@as(u8, 0), one[0]);
 }
 
 test "utf8ToWide encodes astral characters as surrogate pairs" {

@@ -234,7 +234,7 @@ var ctrl_text_count: usize = 0;
 fn setCtrlText(id: i32, text: []const u8) void {
     for (ctrl_texts[0..ctrl_text_count]) |*e| {
         if (e.id == id) {
-            const n = ansi.truncateUtf8(text, e.text.len);
+            const n = text_utils.truncateUtf8(text, e.text.len);
             @memcpy(e.text[0..n.len], n);
             e.len = @intCast(n.len);
             return;
@@ -244,7 +244,7 @@ fn setCtrlText(id: i32, text: []const u8) void {
         const e = &ctrl_texts[ctrl_text_count];
         ctrl_text_count += 1;
         e.id = id;
-        const n = ansi.truncateUtf8(text, e.text.len);
+        const n = text_utils.truncateUtf8(text, e.text.len);
         @memcpy(e.text[0..n.len], n);
         e.len = @intCast(n.len);
     }
