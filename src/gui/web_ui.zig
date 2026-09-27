@@ -276,6 +276,21 @@ fn sendError(ws: *std.http.Server.WebSocket, msg: []const u8) void {
     _ = ws.writeMessage(json, .text) catch {};
 }
 
+/// What the status bar shows after a desktop icon or a Start menu entry is
+/// activated and nothing can start it. A session runs a single program, so the
+/// only handler that ever answers a launch is the open common file dialog's,
+/// and outside one the click would otherwise leave no trace at all.
+const launch_without_handler_message =
+    "Zine runs one program at a time, so the browser cannot start this one. Run it on the host instead.";
+
+/// Hands a resolved launch path to the waiting handler. Returns false when
+/// nothing is waiting, which is the case the caller reports to the client.
+fn deliverLaunch(resolved_path: []const u8) bool {
+    const cb = renderer.on_file_uploaded orelse return false;
+    cb(resolved_path);
+    return true;
+}
+
 /// Methods the static branch serves. Anything else is a client mistake, not
 /// a missing resource, so it gets 405 with `Allow` rather than a body.
 const static_allowed_methods = "GET, HEAD";
@@ -692,8 +707,8 @@ fn handleSocketMessage(ws: *std.http.Server.WebSocket, allocator: std.mem.Alloca
             var path_buf: [1024]u8 = undefined;
             const resolved = path_utils.virtualPathToDriveC(path_val, &path_buf);
             if (resolved != 0) {
-                if (renderer.on_file_uploaded) |cb| {
-                    cb(path_buf[0..resolved]);
+                if (!deliverLaunch(path_buf[0..resolved])) {
+                    sendError(ws, launch_without_handler_message);
                 }
             } else {
                 sendError(ws, "Invalid path");
@@ -1101,6 +1116,27 @@ test "the error envelope stays parseable when the message names a field" {
         try std.testing.expectEqualStrings("error", parsed.value.object.get("type").?.string);
         try std.testing.expectEqualStrings(message, parsed.value.object.get("message").?.string);
     }
+}
+
+const launch_recorder = struct {
+    var last: []const u8 = "";
+
+    fn record(path: []const u8) void {
+        last = path;
+    }
+};
+
+test "a desktop launch with no waiting handler is reported, not dropped" {
+    const previous = renderer.on_file_uploaded;
+    defer renderer.on_file_uploaded = previous;
+
+    renderer.on_file_uploaded = null;
+    try std.testing.expect(!deliverLaunch("drive_c/Desktop/game.exe"));
+
+    launch_recorder.last = "";
+    renderer.on_file_uploaded = &launch_recorder.record;
+    try std.testing.expect(deliverLaunch("drive_c/Desktop/game.exe"));
+    try std.testing.expectEqualStrings("drive_c/Desktop/game.exe", launch_recorder.last);
 }
 
 test "accept retries back off from the base delay and stop at the ceiling" {

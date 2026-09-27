@@ -136,3 +136,9 @@ come back like anyone else's.
 NUL, or names more than 128 components is refused outright: `open_file` and
 `launch` answer `{"type":"error"}`, and `browse_directory` reports an empty
 listing, because `renderer.listDirectory` resolves the path the same way.
+
+A `launch` reaches `renderer.on_file_uploaded`, which only the guest's open
+common file dialog installs. A launch with no such handler answers
+`{"type":"error","message":"Zine runs one program at a time, ..."}` so the
+client can say why the click did nothing, and `open_file`, whose handler is
+installed whenever a dialog can ask for a file, is unaffected.

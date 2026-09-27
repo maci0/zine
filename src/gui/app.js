@@ -520,6 +520,23 @@ function PopupItem(sub, onAfterClick) {
     }}, menuLabel(sub.name));
 }
 
+// A dropdown opens on :hover, which a finger never produces, so a tap opens
+// it too and keeps it open once the finger lifts.
+function closeOtherMenus(except) {
+    let closed = 0;
+    menuBar.querySelectorAll('.menu-item.open').forEach(el => {
+        if (el === except) return;
+        el.classList.remove('open');
+        el.setAttribute('aria-expanded', 'false');
+        closed++;
+    });
+    return closed;
+}
+
+function closeAllMenus() {
+    return closeOtherMenus(null);
+}
+
 // --- Menu Rendering ---
 function renderMenu(menuData) {
     currentMenuData = menuData;
@@ -529,13 +546,21 @@ function renderMenu(menuData) {
         if (item.popup) {
             const popup = div({class: 'popup-menu', role: 'menu'},
                 ...item.popup.map(sub => PopupItem(sub, () => {
+                    closeAllMenus();
                     popup.style.display = 'none';
                     setTimeout(() => popup.style.display = '', 100);
                 }))
             );
-            menuItem = div({class: 'menu-item', role: 'menuitem', dir: 'auto', 'aria-haspopup': 'true'}, menuLabel(item.name), popup);
+            menuItem = div({class: 'menu-item', role: 'menuitem', tabindex: '0', dir: 'auto',
+                'aria-haspopup': 'true', 'aria-expanded': 'false', onclick: (e) => {
+                e.stopPropagation();
+                const showing = window.getComputedStyle(popup).display !== 'none';
+                closeOtherMenus(showing ? null : menuItem);
+                menuItem.classList.toggle('open', !showing);
+                menuItem.setAttribute('aria-expanded', showing ? 'false' : 'true');
+            }}, menuLabel(item.name), popup);
         } else {
-            menuItem = div({class: 'menu-item', role: 'menuitem', dir: 'auto', onclick: (e) => {
+            menuItem = div({class: 'menu-item', role: 'menuitem', tabindex: '0', dir: 'auto', onclick: (e) => {
                 e.stopPropagation();
                 sendCommand(item.id);
             }}, menuLabel(item.name));
@@ -583,6 +608,8 @@ document.getElementById('taskbar-app-btn').addEventListener('contextmenu', (e) =
 
 // Dismiss context menus on outside clicks
 document.addEventListener('click', (e) => {
+    // A dropdown a tap opened outlives the finger, so a click elsewhere closes it.
+    if (!menuBar.contains(e.target)) closeAllMenus();
     if (startMenu.style.display === 'block' && !startMenu.contains(e.target) &&
         !startButton.contains(e.target)) {
         closeStartMenu();
@@ -629,6 +656,9 @@ document.addEventListener('keydown', (e) => {
         }
         return;
     }
+
+    // A dropdown a tap opened is the topmost transient surface too.
+    if (closeAllMenus() > 0) return;
 
     const popups = document.querySelectorAll('.popup-menu');
     let closedMenu = false;
@@ -951,7 +981,9 @@ function connect() {
 
                 if (msg.type === "error") {
                     console.error("Zine API Error:", msg.message);
-                    setStatus("API Error: " + msg.message, true, 4000);
+                    // A reason to act on stays until the next message replaces
+                    // it, the way the disconnect notice does.
+                    setStatus("API Error: " + msg.message, true);
                 } else if (msg.type === "set_resolution") {
                     currentRenderWidth = msg.width;
                     currentRenderHeight = msg.height;
@@ -1870,7 +1902,10 @@ function connect() {
                 } else if (msg.type === "set_clipboard") {
                     // Backend → browser clipboard
                     if (navigator.clipboard && navigator.clipboard.writeText) {
-                        navigator.clipboard.writeText(msg.text).catch(() => {});
+                        // A blocked clipboard leaves the user pasting stale text.
+                        navigator.clipboard.writeText(msg.text).catch(() => {
+                            setStatus('The browser blocked clipboard access.', true);
+                        });
                     }
 
                 } else if (msg.type === "set_edit_text") {

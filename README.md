@@ -366,6 +366,12 @@ release, not a 0.2.1 patch.
   returns early.
 - Web desktop Start button, common dialogs, and modal dismissal behave
   consistently across the desktop, the taskbar, and Escape.
+- A top-level menu caption in the web UI opens its dropdown on a tap as well as
+  on a hover, and the dropdown a tap opened closes on a click elsewhere, so the
+  guest menu bar is usable on a touch screen.
+- Activating a desktop icon or a Start menu entry with nothing able to start
+  the program reports it in the status bar instead of leaving the click with no
+  visible result.
 - The web UI serves the document, stylesheet, and both scripts over one
   keep-alive connection instead of closing the socket after every asset.
 - A web UI script that fails to load reports it in the status bar instead of

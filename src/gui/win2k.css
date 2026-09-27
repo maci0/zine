@@ -409,7 +409,10 @@ body {
     padding: 2px 0;
 }
 
-.menu-item:hover .popup-menu {
+/* A hover opens a dropdown for a mouse; a tap opens it for a finger, and the
+   class the tap sets keeps it open after the finger leaves. */
+.menu-item:hover .popup-menu,
+.menu-item.open .popup-menu {
     display: block;
 }
 
