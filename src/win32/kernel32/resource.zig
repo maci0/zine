@@ -96,7 +96,7 @@ pub fn stub_SizeofResource(hModule: usize, hResInfo: usize) callconv(w32cc.WINAP
                     const res_end = res_dir_rva + opt_header.DataDirectory[@import("../../pe.zig").IMAGE_DIRECTORY_ENTRY_RESOURCE].Size;
                     var pos = res_dir_rva;
                     while (pos + @sizeOf(pe_res.IMAGE_RESOURCE_DATA_ENTRY) <= res_end) : (pos += 4) {
-                        const de = @as(*const pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(@alignCast(&m.*.mapped_memory[pos])));
+                        const de = @as(*align(1) const pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(&m.*.mapped_memory[pos]));
                         if (de.OffsetToData == offset and de.Size > 0 and de.Size < m.*.mapped_memory.len) {
                             return de.Size;
                         }

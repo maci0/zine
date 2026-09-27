@@ -295,7 +295,7 @@ pub fn allocThunkForExport(exp: BuiltinExport, dll_name: []const u8, func_name: 
 /// On native targets, the address is written directly to the IAT slot, and
 /// native imports are registered in the thunk table for host-side dispatch.
 fn patchImport(
-    first_thunk: *u32,
+    first_thunk: *align(1) u32,
     exp: BuiltinExport,
     dll_name: []const u8,
     func_name: []const u8,
@@ -428,7 +428,7 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
             log.warn("loader: {s}: import descriptor table out of bounds at RVA 0x{X}, stopping", .{ mod.name, import_desc_offset });
             break;
         }
-        const import_desc = @as(*pe.IMAGE_IMPORT_DESCRIPTOR, @ptrCast(@alignCast(&mod.mapped_memory[import_desc_offset])));
+        const import_desc = @as(*align(1) pe.IMAGE_IMPORT_DESCRIPTOR, @ptrCast(&mod.mapped_memory[import_desc_offset]));
         if (import_desc.Name == 0) break;
         if (import_desc.Name >= mod.mapped_memory.len) {
             log.warn("loader: {s}: import DLL name RVA 0x{X} out of bounds, stopping", .{ mod.name, import_desc.Name });
@@ -470,8 +470,8 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
                 log.warn("loader: {s}: import thunk table for {s} out of bounds at offset {d}, stopping", .{ mod.name, dll_name, thunk_offset });
                 break;
             }
-            const orig_thunk = @as(*pe.IMAGE_THUNK_DATA32, @ptrCast(@alignCast(&mod.mapped_memory[@intCast(orig_rva)])));
-            const first_thunk = @as(*u32, @ptrCast(@alignCast(&mod.mapped_memory[@intCast(iat_rva)])));
+            const orig_thunk = @as(*align(1) pe.IMAGE_THUNK_DATA32, @ptrCast(&mod.mapped_memory[@intCast(orig_rva)]));
+            const first_thunk = @as(*align(1) u32, @ptrCast(&mod.mapped_memory[@intCast(iat_rva)]));
 
             if (orig_thunk.u1.AddressOfData == 0) break;
 

@@ -276,8 +276,12 @@ pub const Module = struct {
                 const reloc_end = @min(@as(u64, reloc_offset) + reloc_dir.Size, mapped_slice.len);
                 var skipped_blocks: usize = 0;
 
+                // Every directory offset below comes from the file, so the
+                // structures are read unaligned: a malformed image may place a
+                // table at any address, and @alignCast would panic on the ones
+                // that are not naturally aligned.
                 while (reloc_offset + @sizeOf(pe.IMAGE_BASE_RELOCATION) <= reloc_end) {
-                    const block = @as(*pe.IMAGE_BASE_RELOCATION, @ptrCast(@alignCast(&mapped_slice[reloc_offset])));
+                    const block = @as(*align(1) pe.IMAGE_BASE_RELOCATION, @ptrCast(&mapped_slice[reloc_offset]));
                     if (block.SizeOfBlock < @sizeOf(pe.IMAGE_BASE_RELOCATION)) break;
                     if (@as(u64, reloc_offset) + block.SizeOfBlock > mapped_slice.len) {
                         skipped_blocks += 1;
@@ -285,7 +289,7 @@ pub const Module = struct {
                     }
 
                     const entries_count = (block.SizeOfBlock - @sizeOf(pe.IMAGE_BASE_RELOCATION)) / @sizeOf(u16);
-                    const entries = @as([*]u16, @ptrCast(@alignCast(&mapped_slice[reloc_offset + @sizeOf(pe.IMAGE_BASE_RELOCATION)])));
+                    const entries = @as([*]align(1) u16, @ptrCast(&mapped_slice[reloc_offset + @sizeOf(pe.IMAGE_BASE_RELOCATION)]));
 
                     for (0..entries_count) |e| {
                         const entry = entries[e];
@@ -369,7 +373,7 @@ pub const Module = struct {
         if (export_dir_rva == 0 or export_dir_rva + @sizeOf(pe.IMAGE_EXPORT_DIRECTORY) > self.mapped_memory.len) return null;
 
         const export_dir_size = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
-        const export_dir = @as(*pe.IMAGE_EXPORT_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[export_dir_rva])));
+        const export_dir = @as(*align(1) pe.IMAGE_EXPORT_DIRECTORY, @ptrCast(&self.mapped_memory[export_dir_rva]));
 
         const names_rva = export_dir.AddressOfNames;
         const funcs_rva = export_dir.AddressOfFunctions;
@@ -388,9 +392,9 @@ pub const Module = struct {
             return null;
         }
 
-        const names = @as([*]u32, @ptrCast(@alignCast(&self.mapped_memory[names_rva])));
-        const funcs = @as([*]u32, @ptrCast(@alignCast(&self.mapped_memory[funcs_rva])));
-        const ords = @as([*]u16, @ptrCast(@alignCast(&self.mapped_memory[ords_rva])));
+        const names = @as([*]align(1) u32, @ptrCast(&self.mapped_memory[names_rva]));
+        const funcs = @as([*]align(1) u32, @ptrCast(&self.mapped_memory[funcs_rva]));
+        const ords = @as([*]align(1) u16, @ptrCast(&self.mapped_memory[ords_rva]));
 
         for (0..export_dir.NumberOfNames) |i| {
             const name_rva = names[i];
@@ -418,7 +422,7 @@ pub const Module = struct {
 
     const ResourceTypeTable = struct {
         res_dir_rva: u32,
-        entries: []const pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY,
+        entries: []align(1) const pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY,
     };
 
     /// Validates the root resource directory and returns its type-entry table,
@@ -429,11 +433,11 @@ pub const Module = struct {
         if (res_dir_rva == 0) return null;
         if (!inImage(self, res_dir_rva, @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY))) return null;
 
-        const root_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva])));
+        const root_dir = @as(*align(1) pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(&self.mapped_memory[res_dir_rva]));
         const num_type_entries: u32 = @as(u32, root_dir.NumberOfNamedEntries) + root_dir.NumberOfIdEntries;
         if (!inImage(self, @as(u64, res_dir_rva) + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY), @as(u64, num_type_entries) * @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
 
-        const type_entries = @as([*]pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)])));
+        const type_entries = @as([*]align(1) pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(&self.mapped_memory[res_dir_rva + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)]));
         return .{ .res_dir_rva = res_dir_rva, .entries = type_entries[0..num_type_entries] };
     }
 
@@ -457,14 +461,14 @@ pub const Module = struct {
     fn resourceDataSlice(self: *Module, res_dir_rva: u32, dir_offset: u32) ?[]const u8 {
         if (!inImage(self, @as(u64, res_dir_rva) + dir_offset, @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
 
-        const lang_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + dir_offset])));
+        const lang_dir = @as(*align(1) pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(&self.mapped_memory[res_dir_rva + dir_offset]));
         if (lang_dir.NumberOfIdEntries == 0 and lang_dir.NumberOfNamedEntries == 0) return null;
 
-        const lang_entries = @as([*]pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + dir_offset + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)])));
+        const lang_entries = @as([*]align(1) pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(&self.mapped_memory[res_dir_rva + dir_offset + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)]));
         const data_offset = lang_entries[0].OffsetToData & RESOURCE_OFFSET_MASK;
         if (!inImage(self, @as(u64, res_dir_rva) + data_offset, @sizeOf(pe_resources.IMAGE_RESOURCE_DATA_ENTRY))) return null;
 
-        const data_entry = @as(*pe_resources.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + data_offset])));
+        const data_entry = @as(*align(1) pe_resources.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(&self.mapped_memory[res_dir_rva + data_offset]));
 
         const data_rva = fixDataRva(self, data_entry.OffsetToData, data_entry.Size);
         if (@as(u64, data_rva) + data_entry.Size > self.mapped_memory.len) return null;
@@ -478,11 +482,11 @@ pub const Module = struct {
         const table = self.resourceTypeTable() orelse return null;
         const type_off = self.typeSubdirOffset(table, resource_type, true) orelse return null;
 
-        const name_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off])));
+        const name_dir = @as(*align(1) pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(&self.mapped_memory[table.res_dir_rva + type_off]));
         const num_name_entries: u32 = @as(u32, name_dir.NumberOfNamedEntries) + name_dir.NumberOfIdEntries;
         if (num_name_entries == 0) return null;
         if (!inImage(self, @as(u64, table.res_dir_rva) + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY), @as(u64, num_name_entries) * @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
-        const name_entries = @as([*]pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)])));
+        const name_entries = @as([*]align(1) pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(&self.mapped_memory[table.res_dir_rva + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)]));
         var name_offset: ?u32 = null;
         for (0..num_name_entries) |i| {
             if ((entryNameValue(self, table.res_dir_rva, name_entries[i].NameOrId) orelse continue) == resource_type) {
@@ -502,11 +506,11 @@ pub const Module = struct {
         const table = self.resourceTypeTable() orelse return null;
         const type_off = self.typeSubdirOffset(table, resource_type, true) orelse return null;
 
-        const name_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off])));
+        const name_dir = @as(*align(1) pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(&self.mapped_memory[table.res_dir_rva + type_off]));
         const num_name_entries: u32 = @as(u32, name_dir.NumberOfNamedEntries) + name_dir.NumberOfIdEntries;
         if (num_name_entries == 0) return null;
         if (!inImage(self, @as(u64, table.res_dir_rva) + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY), @as(u64, num_name_entries) * @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
-        const name_entries = @as([*]pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)])));
+        const name_entries = @as([*]align(1) pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(&self.mapped_memory[table.res_dir_rva + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)]));
 
         var name_offset: ?u32 = null;
         for (0..num_name_entries) |i| {
@@ -527,10 +531,10 @@ pub const Module = struct {
         const type_off = self.typeSubdirOffset(table, resource_type, false) orelse return null;
 
         // Search name entries — named entries have bit 31 set
-        const name_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off])));
+        const name_dir = @as(*align(1) pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(&self.mapped_memory[table.res_dir_rva + type_off]));
         const num_name_entries: u32 = @as(u32, name_dir.NumberOfNamedEntries) + name_dir.NumberOfIdEntries;
         if (!inImage(self, @as(u64, table.res_dir_rva) + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY), @as(u64, num_name_entries) * @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
-        const name_entries = @as([*]pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)])));
+        const name_entries = @as([*]align(1) pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(&self.mapped_memory[table.res_dir_rva + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)]));
 
         var name_offset: ?u32 = null;
         for (0..num_name_entries) |i| {
@@ -545,7 +549,7 @@ pub const Module = struct {
                 if (!inImage(self, str_off, 2 + 2 * @as(u64, name.len))) continue;
                 const str_len = std.mem.readInt(u16, self.mapped_memory[@intCast(str_off)..][0..2], .little);
                 if (str_len != name.len) continue;
-                const str_data = @as([*]const u16, @ptrCast(@alignCast(&self.mapped_memory[@intCast(str_off + 2)])));
+                const str_data = @as([*]align(1) const u16, @ptrCast(&self.mapped_memory[@intCast(str_off + 2)]));
                 var matches = true;
                 for (0..name.len) |j| {
                     const wc = str_data[j];
@@ -587,6 +591,12 @@ const TestImage = struct {
     /// whose resource directory lives at `res_rva`. Callers then poke raw
     /// words into `image` to shape the directory tree.
     fn create(allocator: std.mem.Allocator) !TestImage {
+        return createAt(allocator, res_rva);
+    }
+
+    /// Same image, but with the resource directory at a caller-chosen RVA, so
+    /// a test can place the tree at an address that is not naturally aligned.
+    fn createAt(allocator: std.mem.Allocator, dir_rva: u32) !TestImage {
         const file_data = try allocator.alloc(u8, 512);
         errdefer allocator.free(file_data);
         @memset(file_data, 0);
@@ -599,7 +609,7 @@ const TestImage = struct {
         // Optional header: magic 0x10b, 16 data directories
         std.mem.writeInt(u16, file_data[88..][0..2], 0x10b, .little);
         std.mem.writeInt(u32, file_data[88 + 92 ..][0..4], 16, .little);
-        std.mem.writeInt(u32, file_data[88 + 96 + 2 * 8 ..][0..4], res_rva, .little);
+        std.mem.writeInt(u32, file_data[88 + 96 + 2 * 8 ..][0..4], dir_rva, .little);
 
         var parser = try pe.PEParser.parse(allocator, file_data);
         errdefer parser.deinit(allocator);
@@ -731,5 +741,28 @@ test "getFirstResource falls back to the first name entry" {
     @memcpy(ti.image[rva + 0x200 ..][0..8], "ICONDATA");
 
     const data = ti.mod.getFirstResource(pe_resources.RT_ICON) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("ICONDATA", data);
+}
+
+test "getResource reads a resource tree at an unaligned RVA" {
+    // The directory RVA is file data, so an image may put the tree anywhere.
+    var ti = try TestImage.createAt(testing.allocator, TestImage.res_rva + 1);
+    defer ti.destroy(testing.allocator);
+
+    const rva = TestImage.res_rva + 1;
+    ti.putDirHeader(rva, 1);
+    ti.put32(rva + 16, pe_resources.RT_ICON);
+    ti.put32(rva + 20, 0x80000080);
+    ti.putDirHeader(rva + 0x80, 1);
+    ti.put32(rva + 0x80 + 16, 1);
+    ti.put32(rva + 0x80 + 20, 0x800000C0);
+    ti.putDirHeader(rva + 0xC0, 1);
+    ti.put32(rva + 0xC0 + 16, 0x409);
+    ti.put32(rva + 0xC0 + 20, 0x100);
+    ti.put32(rva + 0x100, rva + 0x200);
+    ti.put32(rva + 0x104, 8);
+    @memcpy(ti.image[rva + 0x200 ..][0..8], "ICONDATA");
+
+    const data = ti.mod.getResource(pe_resources.RT_ICON, 1) orelse return error.TestUnexpectedResult;
     try testing.expectEqualStrings("ICONDATA", data);
 }
