@@ -11,7 +11,7 @@
 
 ## Problem Statement
 
-The Win32 PE loader runs PE executables across five execution contexts: **native x86**, **interpret**, **WASM**, **JIT**, and — in the future — **real Windows DLL** (where our stubs compile into actual .dll files that Windows loads natively). Each context has a different relationship between the x86 guest code's address space and the host's.
+The Win32 PE loader runs PE executables across five execution contexts: **native x86**, **interpret**, **WASM**, **JIT**, and **real Windows DLL** (where our stubs compile into actual .dll files that Windows loads natively). Each context has a different relationship between the x86 guest code's address space and the host's.
 
 Currently, DLL stub functions contain ad-hoc workarounds (`trace.addr()`, `trace.c_span()`, `shared.guest_memory` checks, comptime platform guards). This leads to ~90 known bugs, inconsistent behavior across modes, and makes adding new stubs error-prone.
 
@@ -468,11 +468,12 @@ as separate APIs (`FindFirstFileA`/`FindNextFileA` keep their own handle pool in
 
 Goal: Stubs use `[*]u8`, `*T`, `?[*:0]const u8` instead of `usize`. The comptime thunk handler auto-translates pointer types. All `trace.addr()` calls removed from stubs.
 
-Status: NOT fully done. 113 `trace.addr()` call sites remain across
+Status: NOT fully done. 112 `trace.addr()` call sites remain across
 `src/win32/` (concentrated in `user32/message.zig`, `comdlg32/dialogs.zig`,
 `advapi32/registry.zig`, `kernel32/locale.zig`/`path.zig`/`mem.zig`, and the
 msvcrt modules below; count checked 2026-09-27).
-Verify current counts with: `rg -c "trace\.addr\(" src/win32`.
+Verify current counts with: `rg -c "trace\.addr\(" src/win32` (this counts
+lines, so it also counts the one mention in a `shared.zig` doc comment).
 
 Current thunk behavior in [`src/loader/env.zig`](../src/loader/env.zig):
 - `addBuiltinExportComptime` translates typed pointer parameters on WASM,
@@ -502,9 +503,7 @@ an exception to the target design.
   - Same pattern
 - [ ] `msvcrt/string.zig`: done for `strlen`, `strcpy`, `strncpy`, `strcat`, `strcmp`; 2 `trace.addr()` sites remain further down the file
   - All `s1_ptr: usize` → `s1: [*:0]const u8`
-- [ ] `msvcrt/fmt.zig`: `printf`, `sprintf`, `sscanf`, etc.
-  - Format string: `fmt_ptr: usize` → `fmt: [*:0]const u8`
-  - Buffer: `buf_ptr: usize` → `buf: [*]u8`
+- [ ] `msvcrt/fmt.zig`: `printf`, `sprintf`, `sscanf`, etc. — the WASM and x86_64 stubs already take `fmt: [*:0]const u8` and a typed `[*]u8` output buffer; the native cdecl variants still take `fmt_ptr: usize` and `buf_ptr: usize` because the variadic path needs the raw guest pointer
 - [x] `msvcrt/mem.zig`: `memcpy`, `memset`, `memmove`
   - `dest_ptr: usize` → `dest: [*]u8`
 - [ ] `msvcrt/io.zig`: done for `fclose`, `fread`, `fwrite`; still `usize`: `fopen`, `fgets`, `fsopen`, `freopen`, `fprintf` (wasm path), `fwprintf`
@@ -525,7 +524,6 @@ an exception to the target design.
 - [ ] `kernel32/sync.zig`: `InterlockedExchange`, `InitializeCriticalSection` (`InterlockedIncrement` is done)
 - [x] `kernel32/sysinfo.zig`: `GetSystemInfo`, `GlobalMemoryStatusEx`
 - [ ] `kernel32/path.zig`: `GetCurrentDirectoryA`, `GetWindowsDirectoryA`, `GetFullPathNameA`
-- [ ] `kernel32/process.zig`: `GetModuleFileNameA`
 
 **Sub-phase 2d: Convert remaining DLL stubs** [PARTIAL — several groups still contain `trace.addr()`]
 - [ ] `advapi32/registry.zig` (6 sites remain); `advapi32/security.zig`, `advapi32/services.zig` clean
@@ -566,8 +564,8 @@ the stubs do check `x86_memory.guest_memory`. Still outstanding: `localtime`,
   - `commode_slot`: 4 bytes (u16, padded)
   - `localtime_slot`: sizeof(struct tm) bytes
   - `ctime_slot`: 26 bytes
-  - `asctime_slot`: 26 bytes
-  - `setlocale_slot`: 256 bytes
+  - `asctime_slot`: 48 bytes
+  - `setlocale_slot`: 2 bytes ("C\0")
 - [ ] On WASM: allocate from guest heap during `ensureGuestGlobals`
 - [ ] On native: use host static variables (zero-cost)
 - [ ] Register WASM wrappers for these functions at the registration layer

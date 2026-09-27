@@ -193,6 +193,11 @@ pub fn main(init: std.process.Init) !void {
                 \\  ZINE_LOG_LEVEL      fatal, error, err, warn, info, trace (default: trace)
                 \\  ZINE_CWD            Absolute POSIX path used as the guest working
                 \\                      directory (default: .)
+                \\  ZINE_VIRTUAL_CLOCK_NS
+                \\                      Guest clock start in ns since the Unix
+                \\                      epoch; unset uses the host clock
+                \\  ZINE_CLOCK_STEP_NS  Guest clock advance per read, ns
+                \\                      (default: 1000000; needs ZINE_VIRTUAL_CLOCK_NS)
                 \\
                 \\Examples:
                 \\  wasmtime --dir=. zine.wasm32.wasm -- myapp.exe

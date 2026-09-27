@@ -376,7 +376,7 @@ sequenceDiagram
 
     CLI->>Main: Parse arguments
     Main->>Env: Environment.init()
-    Main->>Stubs: Register 36 DLL stub modules (37 on WASM, 0 with -Dexternal-stubs)
+    Main->>Stubs: Register 35 DLL stub modules (36 on WASM, 0 with -Dexternal-stubs)
     Main->>Reg: Add search paths (cwd, exe dir)
     Main->>Reg: loadModule(target.exe)
     Reg->>Mod: Module.load() — parse PE, mmap, relocate

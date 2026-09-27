@@ -940,9 +940,10 @@ pub fn listDirectory(path: []const u8) void {
 /// by iterating the given path relative to cwd.
 fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) void {
     // The path is a logical Win32 path (e.g. "Desktop", "Desktop/subfolder").
-    // Map it to the host filesystem under drive_c/. Paths that do not resolve
-    // inside the sandbox (absolute, drive-qualified, containing "..") yield an
-    // empty listing rather than a fallback to the raw string, which would let a
+    // Map it to the host filesystem under drive_c/. Anything virtualPathToDriveC
+    // refuses (absolute, drive-qualified, backslash, NUL, a "." or ".."
+    // component, more components than its stack capacity) yields an empty
+    // listing rather than a fallback to the raw string, which would let a
     // client read directories outside drive_c/.
     var host_path_buf: [1024]u8 = undefined;
     const host_path_len = path_utils.virtualPathToDriveC(path, &host_path_buf);

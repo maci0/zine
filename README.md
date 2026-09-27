@@ -7,7 +7,7 @@ No Windows installation, no Wine.
 ## What works
 
 - Full MSVC 6.0 toolchain: CL.EXE, LINK.EXE, RC.EXE, NMAKE.EXE, and 8 more utilities run to completion
-- 337 unit tests pass (2 skipped, 339 total) on the host with `zig build test`; the gate in
+- 372 unit tests pass (2 skipped, 374 total) on the host with `zig build test`; the gate in
   `tests/check.sh` adds the CLI suites on native x86 and x86_64
 - 158/128 integration checks on native/WASM, 20 FLTK smoke tests (these need guest
   binaries and are not part of `tests/check.sh`)
@@ -161,8 +161,9 @@ release, not a 0.2.1 patch.
   instead of producing a reversed slice or an out-of-bounds read.
 - A target file that is not a usable PE reports a plain-language cause and a
   hint instead of the loader's internal error name.
-- The native and WASI `--help` option lists lost a stray blank line, and
-  `--jit-max-eip` is documented as the u32 it accepts (decimal or 0x hex).
+- The native and WASI `--help` option lists lost a stray blank line, and the
+  WASI-only `--jit-max-eip` is documented as the u32 it accepts (decimal or 0x
+  hex).
 - The web Open and Save dialog filters the file list by the guest's
   "Files of type" patterns, and says "This folder is empty." or "No files
   match the selected type." when there is nothing to list.

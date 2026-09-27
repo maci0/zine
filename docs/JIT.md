@@ -117,7 +117,7 @@ The second phase establishes the capability to compute standalone x86 math flows
 
 ### Phase 3: Condition Codes & Flags (Complete)
 x86 heavily relies on a central status register (EFLAGS). Unlike x86 instructions which natively update flags contextually, WebAssembly mathematics do not magically compute carry/overflow flags.
-- [x] **Abstract Status Flag Representation**: CPU flags mapped to discrete `i32` WebAssembly locals (CF, ZF, SF, OF, DF, PF — locals 8–14).
+- [x] **Abstract Status Flag Representation**: CPU flags mapped to discrete `i32` WebAssembly locals (CF, ZF, SF, OF, DF, PF — locals 8, 9, 10, 11, 13, 14; local 12 is the scratch register).
 - [x] **Synthetic Flag Calculation**: ZF and SF computed inline after all ALU/shift/INC/DEC operations. CF/OF cleared for logic ops. Dedicated helpers for ADD carry and SUB borrow.
 - [x] **Comparisons**: `CMP` and `TEST` translations emit flag updates without storing results.
 - [x] **PUSHFD/POPFD**: Synthesize/decompose packed EFLAGS from/to individual flag locals.

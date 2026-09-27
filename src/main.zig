@@ -206,6 +206,11 @@ pub fn main(init: std.process.Init) !void {
                 \\  ZINE_LOG_LEVEL      fatal, error, err, warn, info, trace (default: trace)
                 \\  ZINE_WEB_HOST       Web UI bind address, IP literal (default: 127.0.0.1)
                 \\  ZINE_WEB_PORT       Web UI port, 1-65535 (default: 1995)
+                \\  ZINE_VIRTUAL_CLOCK_NS
+                \\                      Guest clock start in ns since the Unix
+                \\                      epoch; unset uses the host clock
+                \\  ZINE_CLOCK_STEP_NS  Guest clock advance per read, ns
+                \\                      (default: 1000000; needs ZINE_VIRTUAL_CLOCK_NS)
                 \\
                 \\Examples:
                 \\  zine myapp.exe
