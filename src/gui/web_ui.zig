@@ -199,18 +199,33 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
 
     var server = std.http.Server.init(&r.interface, &w.interface);
 
-    var req = server.receiveHead() catch |err| {
-        if (err != error.EndOfStream and err != error.ConnectionResetByPeer) {
-            std.debug.print("HTTP receiveHead error: {}\n", .{err});
-        }
-        stream.close(runtime.io());
-        return;
-    };
+    // One connection serves every asset request the browser makes for the
+    // page. The page needs six resources (document, stylesheet, two scripts,
+    // favicon, start icon), so a connection per request pays six handshakes
+    // before the emulator UI is usable instead of one. body_buf is reused
+    // per request so a long-lived connection holds one file's worth of
+    // memory, not one per request.
+    var body_buf: std.ArrayList(u8) = .empty;
+    defer body_buf.deinit(allocator);
 
+    while (true) {
+        var req = server.receiveHead() catch |err| {
+            if (err != error.EndOfStream and err != error.ConnectionResetByPeer) {
+                std.debug.print("HTTP receiveHead error: {}\n", .{err});
+            }
+            return stream.close(runtime.io());
+        };
+
+        try handleRequest(&req, stream, allocator, &body_buf);
+        if (!req.head.keep_alive) return stream.close(runtime.io());
+    }
+}
+
+fn handleRequest(req: *std.http.Server.Request, stream: std.Io.net.Stream, allocator: std.mem.Allocator, body_buf: *std.ArrayList(u8)) !void {
     const target = req.head.target;
 
     if (std.mem.startsWith(u8, target, "/ws")) {
-        if (!originAllowed(&req)) {
+        if (!originAllowed(req)) {
             try req.respond("Forbidden", .{ .status = .forbidden });
             return stream.close(runtime.io());
         }
@@ -544,13 +559,13 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
             std.mem.indexOfScalar(u8, req_path, 0) != null)
         {
             try req.respond("Forbidden", .{ .status = .forbidden });
-            return stream.close(runtime.io());
+            return;
         }
 
         // Only allow paths starting with / and containing only safe characters
         if (req_path.len == 0 or req_path[0] != '/') {
             try req.respond("Forbidden", .{ .status = .forbidden });
-            return stream.close(runtime.io());
+            return;
         }
 
         const full_path = std.fmt.bufPrint(&file_path_buf, "src/gui{s}", .{req_path}) catch {
@@ -564,7 +579,7 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                 try req.respond("Internal server error", .{ .status = .internal_server_error });
             }
             std.debug.print("Closing FD {} (File error: {s})\n", .{ stream.socket.handle, full_path });
-            return stream.close(runtime.io());
+            return;
         };
         defer file.close(runtime.io());
 
@@ -582,15 +597,15 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
         const file_size = try file.length(runtime.io());
         if (file_size > 10 * 1024 * 1024) {
             try req.respond("File too large", .{ .status = .internal_server_error });
-            return stream.close(runtime.io());
+            return;
         }
-        const content = allocator.alloc(u8, @intCast(file_size)) catch {
+        body_buf.clearRetainingCapacity();
+        body_buf.resize(allocator, @intCast(file_size)) catch {
             try req.respond("Out of memory", .{ .status = .internal_server_error });
-            return stream.close(runtime.io());
+            return;
         };
-        const bytes_read = try file.readPositionalAll(runtime.io(), content, 0);
-        try respondStaticContent(&req, content[0..bytes_read], content_type);
-        return stream.close(runtime.io());
+        const bytes_read = try file.readPositionalAll(runtime.io(), body_buf.items, 0);
+        try respondStaticContent(req, body_buf.items[0..bytes_read], content_type);
     }
 }
 
@@ -661,16 +676,7 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
     const etag = try std.fmt.bufPrint(&etag_buf, "\"{s}\"", .{std.fmt.bytesToHex(digest, .lower)});
 
     if (staticContentNotModified(req, etag)) {
-        try req.respond("", .{
-            .status = .not_modified,
-            .keep_alive = false,
-            .transfer_encoding = .none,
-            .extra_headers = &.{
-                .{ .name = "etag", .value = etag },
-                .{ .name = "cache-control", .value = "private, no-cache" },
-                .{ .name = "vary", .value = "Accept-Encoding" },
-            },
-        });
+        try respondNotModified(req, etag);
         return;
     }
 
@@ -688,7 +694,81 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
         .{ .name = "vary", .value = "Accept-Encoding" },
         .{ .name = "content-encoding", .value = "gzip" },
     };
-    try req.respond(body, .{ .keep_alive = false, .extra_headers = response_headers[0 .. response_headers.len - @intFromBool(compressed == null)] });
+    try req.respond(body, .{ .extra_headers = response_headers[0 .. response_headers.len - @intFromBool(compressed == null)] });
+}
+
+/// Writes a 304 by hand. `Request.respond` can only leave content-length off a
+/// bodyless response by taking `transfer_encoding = .none`, which also marks
+/// the connection for closing, so every revalidated asset would cost the
+/// browser a fresh handshake. Reached only for GET and HEAD, which carry no
+/// request body, so the connection is immediately ready for the next head.
+fn respondNotModified(req: *std.http.Server.Request, etag: []const u8) !void {
+    const out = req.server.out;
+    try out.writeAll("HTTP/1.1 304 Not Modified\r\n");
+    try out.writeAll("etag: ");
+    try out.writeAll(etag);
+    try out.writeAll("\r\ncache-control: private, no-cache\r\nvary: Accept-Encoding\r\n\r\n");
+    try out.flush();
+    req.server.reader.state = .ready;
+}
+
+test "one connection serves several assets, and closes when the client asks it to" {
+    const content = @embedFile("van.min.js");
+    var input = std.Io.Reader.fixed(
+        "GET /index.html HTTP/1.1\r\nHost: localhost\r\n\r\n" ++
+            "GET /van.min.js HTTP/1.1\r\nHost: localhost\r\n\r\n" ++
+            "GET /win2k.css HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    );
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    var server = std.http.Server.init(&input, &output.writer);
+
+    var responses: usize = 0;
+    while (true) {
+        var req = try server.receiveHead();
+        try respondStaticContent(&req, content, "text/css");
+        responses += 1;
+        if (!req.head.keep_alive) break;
+    }
+    try std.testing.expectEqual(@as(usize, 3), responses);
+
+    const response = output.written();
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, response, "HTTP/1.1 200 OK\r\n"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, response, "connection: close\r\n"));
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, response, "content-length: "));
+}
+
+test "a 304 leaves the connection open for the next request" {
+    const content = @embedFile("van.min.js");
+    var input = std.Io.Reader.fixed("GET /van.min.js HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    var server = std.http.Server.init(&input, &output.writer);
+    var req = try server.receiveHead();
+    try respondStaticContent(&req, content, "application/javascript");
+    const response = output.written();
+    const etag_start = (std.mem.indexOf(u8, response, "\r\netag: ") orelse return error.TestUnexpectedResult) + "\r\netag: ".len;
+    const etag_end = std.mem.indexOfPos(u8, response, etag_start, "\r\n") orelse return error.TestUnexpectedResult;
+    const etag = response[etag_start..etag_end];
+
+    const conditional = try std.fmt.allocPrint(std.testing.allocator, "GET /van.min.js HTTP/1.1\r\nHost: localhost\r\nIf-None-Match: {s}\r\n\r\nGET /win2k.css HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", .{etag});
+    defer std.testing.allocator.free(conditional);
+    var conditional_input = std.Io.Reader.fixed(conditional);
+    var conditional_output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer conditional_output.deinit();
+    var conditional_server = std.http.Server.init(&conditional_input, &conditional_output.writer);
+    var conditional_req = try conditional_server.receiveHead();
+    try respondStaticContent(&conditional_req, content, "application/javascript");
+    const revalidated = conditional_output.written();
+    try std.testing.expect(std.mem.startsWith(u8, revalidated, "HTTP/1.1 304 Not Modified\r\n"));
+    try std.testing.expect(std.mem.indexOf(u8, revalidated, etag) != null);
+    try std.testing.expect(std.mem.indexOf(u8, revalidated, "\r\ncontent-length:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, revalidated, "connection: close") == null);
+
+    // The 304 must not consume or close the connection: the next request on
+    // the same stream is answered from the bytes already buffered.
+    const next_req = try conditional_server.receiveHead();
+    try std.testing.expectEqualStrings("/win2k.css", next_req.head.target);
 }
 
 test "static asset responses carry an etag and 304 on a matching If-None-Match" {

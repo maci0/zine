@@ -160,9 +160,30 @@ fn addWasmExe(
     return wasm_lib;
 }
 
+/// Compressed size ceilings for the Web UI assets the browser downloads
+/// before the emulator UI is usable, measured in bytes as they travel over the
+/// wire. index.html and win2k.css block the first paint; app.js carries the
+/// whole client. Raise a ceiling in the same commit that explains the added
+/// weight, and prefer deferring code to raising one.
+const WebAssetBudget = struct { name: []const u8, max_compressed_bytes: usize };
+
+const web_asset_budgets = [_]WebAssetBudget{
+    .{ .name = "index.html", .max_compressed_bytes = 2 * 1024 },
+    .{ .name = "win2k.css", .max_compressed_bytes = 15 * 1024 },
+    .{ .name = "app.js", .max_compressed_bytes = 21 * 1024 },
+    .{ .name = "van.min.js", .max_compressed_bytes = 2 * 1024 },
+};
+
 fn compressedWebAssets(b: *std.Build) !*std.Build.Step.Options {
     const options = b.addOptions();
+    var critical_path: usize = 0;
     inline for (.{ "app.js", "win2k.css", "index.html", "van.min.js" }) |name| {
+        const max_compressed_bytes = comptime blk: {
+            for (web_asset_budgets) |budget| {
+                if (std.mem.eql(u8, budget.name, name)) break :blk budget.max_compressed_bytes;
+            }
+            @compileError("no web asset size budget for " ++ name);
+        };
         const content = @embedFile("src/gui/" ++ name);
         var output = try std.Io.Writer.Allocating.initCapacity(b.allocator, content.len);
         defer output.deinit();
@@ -174,7 +195,16 @@ fn compressedWebAssets(b: *std.Build) !*std.Build.Step.Options {
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(content, &digest, .{});
         options.addOption([32]u8, name ++ "_digest", digest);
+        critical_path += output.written().len;
+        if (output.written().len > max_compressed_bytes) {
+            std.debug.print(
+                "web asset budget exceeded: {s} is {d} compressed bytes, budget {d}\n",
+                .{ name, output.written().len, max_compressed_bytes },
+            );
+            return error.WebAssetTooLarge;
+        }
     }
+    std.debug.print("web UI critical path: {d} compressed bytes\n", .{critical_path});
     return options;
 }
 
