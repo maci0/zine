@@ -444,22 +444,10 @@ fn findImport(addr: usize) ?*const ImportEntry {
     return if (idx) |i| &slice[i] else null;
 }
 
-/// Retrieves the number of bytes to pop from the stack for a stdcall function.
-pub fn getParamBytes(addr: u32) u32 {
-    return if (findImport(@as(usize, addr))) |entry| entry.param_bytes else 0;
-}
-
-/// Returns true if the function at the given address uses the cdecl calling convention.
-pub fn isTargetCdecl(addr: u32) bool {
-    return if (findImport(@as(usize, addr))) |entry| entry.is_cdecl else false;
-}
-
 /// Returns true if the address corresponds to a registered native import.
 pub fn isNativeImport(addr: u32) bool {
     return findImport(@as(usize, addr)) != null;
 }
-
-pub const getStdcallCleanup = getParamBytes;
 
 /// Combined lookup: returns (is_cdecl, param_bytes) in a single binary search.
 /// Used by dispatchNativeCall to avoid 3 separate lookups for the same address.
@@ -677,5 +665,5 @@ test "thunks: duplicate native import registration keeps first entry" {
     registerNativeImport(0x12345000, "KERNEL32.dll", "FakeA", 12);
     registerNativeImport(0x12345000, "KERNEL32.dll", "FakeB", 20);
     // The second registration of the same address must be ignored.
-    try testing.expectEqual(@as(u32, 12), getParamBytes(0x12345000));
+    try testing.expectEqual(@as(u32, 12), getImportInfo(0x12345000).param_bytes);
 }

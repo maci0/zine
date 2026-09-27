@@ -28,18 +28,6 @@ fn comAddRef(_: usize) callconv(w32cc.WINAPI) u32 {
 fn comRelease(_: usize) callconv(w32cc.WINAPI) u32 {
     return 1;
 }
-fn comStub0(_: usize) callconv(w32cc.WINAPI) i32 {
-    return 0;
-}
-fn comStub1(_: usize, _: usize) callconv(w32cc.WINAPI) i32 {
-    return 0;
-}
-fn comStub2(_: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 {
-    return 0;
-}
-fn comStub3(_: usize, _: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 {
-    return 0;
-}
 fn comStub4(_: usize, _: usize, _: usize, _: usize, _: usize) callconv(w32cc.WINAPI) i32 {
     return 0;
 }

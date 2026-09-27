@@ -408,8 +408,6 @@ pub fn ChooseColorA(lpcc_ptr: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 // CHOOSEFONT Flags (CF_*) and nFontType bits used by ChooseFontA/W.
-const CF_SCREENFONTS: u32 = 0x00000001;
-const CF_INITTOLOGFONTSTRUCT: u32 = 0x00000040;
 const CF_LIMITSIZE: u32 = 0x00002000;
 const SCREEN_FONTTYPE: u16 = 0x0001;
 const BOLD_FONTTYPE: u16 = 0x0100;

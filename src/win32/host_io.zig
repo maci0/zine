@@ -326,50 +326,6 @@ test "getFullPath builds long relative paths in the caller buffer" {
     try std.testing.expectEqual(@as(u8, 0), buf[overlapping_len]);
 }
 
-/// Search for a file in a set of directories (semicolon-separated Win32 paths).
-/// Also searches the main EXE directory. Returns the full Win32 path or empty.
-pub fn searchPath(filename: []const u8, search_dirs: ?[]const u8, result: []u8) usize {
-    // First: check the main EXE's directory (state owned by runtime.zig)
-    if (runtime.main_exe_dir_len > 0 and filename.len > 0) {
-        const dir = runtime.main_exe_dir[0..runtime.main_exe_dir_len];
-        if (dir.len + filename.len < result.len) {
-            @memcpy(result[0..dir.len], dir);
-            @memcpy(result[dir.len..][0..filename.len], filename);
-            const total = dir.len + filename.len;
-            result[total] = 0;
-            // Check if this file exists
-            if (access(result[0..total], 0) == 0) {
-                return total;
-            }
-        }
-    }
-
-    // Then: search the provided directories
-    if (search_dirs) |dirs| {
-        var it = std.mem.splitScalar(u8, dirs, ';');
-        while (it.next()) |dir| {
-            if (dir.len == 0) continue;
-            if (dir.len + 1 + filename.len >= result.len) continue;
-
-            @memcpy(result[0..dir.len], dir);
-            var pos = dir.len;
-            if (result[pos - 1] != '\\' and result[pos - 1] != '/') {
-                result[pos] = '\\';
-                pos += 1;
-            }
-            @memcpy(result[pos..][0..filename.len], filename);
-            pos += filename.len;
-            result[pos] = 0;
-
-            if (access(result[0..pos], 0) == 0) {
-                return pos;
-            }
-        }
-    }
-
-    return 0; // Not found
-}
-
 /// Create a std.Io.File from an integer file descriptor.
 /// On POSIX, fd is used directly. On Windows, fd is cast to HANDLE.
 /// This abstracts the platform difference so stubs can use integer fds everywhere.

@@ -669,24 +669,6 @@ pub fn mbsdec(start: ?[*]const u8, current: ?[*]const u8) callconv(.c) ?[*]const
     return current.? - 1;
 }
 
-/// --- Setjmp / Longjmp ---
-/// Implementation status: Partially implemented
-pub fn log_wcs(prefix: []const u8, str_ptr: usize) void {
-    if (!trace.enable_tracing) return;
-    trace.print("{s}(ptr=0x{x}) ", .{ prefix, str_ptr });
-    if (str_ptr != 0) {
-        const str = @as([*]const u16, @ptrFromInt(trace.addr(str_ptr)));
-        var i: usize = 0;
-        var buf: [2]u8 = undefined;
-        while (str[i] != 0 and i < 256) : (i += 1) {
-            buf[0] = @intCast(str[i] & 0xFF);
-            buf[1] = 0;
-            trace.print("{s}", .{buf[0..1]});
-        }
-    }
-    trace.print("\n", .{});
-}
-
 /// --- Generic Stubs ---
 /// Implementation status: Partially implemented
 pub fn iscntrl(c: i32) callconv(.c) i32 {

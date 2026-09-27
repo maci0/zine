@@ -279,8 +279,6 @@ pub const FLAG_AF: u32 = 1 << 4;
 pub const FLAG_ZF: u32 = 1 << 6;
 /// Sign Flag (SF) bit position.
 pub const FLAG_SF: u32 = 1 << 7;
-/// Trap Flag (TF) bit position.
-pub const FLAG_TF: u32 = 1 << 8;
 /// Interrupt Enable Flag (IF) bit position.
 pub const FLAG_IF: u32 = 1 << 9;
 /// Direction Flag (DF) bit position.

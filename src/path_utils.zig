@@ -65,8 +65,8 @@ pub fn resolveWasiPath(abs_path: []const u8) ?ResolvedPath {
     return null;
 }
 
-/// Check if a path starts with drive_c/ or drive_c\ (either slash direction).
-fn startsWithDriveC(path: []const u8) bool {
+/// Check if a POSIX path is inside drive_c/ (`drive_c/` or `drive_c\`).
+pub fn isInsideDriveC(path: []const u8) bool {
     if (path.len < drive_root_len) return false;
     return std.mem.eql(u8, path[0..7], "drive_c") and (path[7] == '/' or path[7] == '\\');
 }
@@ -149,7 +149,7 @@ pub fn posixToWin32(posix_path: []const u8, out: []u8) !usize {
 
     // Relative path: strip drive_c/ prefix if present, prepend C:\
     var src = posix_path;
-    if (startsWithDriveC(src)) {
+    if (isInsideDriveC(src)) {
         src = src[drive_root_len..];
     }
     var pos = try appendBytes(out, 0, "C:\\");
@@ -190,21 +190,6 @@ fn terminate(out: []u8, pos: usize) !usize {
 /// Check if a path has a drive letter prefix (e.g. `C:` or `z:`).
 pub fn hasDriveLetter(path: []const u8) bool {
     return path.len >= 2 and path[1] == ':' and std.ascii.isAlphabetic(path[0]);
-}
-
-/// Check if a POSIX path is inside drive_c/.
-pub fn isInsideDriveC(path: []const u8) bool {
-    return startsWithDriveC(path);
-}
-
-/// Ensure the drive_c directory exists, creating it if needed.
-pub fn ensureDriveRoot() void {
-    std.Io.Dir.cwd().makeDir(runtime.io(), "drive_c") catch |err| {
-        switch (err) {
-            error.PathAlreadyExists => {},
-            else => {},
-        }
-    };
 }
 
 // ============================================================================
@@ -431,23 +416,6 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
     @memcpy(out[0..fb_len], src[0..fb_len]);
     out[fb_len] = 0;
     return fb_len;
-}
-
-/// Quick file existence check using a Win32 path. Uses `toHostPath` internally.
-pub fn fileExistsHost(win_path: []const u8) bool {
-    var buf: [1024]u8 = undefined;
-    const len = toHostPath(win_path, &buf);
-    if (len == 0) return false;
-    const p = buf[0..len];
-    if (std.fs.path.isAbsolute(p)) {
-        var dir = std.Io.Dir.openDirAbsolute(runtime.io(), "/", .{}) catch return false;
-        defer dir.close(runtime.io());
-        _ = dir.statFile(p[1..]) catch return false;
-        return true;
-    } else {
-        _ = std.Io.Dir.cwd().statFile(runtime.io(), p, .{}) catch return false;
-        return true;
-    }
 }
 
 // -----------------------------------------------------------------------

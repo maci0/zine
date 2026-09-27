@@ -592,7 +592,6 @@ pub fn setMainWindowTitle(title: []const u8) void {
 }
 
 // Per-hwnd WndProc lookup table (for dialogs, subclassed windows, etc.)
-const WndProcType = *const fn (usize, u32, usize, isize) callconv(w32cc.WINAPI) isize;
 const MAX_WINDOWS = 128;
 pub const WindowInfo = struct {
     hwnd: usize = 0,
@@ -814,8 +813,6 @@ pub fn postGenericMessage(msg_id: u32, wParam: usize, lParam: isize) void {
         pending_messages_head = next_head;
     }
 }
-
-pub const postKeyboardMessage = postGenericMessage;
 
 // --- Renderer Input Callbacks ---
 

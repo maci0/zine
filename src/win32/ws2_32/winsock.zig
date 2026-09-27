@@ -80,9 +80,6 @@ const PosixCompat = struct {
     }
 };
 
-/// Small helper to translate between u32 and i32 bit-cast chains.
-const posix_compat = PosixCompat;
-
 /// Minimal AF_INET address used by winsock compat; replaces SockAddrInet.
 const SockAddrInet = extern struct {
     any: linux.sockaddr = .{ .family = linux.AF.UNSPEC, .data = [_]u8{0} ** 14 },

@@ -62,12 +62,6 @@ fn readGuestU32(va: u32) u32 {
     return @as(*const u32, @ptrFromInt(va)).*;
 }
 
-/// Guest-memory u32 read (SEH chain records live in guest memory;
-/// direct on native).
-inline fn gmemRead(va: u32) u32 {
-    return readGuestU32(va);
-}
-
 /// Guest-memory u32 write (the SEH record slots live in guest memory).
 inline fn gmemWrite(va: u32, val: u32) void {
     if (comptime platform.is_wasm) {

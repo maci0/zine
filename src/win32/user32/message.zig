@@ -747,16 +747,6 @@ fn controlIdOf(hwnd: usize) i32 {
     return @intCast(hwnd);
 }
 
-/// True for BS_AUTOCHECKBOX (3) / BS_AUTORADIOBUTTON (9) — clicking toggles
-/// the state automatically, like the real button class.
-fn isAutoToggleButton(hwnd: usize) bool {
-    if (user32.getWindowInfo(hwnd)) |info| {
-        const bs_type = @as(u32, @bitCast(info.style)) & 0xF;
-        return bs_type == 3 or bs_type == 9;
-    }
-    return false;
-}
-
 /// Apply an auto-button click: BS_AUTOCHECKBOX (3) toggles, BS_AUTORADIOBUTTON
 /// (9) becomes checked (radios can't be un-checked by clicking). Returns true
 /// if the state changed.

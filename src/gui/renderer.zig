@@ -180,8 +180,6 @@ pub var on_cancel_dialog: ?*const fn () void = null;
 pub var on_file_uploaded: ?*const fn ([]const u8) void = null;
 /// Callback for text find/replace actions.
 pub var on_find_action: ?*const fn ([]const u8, []const u8, []const u8, bool, bool) void = null;
-/// Callback for context menu selection.
-pub var on_context_menu_select: ?*const fn (u32) void = null;
 /// Callback for the color dialog result (0x00RRGGBB).
 pub var on_color_selected: ?*const fn (u32) void = null;
 
@@ -203,11 +201,6 @@ pub fn editTextSlice() []const u8 {
 /// Returns the length of the current edit text data.
 pub fn editTextLen() usize {
     return edit_text_data.len;
-}
-
-/// Returns a pointer to the current edit text data.
-pub fn editTextPtr() [*]const u8 {
-    return edit_text_data.ptr;
 }
 
 /// Sets the edit text data from a slice, growing the buffer if necessary.
@@ -266,48 +259,6 @@ pub fn editInsertChar(cp: u21) void {
     edit_text_data.ptr[old_len + n] = 0;
     edit_text_data.len = old_len + n;
     setEditText(edit_text_data[0..edit_text_data.len]);
-}
-
-// --- Clipboard buffer ---
-
-/// Shared buffer for clipboard data.
-pub var clipboard_data: []u8 = &[_]u8{};
-/// Capacity of the clipboard data buffer.
-pub var clipboard_data_cap: usize = 0;
-
-/// Returns a slice of the current clipboard data.
-pub fn clipboardSlice() []const u8 {
-    return clipboard_data;
-}
-
-/// Returns the length of the current clipboard data.
-pub fn clipboardLen() usize {
-    return clipboard_data.len;
-}
-
-/// Returns a pointer to the current clipboard data.
-pub fn clipboardPtr() [*]const u8 {
-    return clipboard_data.ptr;
-}
-
-/// Sets the clipboard data from a slice, growing the buffer if necessary.
-pub fn setClipboardFromSlice(text: []const u8) void {
-    const needed = text.len + 1;
-    if (needed > clipboard_data_cap) {
-        const new_cap = @max(needed, clipboard_data_cap * 2);
-        const new_buf = g_allocator.alloc(u8, new_cap) catch return;
-        if (clipboard_data_cap > 0) g_allocator.free(clipboard_data.ptr[0..clipboard_data_cap]);
-        clipboard_data.ptr = new_buf.ptr;
-        clipboard_data_cap = new_cap;
-    }
-    @memcpy(clipboard_data.ptr[0..text.len], text);
-    clipboard_data.ptr[text.len] = 0;
-    clipboard_data.len = text.len;
-}
-
-/// Clears the current clipboard data.
-pub fn clearClipboard() void {
-    clipboard_data.len = 0;
 }
 
 // --- Context menu blocking ---

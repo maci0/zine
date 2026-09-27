@@ -132,15 +132,6 @@ fn dsound_Dummy3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
-fn dsound_Dummy4(a: usize, b: usize, c: usize, d: usize) callconv(w32cc.WINAPI) i32 {
-    _ = a;
-    _ = b;
-    _ = c;
-    _ = d;
-    if (trace.enable_tracing) trace.print("DSOUND: DummyStub4\n", .{});
-    return 0;
-}
-
 fn dsound_QueryInterface(this: *anyopaque, riid: usize, ppvObj: *?*anyopaque) callconv(w32cc.WINAPI) i32 {
     _ = this;
     _ = riid;

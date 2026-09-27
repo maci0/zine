@@ -240,7 +240,6 @@ A comptime-selected backend that abstracts OS-specific functionality:
 | `timestamp` | `std.time.timestamp` (epoch seconds) | Returns 0 |
 | `mprotect`/`mprotectExec` | Linux `mprotect` | No-op |
 | `pipe`/`dup` | Linux `pipe2`/`dup` | Returns error |
-| `writeGuestPtr` | Inline 32-bit write (identity on x86) | — |
 
 ---
 
@@ -389,7 +388,6 @@ sequenceDiagram
     end
     Main->>TEB: initTEB() — allocate TEB/PEB, set stack bounds
     Main->>TEB: setupFS() — configure FS segment register
-    Main->>Loader: attachLoadedDlls() — call DllMain(DLL_PROCESS_ATTACH)
     Main->>EP: Jump to entry point (native) or run interpreter (WASM)
 ```
 

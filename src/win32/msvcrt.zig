@@ -24,8 +24,6 @@ pub var global_env_initialized: bool = false;
 pub var msvcrt_fmode: u32 = 0;
 /// MSVCRT _commode (commit mode) global.
 pub var msvcrt_commode: u16 = 0;
-/// MSVCRT __initenv global.
-pub var msvcrt_initenv: ?*anyopaque = null;
 /// MSVCRT _pgmptr (program name) global.
 pub var msvcrt_pgmptr: ?*anyopaque = null;
 /// MSVCRT _adjust_fdiv (Pentium FDIV bug workaround) global.
@@ -61,8 +59,6 @@ pub var msvcrt_pctype: [257]u16 = [_]u16{0} ** 257;
 pub var msvcrt_pctype_ptr: *u16 = &msvcrt_pctype[1];
 /// MSVCRT _mbctype table.
 pub var msvcrt_mbctype: [257]u8 = [_]u8{0} ** 257;
-/// Pointer to the _mbctype table.
-pub var msvcrt_mbctype_ptr: *u8 = &msvcrt_mbctype[1];
 /// Represents an environment variable key-value pair.
 /// `deleted` marks a tombstone: the guest removed this name, so it must
 /// shadow any inherited entry of the same (or different-case) name instead

@@ -40,8 +40,6 @@ pub const REG_EAX: u32 = 0;
 pub const REG_ECX: u32 = 1;
 /// EDX register index.
 pub const REG_EDX: u32 = 2;
-/// EBX register index.
-pub const REG_EBX: u32 = 3;
 /// ESP register index.
 pub const REG_ESP: u32 = 4;
 /// EBP register index.
@@ -336,27 +334,6 @@ pub fn emitUpdateZfSf(body: *Body, op_size: cpu_mod.OpSize) !void {
     }
     try body.appendOpcode(.local_set);
     try body.appendUleb128(LOCAL_SF);
-}
-
-/// Emit CF computation for ADD: CF = (result < operand1) unsigned.
-pub fn emitCfAdd(body: *Body, dest_local: u32) !void {
-    // CF for add: result < either operand (unsigned)
-    try body.appendOpcode(.local_get);
-    try body.appendUleb128(dest_local);
-    try body.appendOpcode(.local_get);
-    try body.appendUleb128(LOCAL_SCRATCH); // original dest value saved there
-    try body.appendOpcode(.i32_lt_u);
-    try body.appendOpcode(.local_set);
-    try body.appendUleb128(LOCAL_CF);
-}
-
-/// Emit CF computation for SUB: CF = (operand1 < operand2) unsigned.
-pub fn emitCfSub(body: *Body) !void {
-    // Already computed result in dest. We stored originals.
-    // CF = (op1 < op2) unsigned — caller must push op1 and op2
-    try body.appendOpcode(.i32_lt_u);
-    try body.appendOpcode(.local_set);
-    try body.appendUleb128(LOCAL_CF);
 }
 
 /// Emit CF=0, OF=0 (for logic ops like AND, OR, XOR, TEST).

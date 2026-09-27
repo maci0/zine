@@ -6,25 +6,6 @@ const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const io = @import("io.zig");
 
-const max_fds = 64;
-var fd_handles: [max_fds]?std.Io.File = [_]?std.Io.File{null} ** max_fds;
-
-/// Internal helper to allocate a new file descriptor.
-/// Implementation status: Partially implemented
-pub fn alloc_fd() ?i32 {
-    for (3..max_fds) |i| if (fd_handles[i] == null) return @intCast(i);
-    return null;
-}
-
-/// Internal helper to get a std.Io.File from a file descriptor.
-/// Implementation status: Partially implemented
-pub fn get_fd_file(fd: i32) ?std.Io.File {
-    if (fd == 0) return @import("../host_io.zig").fileFromFd(0);
-    if (fd == 1) return @import("../host_io.zig").fileFromFd(1);
-    if (fd == 2) return @import("../host_io.zig").fileFromFd(2);
-    return if (fd >= 3 and fd < max_fds) fd_handles[@intCast(fd)] else null;
-}
-
 const FILE = io.MSVCRT_FILE;
 
 /// Determines if a file has the specified access permissions.
@@ -157,13 +138,6 @@ pub fn fileno(file_ptr: ?*FILE) callconv(.c) i32 {
         return ms_file._file;
     }
     return -1;
-}
-
-/// Determines whether a file descriptor is associated with a character device.
-/// Implementation status: Fully implemented
-pub fn stub_isatty(fd: i32) callconv(.c) i32 {
-    if (fd == 0 or fd == 1 or fd == 2) return 1;
-    return 0;
 }
 
 /// Gets the current position of the file pointer.

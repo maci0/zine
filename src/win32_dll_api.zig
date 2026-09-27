@@ -18,7 +18,6 @@ pub const kernel32 = struct {
     pub const sync = @import("win32/kernel32/sync.zig");
     pub const sysinfo = @import("win32/kernel32/sysinfo.zig");
     pub const path = @import("win32/kernel32/path.zig");
-    pub const profile = @import("win32/kernel32/profile.zig");
 };
 
 pub const advapi32 = struct {
@@ -65,10 +64,6 @@ pub const ntdll = struct {
 
 pub const mss32 = struct {
     pub const miles = @import("win32/mss32/miles.zig");
-};
-
-pub const ws2_32 = struct {
-    pub const winsock = @import("win32/ws2_32/winsock.zig");
 };
 
 pub const rpcrt4 = @import("win32/rpcrt4.zig");

@@ -11,9 +11,6 @@ pub const is_native = false;
 pub const is_x86 = false;
 pub const is_x86_64 = false;
 
-/// The size of a memory page (4KB).
-pub const PAGE_SIZE = 4096;
-
 /// Bounds of the stack region.
 pub const StackBounds = struct {
     stack_base: usize,

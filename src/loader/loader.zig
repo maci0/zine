@@ -514,50 +514,6 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
     mod.imports_resolved = true;
 }
 
-/// Calls the entry point (DllMain) for all loaded PE dependency DLLs that
-/// have not yet been initialized. This is typically called after all imports
-/// for a module and its dependencies have been resolved.
-pub fn attachLoadedDlls(env: *Environment) void {
-    var it = env.registry.modules.iterator();
-    while (it.next()) |entry| {
-        const mod = entry.value_ptr.*;
-        if (mod.attached) continue;
-
-        const opt_header = &mod.parser.getNtHeaders().OptionalHeader;
-        if ((opt_header.Subsystem != 0 and opt_header.Subsystem != 2 and opt_header.Subsystem != 3) or
-            (opt_header.DllCharacteristics & 0x2000) != 0 or
-            opt_header.AddressOfEntryPoint == 0)
-        {
-            mod.attached = true;
-            continue;
-        }
-
-        const nt_headers = mod.parser.getNtHeaders();
-        const file_header = &nt_headers.FileHeader;
-        if ((file_header.Characteristics & 0x2000) == 0) {
-            mod.attached = true;
-            continue;
-        }
-
-        mod.attached = true;
-        const entry_addr = @intFromPtr(mod.mapped_memory.ptr) + opt_header.AddressOfEntryPoint;
-        if (trace.enable_tracing) trace.print("loader: calling DllMain for {s} at {x}\n", .{ entry.key_ptr.*, entry_addr });
-
-        if (comptime platform.is_x86_64) {
-            const compat_thunks = @import("../x86/compat_thunks.zig");
-            _ = compat_thunks.callCompat32(
-                @truncate(entry_addr),
-                @truncate(@intFromPtr(mod.mapped_memory.ptr)),
-                1, // DLL_PROCESS_ATTACH
-                0, // lpReserved
-            );
-        } else {
-            const DllMain = @as(*const fn (usize, u32, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(entry_addr));
-            _ = DllMain(@intFromPtr(mod.mapped_memory.ptr), 1, 0);
-        }
-    }
-}
-
 // -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------

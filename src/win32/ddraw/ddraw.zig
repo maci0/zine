@@ -332,17 +332,6 @@ fn ddraw_Dum5(a: usize, b: usize, c: usize, d: usize, e: usize) callconv(w32cc.W
     return w32.DD_OK;
 }
 
-fn ddraw_Dum6(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) callconv(w32cc.WINAPI) i32 {
-    _ = a;
-    _ = b;
-    _ = c;
-    _ = d;
-    _ = e;
-    _ = f;
-    if (trace.enable_tracing) trace.print("DDRAW: Dummy6\n", .{});
-    return w32.DD_OK;
-}
-
 // Comptime-generic traced stubs for DDraw surface methods
 fn surf_tn1(comptime name: []const u8) fn (usize) callconv(w32cc.WINAPI) i32 {
     return struct {
