@@ -461,40 +461,58 @@ test "VerSetConditionMask builds correct mask" {
     try std.testing.expect(mask2 == (3 << 3) | (1 << 0));
 }
 
+// UNICODE_STRING is 8 bytes with a 32-bit Buffer on every host, so the
+// destination is decoded by offset rather than through the struct type.
+fn usLength(buf: *const [8]u8) u16 {
+    return @as(*align(1) const u16, @ptrCast(&buf[0])).*;
+}
+fn usMaxLength(buf: *const [8]u8) u16 {
+    return @as(*align(1) const u16, @ptrCast(&buf[2])).*;
+}
+fn usBuffer(buf: *const [8]u8) u32 {
+    return @as(*align(1) const u32, @ptrCast(&buf[4])).*;
+}
+
+// RtlInitUnicodeString stores `source` into a 32-bit Buffer field, so a test
+// can only supply a source whose address fits 32 bits. A stack address on a
+// 64-bit host does not, and guest-low memory cannot be mapped from a test.
+const needs_32bit_address = @import("builtin").target.cpu.arch != .x86;
+
 test "RtlInitUnicodeString fills struct correctly" {
-    // This test exercises 32-bit guest API stubs — skip on 64-bit hosts where
-    // pointer-width and struct alignment assumptions don't hold.
-    if (@import("builtin").target.cpu.arch != .x86) return error.SkipZigTest;
+    if (needs_32bit_address) return error.SkipZigTest;
 
     var wstr = [_]u16{ 'H', 'i', 0 };
     var buf: [8]u8 align(4) = undefined;
+    @memset(&buf, 0xFF);
 
     RtlInitUnicodeString(@intFromPtr(&buf), @intFromPtr(&wstr));
 
-    const length = @as(*align(1) const u16, @ptrCast(&buf[0])).*;
-    const max_length = @as(*align(1) const u16, @ptrCast(&buf[2])).*;
-    const buffer_val = @as(*align(1) const u32, @ptrCast(&buf[4])).*;
-
-    try std.testing.expectEqual(@as(u16, 4), length); // 2 chars * 2 bytes
-    try std.testing.expectEqual(@as(u16, 6), max_length); // length + null terminator
-    try std.testing.expectEqual(@as(u32, @intCast(@intFromPtr(&wstr))), buffer_val);
+    try std.testing.expectEqual(@as(u16, 4), usLength(&buf)); // 2 chars * 2 bytes
+    try std.testing.expectEqual(@as(u16, 6), usMaxLength(&buf)); // length + null terminator
+    try std.testing.expectEqual(@as(u32, @intCast(@intFromPtr(&wstr))), usBuffer(&buf));
 }
 
 test "RtlInitUnicodeString with null source" {
-    if (@import("builtin").target.cpu.arch != .x86) return error.SkipZigTest;
+    if (needs_32bit_address) return error.SkipZigTest;
 
     var buf: [8]u8 align(4) = undefined;
     @memset(&buf, 0xFF);
 
     RtlInitUnicodeString(@intFromPtr(&buf), 0);
 
-    const length = @as(*align(1) const u16, @ptrCast(&buf[0])).*;
-    const max_length = @as(*align(1) const u16, @ptrCast(&buf[2])).*;
-    const buffer_val = @as(*align(1) const u32, @ptrCast(&buf[4])).*;
+    try std.testing.expectEqual(@as(u16, 0), usLength(&buf));
+    try std.testing.expectEqual(@as(u16, 0), usMaxLength(&buf));
+    try std.testing.expectEqual(@as(u32, 0), usBuffer(&buf));
+}
 
-    try std.testing.expectEqual(@as(u16, 0), length);
-    try std.testing.expectEqual(@as(u16, 0), max_length);
-    try std.testing.expectEqual(@as(u32, 0), buffer_val);
+test "RtlInitUnicodeString with null destination writes nothing" {
+    // Guest code can pass a null PUNICODE_STRING. The stub must return
+    // before touching either pointer, so this holds on every host.
+    var wstr = [_]u16{ 'H', 'i', 0 };
+
+    RtlInitUnicodeString(0, @intFromPtr(&wstr));
+
+    try std.testing.expectEqualSlices(u16, &.{ 'H', 'i', 0 }, &wstr);
 }
 
 test "RtlEqualSid compares correctly" {

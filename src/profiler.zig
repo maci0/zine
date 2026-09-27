@@ -298,12 +298,36 @@ test "profiler: out of range indices are safe" {
         reset();
     }
 
-    // EIP beyond tracked range (>1GB)
-    tickEip(0x40000000);
-    try std.testing.expectEqual(@as(u64, 1), total_insns); // counted
-    // But no page entry updated beyond MAX_PAGES
+    // The last page inside the tracked 1 GB, then the first one past it.
+    // 0x3FFFFFFF >> 12 is MAX_PAGES - 1, 0x40000000 >> 12 is MAX_PAGES.
+    tickEip(0x3FFFFFFF);
+    try std.testing.expectEqual(@as(u64, 1), eip_pages[MAX_PAGES - 1]);
 
-    // Thunk ID beyond MAX_THUNKS
+    tickEip(0x40000000);
+    try std.testing.expectEqual(@as(u64, 2), total_insns); // counted
+    // The tick past the range must leave every page entry untouched, so the
+    // last tracked page still holds the single count from above.
+    try std.testing.expectEqual(@as(u64, 1), eip_pages[MAX_PAGES - 1]);
+
+    // Highest valid thunk ID is counted; anything at or above MAX_THUNKS
+    // must be dropped instead of writing past the table.
+    tickThunk(MAX_THUNKS - 1);
+    try std.testing.expectEqual(@as(u64, 1), thunk_counts[MAX_THUNKS - 1]);
+
+    tickThunk(MAX_THUNKS);
     tickThunk(MAX_THUNKS + 1);
-    try std.testing.expectEqual(@as(u64, 0), thunk_counts[0]); // not corrupted
+    try std.testing.expectEqual(@as(u64, 1), thunk_counts[MAX_THUNKS - 1]);
+}
+
+test "profiler: registerThunkName drops out of range IDs" {
+    reset();
+    defer reset();
+
+    registerThunkName(MAX_THUNKS - 1, "LastStub");
+    // Both calls must return without writing; the slot below the guard is
+    // the only one that can be observed afterwards.
+    registerThunkName(MAX_THUNKS, "OverflowStub");
+    registerThunkName(std.math.maxInt(u32), "FarOverflowStub");
+
+    try std.testing.expectEqualStrings("LastStub", thunk_names[MAX_THUNKS - 1].?);
 }
