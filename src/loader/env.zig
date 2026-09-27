@@ -148,20 +148,6 @@ pub const Environment = struct {
         }
     }
 
-    /// Update an existing builtin export address (e.g., to relocate data into guest memory).
-    pub fn updateExport(self: *Environment, dll: []const u8, name: []const u8, new_addr: usize) void {
-        // Keys are stored lowercase (from getOrCreateModule), so normalize and do direct lookup.
-        var key_buf: [256]u8 = undefined;
-        const normalized = key_buf[0..dll.len];
-        _ = std.ascii.lowerString(normalized, dll);
-
-        if (self.builtins.getPtr(normalized)) |builtin| {
-            if (builtin.exports.getPtr(name)) |exp| {
-                exp.addr = new_addr;
-            }
-        }
-    }
-
     /// Register a typed Zig function as a built-in export.
     /// On WASM, this generates an intelligent thunk handler that unwraps
     /// guest arguments into the native function signature safely.

@@ -293,8 +293,6 @@ pub const IMAGE_BASE_RELOCATION = extern struct {
 pub const PEParser = struct {
     /// The raw byte data of the PE file.
     data: []u8,
-    /// Offset to the IMAGE_DOS_HEADER.
-    dos_header_offset: usize,
     /// Offset to the IMAGE_NT_HEADERS32.
     nt_headers_offset: usize,
     /// Parsed section headers.
@@ -342,7 +340,6 @@ pub const PEParser = struct {
 
         return PEParser{
             .data = data,
-            .dos_header_offset = 0,
             .nt_headers_offset = @as(usize, @intCast(dos_header_ptr.e_lfanew)),
             .sections = sections_array,
         };
@@ -351,11 +348,6 @@ pub const PEParser = struct {
     /// Frees the section headers array.
     pub fn deinit(self: *PEParser, allocator: std.mem.Allocator) void {
         allocator.free(self.sections);
-    }
-
-    /// Returns a pointer to the IMAGE_DOS_HEADER.
-    pub fn getDosHeader(self: *const PEParser) *align(1) const IMAGE_DOS_HEADER {
-        return @ptrCast(self.data.ptr + self.dos_header_offset);
     }
 
     /// Returns a pointer to the IMAGE_NT_HEADERS32.

@@ -27,24 +27,6 @@ pub const DialogItem = struct {
     class: []const u8,
 };
 
-/// Represents the metadata for an entire dialog.
-pub const DialogData = struct {
-    /// The message type for the GUI backend.
-    type: []const u8 = "custom_dialog",
-    /// Title of the dialog window.
-    title: []const u8,
-    /// Preferred X coordinate.
-    x: u16,
-    /// Preferred Y coordinate.
-    y: u16,
-    /// Width in dialog units.
-    cx: u16,
-    /// Height in dialog units.
-    cy: u16,
-    /// List of controls in the dialog.
-    items: []DialogItem,
-};
-
 /// Reads a NUL-terminated UTF-16 string from a PE resource and returns it as
 /// UTF-8. Surrogate pairs are combined, so characters outside the BMP survive
 /// the trip into the JSON the frontend parses; an unpaired half has no UTF-8
@@ -145,13 +127,8 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
         }
     }
 
-    var title_buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer title_buf.deinit(allocator);
-    {
-        const title = try readUtf16String(allocator, &reader, null);
-        defer allocator.free(title);
-        try title_buf.appendSlice(allocator, title);
-    }
+    const title = try readUtf16String(allocator, &reader, null);
+    defer allocator.free(title);
 
     // DS_SETFONT = 0x40
     if ((style & 0x40) != 0) {
@@ -277,7 +254,7 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
     const w = &aw.writer;
 
     try w.writeAll("{\"type\": \"custom_dialog\", \"title\": \"");
-    for (title_buf.items) |char| {
+    for (title) |char| {
         // JSON string escape incl. control chars: dialog strings come from PE
         // resources and must not be able to break the frontend's JSON.parse.
         if (char == '"') {

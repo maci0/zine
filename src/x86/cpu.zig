@@ -84,8 +84,6 @@ pub const Cpu = struct {
 
     /// If true, the CPU has encountered a HLT instruction or fatal error.
     halted: bool = false,
-    /// Pending interrupt number to be handled on the next step.
-    pending_interrupt: ?u8 = null,
 
     // --- Register access by index ---
 
@@ -185,14 +183,6 @@ pub const Cpu = struct {
     }
 
     // --- XMM register access ---
-
-    pub fn getXmmBytes(self: *const Cpu, idx: u3) [16]u8 {
-        return @bitCast(self.xmm[idx]);
-    }
-
-    pub fn setXmmBytes(self: *Cpu, idx: u3, val: [16]u8) void {
-        self.xmm[idx] = @bitCast(val);
-    }
 
     pub fn getXmmF32(self: *const Cpu, idx: u3) [4]f32 {
         return @bitCast(self.xmm[idx]);

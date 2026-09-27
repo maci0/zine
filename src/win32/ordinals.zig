@@ -147,21 +147,7 @@ pub const DSOUND = struct {
 /// NDDEAPI.dll
 // -----------------------------------------------------------------------
 pub const NDDEAPI = struct {
-    // A variants (ANSI)
-    pub const NDdeShareAddA = ordStr(11);
-    pub const NDdeShareDelA = ordStr(12);
-    pub const NDdeShareEnumA = ordStr(13);
-    pub const NDdeShareGetInfoA = ordStr(14);
-    pub const NDdeShareSetInfoA = ordStr(15);
-    pub const NDdeGetShareSecurityA = ordStr(16);
-    pub const NDdeSetShareSecurityA = ordStr(17);
-    pub const NDdeGetErrorStringA = ordStr(20);
-    pub const NDdeSetTrustedShareA = ordStr(21);
-    pub const NDdeGetTrustedShareA = ordStr(22);
-    pub const NDdeTrustedShareEnumA = ordStr(23);
-    pub const NDdeIsValidShareNameA = ordStr(24);
-    pub const NDdeIsValidAppTopicListA = ordStr(25);
-    // W variants (Unicode)
+    // W variants (Unicode); the A (ANSI) ordinals are not registered.
     pub const NDdeShareAddW = ordStr(500);
     pub const NDdeShareDelW = ordStr(501);
     pub const NDdeShareGetInfoW = ordStr(503);
