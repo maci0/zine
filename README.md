@@ -204,10 +204,12 @@ release, not a 0.2.1 patch.
   write.
 - Every web UI asset response carries `Referrer-Policy: no-referrer`, and the
   content security policy adds `object-src 'none'; base-uri 'none';
-  frame-ancestors 'none'`. A `304 Not Modified` repeats the security headers
-  alongside the `ETag`, so a revalidated response is no weaker than the `200`
-  it replaces. Proxies or frontends that rewrite these headers still need to
-  keep them.
+  frame-ancestors 'none'`. A `304 Not Modified` repeats
+  `X-Content-Type-Options`, `X-Frame-Options`, and `Referrer-Policy` alongside
+  the `ETag`, but not `Content-Security-Policy`. A cache that treats a
+  revalidated response as a full header replacement can therefore end up
+  serving the asset without the policy. Proxies or frontends that rewrite
+  these headers still need to keep them.
 
 #### Added
 
