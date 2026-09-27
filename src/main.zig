@@ -208,23 +208,17 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--argv0") or std.mem.startsWith(u8, arg, "--argv0="))) {
-            if (std.mem.startsWith(u8, arg, "--argv0=")) {
-                const val = arg["--argv0=".len..];
-                if (val.len == 0) {
-                    std.debug.print("{s}", .{"Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n"});
-                    std.process.exit(2);
-                }
-                argv0_opt = val;
-            } else if (args.next()) |val| {
-                if (val.len == 0) {
-                    std.debug.print("{s}", .{"Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n"});
-                    std.process.exit(2);
-                }
-                argv0_opt = val;
-            } else {
+            // Two spellings: a separate argument, or "=".
+            const attached = if (std.mem.startsWith(u8, arg, "--argv0=")) arg["--argv0=".len..] else null;
+            const val = attached orelse args.next() orelse {
                 std.debug.print("{s}", .{"Error: --argv0 requires a value.\nTry 'zine --help' for more information.\n"});
                 std.process.exit(2);
+            };
+            if (val.len == 0) {
+                std.debug.print("{s}", .{"Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n"});
+                std.process.exit(2);
             }
+            argv0_opt = val;
             continue;
         }
         if (!end_of_options and target_exe_opt == null and arg.len > 1 and arg[0] == '-') {

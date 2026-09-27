@@ -309,30 +309,18 @@ fn patchImport(
             if (trace.enable_tracing) {
                 trace.print("loader: {s} -> {s} at {X} (data export)\n", .{ dll_name, func_name, exp.addr });
             }
-        } else if (exp.thunk_handler) |handler| {
-            // Use the comptime-generated handler that calls the stub with
-            // the exact correct signature (avoids WASM type mismatch)
-            const thunk_id = x86_thunks.registerThunk(.{
-                .name = func_name,
-                .param_count = null, // handler manages ESP itself
-                .handler = handler,
-            });
-            if (thunk_memory) |mem| {
-                const guest_addr = allocThunkCode(mem, thunk_id);
-                first_thunk.* = guest_addr;
-                if (trace.enable_tracing) {
-                    trace.print("loader: {s} -> {s} at thunk {X} (id={d})\n", .{ dll_name, func_name, guest_addr, thunk_id });
-                }
-            } else {
-                first_thunk.* = @intCast(exp.addr);
-                if (trace.enable_tracing) {
-                    trace.print("loader: {s} -> {s} at {X} (no thunk mem!)\n", .{ dll_name, func_name, exp.addr });
-                }
-            }
         } else {
-            // Non-comptime function export (e.g., _EH_prolog, _ftol) —
-            // create a generic thunk to dispatch to the native function.
-            const thunk_id = x86_thunks.registerNativeThunk(func_name, exp.addr, exp.param_bytes, false);
+            // A comptime handler calls the stub with its exact signature
+            // (avoids WASM type mismatch); anything else (e.g. _EH_prolog,
+            // _ftol) gets a generic thunk dispatching to the host function.
+            const thunk_id = if (exp.thunk_handler) |handler|
+                x86_thunks.registerThunk(.{
+                    .name = func_name,
+                    .param_count = null, // handler manages ESP itself
+                    .handler = handler,
+                })
+            else
+                x86_thunks.registerNativeThunk(func_name, exp.addr, exp.param_bytes, false);
             if (thunk_memory) |mem| {
                 const guest_addr = allocThunkCode(mem, thunk_id);
                 first_thunk.* = guest_addr;

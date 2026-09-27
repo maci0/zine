@@ -69,33 +69,11 @@ pub fn RestoreDC(hdc: usize, nSavedDC: i32) callconv(w32cc.WINAPI) i32 {
         if (nSavedDC == -1 and saved_dc_count > 0) {
             // Restore most recently saved
             saved_dc_count -= 1;
-            const saved = saved_dc_stack[saved_dc_count];
-            dc.bitmap = saved.bitmap;
-            dc.brush = saved.brush;
-            dc.pen = saved.pen;
-            dc.font = saved.font;
-            dc.bk_mode = saved.bk_mode;
-            dc.bk_color = saved.bk_color;
-            dc.text_color = saved.text_color;
-            dc.rop2 = saved.rop2;
-            dc.stretch_mode = saved.stretch_mode;
-            dc.text_align = saved.text_align;
-            dc.map_mode = saved.map_mode;
+            dc.* = saved_dc_stack[saved_dc_count];
             return 1;
         } else if (nSavedDC > 0 and @as(usize, @intCast(nSavedDC)) <= saved_dc_count) {
             const idx: usize = @intCast(nSavedDC - 1);
-            const saved = saved_dc_stack[idx];
-            dc.bitmap = saved.bitmap;
-            dc.brush = saved.brush;
-            dc.pen = saved.pen;
-            dc.font = saved.font;
-            dc.bk_mode = saved.bk_mode;
-            dc.bk_color = saved.bk_color;
-            dc.text_color = saved.text_color;
-            dc.rop2 = saved.rop2;
-            dc.stretch_mode = saved.stretch_mode;
-            dc.text_align = saved.text_align;
-            dc.map_mode = saved.map_mode;
+            dc.* = saved_dc_stack[idx];
             saved_dc_count = idx;
             return 1;
         }

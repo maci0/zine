@@ -1417,6 +1417,17 @@ fn parseResourceDirForIcon(data: []const u8, rsrc_offset: u32, rsrc_rva: u32) ?[
     return b64_buf;
 }
 
+/// Resolve a directory entry's high-bit-cleared offset as a data entry and
+/// return the bytes it points at.
+fn resourceDataAt(data: []const u8, data_entry: u32, rsrc_base: u32, rsrc_rva: u32) ?[]const u8 {
+    if (data_entry + 16 > data.len) return null;
+    const data_rva = std.mem.readInt(u32, data[data_entry..][0..4], .little);
+    const data_size = std.mem.readInt(u32, data[data_entry + 4 ..][0..4], .little);
+    const file_offset = data_rva - rsrc_rva + rsrc_base;
+    if (file_offset + data_size > data.len) return null;
+    return data[file_offset..][0..data_size];
+}
+
 /// Navigate a resource directory (type → first ID → first language) to get data
 fn getFirstResourceData(data: []const u8, dir_offset: u32, rsrc_base: u32, rsrc_rva: u32) ?[]const u8 {
     if (dir_offset + 16 > data.len) return null;
@@ -1436,13 +1447,7 @@ fn getFirstResourceData(data: []const u8, dir_offset: u32, rsrc_base: u32, rsrc_
         return getFirstResourceData(data, sub_dir, rsrc_base, rsrc_rva);
     } else {
         // It's a data entry
-        const data_entry = rsrc_base + sub_offset;
-        if (data_entry + 16 > data.len) return null;
-        const data_rva = std.mem.readInt(u32, data[data_entry..][0..4], .little);
-        const data_size = std.mem.readInt(u32, data[data_entry + 4 ..][0..4], .little);
-        const file_offset = data_rva - rsrc_rva + rsrc_base;
-        if (file_offset + data_size > data.len) return null;
-        return data[file_offset..][0..data_size];
+        return resourceDataAt(data, rsrc_base + sub_offset, rsrc_base, rsrc_rva);
     }
 }
 
@@ -1463,13 +1468,7 @@ fn getResourceDataById(data: []const u8, dir_offset: u32, rsrc_base: u32, rsrc_r
                 const sub_dir = rsrc_base + (sub_offset & 0x7FFFFFFF);
                 return getFirstResourceData(data, sub_dir, rsrc_base, rsrc_rva);
             } else {
-                const data_entry = rsrc_base + sub_offset;
-                if (data_entry + 16 > data.len) return null;
-                const data_rva = std.mem.readInt(u32, data[data_entry..][0..4], .little);
-                const data_size = std.mem.readInt(u32, data[data_entry + 4 ..][0..4], .little);
-                const file_offset = data_rva - rsrc_rva + rsrc_base;
-                if (file_offset + data_size > data.len) return null;
-                return data[file_offset..][0..data_size];
+                return resourceDataAt(data, rsrc_base + sub_offset, rsrc_base, rsrc_rva);
             }
         }
         entry += 8;

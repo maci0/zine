@@ -647,30 +647,35 @@ fn device3_EndScene(this: usize) callconv(w32cc.WINAPI) i32 {
     return w32.D3D_OK;
 }
 
+/// A DDPIXELFORMAT the enum callbacks see, in the masks the app expects.
+const PixelFormat = struct { bpp: u32, r: u32, g: u32, b: u32, a: u32, flags: u32 };
+
+fn enumTextureFormats(formats: []const PixelFormat, lpd3dEnumPixelProc: usize, lpArg: usize) void {
+    if (lpd3dEnumPixelProc == 0) return;
+    const cb = @as(*const fn (usize, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(lpd3dEnumPixelProc));
+    for (formats) |fmt| {
+        var pf: w32.DDPIXELFORMAT = std.mem.zeroes(w32.DDPIXELFORMAT);
+        pf.dwSize = 32;
+        pf.dwFlags = fmt.flags;
+        pf.dwRGBBitCount = fmt.bpp;
+        pf.dwRBitMask = fmt.r;
+        pf.dwGBitMask = fmt.g;
+        pf.dwBBitMask = fmt.b;
+        pf.dwRGBAlphaBitMask = fmt.a;
+        const cont = cb(@intFromPtr(&pf), lpArg);
+        if (cont == 0) break;
+    }
+}
+
 fn device3_EnumTextureFormats(this: usize, lpd3dEnumPixelProc: usize, lpArg: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
     if (trace.enable_tracing) trace.print("D3D3Dev: EnumTextureFormats\n", .{});
-    if (lpd3dEnumPixelProc != 0) {
-        const cb = @as(*const fn (usize, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(lpd3dEnumPixelProc));
-        const formats = [_]struct { bpp: u32, r: u32, g: u32, b: u32, a: u32, flags: u32 }{
-            .{ .bpp = 16, .r = 0xF800, .g = 0x07E0, .b = 0x001F, .a = 0, .flags = 0x40 }, // RGB565
-            .{ .bpp = 16, .r = 0x7C00, .g = 0x03E0, .b = 0x001F, .a = 0x8000, .flags = 0x41 }, // ARGB1555
-            .{ .bpp = 32, .r = 0x00FF0000, .g = 0x0000FF00, .b = 0x000000FF, .a = 0xFF000000, .flags = 0x41 }, // ARGB8888
-            .{ .bpp = 32, .r = 0x00FF0000, .g = 0x0000FF00, .b = 0x000000FF, .a = 0, .flags = 0x40 }, // XRGB8888
-        };
-        for (formats) |fmt| {
-            var pf: w32.DDPIXELFORMAT = std.mem.zeroes(w32.DDPIXELFORMAT);
-            pf.dwSize = 32;
-            pf.dwFlags = fmt.flags;
-            pf.dwRGBBitCount = fmt.bpp;
-            pf.dwRBitMask = fmt.r;
-            pf.dwGBitMask = fmt.g;
-            pf.dwBBitMask = fmt.b;
-            pf.dwRGBAlphaBitMask = fmt.a;
-            const cont = cb(@intFromPtr(&pf), lpArg);
-            if (cont == 0) break;
-        }
-    }
+    enumTextureFormats(&.{
+        .{ .bpp = 16, .r = 0xF800, .g = 0x07E0, .b = 0x001F, .a = 0, .flags = 0x40 }, // RGB565
+        .{ .bpp = 16, .r = 0x7C00, .g = 0x03E0, .b = 0x001F, .a = 0x8000, .flags = 0x41 }, // ARGB1555
+        .{ .bpp = 32, .r = 0x00FF0000, .g = 0x0000FF00, .b = 0x000000FF, .a = 0xFF000000, .flags = 0x41 }, // ARGB8888
+        .{ .bpp = 32, .r = 0x00FF0000, .g = 0x0000FF00, .b = 0x000000FF, .a = 0, .flags = 0x40 }, // XRGB8888
+    }, lpd3dEnumPixelProc, lpArg);
     return w32.D3D_OK;
 }
 
@@ -692,26 +697,11 @@ fn device7_GetCaps(this: *IDirect3DDevice7, pCaps: usize) callconv(w32cc.WINAPI)
 fn device7_EnumTextureFormats(this: *IDirect3DDevice7, lpd3dEnumPixelProc: usize, lpArg: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
     if (trace.enable_tracing) trace.print("D3D7: EnumTextureFormats\n", .{});
-    if (lpd3dEnumPixelProc != 0) {
-        const cb = @as(*const fn (usize, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(lpd3dEnumPixelProc));
-        const formats = [_]struct { bpp: u32, r: u32, g: u32, b: u32, a: u32, flags: u32 }{
-            .{ .bpp = 16, .r = 0xF800, .g = 0x07E0, .b = 0x001F, .a = 0, .flags = 0x40 },
-            .{ .bpp = 32, .r = 0x00FF0000, .g = 0x0000FF00, .b = 0x000000FF, .a = 0xFF000000, .flags = 0x41 },
-            .{ .bpp = 32, .r = 0x00FF0000, .g = 0x0000FF00, .b = 0x000000FF, .a = 0, .flags = 0x40 },
-        };
-        for (formats) |fmt| {
-            var pf: w32.DDPIXELFORMAT = std.mem.zeroes(w32.DDPIXELFORMAT);
-            pf.dwSize = 32;
-            pf.dwFlags = fmt.flags;
-            pf.dwRGBBitCount = fmt.bpp;
-            pf.dwRBitMask = fmt.r;
-            pf.dwGBitMask = fmt.g;
-            pf.dwBBitMask = fmt.b;
-            pf.dwRGBAlphaBitMask = fmt.a;
-            const cont = cb(@intFromPtr(&pf), lpArg);
-            if (cont == 0) break;
-        }
-    }
+    enumTextureFormats(&.{
+        .{ .bpp = 16, .r = 0xF800, .g = 0x07E0, .b = 0x001F, .a = 0, .flags = 0x40 },
+        .{ .bpp = 32, .r = 0x00FF0000, .g = 0x0000FF00, .b = 0x000000FF, .a = 0xFF000000, .flags = 0x41 },
+        .{ .bpp = 32, .r = 0x00FF0000, .g = 0x0000FF00, .b = 0x000000FF, .a = 0, .flags = 0x40 },
+    }, lpd3dEnumPixelProc, lpArg);
     return w32.D3D_OK;
 }
 

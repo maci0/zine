@@ -1318,8 +1318,8 @@ function connect() {
                         }
                     }
 
-                    function navigateTo(newPath) {
-                        pathHistory.push(currentPath);
+                    function navigateTo(newPath, record = true) {
+                        if (record) pathHistory.push(currentPath);
                         currentPath = newPath;
                         updateLookIn();
                         updateToolbarState();
@@ -1339,19 +1339,7 @@ function connect() {
 
                     function navigateBack() {
                         if (pathHistory.length === 0) return;
-                        currentPath = pathHistory.pop();
-                        updateLookIn();
-                        updateToolbarState();
-                        updatePlaceState();
-                        filenameInput.value = '';
-                        hideNameError();
-                        listingPending = true;
-                        listFolders = [];
-                        listFiles = [];
-                        renderFileList();
-                        if (ws && ws.readyState === WebSocket.OPEN) {
-                            ws.send(JSON.stringify({ type: 'browse_directory', path: currentPath }));
-                        }
+                        navigateTo(pathHistory.pop(), false);
                     }
 
                     function navigateUp() {

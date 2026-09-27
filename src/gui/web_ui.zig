@@ -38,11 +38,20 @@ pub fn init() !void {
     }
 }
 
-/// Pushes the current framebuffer to all connected Web UI clients.
-pub fn pushFrame() void {
+/// A broadcast message is at most a one-frame prefix plus the payload, which
+/// is what the audio channel's "AUD\0" marker needs.
+const max_message_parts = 2;
+
+/// Sends one WebSocket message to every connected client, dropping the
+/// clients whose write fails.
+fn broadcast(parts: []const []const u8, op: std.http.Server.WebSocket.Opcode) void {
     if (comptime !platform.is_native) return;
+    std.debug.assert(parts.len <= max_message_parts);
     clients_mutex.lock();
     defer clients_mutex.unlock();
+
+    var bufs: [max_message_parts][]const u8 = undefined;
+    for (parts, 0..) |part, n| bufs[n] = part;
 
     var i: usize = 0;
     while (i < clients.items.len) {
@@ -55,13 +64,7 @@ pub fn pushFrame() void {
             .key = "",
         };
 
-        const len: u64 = @min(
-            @as(u64, renderer.global_width) * @as(u64, renderer.global_height) * 4,
-            renderer.global_framebuf.len,
-        );
-        const payload = renderer.global_framebuf[0..@intCast(len)];
-
-        if (ws.writeMessage(payload, .binary)) {
+        if (ws.writeMessageVec(bufs[0..parts.len], op)) {
             i += 1;
         } else |_| {
             _ = clients.swapRemove(i);
@@ -69,60 +72,30 @@ pub fn pushFrame() void {
     }
 }
 
+/// Pushes the current framebuffer to all connected Web UI clients.
+pub fn pushFrame() void {
+    if (comptime !platform.is_native) return;
+
+    const len: u64 = @min(
+        @as(u64, renderer.global_width) * @as(u64, renderer.global_height) * 4,
+        renderer.global_framebuf.len,
+    );
+    const payload = renderer.global_framebuf[0..@intCast(len)];
+    broadcast(&.{payload}, .binary);
+}
+
 /// Sends a JSON-encoded message to all connected Web UI clients.
 pub fn pushMessage(json: []const u8) void {
-    if (comptime !platform.is_native) return;
-    clients_mutex.lock();
-    defer clients_mutex.unlock();
-
-    var i: usize = 0;
-    while (i < clients.items.len) {
-        const stream = clients.items[i];
-
-        // TODO(zig-0.16): reinstate socket liveness check via std.Io.net. std.posix.getsockopt removed.
-
-        var out_buf: [4096]u8 = undefined;
-        var w = std.Io.net.Stream.writer(stream, runtime.io(), &out_buf);
-        var ws: std.http.Server.WebSocket = .{
-            .input = undefined,
-            .output = &w.interface,
-            .key = "",
-        };
-
-        if (ws.writeMessage(json, .text)) {
-            i += 1;
-        } else |_| {
-            _ = clients.swapRemove(i);
-        }
-    }
+    // TODO(zig-0.16): reinstate socket liveness check via std.Io.net. std.posix.getsockopt removed.
+    broadcast(&.{json}, .text);
 }
 
 /// Sends PCM audio data to all connected Web UI clients.
 pub fn pushAudio(data: []const u8) void {
     if (comptime !platform.is_native) return;
-    clients_mutex.lock();
-    defer clients_mutex.unlock();
 
     const prefix = [4]u8{ 'A', 'U', 'D', 0 };
-
-    var i: usize = 0;
-    while (i < clients.items.len) {
-        const stream = clients.items[i];
-        var out_buf: [4096]u8 = undefined;
-        var w = std.Io.net.Stream.writer(stream, runtime.io(), &out_buf);
-        var ws: std.http.Server.WebSocket = .{
-            .input = undefined,
-            .output = &w.interface,
-            .key = "",
-        };
-
-        var bufs = [_][]const u8{ &prefix, data };
-        if (ws.writeMessageVec(&bufs, .binary)) {
-            i += 1;
-        } else |_| {
-            _ = clients.swapRemove(i);
-        }
-    }
+    broadcast(&.{ &prefix, data }, .binary);
 }
 
 /// Copies one cached JSON string out from under `renderer.cache_mutex` into

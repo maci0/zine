@@ -140,7 +140,7 @@ const IDirect3DDevice8Vtbl = extern struct {
     DrawRectPatch: usize, // 93
     DrawTriPatch: usize, // 94
     DeletePatch: usize, // 95
-    CreateQuery: usize, // 96 -- D3D9 only, but let's pad
+    CreateQuery: usize, // 96 -- D3D9 only, padded to keep the slot
 };
 
 // --- Generic D3D8 Resource (fake texture/surface/VB/IB) ---
