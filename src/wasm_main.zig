@@ -960,6 +960,10 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: 
     var jit = jit_compiler.JitCompiler.init(allocator, state_addr);
     defer jit.deinit();
 
+    // The SMC hook reaches the host through the vtable, not the module-level
+    // compile/call functions the loop below uses.
+    var jit_host = host_wasm.wasmJitHost();
+
     // Cache: guest_eip → host block id, validated against the x86 bytes the
     // block was compiled from. Fixed 4096-entry direct-mapped table to bound
     // memory; a hit requires the guest bytes to be unchanged.

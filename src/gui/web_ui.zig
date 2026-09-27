@@ -373,6 +373,53 @@ fn jsonBool(object: std.json.ObjectMap, key: []const u8, default: bool) bool {
     return value.bool;
 }
 
+/// The context menu item a client selected, or null when `id` is missing, is
+/// not an integer, or does not fit the guest's u32 result.
+fn contextMenuId(object: std.json.ObjectMap) ?u32 {
+    const id = jsonInt(object, "id") orelse return null;
+    return std.math.cast(u32, id);
+}
+
+/// A print dialog's answer, once the client's numbers are known to be usable.
+const PrintRequest = struct {
+    from: i32,
+    to: i32,
+    copies: i32,
+};
+
+/// Reads `{ from, to, copies }`. Pages are 1-based and `copies` is a count, so
+/// a value below 1 is a client bug rather than a request and is refused the
+/// way the other handlers refuse a field that does not fit the callback's
+/// type. On failure the rejection reason is written to `reason` as a
+/// NUL-terminated string, which is what the caller reports to the client.
+fn parsePrintRequest(object: std.json.ObjectMap, reason: []u8) error{Malformed}!PrintRequest {
+    const from_page = std.math.cast(i32, jsonInt(object, "from") orelse return reject(
+        reason,
+        "print_chosen requires integer fields \"from\" and \"to\"",
+    )) orelse return reject(reason, "print_chosen field \"from\" is out of range");
+    const to_page = std.math.cast(i32, jsonInt(object, "to") orelse return reject(
+        reason,
+        "print_chosen requires integer fields \"from\" and \"to\"",
+    )) orelse return reject(reason, "print_chosen field \"to\" is out of range");
+    if (from_page < 1 or to_page < 1) {
+        return reject(reason, "print_chosen fields \"from\" and \"to\" must be positive");
+    }
+    const copies = jsonIntOr(object, "copies", 1);
+    if (copies < 1) {
+        return reject(reason, "print_chosen field \"copies\" must be positive");
+    }
+    return .{ .from = from_page, .to = to_page, .copies = copies };
+}
+
+/// Writes `msg` to `reason` and fails, so a rejection reason lives next to the
+/// check that produces it.
+fn reject(reason: []u8, msg: []const u8) error{Malformed} {
+    if (reason.len < msg.len + 1) return error.Malformed;
+    @memcpy(reason[0..msg.len], msg);
+    reason[msg.len] = 0;
+    return error.Malformed;
+}
+
 /// True if the request may talk to this UI. Browsers always send an Origin
 /// header on WebSocket handshakes and on cross-site fetches; without this
 /// check any webpage the user visits could open the UI's WebSocket, receive
@@ -692,23 +739,13 @@ fn handleSocketMessage(ws: *std.http.Server.WebSocket, allocator: std.mem.Alloca
         const is_italic = jsonBool(root.object, "italic", false);
         if (renderer.on_font_chosen) |cb| cb(face, pt_size, is_bold, is_italic);
     } else if (std.mem.eql(u8, type_val.string, "print_chosen")) {
-        // Parse print confirmation: { from, to, copies }
-        const from_page = std.math.cast(i32, jsonInt(root.object, "from") orelse {
-            sendError(ws, "print_chosen requires integer fields \"from\" and \"to\"");
-            return;
-        }) orelse {
-            sendError(ws, "print_chosen field \"from\" is out of range");
+        var reason: [128]u8 = undefined;
+        const request = parsePrintRequest(root.object, &reason) catch {
+            const length = std.mem.indexOfScalar(u8, &reason, 0) orelse reason.len;
+            sendError(ws, reason[0..length]);
             return;
         };
-        const to_page = std.math.cast(i32, jsonInt(root.object, "to") orelse {
-            sendError(ws, "print_chosen requires integer fields \"from\" and \"to\"");
-            return;
-        }) orelse {
-            sendError(ws, "print_chosen field \"to\" is out of range");
-            return;
-        };
-        const copies = jsonIntOr(root.object, "copies", 1);
-        if (renderer.on_print_chosen) |cb| cb(from_page, to_page, copies);
+        if (renderer.on_print_chosen) |cb| cb(request.from, request.to, request.copies);
     } else if (std.mem.eql(u8, type_val.string, "page_setup_chosen")) {
         // Parse page-setup confirmation:
         // { left, top, right, bottom, paperW, paperH, orientation }
@@ -809,14 +846,17 @@ fn handleSocketMessage(ws: *std.http.Server.WebSocket, allocator: std.mem.Alloca
             cb(cb_id, cb_index);
         }
     } else if (std.mem.eql(u8, type_val.string, "context_menu_select")) {
-        // Context menu item selected
-        if (jsonInt(root.object, "id")) |id| {
+        // Context menu item selected. An id outside the callback's range is
+        // refused rather than truncated, which would select a different item
+        // than the client asked for, matching the check `command` and
+        // `listbox_select` apply.
+        if (contextMenuId(root.object)) |menu_id| {
             // Result first so a guest that observes
             // chosen==true also observes the result.
-            renderer.context_menu_result.store(@intCast(@as(u32, @truncate(@as(u64, @bitCast(id))))), .release);
+            renderer.context_menu_result.store(menu_id, .release);
             renderer.context_menu_chosen.store(true, .release);
         } else {
-            sendError(ws, "context_menu_select requires an integer field \"id\"");
+            sendError(ws, "context_menu_select requires an integer field \"id\" in u32 range");
         }
     } else if (std.mem.eql(u8, type_val.string, "set_volume")) {
         if (jsonInt(root.object, "volume")) |pct| {
@@ -1071,6 +1111,53 @@ test "only the dialog's find actions are accepted" {
     }
 }
 
+test "the print dialog answer is validated before it reaches the guest" {
+    const cases = [_]struct { body: []const u8, expected: ?PrintRequest }{
+        .{ .body = "{\"type\":\"print_chosen\",\"from\":1,\"to\":3}", .expected = .{ .from = 1, .to = 3, .copies = 1 } },
+        .{ .body = "{\"from\":1,\"to\":2,\"copies\":4}", .expected = .{ .from = 1, .to = 2, .copies = 4 } },
+        // A missing or wrong-typed page is a malformed request, a page or copy
+        // count below 1 is out of range, and both name the field.
+        .{ .body = "{\"type\":\"print_chosen\",\"to\":2}", .expected = null },
+        .{ .body = "{\"type\":\"print_chosen\",\"from\":\"1\",\"to\":2}", .expected = null },
+        .{ .body = "{\"type\":\"print_chosen\",\"from\":0,\"to\":2}", .expected = null },
+        .{ .body = "{\"type\":\"print_chosen\",\"from\":1,\"to\":-1}", .expected = null },
+        .{ .body = "{\"type\":\"print_chosen\",\"from\":1,\"to\":2,\"copies\":0}", .expected = null },
+    };
+    for (cases) |case| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, case.body, .{});
+        defer parsed.deinit();
+        var reason: [128]u8 = undefined;
+        const request = parsePrintRequest(parsed.value.object, &reason) catch |err| {
+            try std.testing.expectEqual(error.Malformed, err);
+            try std.testing.expect(case.expected == null);
+            const message = reason[0 .. std.mem.indexOfScalar(u8, &reason, 0) orelse return error.TestUnexpectedResult];
+            try std.testing.expect(std.mem.startsWith(u8, message, "print_chosen"));
+            continue;
+        };
+        try std.testing.expect(case.expected != null);
+        try std.testing.expectEqual(case.expected.?, request);
+    }
+}
+
+test "a context menu id outside u32 is refused rather than truncated" {
+    const cases = [_]struct { body: []const u8, expected: ?u32 }{
+        .{ .body = "{\"id\":0}", .expected = 0 },
+        .{ .body = "{\"id\":7}", .expected = 7 },
+        .{ .body = "{\"id\":4294967295}", .expected = 4294967295 },
+        // Truncating this to 32 bits would select a different menu item than
+        // the client asked for.
+        .{ .body = "{\"id\":4294967296}", .expected = null },
+        .{ .body = "{\"id\":-1}", .expected = null },
+        .{ .body = "{\"id\":\"7\"}", .expected = null },
+        .{ .body = "{}", .expected = null },
+    };
+    for (cases) |case| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, case.body, .{});
+        defer parsed.deinit();
+        try std.testing.expectEqual(case.expected, contextMenuId(parsed.value.object));
+    }
+}
+
 test "endpoints answer an unsupported method with 405 and their Allow list" {
     try std.testing.expect(methodAllowed(.GET, static_allowed_methods));
     try std.testing.expect(methodAllowed(.HEAD, static_allowed_methods));
@@ -1255,10 +1342,11 @@ test "static assets negotiate gzip without changing decoded content" {
         const response = output.written();
         try std.testing.expect(std.mem.indexOf(u8, response, "\r\ncontent-encoding: gzip\r\n") != null);
         try std.testing.expect(std.mem.indexOf(u8, response, "\r\nvary: Accept-Encoding\r\n") != null);
+        // The transfer budget per asset belongs to the test that owns it, so
+        // this one only checks that the served bytes decompress to the asset.
         const body_start = (std.mem.indexOf(u8, response, "\r\n\r\n") orelse return error.TestUnexpectedResult) + 4;
         const body = response[body_start..];
         try std.testing.expect(body.len < asset[0].len);
-        if (std.mem.eql(u8, asset[1], "text/css")) try std.testing.expect(body.len <= 14 * 1024);
         var compressed = std.Io.Reader.fixed(body);
         var window: [std.compress.flate.max_window_len]u8 = undefined;
         var decompressor = std.compress.flate.Decompress.init(&compressed, .gzip, &window);
@@ -1295,7 +1383,7 @@ test "a static asset keeps the connection open, and closes it when the client as
 test "precompressed assets stay inside their transfer budget" {
     const assets = @import("web_assets");
     // What every visitor downloads before the UI is interactive, as served.
-    // Measured 2026-09: 1.5 KiB document, 13.1 KiB stylesheet, 19.3 KiB
+    // Measured 2026-09: 1.5 KiB document, 14.0 KiB stylesheet, 19.3 KiB
     // script, 1.3 KiB van. The headroom absorbs a deflate encoder change;
     // anything past it is weight a reload re-transfers every time.
     const budgets = [_]struct { name: []const u8, bytes: []const u8, limit: usize }{

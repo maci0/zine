@@ -102,7 +102,7 @@ connection stays open either way.
 
 | `type` | Fields |
 | --- | --- |
-| `command` | `id` (integer, required) |
+| `command` | `id` (integer, required, u32 range) |
 | `keydown`, `keyup` | `key` (string, required; a `KeyboardEvent.code` with no Win32 equivalent is ignored, not an error) |
 | `mousedown`, `mouseup`, `mousemove` | `x`, `y` (integers, required), `button` (integer, default 0) |
 | `wheel` | `delta` (integer, required) |
@@ -113,11 +113,11 @@ connection stays open either way.
 | `launch` | `path` (string, required) |
 | `find_action` | `action` (string, required: `find_next`, `replace`, `replace_all`, or `close`), `findText` (string, required), `replaceText` (string, default `""`), `matchCase` (bool, default false), `searchDown` (bool, default true) |
 | `font_chosen` | `face` (string, required), `size` (integer, required), `bold`, `italic` (bools, default false) |
-| `print_chosen` | `from`, `to` (integers, required), `copies` (integer, default 1) |
+| `print_chosen` | `from`, `to` (integers, required, both positive), `copies` (integer, default 1, positive) |
 | `page_setup_chosen` | `left`, `top` (integers, required), `right`, `bottom`, `paperW`, `paperH`, `orientation` (integers, default 0/0/8500/11000/0) |
 | `color_selected` | `color` (integer, required; `0x000000` to `0xFFFFFF`, a negative value means cancel) |
 | `listbox_select` | `id` (integer, required, u32 range), `index` (integer, required, i32 range; a value outside either range is refused with an `error` frame) |
-| `context_menu_select` | `id` (integer, required; 0 dismisses the menu) |
+| `context_menu_select` | `id` (integer, required, u32 range; 0 dismisses the menu) |
 | `cancel_dialog` | none |
 | `text_sync` | `text` (string, required, at most 65536 bytes) |
 | `clipboard_sync` | `text` (string, required, at most 65536 bytes) |

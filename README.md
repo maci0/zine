@@ -85,6 +85,15 @@ release, not a 0.2.1 patch.
   `text/plain; charset=utf-8` carrying the reason; the JSON `error` frame stays
   on the WebSocket side. Routes and message types are specified in
   [`docs/WEB_UI_PROTOCOL.md`](docs/WEB_UI_PROTOCOL.md).
+- A Web UI `print_chosen` message whose `from`, `to`, or `copies` is below 1,
+  and a `context_menu_select` whose `id` does not fit the guest's u32 result,
+  are answered with an `error` frame and ignored. Pages are 1-based and a copy
+  count below 1 is not a request; the menu id used to be truncated, so a large
+  id selected a different item than the client asked for. A `command` or
+  `listbox_select` id outside its range was already refused this way.
+- `zig build -Darch=wasm32` and `-Darch=wasm64` compile again. The JIT host
+  loop registered the SMC flush hook against a host instance that no longer
+  existed, so the WASI targets failed to build.
 - Wide (`W`) API strings convert as whole code points instead of one truncated
   byte per UTF-16 unit. Text set through `SetDlgItemTextW`, `MessageBoxW`,
   `AppendMenuW`, the status bar, or a window title keeps its characters when a
