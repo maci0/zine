@@ -151,6 +151,13 @@ unknown log levels exit with status 2 and list the accepted values before guest
 loading. `ZINE_LOG_LEVEL=warn ./zig-out/bin/zine.x86 --version` checks startup
 validation without running a guest.
 
+The host home directory is redacted from every diagnostic before it reaches
+stderr, so a trace pasted into a bug report does not carry the local account
+name. Only that prefix changes: `CreateFileA('/home/jane/notes.txt')` is
+recorded as `CreateFileA('/~/notes.txt')`, and the `Z:\home\jane\...` form the
+guest sees is redacted the same way. A run whose environment has neither `HOME`
+nor `USERPROFILE` records paths unchanged.
+
 ## Build options
 
 | Flag | Purpose |

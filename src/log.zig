@@ -98,6 +98,67 @@ fn levelPrefix(level: Level) struct { plain: []const u8, color: []const u8 } {
     };
 }
 
+// ── Home path redaction ─────────────────────────────────────────────
+
+/// Diagnostics carry host paths: module paths, the command line, every file
+/// the guest opens. A home path names the local account, so it is replaced
+/// with `~` in every record before the record reaches stderr. Nothing else
+/// about the path changes, and a run with no `HOME` in the environment
+/// redacts nothing.
+const redacted_home = "~";
+const max_home_forms = 2;
+const max_home_len = 512;
+
+/// `home` in its POSIX form and with separators flipped, each without the
+/// leading separator so both `/home/u/f` and `Z:\home\u\f` match. Empty
+/// until `initFromEnv` runs.
+var home_forms: [max_home_forms][max_home_len]u8 = undefined;
+var home_forms_len: [max_home_forms]usize = [_]usize{0} ** max_home_forms;
+
+fn initHomeRedaction(env: *const std.process.Environ.Map) void {
+    home_forms_len = [_]usize{0} ** max_home_forms;
+    const home = env.get("HOME") orelse env.get("USERPROFILE") orelse return;
+    // A bare separator or an implausibly long value would match everywhere.
+    if (home.len < 2 or home.len >= max_home_len) return;
+
+    var rel = home;
+    if (rel[0] == '/' or rel[0] == '\\') rel = rel[1..];
+    while (rel.len > 0 and (rel[rel.len - 1] == '/' or rel[rel.len - 1] == '\\')) rel = rel[0 .. rel.len - 1];
+    if (rel.len == 0) return;
+
+    @memcpy(home_forms[0][0..rel.len], rel);
+    for (rel, 0..) |c, i| home_forms[1][i] = if (c == '/') '\\' else c;
+    home_forms_len = .{ rel.len, rel.len };
+}
+
+/// Replaces home path occurrences in `body` in place. Every replacement is one
+/// byte and every match is at least one byte, so the write cursor never
+/// overtakes the read cursor.
+fn redactHome(body: []u8) []const u8 {
+    if (home_forms_len[0] == 0) return body;
+    var read: usize = 0;
+    var write: usize = 0;
+    while (read < body.len) {
+        var matched = false;
+        for (0..max_home_forms) |i| {
+            const len = home_forms_len[i];
+            if (len == 0) continue;
+            if (read + len <= body.len and std.mem.eql(u8, body[read..][0..len], home_forms[i][0..len])) {
+                body[write] = redacted_home[0];
+                write += 1;
+                read += len;
+                matched = true;
+                break;
+            }
+        }
+        if (matched) continue;
+        body[write] = body[read];
+        write += 1;
+        read += 1;
+    }
+    return body[0..write];
+}
+
 // ── Core emit function ──────────────────────────────────────────────
 
 /// Formats and emits a log message at the specified level.
@@ -125,20 +186,21 @@ pub fn emit(level: Level, comptime fmt: []const u8, args: anytype) void {
         return;
     };
 
-    const needs_nl = body.len == 0 or body[body.len - 1] != '\n';
+    const redacted = redactHome(body);
+    const needs_nl = redacted.len == 0 or redacted[redacted.len - 1] != '\n';
     if (builtin.target.os.tag == .linux) {
         // Direct write to fd 2 avoids the locked-stderr vtable in std.debug.print.
         const iovec = [_]std.posix.iovec_const{
             .{ .base = ts.ptr, .len = ts.len },
             .{ .base = tag.ptr, .len = tag.len },
-            .{ .base = body.ptr, .len = body.len },
+            .{ .base = redacted.ptr, .len = redacted.len },
             .{ .base = "\n", .len = @intFromBool(needs_nl) },
         };
         _ = std.os.linux.writev(2, &iovec, iovec.len);
     } else if (needs_nl) {
-        std.debug.print("{s}{s}{s}\n", .{ ts, tag, body });
+        std.debug.print("{s}{s}{s}\n", .{ ts, tag, redacted });
     } else {
-        std.debug.print("{s}{s}{s}", .{ ts, tag, body });
+        std.debug.print("{s}{s}{s}", .{ ts, tag, redacted });
     }
 }
 
@@ -164,9 +226,10 @@ pub fn info(comptime fmt: []const u8, args: anytype) void {
     emit(.info, fmt, args);
 }
 
-/// Initialize log level from ZINE_LOG_LEVEL environment variable.
-/// Call during startup, after env vars are available.
+/// Initialize the log level from `ZINE_LOG_LEVEL` and home path redaction
+/// from `HOME`. Call during startup, after env vars are available.
 pub fn initFromEnv(env: *const std.process.Environ.Map) error{InvalidLogLevel}!void {
+    initHomeRedaction(env);
     const val = env.get("ZINE_LOG_LEVEL") orelse {
         min_level = .trace;
         return;
@@ -207,4 +270,51 @@ test "log level environment validates values before changing the active level" {
         try std.testing.expectError(error.InvalidLogLevel, initFromEnv(&env));
         try std.testing.expectEqual(Level.warn, min_level);
     }
+}
+
+test "diagnostics redact the host home path in both path forms" {
+    const saved_forms = home_forms;
+    const saved_lens = home_forms_len;
+    defer {
+        home_forms = saved_forms;
+        home_forms_len = saved_lens;
+    }
+
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("HOME", "/home/jane/");
+    try initFromEnv(&env);
+
+    const cases = .{
+        .{ "KERNEL32: CreateFileA('/home/jane/notes.txt')", "KERNEL32: CreateFileA('/~/notes.txt')" },
+        .{ "USER32: SetWindowTextA('Z:\\home\\jane\\tax.doc')", "USER32: SetWindowTextA('Z:\\~\\tax.doc')" },
+        .{ "KERNEL32: CreateFileA('C:\\Program Files\\app.exe')", "KERNEL32: CreateFileA('C:\\Program Files\\app.exe')" },
+        .{ "no path here", "no path here" },
+    };
+    inline for (cases) |case| {
+        var buf: [128]u8 = undefined;
+        @memcpy(buf[0..case[0].len], case[0]);
+        try std.testing.expectEqualStrings(case[1], redactHome(buf[0..case[0].len]));
+    }
+}
+
+test "home redaction stays off without a usable HOME" {
+    const saved_lens = home_forms_len;
+    defer home_forms_len = saved_lens;
+
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+    try initFromEnv(&env);
+    try std.testing.expectEqual(@as(usize, 0), home_forms_len[0]);
+
+    for ([_][]const u8{ "/", "//" }) |home| {
+        try env.put("HOME", home);
+        try initFromEnv(&env);
+        try std.testing.expectEqual(@as(usize, 0), home_forms_len[0]);
+    }
+
+    var buf: [32]u8 = undefined;
+    const body = "/home/jane/file";
+    @memcpy(buf[0..body.len], body);
+    try std.testing.expectEqualStrings(body, redactHome(buf[0..body.len]));
 }
