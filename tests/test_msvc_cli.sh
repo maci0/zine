@@ -210,11 +210,9 @@ else
 fi
 
 if $IS_WASM; then
-    WASM_BIN="$(realpath "$ROOT/zig-out/bin/zine.wasm32.wasm")"
-    # Fall back to old name if new name doesn't exist
-    if [ ! -f "$WASM_BIN" ]; then
-        WASM_BIN="$(realpath "$ROOT/zig-out/bin/zine.wasm" 2>/dev/null || echo "")"
-    fi
+    # realpath exits non-zero for a missing file, and `set -e` turns that into
+    # an abort, so the guard has to be in the substitution itself.
+    WASM_BIN="$(realpath "$ROOT/zig-out/bin/zine.wasm32.wasm" 2>/dev/null || echo "")"
     if [ ! -f "$WASM_BIN" ]; then
         echo "FATAL: zine.wasm32.wasm not found"
         exit 1
@@ -379,7 +377,8 @@ EOF
 
 rc=$(run cl_out.txt "${WINLOADER_CMD[@]}" "${ZINE_FLAGS[@]+${ZINE_FLAGS[@]}}" "$VC_BIN/CL.EXE" /nologo /c /Fohello.obj hello.c)
 if [ "$rc" = "0" ] && [ -f hello.obj ]; then
-    objsize=$(stat -c%s hello.obj 2>/dev/null || echo "0")
+    # stat's size syntax differs: GNU takes -c%s, BSD and macOS take -f%z.
+    objsize=$(stat -c%s hello.obj 2>/dev/null || stat -f%z hello.obj 2>/dev/null || echo "0")
     pass "CL /c hello.c" "($objsize bytes)"
 else
     fail "CL /c hello.c" "exit $rc $(tail -3 cl_out.txt 2>/dev/null)"

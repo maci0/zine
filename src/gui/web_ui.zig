@@ -1324,6 +1324,16 @@ test "static asset responses carry an etag and 304 on a matching If-None-Match" 
     try std.testing.expect(std.mem.indexOf(u8, changed, etag) == null);
 }
 
+/// Ceiling on the compressed stylesheet, shared by the negotiation test and
+/// the transfer-budget test so the two cannot drift apart. Measured 2026-09:
+/// the document is 1.5 KiB, the stylesheet 14.0 KiB, the script 21.5 KiB, and
+/// the van 1.4 KiB, each transferred as gzip. The headroom absorbs a deflate
+/// encoder change; anything past it is weight a reload re-transfers.
+const budget_document: usize = 3 * 1024;
+const budget_stylesheet: usize = 15 * 1024;
+const budget_script: usize = 22 * 1024;
+const budget_van: usize = 2 * 1024;
+
 test "static assets negotiate gzip without changing decoded content" {
     const assets = .{
         .{ @embedFile("app.js"), "application/javascript" },
@@ -1387,10 +1397,10 @@ test "precompressed assets stay inside their transfer budget" {
     // script, 1.3 KiB van. The headroom absorbs a deflate encoder change;
     // anything past it is weight a reload re-transfers every time.
     const budgets = [_]struct { name: []const u8, bytes: []const u8, limit: usize }{
-        .{ .name = "index.html", .bytes = assets.@"index.html", .limit = 3 * 1024 },
-        .{ .name = "win2k.css", .bytes = assets.@"win2k.css", .limit = 15 * 1024 },
-        .{ .name = "app.js", .bytes = assets.@"app.js", .limit = 22 * 1024 },
-        .{ .name = "van.min.js", .bytes = assets.@"van.min.js", .limit = 2 * 1024 },
+        .{ .name = "index.html", .bytes = assets.@"index.html", .limit = budget_document },
+        .{ .name = "win2k.css", .bytes = assets.@"win2k.css", .limit = budget_stylesheet },
+        .{ .name = "app.js", .bytes = assets.@"app.js", .limit = budget_script },
+        .{ .name = "van.min.js", .bytes = assets.@"van.min.js", .limit = budget_van },
     };
     var total: usize = 0;
     inline for (budgets) |budget| {
