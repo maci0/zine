@@ -110,7 +110,35 @@ test "file dialog paths own borrowed input and release replaced results" {
     try std.testing.expect(takePendingFilePath() == null);
 }
 
+/// Upper bound on the default-extension scan. The guest string is read as
+/// plain bytes, so the walk stops at the bound if the NUL is missing.
+const max_def_ext_chars: usize = 32;
+
+fn defExtA(ptr: u32) ?[]const u8 {
+    if (ptr == 0) return null;
+    const ext = trace.c_span(ptr);
+    return if (ext.len > 0) ext else null;
+}
+
+fn defExtW(ptr: u32) ?[]const u16 {
+    if (ptr == 0) return null;
+    const ext = @as([*]const u16, @ptrFromInt(ptr));
+    var len: usize = 0;
+    while (len < max_def_ext_chars and ext[len] != 0) : (len += 1) {}
+    return if (len > 0) ext[0..len] else null;
+}
+
 fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
+    return commonFileDialog(u8, parseFilterStringA, defExtA, lpofn_ptr, is_save);
+}
+
+fn commonFileDialog(
+    comptime C: type,
+    comptime filter_of: fn (u32) ?[]const u8,
+    comptime def_ext_of: fn (u32) ?[]const C,
+    lpofn_ptr: usize,
+    is_save: bool,
+) i32 {
     {
         dlg_result_mutex.lock();
         defer dlg_result_mutex.unlock();
@@ -118,12 +146,17 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
         dialog_cancelled = false;
     }
 
+    const sep: C = std.math.lossyCast(C, '\\');
+    const dot: C = std.math.lossyCast(C, '.');
+
     var filters_json: ?[]const u8 = null;
+    var def_ext: ?[]const C = null;
     if (lpofn_ptr != 0) {
         const ofn = @as(*w32.OPENFILENAMEA, @ptrFromInt(lpofn_ptr));
         if (ofn.lpstrFilter != 0) {
-            filters_json = parseFilterStringA(ofn.lpstrFilter);
+            filters_json = filter_of(ofn.lpstrFilter);
         }
+        def_ext = def_ext_of(ofn.lpstrDefExt);
     }
     defer if (filters_json) |f| std.heap.page_allocator.free(f);
 
@@ -149,13 +182,13 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
             const ofn = @as(*w32.OPENFILENAMEA, @ptrFromInt(lpofn_ptr));
 
             if (ofn.lpstrFile != 0 and ofn.nMaxFile > path.len) {
-                const lpstrFile = @as([*]u8, @ptrFromInt(ofn.lpstrFile));
+                const lpstrFile = @as([*]C, @ptrFromInt(ofn.lpstrFile));
                 for (0..path.len) |i| {
-                    lpstrFile[i] = if (path[i] == '/') '\\' else path[i];
+                    lpstrFile[i] = if (path[i] == '/') sep else std.math.lossyCast(C, path[i]);
                 }
                 var final_len = path.len;
 
-                if (ofn.lpstrDefExt != 0) {
+                if (def_ext) |ext| {
                     var has_dot = false;
                     var last_sep: usize = 0;
                     for (0..path.len) |i| {
@@ -168,11 +201,10 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
                         }
                     }
                     if (!has_dot) {
-                        const def_ext = trace.c_span(ofn.lpstrDefExt);
-                        if (def_ext.len > 0 and final_len + 1 + def_ext.len < ofn.nMaxFile) {
-                            lpstrFile[final_len] = '.';
-                            @memcpy(lpstrFile[final_len + 1 .. final_len + 1 + def_ext.len], def_ext);
-                            final_len += 1 + def_ext.len;
+                        if (final_len + 1 + ext.len < ofn.nMaxFile) {
+                            lpstrFile[final_len] = dot;
+                            for (ext, 0..) |ch, i| lpstrFile[final_len + 1 + i] = ch;
+                            final_len += 1 + ext.len;
                         }
                     }
                 }
@@ -181,10 +213,10 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
                 var file_offset: u16 = 0;
                 var ext_offset: u16 = 0;
                 for (0..final_len) |i| {
-                    if (lpstrFile[i] == '/' or lpstrFile[i] == '\\') {
+                    if (lpstrFile[i] == sep) {
                         file_offset = @intCast(i + 1);
                     }
-                    if (lpstrFile[i] == '.') {
+                    if (lpstrFile[i] == dot) {
                         ext_offset = @intCast(i + 1);
                     }
                 }
@@ -195,8 +227,10 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
                 if (ofn.lpstrFileTitle != 0 and ofn.nMaxFileTitle > 0) {
                     const title_len = final_len - file_offset;
                     if (ofn.nMaxFileTitle > title_len) {
-                        const lpstrFileTitle = @as([*]u8, @ptrFromInt(ofn.lpstrFileTitle));
-                        @memcpy(lpstrFileTitle[0..title_len], lpstrFile[file_offset .. file_offset + title_len]);
+                        const lpstrFileTitle = @as([*]C, @ptrFromInt(ofn.lpstrFileTitle));
+                        for (0..title_len) |i| {
+                            lpstrFileTitle[i] = lpstrFile[file_offset + i];
+                        }
                         lpstrFileTitle[title_len] = 0;
                     }
                 }
@@ -231,115 +265,7 @@ pub fn GetSaveFileNameA(lpofn_ptr: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 fn commonFileDialogW(lpofn_ptr: usize, is_save: bool) i32 {
-    {
-        dlg_result_mutex.lock();
-        defer dlg_result_mutex.unlock();
-        clearPendingFilePathLocked();
-        dialog_cancelled = false;
-    }
-
-    var filters_json: ?[]const u8 = null;
-    if (lpofn_ptr != 0) {
-        const ofn = @as(*w32.OPENFILENAMEA, @ptrFromInt(lpofn_ptr));
-        if (ofn.lpstrFilter != 0) {
-            filters_json = parseFilterStringW(ofn.lpstrFilter);
-        }
-    }
-    defer if (filters_json) |f| std.heap.page_allocator.free(f);
-
-    renderer.openFileDialog(filters_json, is_save);
-
-    const prev_file_cb = renderer.on_file_uploaded;
-    const prev_cancel_cb = renderer.on_cancel_dialog;
-    renderer.on_file_uploaded = &handleFileUploaded;
-    renderer.on_cancel_dialog = &handleCancelDialog;
-
-    while (!fileDialogDone()) {
-        @import("../../runtime.zig").pauseOrAdvance(10 * std.time.ns_per_ms);
-    }
-
-    renderer.on_file_uploaded = prev_file_cb;
-    renderer.on_cancel_dialog = prev_cancel_cb;
-
-    renderer.closeDialog();
-
-    if (takePendingFilePath()) |path| {
-        defer file_path_allocator.free(path);
-        if (lpofn_ptr != 0) {
-            const ofn = @as(*w32.OPENFILENAMEA, @ptrFromInt(lpofn_ptr));
-
-            if (ofn.lpstrFile != 0 and ofn.nMaxFile > path.len) {
-                const lpstrFile = @as([*]u16, @ptrFromInt(ofn.lpstrFile));
-                for (0..path.len) |i| {
-                    lpstrFile[i] = if (path[i] == '/') '\\' else path[i];
-                }
-                var final_len = path.len;
-
-                if (ofn.lpstrDefExt != 0) {
-                    var has_dot = false;
-                    var last_sep: usize = 0;
-                    for (0..path.len) |i| {
-                        if (path[i] == '/' or path[i] == '\\') last_sep = i + 1;
-                    }
-                    for (last_sep..path.len) |i| {
-                        if (path[i] == '.') {
-                            has_dot = true;
-                            break;
-                        }
-                    }
-                    if (!has_dot) {
-                        const def_ext_w = @as([*]const u16, @ptrFromInt(ofn.lpstrDefExt));
-                        var ext_len: usize = 0;
-                        while (ext_len < 32 and def_ext_w[ext_len] != 0) : (ext_len += 1) {}
-                        if (ext_len > 0 and final_len + 1 + ext_len < ofn.nMaxFile) {
-                            lpstrFile[final_len] = '.';
-                            for (0..ext_len) |i| {
-                                lpstrFile[final_len + 1 + i] = def_ext_w[i];
-                            }
-                            final_len += 1 + ext_len;
-                        }
-                    }
-                }
-                lpstrFile[final_len] = 0;
-
-                var file_offset: u16 = 0;
-                var ext_offset: u16 = 0;
-                for (0..final_len) |i| {
-                    if (lpstrFile[i] == '/' or lpstrFile[i] == '\\') {
-                        file_offset = @intCast(i + 1);
-                    }
-                    if (lpstrFile[i] == '.') {
-                        ext_offset = @intCast(i + 1);
-                    }
-                }
-
-                ofn.nFileOffset = file_offset;
-                ofn.nFileExtension = ext_offset;
-
-                if (ofn.lpstrFileTitle != 0 and ofn.nMaxFileTitle > 0) {
-                    const title_len = final_len - file_offset;
-                    if (ofn.nMaxFileTitle > title_len) {
-                        const lpstrFileTitle = @as([*]u16, @ptrFromInt(ofn.lpstrFileTitle));
-                        for (0..title_len) |i| {
-                            lpstrFileTitle[i] = lpstrFile[file_offset + i];
-                        }
-                        lpstrFileTitle[title_len] = 0;
-                    }
-                }
-
-                if ((ofn.Flags & w32.OFN_ENABLEHOOK) != 0) {
-                    if (ofn.lpfnHook != 0) {
-                        const hook_fn = @as(*const fn (usize, u32, usize, usize) callconv(w32cc.WINAPI) isize, @ptrFromInt(ofn.lpfnHook));
-                        _ = hook_fn(0xBEEF, w32.WM_INITDIALOG, 0, lpofn_ptr);
-                    }
-                }
-
-                return 1;
-            }
-        }
-    }
-
-    return 0;
+    return commonFileDialog(u16, parseFilterStringW, defExtW, lpofn_ptr, is_save);
 }
 
 /// Creates an Open dialog box that lets the user specify the drive, directory, and the name of a file or set of files to be opened (Unicode version).
