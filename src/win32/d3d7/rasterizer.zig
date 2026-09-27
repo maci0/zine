@@ -100,14 +100,25 @@ inline fn transformToScreen(pos: Vec4, wvp: [16]f32, vp_x: f32, vp_y: f32, vp_w:
 
 // ===== Triangle Rasterizer =====
 
+/// Rounded screen coordinate as a pixel index, or null when the value is not
+/// a finite number inside the i32 range. Vertex positions and transform
+/// matrices come from guest memory, so NaN and Inf reach this point (an
+/// infinite clip w, a guest-supplied NaN) and trap in @intFromFloat.
+fn pixelIndex(v: f32, comptime round_up: bool) ?i32 {
+    if (!std.math.isFinite(v)) return null;
+    const r = if (round_up) @ceil(v) else @floor(v);
+    if (r < -2147483648.0 or r >= 2147483648.0) return null;
+    return @intFromFloat(r);
+}
+
 /// Rasterize a single flat-shaded triangle with z-buffer test.
 /// Marked inline — this is called per-triangle in the draw loop.
 inline fn rasterizeTriangle(v0: ScreenVertex, v1: ScreenVertex, v2: ScreenVertex, buf: []u8, w: u32, h: u32) void {
     // Bounding box (clamped to viewport)
-    const min_x = @max(@as(i32, @intFromFloat(@floor(@min(@min(v0.x, v1.x), v2.x)))), 0);
-    const max_x = @min(@as(i32, @intFromFloat(@ceil(@max(@max(v0.x, v1.x), v2.x)))), @as(i32, @intCast(w)) - 1);
-    const min_y = @max(@as(i32, @intFromFloat(@floor(@min(@min(v0.y, v1.y), v2.y)))), 0);
-    const max_y = @min(@as(i32, @intFromFloat(@ceil(@max(@max(v0.y, v1.y), v2.y)))), @as(i32, @intCast(h)) - 1);
+    const min_x = @max(pixelIndex(@min(@min(v0.x, v1.x), v2.x), false) orelse return, 0);
+    const max_x = @min(pixelIndex(@max(@max(v0.x, v1.x), v2.x), true) orelse return, @as(i32, @intCast(w)) - 1);
+    const min_y = @max(pixelIndex(@min(@min(v0.y, v1.y), v2.y), false) orelse return, 0);
+    const max_y = @min(pixelIndex(@max(@max(v0.y, v1.y), v2.y), true) orelse return, @as(i32, @intCast(h)) - 1);
 
     if (min_x > max_x or min_y > max_y) return;
 
@@ -309,4 +320,23 @@ pub fn impl_DrawIndexedPrimitive(this: usize, primType: usize, vertexTypeOrFVF: 
     else
         drawTriangles(false, primType, lpVertices, dwIndexCount, indices, s.wvp, s.vp_x, s.vp_y, s.vp_w, s.vp_h, s.buf, vw, vh);
     return 0;
+}
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
+
+const testing = std.testing;
+
+test "rasterizer: pixelIndex rejects non-finite and out-of-range coordinates" {
+    // A guest NaN or Inf coordinate must not reach @intFromFloat.
+    try testing.expect(pixelIndex(std.math.nan(f32), false) == null);
+    try testing.expect(pixelIndex(std.math.inf(f32), true) == null);
+    try testing.expect(pixelIndex(-std.math.inf(f32), false) == null);
+    try testing.expect(pixelIndex(3.0e30, true) == null);
+
+    try testing.expectEqual(@as(?i32, 4), pixelIndex(4.7, false));
+    try testing.expectEqual(@as(?i32, 5), pixelIndex(4.2, true));
+    try testing.expectEqual(@as(?i32, -5), pixelIndex(-4.2, false));
+    try testing.expectEqual(@as(?i32, -4), pixelIndex(-4.7, true));
 }

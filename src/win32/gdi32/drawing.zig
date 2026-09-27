@@ -748,7 +748,9 @@ pub fn ExtTextOutA(hdc: usize, x: i32, y: i32, options: u32, lprect: usize, lpSt
             const top = @as(*const i32, @ptrFromInt(lprect + 4)).*;
             const right = @as(*const i32, @ptrFromInt(lprect + 8)).*;
             const bot = @as(*const i32, @ptrFromInt(lprect + 12)).*;
-            fb.fillRect(left, top, right - left, bot - top, bg_color);
+            const w: i32 = @intCast(@min(@as(i64, right) - left, std.math.maxInt(i32)));
+            const h: i32 = @intCast(@min(@as(i64, bot) - top, std.math.maxInt(i32)));
+            fb.fillRect(left, top, @max(w, 0), @max(h, 0), bg_color);
             if (fb.is_screen) renderer.markScreenDirty();
         }
     }
@@ -805,10 +807,13 @@ pub fn Ellipse(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callcon
         }
     }
 
-    const cx = @divTrunc(left + right, 2);
-    const cy = @divTrunc(top + bottom, 2);
-    const rx = @divTrunc(right - left, 2);
-    const ry = @divTrunc(bottom - top, 2);
+    // Guest rectangles are unconstrained i32 values, so the sums and
+    // differences widen: an extreme rectangle must not overflow here. After
+    // halving, every result still fits in i32 by construction.
+    const cx: i32 = @intCast(@divTrunc(@as(i64, left) + right, 2));
+    const cy: i32 = @intCast(@divTrunc(@as(i64, top) + bottom, 2));
+    const rx: i32 = @intCast(@divTrunc(@as(i64, right) - left, 2));
+    const ry: i32 = @intCast(@divTrunc(@as(i64, bottom) - top, 2));
 
     if (rx <= 0 or ry <= 0) return 1;
 
@@ -823,7 +828,10 @@ pub fn Ellipse(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callcon
             const ratio = 1.0 - (yf * yf) / (ryf * ryf);
             if (ratio < 0) continue;
             const x_span: i32 = @intFromFloat(rxf * @sqrt(ratio));
-            fb.fillRect(cx - x_span, cy + y_off, x_span * 2, 1, brush_color);
+            // cx ± x_span stays inside [left, right], but twice the span can
+            // exceed i32 for a full-width rectangle.
+            const span: i32 = @intCast(@min(@as(i64, x_span) * 2, std.math.maxInt(i32)));
+            fb.fillRect(cx - x_span, cy + y_off, span, 1, brush_color);
         }
     }
 

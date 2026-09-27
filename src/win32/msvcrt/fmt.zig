@@ -377,6 +377,14 @@ fn stub_sscanf_native(buf_ptr: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
     return sscanf_impl(@ptrFromInt(buf_ptr), @ptrFromInt(fmt_ptr), va_list_to_usize(ap));
 }
 
+/// Accumulate one digit into a parsed number, saturating instead of
+/// overflowing. sscanf keeps consuming digits past the type's range and
+/// stores the clamped value, so a long digit run must not trap.
+fn accumulateDigit(comptime T: type, val: T, base: T, digit: T) T {
+    const scaled = std.math.mul(T, val, base) catch return std.math.maxInt(T);
+    return std.math.add(T, scaled, digit) catch std.math.maxInt(T);
+}
+
 fn sscanf_impl(input: [*:0]const u8, fmt_str: [*:0]const u8, ap: usize) i32 {
     const buf = std.mem.span(input);
     const fmt = std.mem.span(fmt_str);
@@ -418,14 +426,16 @@ fn sscanf_impl(input: [*:0]const u8, fmt_str: [*:0]const u8, ap: usize) i32 {
                 var val: i32 = 0;
                 var parsed = false;
                 while (buf_idx < buf.len and std.ascii.isDigit(buf[buf_idx])) {
-                    val = val * 10 + @as(i32, buf[buf_idx] - '0');
+                    val = accumulateDigit(i32, val, 10, @as(i32, buf[buf_idx] - '0'));
                     parsed = true;
                     buf_idx += 1;
                 }
 
                 if (parsed) {
                     if (out_addr != 0) {
-                        @as(*i32, @ptrFromInt(out_addr)).* = val * sign;
+                        // val is never negative here, so negation cannot
+                        // overflow even at the saturation point.
+                        @as(*i32, @ptrFromInt(out_addr)).* = if (sign < 0) -val else val;
                         match_count += 1;
                     }
                 } else {
@@ -452,7 +462,7 @@ fn sscanf_impl(input: [*:0]const u8, fmt_str: [*:0]const u8, ap: usize) i32 {
                     } else {
                         break;
                     }
-                    val = val * 16 + digit;
+                    val = accumulateDigit(u32, val, 16, digit);
                     parsed = true;
                     buf_idx += 1;
                 }
@@ -526,4 +536,19 @@ pub fn stdio_common_vsprintf(_options: u64, out: [*]u8, buf_size: usize, fmt: [*
 pub fn stdio_common_vfscanf(_options: u64, _stream: usize, _fmt: usize, _locale: usize, _ap: usize) callconv(.c) i32 {
     _ = .{ _options, _stream, _fmt, _locale, _ap };
     return 0;
+}
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
+
+const testing = std.testing;
+
+test "sscanf digit accumulation saturates instead of overflowing" {
+    // A decimal or hex run longer than the target type can hold must clamp,
+    // not trap: sscanf keeps consuming digits past the range.
+    try testing.expectEqual(@as(i32, 1234), accumulateDigit(i32, 123, 10, 4));
+    try testing.expectEqual(std.math.maxInt(i32), accumulateDigit(i32, 2147483647, 10, 9));
+    try testing.expectEqual(std.math.maxInt(u32), accumulateDigit(u32, 0xFFFFFFFF, 16, 0xF));
+    try testing.expectEqual(@as(u32, 0), accumulateDigit(u32, 0, 16, 0));
 }

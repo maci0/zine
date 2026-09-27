@@ -43,7 +43,10 @@ fn fillTm(tm: *Tm, ts: u64) void {
 /// Get current system time.
 /// Implementation status: Partially implemented
 pub fn time(time_out: ?*i32) callconv(.c) i32 {
-    const t = @as(i32, @intCast(@divTrunc(runtime.nanoTimestamp(), std.time.ns_per_s)));
+    // time_t is 32 bits here, so a clock past 2038 saturates instead of
+    // trapping in @intCast. -1 stays reserved for the error return.
+    const secs = @divTrunc(runtime.nanoTimestamp(), std.time.ns_per_s);
+    const t = @as(i32, @intCast(std.math.clamp(secs, std.math.minInt(i32), std.math.maxInt(i32))));
     if (time_out) |p| p.* = t;
     return t;
 }
@@ -103,8 +106,11 @@ pub fn tzset() callconv(.c) void {
 /// Implementation status: Partially implemented
 pub fn ftime(timeb_buf: [*]u8) callconv(.c) void {
     const ms = runtime.milliTimestamp();
-    const secs: i32 = @intCast(@divTrunc(ms, 1000));
-    const millitm: u16 = @intCast(@mod(@as(u64, @intCast(ms)), 1000));
+    // The wall clock can sit before 1970 (negative ms) or past the 32-bit
+    // time_t range; clamp the seconds and take the millisecond remainder in
+    // the sign-safe form instead of casting a negative value to u64.
+    const secs: i32 = @intCast(std.math.clamp(@divTrunc(ms, 1000), std.math.minInt(i32), std.math.maxInt(i32)));
+    const millitm: u16 = @intCast(@mod(@as(i64, @mod(ms, 1000)), 1000));
     @as(*align(1) i32, @ptrCast(timeb_buf[0..4])).* = secs; // time
     @as(*align(1) u16, @ptrCast(timeb_buf[4..6])).* = millitm; // millitm
     @as(*align(1) i16, @ptrCast(timeb_buf[6..8])).* = 0; // timezone

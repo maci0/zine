@@ -573,7 +573,12 @@ pub fn GetLocaleInfoA(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) c
     if (trace.enable_tracing) trace.print("KERNEL32: GetLocaleInfoA(LCType={x})\n", .{LCType});
 
     const val = localeInfoValue(LCType) orelse return 0;
-    if (cchData <= 0) {
+
+    // A negative buffer size is a caller error; it must fail rather than be
+    // cast to a huge unsigned capacity.
+    if (cchData < 0) return 0;
+
+    if (cchData == 0) {
         return @intCast(val.len + 1);
     }
 
@@ -597,7 +602,12 @@ pub fn GetLocaleInfoW(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) c
     // asking for the language or the date separator must not receive the
     // answer of a different code page constant.
     const val = localeInfoValue(LCType) orelse return 0;
-    if (cchData <= 0) {
+
+    // A negative buffer size is a caller error; it must fail rather than be
+    // cast to a huge unsigned capacity.
+    if (cchData < 0) return 0;
+
+    if (cchData == 0) {
         return @intCast(val.len + 1);
     }
 

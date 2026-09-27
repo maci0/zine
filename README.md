@@ -84,6 +84,12 @@ retroactively.
   non-blocking wait.
 - Web desktop Start button, common dialogs, and modal dismissal behave
   consistently across the desktop, the taskbar, and Escape.
+- Guest input no longer aborts the runtime through arithmetic traps: `sscanf`
+  clamps digit runs that overrun the target type, D3D triangle rasterization
+  drops triangles with non-finite screen coordinates instead of failing to
+  convert them, `GetLocaleInfoA`/`W` fail on a negative buffer size, and
+  `Ellipse`, `ExtTextOutA`, `time`, and `_ftime` compute in a wide enough type
+  to cover extreme rectangles, a pre-1970 clock, and dates past 2038.
 
 ### 0.2.0 (2026-09-18)
 

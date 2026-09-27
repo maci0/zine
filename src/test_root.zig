@@ -52,6 +52,7 @@ comptime {
     _ = @import("win32/kernel32/process.zig");
     _ = @import("win32/rcdll.zig");
     _ = @import("win32/msvcrt/io.zig");
+    _ = @import("win32/msvcrt/fmt.zig");
     _ = @import("win32/msvcrt/time.zig");
     _ = @import("win32/ntdll/ntapi.zig");
     _ = @import("win32/advapi32/registry.zig");
@@ -61,4 +62,5 @@ comptime {
     _ = @import("win32/gdi32/object.zig");
     _ = @import("win32/gdi32/dc.zig");
     _ = @import("win32/ws2_32/winsock.zig");
+    _ = @import("win32/d3d7/rasterizer.zig");
 }
