@@ -15,7 +15,8 @@ concurrency:
 jobs:
   static-analysis:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Builds default to ReleaseSafe, which is slower to compile than Debug.
+    timeout-minutes: 45
     steps:
       # Pinned by commit SHA (third-party actions execute repo-owned code);
       # update the SHA deliberately when bumping the commented version.

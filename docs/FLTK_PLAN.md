@@ -80,7 +80,7 @@ Rationale: System has FLTK 1.3.11 shared libs, but zfltk requires cfltk (targeti
 #### Build system (`build.zig`)
 
 ```bash
-zig build -Dfltk=true
+zig build -Darch=x86_64 -Dfltk=true
 ```
 
 The `-Dfltk=true` option:
@@ -88,7 +88,9 @@ The `-Dfltk=true` option:
 - Links system FLTK 1.3 (`/usr/lib/fltk1.3/`) and X11 dependencies
 - Passes `build_options.use_fltk` to Zig source for conditional compilation
 
-> **Note:** FLTK requires a native build; it is verified on the x86_64 target
+> **Note:** FLTK requires a native x86_64 build. The build fails with the list of
+> system packages to install when the headers are missing, and rejects
+> `-Dfltk` on any other architecture. It is verified on the x86_64 target
 > (`zig build -Darch=x86_64 -Dfltk`, exercised by `tests/fltk_smoke.sh` — see
 > [`STATUS.md`](STATUS.md)). It is not available on wasm32.
 

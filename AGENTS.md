@@ -18,7 +18,7 @@ Run `bash tests/check.sh` from the repository root before a pull request. It run
 - Unit tests: `zig build test` (also checks formatting). Tests run on the host; `-Darch` does not change the test target.
 - Native CLI tests: `zig build test-cli`, then `zig build test-cli -Darch=x86_64`; no guest binaries required.
 - Formatting: `zig fmt --check src build.zig build.zig.zon`.
-- Compile/typecheck each target, sequentially to limit peak memory: `zig build`, `zig build -Darch=x86_64`, `zig build -Darch=wasm32`, `zig build -Darch=wasm64`.
+- Compile/typecheck each target, sequentially to limit peak memory: `zig build`, `zig build -Darch=x86_64`, `zig build -Darch=wasm32`, `zig build -Darch=wasm64`. These build ReleaseSafe, the mode `b.standardOptimizeOption` prefers; pass `-Doptimize=Debug` for a debugging loop and expect that to change build time.
 
 Formatting also gates the install and test steps inside `build.zig`. A new gate belongs in `tests/check.sh` and `.github/workflows/ci.yml` together; fix failing code rather than weakening checks or dropping targets.
 

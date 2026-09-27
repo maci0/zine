@@ -15,6 +15,7 @@ root.
 | Task | Command |
 |---|---|
 | Build (default 32-bit x86) | `zig build` |
+| Debug build | `zig build -Doptimize=Debug` |
 | Unit tests | `zig build test` |
 | One test or module | `zig build test -Dtest-filter=<substring> --summary all` |
 | CLI output and exit status | `zig build test-cli` (add `-Darch=x86_64` or `-Darch=wasm32`) |
@@ -27,6 +28,10 @@ The filter is a substring of the test name, and it applies to the whole
 suite, so `zig build test -Dtest-filter=x86.decoder` runs the decoder tests
 across files. `-Darch` does not change the target of the unit tests: they
 always run on the host. Only `test-cli` varies by architecture.
+
+`-Doptimize` defaults to ReleaseSafe so the installed artifacts are the
+optimized ones and stay free of the absolute build path that a Debug binary
+embeds. Pass `-Doptimize=Debug` when stepping through code.
 
 `tests/check.sh` is the single pre-pull-request gate. It runs the same checks,
 in the same order, as the `static-analysis` job in `.github/workflows/ci.yml`:

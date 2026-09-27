@@ -1,6 +1,11 @@
 const std = @import("std");
 const package_version = @import("build.zig.zon").version;
 
+// Debian/Ubuntu install FLTK 1.3 here; the bridge's C++ sources and the
+// system libraries it links assume that layout.
+const fltk_include_dir = "/usr/include/fltk1.3";
+const fltk_lib_dir = "/usr/lib/fltk1.3";
+
 comptime {
     if (!std.mem.eql(u8, package_version, @import("src/version.zig").string)) {
         @compileError("build.zig.zon version must match src/version.zig");
@@ -95,11 +100,11 @@ fn addNativeExe(
             // Warnings are errors: the bridge is clean under -Wall -Wextra and
             // should stay that way. System FLTK headers stay non-fatal via the
             // -isystem include added below.
-            .flags = &.{ "-std=c++11", "-fno-exceptions", "-Wall", "-Wextra", "-Werror", "-I/usr/include/fltk1.3" },
+            .flags = &.{ "-std=c++11", "-fno-exceptions", "-Wall", "-Wextra", "-Werror", "-I" ++ fltk_include_dir },
         });
         exe.root_module.addIncludePath(b.path("src/gui"));
-        exe.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/fltk1.3" });
-        exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib/fltk1.3" });
+        exe.root_module.addSystemIncludePath(.{ .cwd_relative = fltk_include_dir });
+        exe.root_module.addLibraryPath(.{ .cwd_relative = fltk_lib_dir });
         exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
         exe.root_module.linkSystemLibrary("fltk", .{});
         exe.root_module.linkSystemLibrary("fltk_images", .{});
@@ -187,7 +192,19 @@ pub fn build(b: *std.Build) void {
     const embed_stubs = !(b.option(bool, "external-stubs", "Load Win32 stubs from external DLLs instead of embedding them") orelse false);
     const enable_jit_host = b.option(bool, "jit_host", "Enable JIT host imports (requires zine-host or browser)") orelse false;
 
-    const optimize = b.standardOptimizeOption(.{});
+    // ReleaseSafe by default: the artifacts `zig build` installs are the ones
+    // users run, and Zig's default (Debug) leaves them unoptimized and large.
+    // -Doptimize=Debug is still available for a debugging loop, and
+    // --release=<mode> keeps its usual meaning.
+    const optimize = b.option(
+        std.builtin.OptimizeMode,
+        "optimize",
+        "Prioritize performance, safety, or binary size (default: ReleaseSafe)",
+    ) orelse switch (b.release_mode) {
+        .off, .any, .safe => std.builtin.OptimizeMode.ReleaseSafe,
+        .fast => std.builtin.OptimizeMode.ReleaseFast,
+        .small => std.builtin.OptimizeMode.ReleaseSmall,
+    };
     const cli_test_step = b.step("test-cli", "Check native and wasm32 CLI output (wasm32 requires wasmtime)");
 
     const archs_to_build: []const std.Target.Cpu.Arch = if (build_all)
@@ -196,6 +213,22 @@ pub fn build(b: *std.Build) void {
         @as([]const std.Target.Cpu.Arch, &.{a})
     else
         &.{.x86}; // default
+
+    if (use_fltk) {
+        if (arch) |a| if (a != .x86_64) {
+            std.log.err("-Dfltk needs -Darch=x86_64: the bridge links the 64-bit system FLTK libraries, got -Darch={s}", .{@tagName(a)});
+            @panic("unsupported -Dfltk target");
+        };
+        // The include and library paths below are hardcoded to the Debian
+        // layout, so name the missing packages instead of failing later with a
+        // C compiler error.
+        std.Io.Dir.accessAbsolute(b.graph.io, fltk_include_dir, .{}) catch {
+            std.log.err("FLTK headers not found in {s}. Install the system FLTK 1.3 packages: " ++
+                "libfltk1.3-dev libx11-dev libxext-dev libxft-dev libfontconfig1-dev " ++
+                "libxinerama-dev libxcursor-dev libxrender-dev libxfixes-dev", .{fltk_include_dir});
+            @panic("FLTK headers not installed");
+        };
+    }
 
     for (archs_to_build) |a| {
         const query = queryForArch(a);
@@ -223,12 +256,18 @@ pub fn build(b: *std.Build) void {
                 cli_test.addArgs(&.{ "zine " ++ package_version, "wasmtime", "run" });
                 cli_test.addArtifactArg(wasm_lib);
                 cli_test_step.dependOn(&cli_test.step);
-            } else {
+            } else if (!build_all) {
+                // Asking for wasm64 (or wasm32 + jit_host) alone means the CLI
+                // suite has nothing it can run. Under -Dall the other targets
+                // carry their own tests, so the untestable one is skipped
+                // rather than failing the step it is not part of.
                 const cli_test = b.addFail("test-cli requires a native or plain wasm32 target; wasm64 and jit_host need a custom runtime");
                 cli_test_step.dependOn(&cli_test.step);
             }
         } else {
-            const exe = addNativeExe(b, a, target, optimize, toml_dep.module("toml"), use_fltk, embed_stubs, web_assets);
+            // FLTK is only built for x86_64; -Dall also builds x86, which has no
+            // FLTK bridge.
+            const exe = addNativeExe(b, a, target, optimize, toml_dep.module("toml"), use_fltk and a == .x86_64, embed_stubs, web_assets);
             b.installArtifact(exe);
             const cli_test = b.addSystemCommand(&.{"bash"});
             cli_test.addFileArg(b.path("tests/test_cli.sh"));

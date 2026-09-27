@@ -103,7 +103,8 @@ command table, and pull-request expectations.
 
 ## Build
 
-Requires [Zig 0.16.0](https://ziglang.org/download/).
+Requires [Zig 0.16.0](https://ziglang.org/download/). Builds are ReleaseSafe by
+default; add `-Doptimize=Debug` for a debugging loop.
 
 ```sh
 # Default 32-bit x86 interpreter
@@ -118,6 +119,18 @@ zig build -Darch=wasm32
 # All targets
 zig build -Dall
 ```
+
+`-Dfltk` links the system FLTK 1.3 libraries from `/usr/lib/fltk1.3`, so it
+needs them installed first (Debian/Ubuntu):
+
+```sh
+sudo apt install libfltk1.3-dev libx11-dev libxext-dev libxft-dev \
+    libfontconfig1-dev libxinerama-dev libxcursor-dev libxrender-dev \
+    libxfixes-dev
+```
+
+`-Dhost` (the `zine-host` JIT wrapper) needs the Wasmer C API headers and
+library plus a system `cc` on `PATH`.
 
 ## Usage
 
