@@ -465,6 +465,17 @@ pub const Registry = struct {
         return mod;
     }
 
+    /// Finds the loaded module whose mapping starts at `handle`, the guest
+    /// HINSTANCE form. A handle that names no mapping is not readable: every
+    /// offset inside such an image would be unchecked.
+    pub fn moduleForHandle(self: *const Registry, handle: usize) ?*Module {
+        var it = self.modules.valueIterator();
+        while (it.next()) |m| {
+            if (@intFromPtr(m.*.mapped_memory.ptr) == handle) return m.*;
+        }
+        return null;
+    }
+
     /// Resolves an export from a loaded PE module.
     pub fn getExport(self: *Registry, dll_name: []const u8, func_name: []const u8) ?usize {
         const lower_name = self.allocator.alloc(u8, dll_name.len) catch return null;

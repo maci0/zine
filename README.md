@@ -88,6 +88,12 @@ release, not a 0.2.1 patch.
 
 #### Security fixes
 
+- `LoadStringA`/`LoadStringW` read the PE string table only inside the mapped
+  image and inside the block's declared size. A module whose resource
+  directory or string lengths point past its own mapping returns an empty
+  string instead of reading host memory beyond it. A module handle that names
+  no loaded module now yields an empty string as well, where the lookup
+  previously read whatever the address held.
 - The host home directory is redacted from every diagnostic before it reaches
   stderr, so a trace pasted into a bug report no longer carries the local
   account name. A run whose environment has neither `HOME` nor `USERPROFILE`

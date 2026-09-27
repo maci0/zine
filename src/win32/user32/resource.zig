@@ -1,5 +1,6 @@
 const trace = @import("../../trace.zig");
 const pe = @import("../../pe.zig");
+const pe_resources = @import("../../pe_resources.zig");
 const kernel32 = @import("../kernel32.zig");
 const renderer = @import("../../gui/renderer.zig");
 const w32cc = @import("../calling_convention.zig");
@@ -45,112 +46,186 @@ pub fn stub_LoadCursorA(hInstance: usize, lpCursorName: usize) callconv(w32cc.WI
     return 0x87654321; // Dummy handle
 }
 
-fn loadStringFromPE(hInst: usize, uID: u32, out_buf: [*]u8, max_len: usize) usize {
-    if (hInst == 0) return 0;
-    const dos_header = @as(*const pe.IMAGE_DOS_HEADER, @ptrFromInt(hInst));
-    if (dos_header.e_magic != pe.IMAGE_DOS_SIGNATURE) return 0;
+/// Resource-directory entry count, or null when the directory header does not
+/// fit in the image.
+fn dirEntryCount(image: []const u8, dir_off: usize) ?u32 {
+    if (dir_off > image.len or image.len - dir_off < @sizeOf(pe.IMAGE_RESOURCE_DIRECTORY)) return null;
+    const named = std.mem.readInt(u16, image[dir_off + 12 ..][0..2], .little);
+    const ids = std.mem.readInt(u16, image[dir_off + 14 ..][0..2], .little);
+    return @as(u32, named) + ids;
+}
 
-    const nt_headers = @as(*const pe.IMAGE_NT_HEADERS32, @ptrFromInt(hInst + dos_header.e_lfanew));
-    if (nt_headers.Signature != pe.IMAGE_NT_SIGNATURE) return 0;
+/// Offset of entry `index` in the table at `entries_off`, or null when the
+/// arithmetic would leave the address space.
+fn nthEntry(entries_off: usize, index: usize) ?usize {
+    const delta = std.math.mul(u64, index, @sizeOf(pe.IMAGE_RESOURCE_DIRECTORY_ENTRY)) catch return null;
+    const off = std.math.add(u64, entries_off, delta) catch return null;
+    return std.math.cast(usize, off) orelse null;
+}
 
-    const res_dir_info = nt_headers.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_RESOURCE];
-    if (res_dir_info.VirtualAddress == 0 or res_dir_info.Size == 0) {
-        if (trace.enable_tracing) trace.print("USER32: No resource dir\n", .{});
-        return 0;
-    }
-
-    const res_base = hInst + res_dir_info.VirtualAddress;
-    const root_dir = @as(*const pe.IMAGE_RESOURCE_DIRECTORY, @ptrFromInt(res_base));
-
-    const find_entry = struct {
-        fn find(dir: *const pe.IMAGE_RESOURCE_DIRECTORY, id: u32, base: usize, size: u32) ?u32 {
-            const num_named = dir.NumberOfNamedEntries;
-            const num_id = dir.NumberOfIdEntries;
-            const entries = @as([*]const pe.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrFromInt(@intFromPtr(dir) + @sizeOf(pe.IMAGE_RESOURCE_DIRECTORY)));
-
-            for (0..num_named + num_id) |i| {
-                const entry = entries[i];
-                // CVTRES under the emulator stores type/name entries as
-                // single-wchar string names holding the numeric value.
-                var resolved: ?u32 = null;
-                if (entry.NameOrId & 0x80000000 != 0) {
-                    const s_off = base + (entry.NameOrId & 0x7FFFFFFF);
-                    if (s_off + 4 <= base + size) {
-                        const slen = @as(*const u16, @ptrFromInt(s_off)).*;
-                        if (slen == 1) {
-                            resolved = @as(*const u16, @ptrFromInt(s_off + 2)).*;
-                        }
-                    }
-                } else {
-                    resolved = entry.NameOrId;
-                }
-                if (resolved != null and resolved.? == id) {
-                    return entry.OffsetToData;
-                }
-            }
-            return null;
-        }
-    }.find;
-
-    const type_offset = find_entry(root_dir, 6, res_base, res_dir_info.Size) orelse {
-        if (trace.enable_tracing) trace.print("USER32: No RT_STRING\n", .{});
-        return 0;
+fn readEntry(image: []const u8, off: usize) ?pe.IMAGE_RESOURCE_DIRECTORY_ENTRY {
+    if (off > image.len or image.len - off < @sizeOf(pe.IMAGE_RESOURCE_DIRECTORY_ENTRY)) return null;
+    return .{
+        .NameOrId = std.mem.readInt(u32, image[off..][0..4], .little),
+        .OffsetToData = std.mem.readInt(u32, image[off + 4 ..][0..4], .little),
     };
-    if ((type_offset & 0x80000000) == 0) return 0;
+}
 
-    const name_dir = @as(*const pe.IMAGE_RESOURCE_DIRECTORY, @ptrFromInt(res_base + (type_offset & 0x7FFFFFFF)));
+fn readU16(image: []const u8, off: usize) ?u16 {
+    if (off > image.len or image.len - off < 2) return null;
+    return std.mem.readInt(u16, image[off..][0..2], .little);
+}
+
+fn readU32(image: []const u8, off: usize) ?u32 {
+    if (off > image.len or image.len - off < 4) return null;
+    return std.mem.readInt(u32, image[off..][0..4], .little);
+}
+
+/// Finds the entry with `id` in the resource directory at `dir_off`. Named
+/// entries (bit 31 set) resolve through the UTF-16 name holding the numeric
+/// id, as CVTRES under the emulator writes them, bounded by the resource
+/// directory itself.
+fn findResEntry(image: []const u8, res_base: usize, res_size: u32, dir_off: usize, id: u32) ?u32 {
+    const count = dirEntryCount(image, dir_off) orelse return null;
+    const limit = @as(u64, res_base) + res_size;
+    const entries_off = std.math.add(usize, dir_off, @sizeOf(pe.IMAGE_RESOURCE_DIRECTORY)) catch return null;
+
+    for (0..count) |i| {
+        const entry = readEntry(image, nthEntry(entries_off, i) orelse return null) orelse return null;
+        var resolved: ?u32 = null;
+        if (entry.NameOrId & 0x80000000 != 0) {
+            const s_off = @as(u64, res_base) + (entry.NameOrId & 0x7FFFFFFF);
+            if (s_off + 4 <= limit) {
+                const name_off: usize = @intCast(s_off);
+                if (readU16(image, name_off) == 1) resolved = readU16(image, name_off + 2) orelse return null;
+            }
+        } else {
+            resolved = entry.NameOrId;
+        }
+        if (resolved != null and resolved.? == id) return entry.OffsetToData;
+    }
+    return null;
+}
+
+/// Where the wide characters of one string live inside a mapped image.
+const BlockString = struct {
+    off: usize,
+    len: u16,
+    /// First byte past the string-table block, the hard bound on the walk.
+    end: usize,
+};
+
+/// Resolves `uID` to its string in the RT_STRING block, walking only bytes
+/// inside `image` and inside the block's declared size. Every offset on the
+/// way comes from the PE file, so a malformed one returns null instead of
+/// reading past the mapping.
+fn findBlockString(image: []const u8, uID: u32) ?BlockString {
+    if (readU16(image, @offsetOf(pe.IMAGE_DOS_HEADER, "e_magic")) != pe.IMAGE_DOS_SIGNATURE) return null;
+    const lfanew = std.math.cast(usize, readU32(image, @offsetOf(pe.IMAGE_DOS_HEADER, "e_lfanew")) orelse return null) orelse return null;
+    if (readU32(image, lfanew) != pe.IMAGE_NT_SIGNATURE) return null;
+
+    const res_dir_off = std.math.add(usize, lfanew, @offsetOf(pe.IMAGE_NT_HEADERS32, "OptionalHeader")) catch return null;
+    const data_dir_off = std.math.add(usize, res_dir_off, @offsetOf(pe.IMAGE_OPTIONAL_HEADER32, "DataDirectory")) catch return null;
+    const res_entry_off = std.math.add(usize, data_dir_off, @as(usize, pe.IMAGE_DIRECTORY_ENTRY_RESOURCE) * @sizeOf(pe.IMAGE_DATA_DIRECTORY)) catch return null;
+    if (res_entry_off > image.len or image.len - res_entry_off < 2 * @sizeOf(pe.IMAGE_DATA_DIRECTORY)) return null;
+    const res_rva = std.mem.readInt(u32, image[res_entry_off..][0..4], .little);
+    const res_size = std.mem.readInt(u32, image[res_entry_off + 4 ..][0..4], .little);
+    if (res_rva == 0 or res_size == 0) {
+        if (trace.enable_tracing) trace.print("USER32: No resource dir\n", .{});
+        return null;
+    }
+    const res_base = std.math.cast(usize, res_rva) orelse return null;
+
+    const type_offset = findResEntry(image, res_base, res_size, res_base, pe_resources.RT_STRING) orelse {
+        if (trace.enable_tracing) trace.print("USER32: No RT_STRING\n", .{});
+        return null;
+    };
+    if ((type_offset & 0x80000000) == 0) return null;
+    const name_off = std.math.add(usize, res_base, type_offset & 0x7FFFFFFF) catch return null;
 
     const block_id = (uID >> 4) + 1;
-    const lang_offset = find_entry(name_dir, block_id, res_base, res_dir_info.Size) orelse {
+    const lang_offset = findResEntry(image, res_base, res_size, name_off, block_id) orelse {
         if (trace.enable_tracing) trace.print("USER32: No block ID {d}\n", .{block_id});
-        return 0;
+        return null;
     };
-    if ((lang_offset & 0x80000000) == 0) return 0;
+    if ((lang_offset & 0x80000000) == 0) return null;
+    const lang_off = std.math.add(usize, res_base, lang_offset & 0x7FFFFFFF) catch return null;
 
-    const lang_dir = @as(*const pe.IMAGE_RESOURCE_DIRECTORY, @ptrFromInt(res_base + (lang_offset & 0x7FFFFFFF)));
+    const lang_count = dirEntryCount(image, lang_off) orelse return null;
+    if (lang_count == 0) return null;
+    const named = std.mem.readInt(u16, image[lang_off + 12 ..][0..2], .little);
+    const lang_entries = std.math.add(usize, lang_off, @sizeOf(pe.IMAGE_RESOURCE_DIRECTORY)) catch return null;
+    const first = readEntry(image, nthEntry(lang_entries, named) orelse return null) orelse return null;
+    if ((first.OffsetToData & 0x80000000) != 0) return null;
 
-    if (lang_dir.NumberOfIdEntries == 0) return 0;
-    const entries = @as([*]const pe.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrFromInt(@intFromPtr(lang_dir) + @sizeOf(pe.IMAGE_RESOURCE_DIRECTORY)));
-    const data_entry_offset = entries[lang_dir.NumberOfNamedEntries].OffsetToData;
-    if ((data_entry_offset & 0x80000000) != 0) return 0;
-
-    const data_entry = @as(*const pe.IMAGE_RESOURCE_DATA_ENTRY, @ptrFromInt(res_base + data_entry_offset));
-
-    var data_rva = data_entry.OffsetToData;
+    const data_off = std.math.add(usize, res_base, first.OffsetToData) catch return null;
+    if (data_off > image.len or image.len - data_off < @sizeOf(pe.IMAGE_RESOURCE_DATA_ENTRY)) return null;
+    var data_rva = std.mem.readInt(u32, image[data_off..][0..4], .little);
+    const data_size = std.mem.readInt(u32, image[data_off + 4 ..][0..4], .little);
     // CVTRES byte-swaps the data RVA's 16-bit halves in stale builds.
-    if (data_rva > res_dir_info.VirtualAddress + res_dir_info.Size) {
+    if (@as(u64, data_rva) > @as(u64, res_base) + res_size) {
         data_rva = ((data_rva & 0xFFFF) << 16) | (data_rva >> 16);
     }
-    var str_ptr = hInst + data_rva;
 
-    const string_index = uID & 0xF;
+    const str_off = std.math.cast(usize, data_rva) orelse return null;
+    if (str_off > image.len) return null;
+    const block_end = std.math.add(usize, str_off, data_size) catch return null;
+    if (block_end > image.len) return null;
 
-    for (0..string_index) |i| {
-        if (str_ptr < hInst or str_ptr > hInst + 0x1000000) return 0;
-        const len = @as(*const u16, @ptrFromInt(str_ptr)).*;
+    var off = str_off;
+    for (0..uID & 0xF) |i| {
+        const len = readU16(image, off) orelse return null;
         if (trace.enable_tracing) {
-            const raw = @as([*]const u8, @ptrFromInt(str_ptr));
-            trace.print("USER32: loadString: block {d} string {d} at 0x{X} len 0x{X} bytes={X:0>2} {X:0>2} {X:0>2} {X:0>2}\n", .{ block_id, i, str_ptr, len, raw[0], raw[1], raw[2], raw[3] });
+            trace.print("USER32: loadString: block {d} string {d} at 0x{X} len 0x{X}\n", .{ block_id, i, off, len });
         }
-        str_ptr += 2 + (len * 2);
+        off = std.math.add(usize, off, 2 + @as(usize, len) * 2) catch return null;
+        if (off > block_end) return null;
     }
-
-    if (str_ptr < hInst or str_ptr > hInst + 0x1000000) return 0;
-    const target_len = @as(*const u16, @ptrFromInt(str_ptr)).*;
+    const target_len = readU16(image, off) orelse return null;
     if (trace.enable_tracing) {
-        trace.print("USER32: loadString: block {d} target string at 0x{X} target_len 0x{X}\n", .{ block_id, str_ptr, target_len });
+        trace.print("USER32: loadString: block {d} target string at 0x{X} target_len 0x{X}\n", .{ block_id, off, target_len });
     }
-    if (target_len == 0) return 0;
+    if (target_len == 0) return null;
+    if (off + 2 > block_end) return null;
+    return .{ .off = off + 2, .len = target_len, .end = block_end };
+}
 
-    str_ptr += 2;
-    const wide_chars = @as([*]const u16, @ptrFromInt(str_ptr));
-
-    const copy_len = @min(@as(usize, @intCast(target_len)), max_len - 1);
+/// Narrow copy of string `uID` out of a mapped image. `image` is one loaded
+/// module, so every byte read is inside its mapping.
+pub fn loadStringFromImage(image: []const u8, uID: u32, out_buf: [*]u8, max_len: usize) usize {
+    if (max_len == 0) return 0;
+    const s = findBlockString(image, uID) orelse return 0;
+    const avail = (s.end - s.off) / 2;
+    const copy_len = @min(@as(usize, s.len), @min(max_len - 1, avail));
     for (0..copy_len) |i| {
-        out_buf[i] = @intCast(wide_chars[i] & 0xFF);
+        out_buf[i] = @intCast(std.mem.readInt(u16, image[s.off + i * 2 ..][0..2], .little) & 0xFF);
     }
     out_buf[copy_len] = 0;
     return copy_len;
+}
+
+/// Wide copy of string `uID` out of a mapped image. Same walk as
+/// `loadStringFromImage`, so both return the same length for the same image.
+pub fn loadStringFromImageW(image: []const u8, uID: u32, out_buf: [*]u16, max_len: usize) usize {
+    if (max_len == 0) return 0;
+    const s = findBlockString(image, uID) orelse return 0;
+    const avail = (s.end - s.off) / 2;
+    const copy_len = @min(@as(usize, s.len), @min(max_len - 1, avail));
+    for (0..copy_len) |i| {
+        out_buf[i] = std.mem.readInt(u16, image[s.off + i * 2 ..][0..2], .little);
+    }
+    out_buf[copy_len] = 0;
+    return copy_len;
+}
+
+/// The mapped image of the loaded module `handle` names, or null when it
+/// names no mapping. A handle outside the registry has no known length, so
+/// nothing inside it can be read within bounds.
+fn imageForHandle(handle: usize) ?[]const u8 {
+    if (handle == 0) return null;
+    const genv = kernel32.global_env orelse return null;
+    const mod = genv.registry.moduleForHandle(handle) orelse return null;
+    return mod.mapped_memory;
 }
 
 pub fn LoadStringA(hInstance: ?*anyopaque, uID: u32, lpBuffer: [*]u8, nBufferMax: i32) callconv(w32cc.WINAPI) i32 {
@@ -163,8 +238,8 @@ pub fn LoadStringA(hInstance: ?*anyopaque, uID: u32, lpBuffer: [*]u8, nBufferMax
         var hInst: usize = if (hInstance != null) @intFromPtr(hInstance.?) else 0;
         if (hInst == 0) hInst = kernel32.main_module_handle;
 
-        if (hInst != 0) {
-            const len = loadStringFromPE(hInst, uID, lpBuffer, max_len);
+        if (imageForHandle(hInst)) |image| {
+            const len = loadStringFromImage(image, uID, lpBuffer, max_len);
             if (len > 0) {
                 if (trace.enable_tracing) {
                     trace.print("USER32: loaded from PE -> '{s}'\n", .{lpBuffer[0..len]});
@@ -189,86 +264,14 @@ pub fn LoadStringW(hInstance: ?*anyopaque, uID: u32, lpBuffer_ptr: usize, nBuffe
         var hInst: usize = if (hInstance != null) @intFromPtr(hInstance.?) else 0;
         if (hInst == 0) hInst = kernel32.main_module_handle;
 
-        if (hInst != 0) {
-            // Reuse the PE resource lookup but output wide chars
-            const len = loadStringFromPEW(hInst, uID, lpBuffer, max_len);
+        if (imageForHandle(hInst)) |image| {
+            const len = loadStringFromImageW(image, uID, lpBuffer, max_len);
             if (len > 0) return @intCast(len);
         }
 
         lpBuffer[0] = 0;
     }
     return 0;
-}
-
-fn loadStringFromPEW(hInst: usize, uID: u32, out_buf: [*]u16, max_len: usize) usize {
-    if (hInst == 0) return 0;
-    const dos_header = @as(*const pe.IMAGE_DOS_HEADER, @ptrFromInt(hInst));
-    if (dos_header.e_magic != pe.IMAGE_DOS_SIGNATURE) return 0;
-
-    const nt_headers = @as(*const pe.IMAGE_NT_HEADERS32, @ptrFromInt(hInst + dos_header.e_lfanew));
-    if (nt_headers.Signature != pe.IMAGE_NT_SIGNATURE) return 0;
-
-    const res_dir_info = nt_headers.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_RESOURCE];
-    if (res_dir_info.VirtualAddress == 0 or res_dir_info.Size == 0) return 0;
-
-    const res_base = hInst + res_dir_info.VirtualAddress;
-    const root_dir = @as(*const pe.IMAGE_RESOURCE_DIRECTORY, @ptrFromInt(res_base));
-
-    const find_entry_w = struct {
-        fn find(dir: *const pe.IMAGE_RESOURCE_DIRECTORY, id: u32) ?u32 {
-            const num_named = dir.NumberOfNamedEntries;
-            const num_id = dir.NumberOfIdEntries;
-            const entries = @as([*]const pe.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrFromInt(@intFromPtr(dir) + @sizeOf(pe.IMAGE_RESOURCE_DIRECTORY)));
-            for (0..num_id) |i| {
-                const entry = entries[num_named + i];
-                if (entry.NameOrId == id) return entry.OffsetToData;
-            }
-            return null;
-        }
-    }.find;
-
-    const type_offset = find_entry_w(root_dir, 6) orelse return 0;
-    if ((type_offset & 0x80000000) == 0) return 0;
-
-    const name_dir = @as(*const pe.IMAGE_RESOURCE_DIRECTORY, @ptrFromInt(res_base + (type_offset & 0x7FFFFFFF)));
-    const block_id = (uID >> 4) + 1;
-    const lang_offset = find_entry_w(name_dir, block_id) orelse return 0;
-    if ((lang_offset & 0x80000000) == 0) return 0;
-
-    const lang_dir = @as(*const pe.IMAGE_RESOURCE_DIRECTORY, @ptrFromInt(res_base + (lang_offset & 0x7FFFFFFF)));
-    if (lang_dir.NumberOfIdEntries == 0) return 0;
-    const entries = @as([*]const pe.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrFromInt(@intFromPtr(lang_dir) + @sizeOf(pe.IMAGE_RESOURCE_DIRECTORY)));
-    const data_entry_offset = entries[lang_dir.NumberOfNamedEntries].OffsetToData;
-    if ((data_entry_offset & 0x80000000) != 0) return 0;
-
-    const data_entry = @as(*const pe.IMAGE_RESOURCE_DATA_ENTRY, @ptrFromInt(res_base + data_entry_offset));
-    var str_ptr = hInst + data_entry.OffsetToData;
-    const string_index = uID & 0xF;
-
-    for (0..string_index) |i| {
-        if (str_ptr < hInst or str_ptr > hInst + 0x1000000) return 0;
-        const len = @as(*const u16, @ptrFromInt(str_ptr)).*;
-        if (trace.enable_tracing) {
-            trace.print("USER32: loadString: block {d} string {d} at 0x{X} len 0x{X}\n", .{ block_id, i, str_ptr, len });
-        }
-        str_ptr += 2 + (len * 2);
-    }
-
-    if (str_ptr < hInst or str_ptr > hInst + 0x1000000) return 0;
-    const target_len = @as(*const u16, @ptrFromInt(str_ptr)).*;
-    if (trace.enable_tracing) {
-        trace.print("USER32: loadString: block {d} target string at 0x{X} target_len 0x{X}\n", .{ block_id, str_ptr, target_len });
-    }
-    if (target_len == 0) return 0;
-
-    str_ptr += 2;
-    const wide_chars = @as([*]const u16, @ptrFromInt(str_ptr));
-    const copy_len = @min(@as(usize, @intCast(target_len)), max_len - 1);
-    for (0..copy_len) |i| {
-        out_buf[i] = wide_chars[i];
-    }
-    out_buf[copy_len] = 0;
-    return copy_len;
 }
 
 pub fn stub_LoadAcceleratorsA(hInstance: usize, lpTableName: usize) callconv(w32cc.WINAPI) usize {

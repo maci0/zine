@@ -10,6 +10,7 @@ const testing = std.testing;
 const mutation = @import("mutation.zig");
 const dialog_fuzz = @import("dialog.zig");
 const icon_fuzz = @import("icon.zig");
+const loadstring_fuzz = @import("loadstring.zig");
 const menu_fuzz = @import("menu.zig");
 const pe_fuzz = @import("pe.zig");
 
@@ -49,4 +50,31 @@ test "fuzz: icon seeds and mutations hold the parser contract" {
 
 test "fuzz: pe seeds and mutations hold the parser contract" {
     try replay(&pe_fuzz.seeds, pe_fuzz.harness);
+}
+
+test "fuzz: loadstring seeds and mutations hold the parser contract" {
+    try replay(&loadstring_fuzz.seeds, loadstring_fuzz.harness);
+}
+
+test "loadstring: a well-formed string table yields its strings" {
+    const resource = @import("../win32/user32/resource.zig");
+    const image = loadstring_fuzz.seeds[0];
+
+    for (loadstring_fuzz.seed_strings, 0..) |expected, uID| {
+        var narrow: [64]u8 = undefined;
+        const len = resource.loadStringFromImage(image, @intCast(uID), &narrow, narrow.len);
+        var want: [64]u8 = undefined;
+        for (expected, 0..) |wc, i| want[i] = @intCast(wc & 0xFF);
+        try testing.expectEqualStrings(want[0..expected.len], narrow[0..len]);
+        try testing.expectEqual(@as(u8, 0), narrow[len]);
+
+        var wide: [64]u16 = undefined;
+        const wide_len = resource.loadStringFromImageW(image, @intCast(uID), &wide, wide.len);
+        try testing.expectEqualSlices(u16, expected, wide[0..wide_len]);
+    }
+
+    // A block the image does not hold must resolve to nothing, not to a
+    // neighbouring string.
+    var narrow: [64]u8 = undefined;
+    try testing.expectEqual(@as(usize, 0), resource.loadStringFromImage(image, 0x20, &narrow, narrow.len));
 }
