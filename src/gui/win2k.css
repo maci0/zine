@@ -150,6 +150,8 @@ canvas                      { cursor: none; }
     --sys-sel-text:     #FFFFFF;  /* HilightText / HighlightText              RGB 255,255,255 */
     --sys-hot:          #000080;  /* HotTrackingColor                         RGB 0,0,128     */
 
+    --sys-error:        #A40000;  /* Inline validation text                    */
+
     /* Menu */
     --sys-menu:         #D4D0C8;  /* Menu                                     RGB 212,208,200 */
     --sys-menu-text:    #000000;  /* MenuText                                 RGB 0,0,0       */
@@ -307,6 +309,30 @@ body {
     position: absolute;
     top: 1px;
     left: 3px;
+    box-sizing: border-box;
+}
+
+/* Restore glyph — two overlapping rectangles, the maximized window's way back */
+.btn-restore {
+    position: absolute;
+    top: 0;
+    left: 2px;
+    width: 7px;
+    height: 6px;
+    border: 1px solid var(--sys-text);
+    box-sizing: border-box;
+}
+
+.btn-restore::after {
+    content: '';
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    width: 7px;
+    height: 6px;
+    border: 1px solid var(--sys-text);
+    border-top-color: transparent;
+    background-color: var(--sys-face);
     box-sizing: border-box;
 }
 
@@ -512,6 +538,13 @@ body {
 .win2k-content p {
     margin: 0 0 8px 0;
     white-space: pre-wrap;
+}
+
+/* Inline validation inside a dialog; hidden until a field is wrong */
+.dlg-error {
+    color: var(--sys-error);
+    font-size: 11px;
+    margin: -4px 0 6px;
 }
 
 /* ===================================================================
@@ -1662,7 +1695,8 @@ select.win2k-edit:disabled {
     padding: 6px 8px 8px;
     font-family: var(--font-ui);
     font-size: 11px;
-    min-width: 440px;
+    width: 440px;
+    max-width: 100%;
 }
 
 /* --- "Look in:" toolbar row --- */
@@ -1831,6 +1865,13 @@ select.win2k-edit:disabled {
     width: 16px;
     height: 16px;
     flex-shrink: 0;
+}
+
+/* Shown when the folder is empty, or when the selected type hides everything */
+.comdlg-empty {
+    padding: 6px 8px;
+    font-size: 11px;
+    color: var(--sys-gray-text);
 }
 
 /* --- Bottom rows (File name / Files of type) --- */
@@ -2969,6 +3010,45 @@ select.win2k-edit:disabled {
 
 .win2k-wait { cursor: wait; }
 .win2k-busy { cursor: progress; }
+
+/* ===================================================================
+ * Small Viewports
+ *
+ * Dialogs are authored at a desktop width and clamped from script; below
+ * that the fixed minimums are dropped so a dialog fits the screen
+ * instead of scrolling the page sideways.
+ * =================================================================== */
+
+@media (max-width: 520px) {
+    .win2k-dialog {
+        min-width: 0;
+    }
+
+    .comdlg-body {
+        width: auto;
+    }
+
+    .comdlg-places-bar {
+        width: 64px;
+        min-width: 64px;
+    }
+
+    .comdlg-place-item {
+        width: 56px;
+    }
+
+    .comdlg-place-item span {
+        max-width: 54px;
+    }
+
+    .fontdlg-col-row {
+        flex-wrap: wrap;
+    }
+
+    .fontdlg-col {
+        min-width: 0;
+    }
+}
 
 /* ===================================================================
  * Reduced Motion

@@ -218,6 +218,18 @@ function fitCanvasToContainer() {
 })();
 
 // --- Dialog Management ---
+// Dialogs are authored at a desktop width. A phone in portrait is narrower, so
+// the requested width is clamped to the viewport and re-applied on rotate.
+const DIALOG_VIEWPORT_MARGIN = 16;
+const DIALOG_MIN_WIDTH = 240;
+let dialogPreferredWidth = 0;
+
+function setDialogWidth(px) {
+    dialogPreferredWidth = px;
+    const available = Math.max(DIALOG_MIN_WIDTH, window.innerWidth - DIALOG_VIEWPORT_MARGIN);
+    dialogOverlay.style.width = Math.min(px, available) + 'px';
+}
+
 function showDialog(title, content) {
     const dialogContent = document.getElementById('dialog-content');
     setGuestText(document.getElementById('dialog-title'), title);
@@ -235,6 +247,7 @@ function showDialog(title, content) {
     dialogOverlay.style.left = '50%';
     dialogOverlay.style.top = '50%';
     dialogOverlay.style.width = '';
+    dialogPreferredWidth = 0;
     dialogOverlay.style.zIndex = 3000;
 
     document.getElementById('main-titlebar').classList.add('inactive');
@@ -295,6 +308,17 @@ function sendWmSize(clientW, clientH, sizeType) {
     }
 }
 
+// The caption button keeps saying "Maximize" after the window is maximized, so
+// the next click is a surprise. Its glyph and label follow the state.
+function updateMaximizeButton() {
+    const btn = document.getElementById('maximize-button');
+    if (!btn) return;
+    const glyph = btn.querySelector('.btn-glyph');
+    glyph.classList.toggle('btn-restore', isMaximized);
+    glyph.classList.toggle('btn-maximize', !isMaximized);
+    btn.setAttribute('aria-label', isMaximized ? 'Restore' : 'Maximize');
+}
+
 function maximizeWindow() {
     if (isMaximized) {
         if (restoreRect) {
@@ -328,6 +352,7 @@ function maximizeWindow() {
             if (cw > 0 && ch > 0) sendWmSize(cw, ch, 2);
         });
     }
+    updateMaximizeButton();
 }
 
 function closeWindow() {
@@ -352,6 +377,11 @@ const startButton = document.getElementById('start-button');
 const startMenu = document.getElementById('start-menu');
 const LAUNCHABLE_EXTENSIONS = ['exe', 'com', 'bat', 'cmd'];
 let desktopItems = [];
+// The listing arrives once after connecting, and not at all when the guest has
+// no Desktop directory, so the wait for it is bounded rather than open ended.
+const DESKTOP_LISTING_GRACE_MS = 2000;
+let desktopItemsLoaded = false;
+let desktopItemsWaitStart = 0;
 
 function launchDesktopItem(name) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -368,11 +398,15 @@ function renderStartMenu() {
     startMenu.innerHTML = '';
     const programs = desktopItems.filter(item =>
         !item.is_dir && LAUNCHABLE_EXTENSIONS.includes((item.ext || '').toLowerCase()));
+    const listingPending = !desktopItemsLoaded &&
+        Date.now() - desktopItemsWaitStart < DESKTOP_LISTING_GRACE_MS;
 
     van.add(startMenu, div({class: 'popup-header'}, 'Programs'));
-    if (programs.length === 0) {
+    if (listingPending) {
+        van.add(startMenu, div({class: 'popup-item disabled'}, 'Loading...'));
+    } else if (programs.length === 0) {
         van.add(startMenu, div({class: 'popup-item disabled'},
-            'No programs in drive_c/Desktop'));
+            'No programs on the Desktop'));
     } else {
         programs.forEach(p => {
             van.add(startMenu, div({class: 'popup-item', onclick: () => {
@@ -800,6 +834,8 @@ function connect() {
         menuBar.innerHTML = '';
         currentMenuData = null;
         desktopItems = [];
+        desktopItemsLoaded = false;
+        desktopItemsWaitStart = Date.now();
         dialogOverlay.style.display = 'none';
 
         // Reset window title
@@ -938,7 +974,7 @@ function connect() {
                         ...(msg.items || []).map(item => DialogControl(item, scaleX, scaleY, msg.items))
                     );
                     showDialog(msg.title, container);
-                    dialogOverlay.style.width = (dlgW + 14) + 'px';
+                    setDialogWidth(dlgW + 14);
 
                 } else if (msg.type === "show_controls") {
                     const scaleX = 1.75;
@@ -1015,7 +1051,7 @@ function connect() {
                                     }
                                     closeDialog(true);
                                 }}, 'Cancel'))));
-                    dialogOverlay.style.width = '260px';
+                    setDialogWidth(260);
 
                 } else if (msg.type === "set_control_color") {
                     // Background color from the parent's WM_CTLCOLOR handler.
@@ -1146,6 +1182,15 @@ function connect() {
                     const fileListEl = div({class: 'win2k-edit comdlg-file-list'});
                     const lookInLabel = div({class: 'win2k-edit comdlg-lookin'});
 
+                    // The guest sends filter descriptions ("Text files (*.txt)"),
+                    // so the pattern lives in the label and narrows the list here.
+                    const filterOptions = (msg.filters && msg.filters.length > 0)
+                        ? msg.filters.map(f => option(f))
+                        : [option('All Files (*.*)')];
+                    const ftSel = select({id: 'dialog_filetype', class: 'win2k-edit'}, ...filterOptions);
+                    let listFolders = msg.folders || [];
+                    let listFiles = msg.files || [];
+
                     // --- Toolbar buttons (created early so we can reference them) ---
                     const backBtn = div({class: 'comdlg-toolbar-btn', title: 'Go To Last Folder Visited',
                         onclick: () => navigateBack()}, img({src: 'assets/back.svg'}));
@@ -1213,54 +1258,75 @@ function connect() {
                         navigateTo(parentPath);
                     }
 
-                    function populateFileList(folders, files) {
-                        fileListEl.innerHTML = '';
-                        // Folders first
-                        if (folders) {
-                            folders.forEach(f => {
-                                const item = div({
-                                    class: 'file-item',
-                                    'data-name': f,
-                                    'data-type': 'folder',
-                                    onclick: () => selectFile(f),
-                                    ondblclick: () => navigateTo(currentPath + '/' + f)
-                                }, img({src: 'assets/folder.svg', width: 16, height: 16}), f);
-                                van.add(fileListEl, item);
-                            });
-                        }
-                        // Then files
-                        if (files) {
-                            files.forEach(f => {
-                                van.add(fileListEl, div({
-                                    class: 'file-item',
-                                    'data-name': f,
-                                    'data-type': 'file',
-                                    onclick: () => selectFile(f),
-                                    ondblclick: () => { selectFile(f); openSelectedFile(); }
-                                }, img({src: 'assets/file.svg', width: 16, height: 16}), f));
-                            });
-                        }
+                    /** Does a name pass the active "Files of type" description?
+                     * The pattern list is the parenthesized part, e.g.
+                     * "Text files (*.txt;*.asc)". A description without one
+                     * (or "*.*") shows everything. */
+                    function filterMatches(name) {
+                        const paren = /\(([^)]*)\)/.exec(ftSel.value || '');
+                        if (!paren) return true;
+                        const patterns = paren[1].split(';').map(p => p.trim()).filter(Boolean);
+                        if (patterns.length === 0) return true;
+                        const lower = name.toLowerCase();
+                        return patterns.some(p => {
+                            const re = new RegExp('^' + p.toLowerCase()
+                                .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+                                .replace(/\*/g, '.*')
+                                .replace(/\?/g, '.') + '$');
+                            return re.test(lower);
+                        });
                     }
+
+                    function renderFileList() {
+                        fileListEl.innerHTML = '';
+                        const files = listFiles.filter(filterMatches);
+                        if (listFolders.length === 0 && files.length === 0) {
+                            // An empty folder and a filter that matches nothing are
+                            // different situations, so they say so.
+                            van.add(fileListEl, div({class: 'comdlg-empty'},
+                                listFiles.length === 0
+                                    ? 'This folder is empty.'
+                                    : 'No files match the selected type.'));
+                            return;
+                        }
+                        // Folders are places, not files, so a filter never hides them.
+                        listFolders.forEach(f => {
+                            const item = div({
+                                class: 'file-item',
+                                'data-name': f,
+                                'data-type': 'folder',
+                                onclick: () => selectFile(f),
+                                ondblclick: () => navigateTo(currentPath + '/' + f)
+                            }, img({src: 'assets/folder.svg', width: 16, height: 16}), f);
+                            van.add(fileListEl, item);
+                        });
+                        files.forEach(f => {
+                            van.add(fileListEl, div({
+                                class: 'file-item',
+                                'data-name': f,
+                                'data-type': 'file',
+                                onclick: () => selectFile(f),
+                                ondblclick: () => { selectFile(f); openSelectedFile(); }
+                            }, img({src: 'assets/file.svg', width: 16, height: 16}), f));
+                        });
+                    }
+                    ftSel.addEventListener('change', renderFileList);
 
                     // Store handler on the dialog so directory_listing messages can find it
                     window._fileDialogUpdate = function(folders, files, path) {
                         if (path !== undefined) currentPath = path;
-                        populateFileList(folders, files);
+                        listFolders = folders || [];
+                        listFiles = files || [];
+                        renderFileList();
                         updateLookIn();
                         updateToolbarState();
                         updatePlaceState();
                     };
 
                     // Populate initial listing
-                    populateFileList(msg.folders, msg.files);
+                    renderFileList();
                     updateLookIn();
                     updateToolbarState();
-
-                    // Build filter dropdown
-                    const filterOptions = (msg.filters && msg.filters.length > 0)
-                        ? msg.filters.map(f => option(f))
-                        : [option('All Files (*.*)')];
-                    const ftSel = select({id: 'dialog_filetype', class: 'win2k-edit'}, ...filterOptions);
 
                     // --- Places bar ---
                     // The guest browses drive_c/Desktop, so only that place has
@@ -1313,7 +1379,7 @@ function connect() {
                                 ftSel,
                                 button({class: 'win2k-button', onclick: () => closeDialog()}, 'Cancel')))
                     );
-                    dialogOverlay.style.width = '475px';
+                    setDialogWidth(475);
                     updatePlaceState();
 
                 } else if (msg.type === "directory_listing") {
@@ -1406,10 +1472,21 @@ function connect() {
                     sizeInput.addEventListener('change', () => {
                         const v = parseInt(sizeInput.value);
                         if (v > 0 && v < 1000) { selSize = v; selectListItem(sizeListEl, String(v)); updatePreview(); }
+                        else sizeInput.value = String(selSize);
                     });
                     fontInput.addEventListener('change', () => {
                         selFont = fontInput.value;
                         selectListItem(fontListEl, selFont);
+                        updatePreview();
+                    });
+                    // The style box accepts the same four names the list offers;
+                    // an unknown name reverts to the selection it came from.
+                    styleInput.addEventListener('change', () => {
+                        const i = styles.indexOf(styleInput.value.trim());
+                        if (i < 0) { styleInput.value = styles[getStyleIdx()]; return; }
+                        selBold = (i === 2 || i === 3);
+                        selItalic = (i === 1 || i === 3);
+                        selectListItem(styleListEl, styles[i]);
                         updatePreview();
                     });
 
@@ -1438,7 +1515,7 @@ function connect() {
                                     button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => onOK()}, 'OK'),
                                     button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => closeDialog()}, 'Cancel'))))
                     );
-                    dialogOverlay.style.width = '440px';
+                    setDialogWidth(440);
 
                     // Scroll to initial selections
                     setTimeout(() => {
@@ -1464,8 +1541,14 @@ function connect() {
                         if (isNaN(n)) return lo;
                         return Math.max(lo, Math.min(n, hi));
                     }
-                    fromInput.addEventListener('change', () => { fromPage = clampInt(fromInput.value, minPage, maxPage); fromInput.value = String(fromPage); });
-                    toInput.addEventListener('change', () => { toPage = clampInt(toInput.value, minPage, maxPage); toInput.value = String(toPage); });
+                    const rangeError = div({class: 'dlg-error', style: 'display:none;'}, 'The "To" page cannot be before the "From" page.');
+                    function refreshRangeError() {
+                        const bad = fromPage > toPage;
+                        rangeError.style.display = bad ? 'block' : 'none';
+                        return bad;
+                    }
+                    fromInput.addEventListener('change', () => { fromPage = clampInt(fromInput.value, minPage, maxPage); fromInput.value = String(fromPage); refreshRangeError(); });
+                    toInput.addEventListener('change', () => { toPage = clampInt(toInput.value, minPage, maxPage); toInput.value = String(toPage); refreshRangeError(); });
                     copiesInput.addEventListener('change', () => { copies = clampInt(copiesInput.value, 1, 999); copiesInput.value = String(copies); });
 
                     showDialog('Print',
@@ -1474,15 +1557,17 @@ function connect() {
                                 div({class: 'fontdlg-col'}, label('From:'), fromInput),
                                 div({class: 'fontdlg-col'}, label('To:'), toInput),
                                 div({class: 'fontdlg-col'}, label('Copies:'), copiesInput)),
+                            rangeError,
                             div({style: 'display:flex; justify-content:flex-end; gap:8px; margin-top:10px;'},
                                 button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => {
+                                    if (refreshRangeError()) return;
                                     if (ws && ws.readyState === WebSocket.OPEN) {
                                         ws.send(JSON.stringify({ type: 'print_chosen', from: fromPage, to: toPage, copies: copies }));
                                     }
                                 }}, 'Print'),
                                 button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => closeDialog()}, 'Cancel')))
                     );
-                    dialogOverlay.style.width = '360px';
+                    setDialogWidth(360);
 
                 } else if (msg.type === "show_page_setup_dialog") {
                     // --- Page Setup Dialog ---
@@ -1528,7 +1613,7 @@ function connect() {
                                 }}, 'OK'),
                                 button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => closeDialog()}, 'Cancel')))
                     );
-                    dialogOverlay.style.width = '420px';
+                    setDialogWidth(420);
 
                 } else if (msg.type === "open_find_dialog") {
                     // --- Find/Replace Dialog (modeless) ---
@@ -1588,7 +1673,7 @@ function connect() {
                                     dialogOverlay.style.display = 'none';
                                 }}, 'Cancel')))
                     );
-                    dialogOverlay.style.width = isReplace ? '420px' : '380px';
+                    setDialogWidth(isReplace ? 420 : 380);
 
                 } else if (msg.type === "close_dialog") {
                     dialogOverlay.style.display = 'none';
@@ -1851,6 +1936,7 @@ function connect() {
                     const newDesktop = desktop.cloneNode(false);
                     desktop.parentNode.replaceChild(newDesktop, desktop);
                     desktopItems = msg.items || [];
+                    desktopItemsLoaded = true;
                     const folderSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><path d="M2 6h12l2 3h14v19H2z" fill="#FEC64F" stroke="#996515" stroke-width="0.5"/><path d="M2 9h28v16H2z" fill="#FEC64F"/></svg>`;
                     const docSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><path d="M6 2h14l6 6v22H6z" fill="#fff" stroke="#888" stroke-width="0.8"/><path d="M20 2l6 6h-6z" fill="#ccc" stroke="#888" stroke-width="0.5"/><line x1="10" y1="14" x2="22" y2="14" stroke="#999" stroke-width="0.8"/><line x1="10" y1="17" x2="22" y2="17" stroke="#999" stroke-width="0.8"/><line x1="10" y1="20" x2="18" y2="20" stroke="#999" stroke-width="0.8"/></svg>`;
                     const exeSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><rect x="4" y="2" width="24" height="28" rx="2" fill="#ddd" stroke="#666" stroke-width="0.8"/><rect x="7" y="5" width="18" height="12" fill="#000080"/><rect x="9" y="8" width="4" height="2" fill="#0f0"/><rect x="15" y="8" width="6" height="2" fill="#0ff"/><rect x="9" y="11" width="8" height="2" fill="#ff0"/><rect x="8" y="20" width="7" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/><rect x="17" y="20" width="7" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/><rect x="8" y="25" width="16" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/></svg>`;
@@ -1902,6 +1988,10 @@ function connect() {
                             launchDesktopItem(item.name);
                         });
 
+                        // A desktop icon launches on a double click, which nothing
+                        // on screen says; the tooltip is the one place it can.
+                        iconEl.title = 'Double-click to open ' + item.name;
+
                         // Double-click to launch
                         iconEl.addEventListener('dblclick', () => {
                             launchDesktopItem(item.name);
@@ -1924,6 +2014,9 @@ function connect() {
 
 // --- Window Resize Event ---
 window.addEventListener('resize', () => {
+    if (dialogPreferredWidth > 0) {
+        setDialogWidth(dialogPreferredWidth);
+    }
     if (isMaximized) {
         const container = document.getElementById('game-container');
         const cw = container.clientWidth - 4;

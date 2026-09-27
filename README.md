@@ -133,6 +133,19 @@ retroactively.
   hint instead of the loader's internal error name.
 - The native and WASI `--help` option lists lost a stray blank line, and
   `--jit-max-eip` is documented as the u32 it accepts (decimal or 0x hex).
+- The web Open and Save dialog filters the file list by the guest's
+  "Files of type" patterns, and says "This folder is empty." or "No files
+  match the selected type." when there is nothing to list.
+- The web Print dialog reports a page range that ends before it starts instead
+  of handing that range to the guest.
+- The web Font dialog applies a style typed into its style box, as its font and
+  size boxes already did.
+- Web dialogs are clamped to the viewport, so a narrow window no longer forces
+  the page to scroll sideways.
+- The web window's maximize button switches to a restore glyph and label once
+  the window is maximized.
+- The web Start menu waits briefly for the desktop listing, then names an empty
+  Desktop the way the rest of the interface names it.
 
 ### 0.2.0 (2026-09-18)
 

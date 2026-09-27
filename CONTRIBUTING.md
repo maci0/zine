@@ -67,6 +67,12 @@ integration suite (`tests/test_msvc_cli.sh`, needs MSVC 6.0 fixtures under
 (`tests/fltk_smoke.sh`, needs Xvfb), and the WebSocket tests (need Python 3 and
 `tests/requirements.txt`).
 
+The browser UI has one page-level harness, `tests/gui_file_dialog.html`: it
+loads `src/gui/app.js` against a stubbed WebSocket, drives the dialogs, and
+prints PASS or FAIL into the page. Run it headless and read the result:
+
+    chromium --headless --dump-dom "file://$PWD/tests/gui_file_dialog.html" | grep 'id="result"'
+
 ## Adding a test
 
 Unit tests are Zig `test` blocks in the same file as the code they cover.

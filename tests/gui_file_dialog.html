@@ -8,6 +8,7 @@
     <pre id="result">RUNNING</pre>
     <canvas id="screen"></canvas>
     <div id="status"></div>
+    <div id="desktop-area"></div>
     <div id="menu-bar"></div>
     <div id="main-window"><div id="main-titlebar"></div></div>
     <div id="dialog-overlay">
@@ -17,6 +18,8 @@
     <div id="taskbar-clock"></div>
     <div id="taskbar-app-btn"></div>
     <div id="taskbar-context-menu"></div>
+    <div id="start-button"></div>
+    <div id="start-menu"></div>
     <div id="volume-popup"></div>
     <div id="tray-volume"></div>
     <script>
@@ -61,9 +64,103 @@
                 assert(sent.length === 2 && sent[1].type === 'open_file' && sent[1].filename === 'note.txt' && sent[1].dir === 'Desktop/Documents', 'File selection must use the new directory');
                 closeDialog();
             }
-            document.getElementById('result').textContent = 'PASS: folder selection in Open and Save dialogs';
+            document.getElementById('result').textContent = 'RUNNING';
+            block2();
+            block3();
+            block4();
+            block5();
+            document.getElementById('result').textContent = 'PASS: dialogs, filter, print range, font style, start menu';
         } catch (error) {
             document.getElementById('result').textContent = 'FAIL: ' + error.message;
+        }
+
+        // "Files of type" narrows the listing and the list says so when it is empty
+        function block2() {
+            sent.length = 0;
+            receive({
+                type: 'open_file_dialog', mode: 'open', path: 'Desktop',
+                folders: ['Documents'], files: ['a.txt', 'b.exe', 'c.txt'],
+                filters: ['All Files (*.*)', 'Text files (*.txt)', 'Programs (*.exe)', 'Archives (*.zip)']
+            });
+            const ftSel = document.getElementById('dialog_filetype');
+            const names = () => [...document.querySelectorAll('#dialog-content .file-item')].map(el => el.dataset.name);
+            const emptyText = () => {
+                const el = document.querySelector('#dialog-content .comdlg-empty');
+                return el ? el.textContent : null;
+            };
+            const pick = label => {
+                ftSel.value = label;
+                ftSel.dispatchEvent(new Event('change'));
+            };
+            assert(names().join() === 'Documents,a.txt,b.exe,c.txt', 'All Files must list every entry, got ' + names());
+            pick('Text files (*.txt)');
+            assert(names().join() === 'Documents,a.txt,c.txt', 'A type must keep folders and matching files, got ' + names());
+            pick('Archives (*.zip)');
+            assert(names().join() === 'Documents', 'A type with no match must hide the files, got ' + names());
+            assert(emptyText() === null, 'Folders remain listed, so there is no empty state');
+            receive({type: 'directory_listing', path: 'Documents', folders: [], files: []});
+            assert(emptyText() === 'This folder is empty.', 'An empty folder must say so, got ' + emptyText());
+            receive({type: 'directory_listing', path: 'Documents', folders: [], files: ['note.txt']});
+            assert(emptyText() === 'No files match the selected type.', 'A filter that hides everything must say so, got ' + emptyText());
+            pick('Text files (*.txt)');
+            assert(names().join() === 'note.txt', 'The matching file must come back, got ' + names());
+            closeDialog();
+        }
+
+        // A page range that ends before it starts is reported, not printed
+        function block3() {
+            sent.length = 0;
+            receive({type: 'show_print_dialog', from: 1, to: 1, copies: 1, min: 1, max: 9});
+            const [fromIn, toIn] = document.querySelectorAll('#dialog-content input');
+            const print = [...document.querySelectorAll('#dialog-content button')].find(b => b.textContent === 'Print');
+            const err = document.querySelector('#dialog-content .dlg-error');
+            fromIn.value = '5';
+            fromIn.dispatchEvent(new Event('change'));
+            toIn.value = '2';
+            toIn.dispatchEvent(new Event('change'));
+            print.click();
+            assert(sent.length === 0, 'Print must not be sent for an inverted page range');
+            assert(err.style.display === 'block', 'The inverted range must be reported');
+            toIn.value = '7';
+            toIn.dispatchEvent(new Event('change'));
+            print.click();
+            assert(sent.length === 1 && sent[0].type === 'print_chosen' && sent[0].from === 5 && sent[0].to === 7,
+                'Print must be sent once the range is valid');
+            closeDialog();
+        }
+
+        // The style box honors typed names, as the font and size boxes do
+        function block4() {
+            sent.length = 0;
+            receive({type: 'open_font_dialog', face: 'Arial', size: 10});
+            const styleIn = document.querySelectorAll('#dialog-content .fontdlg-body input')[1];
+            const ok = [...document.querySelectorAll('#dialog-content button')].find(b => b.textContent === 'OK');
+            styleIn.value = 'Bold Italic';
+            styleIn.dispatchEvent(new Event('change'));
+            ok.click();
+            const chosen = sent[sent.length - 1];
+            assert(chosen.type === 'font_chosen' && chosen.bold === true && chosen.italic === true,
+                'A typed style must reach the guest, got ' + JSON.stringify(chosen));
+            styleIn.value = 'Nonsense';
+            styleIn.dispatchEvent(new Event('change'));
+            assert(styleIn.value === 'Bold Italic', 'An unknown style must revert to the selection, got ' + styleIn.value);
+            closeDialog();
+        }
+
+        // Start > Programs waits for the desktop listing, then names what is there
+        function block5() {
+            const openStart = () => {
+                renderStartMenu();
+                return [...document.querySelectorAll('#start-menu .popup-item')].map(el => el.textContent).join('|');
+            };
+            socket.onopen();
+            assert(openStart().includes('Loading'), 'Start must wait for the listing, got ' + openStart());
+            receive({type: 'desktop_icons', items: [{name: 'Sol.exe', ext: 'exe'}, {name: 'notes.txt', ext: 'txt'}]});
+            const listed = openStart();
+            assert(listed.includes('Sol.exe') && !listed.includes('notes.txt'),
+                'Start must list the launchable programs only, got ' + listed);
+            receive({type: 'desktop_icons', items: []});
+            assert(openStart() === 'No programs on the Desktop|Cancel', 'An empty Desktop must say so, got ' + openStart());
         }
     </script>
 </body>
