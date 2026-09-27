@@ -1,5 +1,10 @@
 # WASM Target: Running Win32 PE Binaries in the Browser
 
+> **Status: the WASI CLI, the in-process child PE path, and JIT host execution
+> ship; the browser-hosted frontend does not.** Status checked 2026-09-27.
+> [`STATUS.md`](STATUS.md) is the canonical record of what is implemented; the
+> unchecked boxes below are the work that is left.
+
 ## Goal
 
 Run unmodified 32-bit Windows PE executables entirely in the browser by combining:
@@ -31,7 +36,7 @@ level, which is what CheerpX does with Linux syscalls but one layer higher.
 | x86-to-WASM JIT compiler | ✅ Working (`src/jit/`; blocks execute end-to-end via a host runtime) |
 | JIT host execution (zine-host) | ✅ Working (`--jit` via `zine-host`; SEH/nested-SEH/registry tests green) |
 | JIT host execution (browser) | ⬚ Not implemented |
-| Browser JS host frontend | ⬚ Not implemented |
+| Browser JS host frontend | ⬚ Not implemented (the demo page in `src/gui/` drives a native zine process over WebSocket; hosting `zine.wasm32.wasm` in a page is not built) |
 | Basic block caching | ⚠️ Partial ([`JIT.md`](JIT.md#jit-block-caching-strategy-partial): interpreter decode cache 1024-entry hash-indexed; JIT block caches fixed 4096-entry with no trace linking) |
 
 ### Test Results
@@ -255,7 +260,7 @@ a browser runtime).
 | Limitation | Impact |
 |-----------|--------|
 | **Single-threaded** | `CreateThread` runs the start routine synchronously, so the guest sees one thread |
-| **No GUI rendering** | GUI apps load but don't display on WASM |
+| **No GUI rendering under WASI** | A WASI runtime has no browser attached, so GUI apps run without a display; the native web backend does render, over WebSocket |
 | **No file persistence** | WASI preopened dirs only |
 | **No networking** | Winsock stubs are minimal |
 | **No audio** | DirectSound/WinMM stubs don't produce audio |
@@ -278,7 +283,12 @@ a browser runtime).
 ### Phase 1: Platform abstraction ✅ COMPLETE
 ### Phase 2: x86 interpreter core ✅ COMPLETE
 ### Phase 3: x87 FPU instructions ⚠️ PARTIAL
-### Phase 4: Browser frontend ⬚ NOT STARTED
+### Phase 4: Browser-hosted WASM ⬚ NOT STARTED
+
+The browser demo page (`src/gui/index.html`, `app.js`) is complete and served
+by the native build, but it drives a native zine process over WebSocket. Loading
+`zine.wasm32.wasm` in a page, with the browser supplying the host imports, is
+what this phase still owes.
 
 ### Phase 5: Testing and hardening ⚠️ IN PROGRESS
 

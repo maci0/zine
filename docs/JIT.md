@@ -1,6 +1,6 @@
 # Zine x86-to-WASM JIT Architecture
 
-Status: partially implemented design and roadmap. Execution and block-cache status checked 2026-09-18; unchecked items remain planned.
+Status: partially implemented design and roadmap. Execution, block-cache, and local-layout status checked 2026-09-27; unchecked items remain planned.
 
 Zine includes an experimental Just-In-Time (JIT) compiler designed to translate 32-bit x86 instructions into WebAssembly (WASM) bytecode at runtime.
 
@@ -144,7 +144,7 @@ The final phase lifts the JIT from compiling one-off instruction structures into
 - [ ] **Page Protection**: Implement MMU-level page protection memory interception algorithms to guarantee Cache Invalidation correctly catches SMC (Self-Modifying Code) writes instantly.
 - [ ] **Trace Linking**: Implement direct WebAssembly-to-WebAssembly block trampolines, allowing the engine to traverse "hot" code loops without costly context-switches back into the host Zig interpreter.
 
-### 5. JIT Host Interface (`host.zig` / `host_wasm.zig`)
+### JIT Host Interface (`host.zig` / `host_wasm.zig`)
 Manages CPU state transfer between the interpreter and JIT-compiled blocks:
 - **`JitCpuState`**: A 64-byte struct in linear memory containing all 8 GPRs, EIP, packed EFLAGS, an execution status code, `mem_base` (guest VA → linear memory offset adjustment), and the FS segment base — used to pass state between the host and compiled WASM modules.
 - **`host.zig`**: Defines the `JitCpuState` struct, its field offsets, the status codes, the `BlockId` alias, and the `JitHost` compile/call/reset interface. State transfer is written inline by the callers (`wasm_main.zig` for the host runtime, `runner.zig` for the compile-only loop), not by shared helpers.

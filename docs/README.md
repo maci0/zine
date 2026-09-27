@@ -13,7 +13,7 @@
 | [X86_64_NATIVE_EXECUTION.md](X86_64_NATIVE_EXECUTION.md) | 32-bit guests on x86_64 hosts via compat mode |
 | [FLTK_PLAN.md](FLTK_PLAN.md) | FLTK native GUI backend |
 | [WEB_UI_PROTOCOL.md](WEB_UI_PROTOCOL.md) | Web UI HTTP routes and WebSocket message types |
-| [WEBGPU_TRANSLATION.md](WEBGPU_TRANSLATION.md) | DirectDraw/D3D to WebGPU translation guide |
+| [WEBGPU_TRANSLATION.md](WEBGPU_TRANSLATION.md) | DirectDraw/D3D to WebGPU translation guide (proposal) |
 | [DX_VTABLES.md](DX_VTABLES.md) | DirectX COM vtable layouts |
 | [THREAT_MODEL.md](THREAT_MODEL.md) | Attack surface, trust boundaries, risks |
 | [phase0-audit-results.md](phase0-audit-results.md) | Historical phase 0 codebase audit (dated, not current) |

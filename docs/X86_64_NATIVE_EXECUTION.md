@@ -1,8 +1,9 @@
 # Executing Windows Applications Natively from a 64-bit Zine Process
 
 > **Status: Part 1 (32-bit PEs on x86_64) is implemented and green** via
-> signal-based `INT 0xFE` dispatch — see "Implementation Status" below and
-> [`STATUS.md`](STATUS.md) (`--native64` suite 158/0). The earlier sections
+> signal-based `INT 0xFE` dispatch, checked 2026-09-27. See "Implementation
+> Status" below and [`STATUS.md`](STATUS.md) (`--native64` suite 158/0). The
+> earlier sections
 > describe the original problem analysis and are kept for reference; items they
 > call "Missing" are done unless the checklist says otherwise. Part 2 (64-bit
 > PEs) remains unimplemented.
@@ -22,12 +23,15 @@ An x86_64 CPU is perfectly capable of executing 32-bit x86 instructions natively
 To engage compatibility mode, the code must be executing from a Code Segment (CS) where the `L` (Long) bit is `0`, and the `D` (Default operation size) bit is `1`.
 On Linux, the standard 32-bit user-space code segment is `0x23` (Index 4, RPL 3), while the 64-bit code segment is `0x33` (Index 6, RPL 3).
 
-Currently, `src/main.zig` does:
+On an `x86` build, `src/main.zig` does:
 ```zig
 const entry_point = @as(EntryPointFn, @ptrFromInt(ep));
 entry_point(); // 64-bit call
 ```
-This fails because `CS` remains `0x33`. We need a mechanism to switch `CS` to `0x23` before jumping to the PE's entry point, and switch back to `0x33` when calling Zine's Win32 API stubs.
+On an `x86_64` build this fails because `CS` remains `0x33`. The x86_64 branch
+now calls `compat_thunks.enterCompatMode` instead, which switches `CS` to `0x23`
+before jumping to the PE's entry point and back to `0x33` when the guest calls a
+Zine's Win32 API stub (see "Implementation Status" below).
 
 ## What is Missing in the Zine Codebase?
 

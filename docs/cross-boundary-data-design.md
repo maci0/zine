@@ -1,6 +1,6 @@
 # Cross-Boundary Data Handling: Arguments, Paths, Environment, and Memory Addresses
 
-> **Status: partially implemented migration design.** Status checked 2026-09-18.
+> **Status: partially implemented migration design.** Status checked 2026-09-27.
 > The architecture and examples below describe the target design, not a completed
 > migration. [Phase 2](#phase-2-convert-stub-signatures-from-usize-to-pointer-types-partial)
 > records the current typed-pointer, legacy-integer, and variadic thunk behavior.
@@ -472,10 +472,10 @@ as separate APIs (`FindFirstFileA`/`FindNextFileA` keep their own handle pool in
 
 Goal: Stubs use `[*]u8`, `*T`, `?[*:0]const u8` instead of `usize`. The comptime thunk handler auto-translates pointer types. All `trace.addr()` calls removed from stubs.
 
-Status: NOT fully done. 112 `trace.addr()` call sites remain across
-`src/win32/` (concentrated in `user32/message.zig`, `comdlg32/dialogs.zig`,
-`advapi32/registry.zig`, `kernel32/locale.zig`/`path.zig`/`mem.zig`, and the
-msvcrt modules below; count checked 2026-09-27).
+Status: NOT fully done. 118 `trace.addr()` call sites remain across
+`src/win32/` (concentrated in `user32/message.zig`, `kernel32/locale.zig`,
+`comdlg32/dialogs.zig`, `advapi32/registry.zig`, `kernel32/path.zig`/`mem.zig`,
+and the msvcrt modules below; count checked 2026-09-27).
 Verify current counts with: `rg -c "trace\.addr\(" src/win32` (this counts
 lines, so it also counts the one mention in a `shared.zig` doc comment).
 
@@ -536,10 +536,12 @@ an exception to the target design.
 
 **Sub-phase 2d: Convert remaining DLL stubs** [PARTIAL — several groups still contain `trace.addr()`]
 - [ ] `advapi32/registry.zig` (6 sites remain); `advapi32/security.zig`, `advapi32/services.zig` clean
-- [ ] `user32/message.zig` (27 sites), `user32/dialog.zig` (4) remain; `user32/window.zig`, `user32/resource.zig` clean
-- [ ] `kernel32/locale.zig` (12 sites), `kernel32/path.zig` (9), `kernel32/mem.zig` (6) remain
+- [ ] `user32/message.zig` (27 sites), `user32/dialog.zig` (4), `user32.zig` (1) remain; `user32/window.zig`, `user32/resource.zig` clean
+- [ ] `kernel32/locale.zig` (13 sites), `kernel32/path.zig` (9), `kernel32/mem.zig` (6), `kernel32/process.zig` (3), `kernel32/file.zig` (2) remain
 - [ ] `gdi32/drawing.zig` (2 sites remain); `gdi32/object.zig` clean
 - [ ] `rpcrt4.zig` (4 sites), `ole32/com.zig` (1 site), `comdlg32/dialogs.zig` (11 sites) remain; `shell32.zig` clean
+- [ ] `msvcrt/path.zig` (3), `msvcrt/io.zig` (3), `msvcrt/process.zig` (3), `msvcrt/except.zig` (3), `msvcrt/time.zig` (2), `msvcrt/string.zig` (2), `msvcrt/misc.zig` (2), `msvcrt/fmt.zig` (2), `msvcrt/file.zig` (2) remain
+- [ ] `rcdll.zig` (1 site), `imagehlp.zig` (1 site) remain
 - [ ] Register the remaining raw exports through the comptime thunk handler. `msvcrt.zig` (`_EH_prolog`, `_setjmp3`, `longjmp`, `_ftol`) and `ntdll.zig` (`_chkstk`, `_allmul`, `_alldiv`) still go through `addBuiltinExport`, which sets `param_bytes = 0` and no `thunk_handler`.
 
 **Sub-phase 2e: Remove `usize` auto-translation [PARTIAL]**
@@ -651,7 +653,7 @@ Goal: ALL stubs compile as standalone Windows DLLs.
 **Status**: DONE. 36 DLLs cross-compile into `zig-out/bin/dll/`.
 
 **Build commands**:
-- `zig build -Ddll=true` — build all 36 DLLs
+- `zig build -Ddll=all` — build all 36 DLLs
 - `zig build -Ddll=msvcrt` — build a single DLL
 - `zig build -Dexternal-stubs=true` — slim binary that loads the stub DLLs from disk instead of embedding them
 

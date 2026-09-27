@@ -153,7 +153,7 @@ On WASM and x86_64, Win32 API calls can't be dispatched by jumping to native fun
    **x86_64**: `INT 0xFE` in 32-bit compat mode (CS=0x23) triggers SIGSEGV. The signal handler detects `CD FE` at the faulting IP, reads the thunk ID, and calls `compat_thunks.dispatchFromSignal()` which marshals 32-bit args from the guest stack (via RSP in ucontext), calls the 64-bit Zig stub, writes the return value to RAX, adjusts RSP for stdcall, and sets RIP to the return address.
 5. The handler reads arguments from the guest stack, calls the stub function, writes the return value to EAX (the accumulator register, used for return values), and adjusts ESP (the stack pointer register) for stdcall cleanup.
 
-> **Note (WASM):** Thunks are allocated in a dedicated region *beyond* the PE image and stack in WASM's combined buffer (`[PE image] [stack 64KB] [thunks 32KB]`). An earlier design placed thunks inside `SizeOfImage`, which overwrote the IAT and data sections with `0xCC` (INT3), causing crashes.
+> **Note (WASM):** Thunks are allocated in a dedicated region *beyond* the PE image and stack in WASM's combined buffer; the region sizes are in [`MEMORY_LAYOUT.md`](MEMORY_LAYOUT.md). An earlier design placed thunks inside `SizeOfImage`, which overwrote the IAT and data sections with `0xCC` (INT3), causing crashes.
 
 > **Note (x86_64):** Thunks are allocated in a 256KB executable pool mapped with `MAP_32BIT` to ensure addresses fit in 32-bit IAT slots. Each API call costs one kernel signal entry/exit (~2-5µs), acceptable for I/O-bound CLI tools like MSVC.
 

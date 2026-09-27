@@ -86,7 +86,7 @@ sides may then send text messages at any time.
 | `directory_listing` | answer to `browse_directory` |
 | `desktop_icons` | desktop listing: `name`, `is_dir`, `ext`, optional `icon` |
 | `set_icon` | `base64` (the window icon image, for titlebar, taskbar, and favicon) |
-| `open_file_dialog`, `open_find_dialog`, `open_font_dialog`, `open_print_dialog`, `show_page_setup_dialog`, `show_print_dialog`, `show_color_dialog`, `show_context_menu`, `message_box` | dialog requests |
+| `open_file_dialog`, `open_find_dialog`, `open_font_dialog`, `show_page_setup_dialog`, `show_print_dialog` (`from`, `to`, `min`, `max`, `copies`), `show_color_dialog`, `show_context_menu`, `message_box` | dialog requests |
 | `show_controls`, `add_control`, `set_control_checked`, `set_control_color`, `set_listbox_items`, `update_control_range`, `update_control_text`, `update_control_value` | guest control state |
 | `show_edit_control`, `set_edit_text`, `set_edit_font`, `resize_edit_control`, `edit_setsel`, `edit_replacesel`, `edit_scrollcaret`, `edit_undo` | guest edit control state |
 | `close_dialog`, `custom_dialog` | dialog lifecycle |

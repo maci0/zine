@@ -1,16 +1,17 @@
 # Translating DirectDraw / Direct3D to WebGPU
 
-> **Status: Proposal — nothing here is implemented yet.** No WebGPU code
-> exists in the tree, and the browser frontend itself is not started (see the
-> status table in [`WASM_PLAN.md`](WASM_PLAN.md) and
+> **Status: Proposal, nothing here is implemented yet.** Checked 2026-09-27.
+> No WebGPU code exists in the tree, and the browser frontend itself is not
+> started (see the status table in [`WASM_PLAN.md`](WASM_PLAN.md) and
 > [`STATUS.md`](STATUS.md)). Current rendering goes over WebSocket as described
 > in [`ARCHITECTURE.md`](ARCHITECTURE.md) §GUI/Renderer. The tiers below are a
 > forward-looking design, not shipped behavior.
 
-This document describes how the Zine emulator's `ddraw.dll`, `d3d8.dll`,
-`d3d9.dll`, `d3d10.dll`, `d3d10_1.dll`, `d3d11.dll`, `d3d12.dll`, `vulkan-1.dll`,
-and GDI32 rendering stubs can be reimplemented on top of WebGPU when running in
-the browser via the WASM target.
+This document describes how Zine's rendering stubs can be reimplemented on top of
+WebGPU when running in the browser via the WASM target. The stub modules that
+exist today are `ddraw`, `d3d7`, `d3d8`, and `gdi32`; the tiers for `d3d9`,
+`d3d10`, `d3d10_1`, `d3d11`, `d3d12`, and `vulkan-1` need those stub modules
+written first, and their checklists say so.
 
 The Direct3D versions covered span a wide range of Windows gaming eras:
 
