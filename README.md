@@ -176,7 +176,10 @@ command table, and pull-request expectations.
 ## Build
 
 Requires [Zig 0.16.0](https://ziglang.org/download/). Builds are ReleaseSafe by
-default; add `-Doptimize=Debug` for a debugging loop.
+default; add `-Doptimize=Debug` for a debugging loop. Every build except
+`-Doptimize=Debug` strips debug info: unstripped DWARF records the checkout
+directory and the toolchain's lib path, so the same source would produce a
+different binary on every machine.
 
 ```sh
 # Default 32-bit x86 interpreter
@@ -361,9 +364,12 @@ zig build --summary all
 zig build -Darch=x86_64 --summary all
 zig build -Darch=wasm32 --summary all
 zig build -Darch=wasm64 --summary all
+zig build -Ddll=all --summary all          # Windows stub DLLs
+zig build -Dexternal-stubs --summary all
 zig build test --summary all
 zig build test-cli --summary all
 zig build test-cli -Darch=x86_64 --summary all
+zig build fuzz -Dfuzz-seconds=10 --summary all
 ```
 
 The same list is the `static-analysis` job in `.github/workflows/ci.yml`; a

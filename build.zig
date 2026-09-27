@@ -84,6 +84,11 @@ fn addNativeExe(
         }),
     });
 
+    // DWARF records absolute source paths (DW_AT_comp_dir) and absolute
+    // toolchain paths for std, so an unstripped artifact differs per
+    // checkout directory and per host. Debug builds keep them.
+    exe.root_module.strip = optimize != .Debug;
+
     // Move the host binary to a high address so that the low address
     // space (0x00400000+) is free for guest Win32 PEs.
     // On x86: 0x70000000 (same approach Wine uses)
@@ -151,6 +156,9 @@ fn addWasmExe(
             },
         }),
     });
+    // Same reason as the native exes: keep checkout and toolchain paths
+    // out of the installed module.
+    wasm_lib.root_module.strip = optimize != .Debug;
     wasm_lib.rdynamic = true;
     wasm_lib.initial_memory = 256 * 1024 * 1024;
     wasm_lib.max_memory = 2 * 1024 * 1024 * 1024;
@@ -370,6 +378,7 @@ pub fn build(b: *std.Build) void {
                 const dll_options = b.addOptions();
                 dll_options.addOption(bool, "use_fltk", false);
                 dll.root_module.addOptions("build_options", dll_options);
+                dll.root_module.strip = optimize != .Debug;
 
                 // Install to bin/dll/ subdirectory
                 const install_dll = b.addInstallArtifact(dll, .{

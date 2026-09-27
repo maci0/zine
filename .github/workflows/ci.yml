@@ -14,7 +14,9 @@ concurrency:
 
 jobs:
   static-analysis:
-    runs-on: ubuntu-latest
+    # Pinned OS image: a moving tag changes the compiler, libc and linker
+    # under the build, so two runs of one commit are not comparable.
+    runs-on: ubuntu-24.04
     # Builds default to ReleaseSafe, which is slower to compile than Debug.
     timeout-minutes: 45
     steps:
@@ -89,3 +91,6 @@ jobs:
       - run: zig build test --summary all
       - run: zig build test-cli --summary all
       - run: zig build test-cli -Darch=x86_64 --summary all
+      # Untrusted-input parsers: short budget, but they must fail the build
+      # when a mutation trips a safety check.
+      - run: zig build fuzz -Dfuzz-seconds=60 --summary all

@@ -49,6 +49,9 @@ steps=(
     'zig build test --summary all'
     'zig build test-cli --summary all'
     'zig build test-cli -Darch=x86_64 --summary all'
+    # Short budget locally; the untrusted-input parsers otherwise never run
+    # outside a hand-run `zig build fuzz`.
+    'zig build fuzz -Dfuzz-seconds=10 --summary all'
 )
 
 # Every tracked script, wherever it lives, must stay shellcheck-clean. This
