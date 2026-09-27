@@ -128,17 +128,17 @@ fn loadStringFromPE(hInst: usize, uID: u32, out_buf: [*]u8, max_len: usize) usiz
     for (0..string_index) |i| {
         if (str_ptr < hInst or str_ptr > hInst + 0x1000000) return 0;
         const len = @as(*const u16, @ptrFromInt(str_ptr)).*;
-        if (@import("../../trace.zig").enable_tracing) {
+        if (trace.enable_tracing) {
             const raw = @as([*]const u8, @ptrFromInt(str_ptr));
-            @import("../../trace.zig").print("USER32: loadString: block {d} string {d} at 0x{X} len 0x{X} bytes={X:0>2} {X:0>2} {X:0>2} {X:0>2}\n", .{ block_id, i, str_ptr, len, raw[0], raw[1], raw[2], raw[3] });
+            trace.print("USER32: loadString: block {d} string {d} at 0x{X} len 0x{X} bytes={X:0>2} {X:0>2} {X:0>2} {X:0>2}\n", .{ block_id, i, str_ptr, len, raw[0], raw[1], raw[2], raw[3] });
         }
         str_ptr += 2 + (len * 2);
     }
 
     if (str_ptr < hInst or str_ptr > hInst + 0x1000000) return 0;
     const target_len = @as(*const u16, @ptrFromInt(str_ptr)).*;
-    if (@import("../../trace.zig").enable_tracing) {
-        @import("../../trace.zig").print("USER32: loadString: block {d} target string at 0x{X} target_len 0x{X}\n", .{ block_id, str_ptr, target_len });
+    if (trace.enable_tracing) {
+        trace.print("USER32: loadString: block {d} target string at 0x{X} target_len 0x{X}\n", .{ block_id, str_ptr, target_len });
     }
     if (target_len == 0) return 0;
 
@@ -248,16 +248,16 @@ fn loadStringFromPEW(hInst: usize, uID: u32, out_buf: [*]u16, max_len: usize) us
     for (0..string_index) |i| {
         if (str_ptr < hInst or str_ptr > hInst + 0x1000000) return 0;
         const len = @as(*const u16, @ptrFromInt(str_ptr)).*;
-        if (@import("../../trace.zig").enable_tracing) {
-            @import("../../trace.zig").print("USER32: loadString: block {d} string {d} at 0x{X} len 0x{X}\n", .{ block_id, i, str_ptr, len });
+        if (trace.enable_tracing) {
+            trace.print("USER32: loadString: block {d} string {d} at 0x{X} len 0x{X}\n", .{ block_id, i, str_ptr, len });
         }
         str_ptr += 2 + (len * 2);
     }
 
     if (str_ptr < hInst or str_ptr > hInst + 0x1000000) return 0;
     const target_len = @as(*const u16, @ptrFromInt(str_ptr)).*;
-    if (@import("../../trace.zig").enable_tracing) {
-        @import("../../trace.zig").print("USER32: loadString: block {d} target string at 0x{X} target_len 0x{X}\n", .{ block_id, str_ptr, target_len });
+    if (trace.enable_tracing) {
+        trace.print("USER32: loadString: block {d} target string at 0x{X} target_len 0x{X}\n", .{ block_id, str_ptr, target_len });
     }
     if (target_len == 0) return 0;
 

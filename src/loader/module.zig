@@ -425,6 +425,20 @@ pub const Module = struct {
         return .{ .res_dir_rva = res_dir_rva, .entries = type_entries[0..num_type_entries] };
     }
 
+    /// Finds the type subdirectory whose entry matches `resource_type`.
+    /// `resolve_names` compares named entries through `entryNameValue`
+    /// instead of using the raw `NameOrId` word.
+    fn typeSubdirOffset(self: *Module, table: ResourceTypeTable, resource_type: u32, resolve_names: bool) ?u32 {
+        for (table.entries) |entry| {
+            const id = if (resolve_names) entryNameValue(self, table.res_dir_rva, entry.NameOrId) else entry.NameOrId;
+            if (id != resource_type) continue;
+            const type_off = entry.OffsetToData & RESOURCE_OFFSET_MASK;
+            if (!inImage(self, @as(u64, table.res_dir_rva) + type_off, @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
+            return type_off;
+        }
+        return null;
+    }
+
     /// Reads the language-level data entry of the directory at `dir_offset`
     /// (relative to `res_dir_rva`) and returns the resource bytes. This is the
     /// shared tail of all resource lookups: Type -> Name/ID -> Language -> data.
@@ -450,16 +464,7 @@ pub const Module = struct {
     /// of that type is needed (e.g. the first icon in a module).
     pub fn getFirstResource(self: *Module, resource_type: u32) ?[]const u8 {
         const table = self.resourceTypeTable() orelse return null;
-
-        var type_offset: ?u32 = null;
-        for (table.entries) |entry| {
-            if ((entryNameValue(self, table.res_dir_rva, entry.NameOrId) orelse continue) == resource_type) {
-                type_offset = entry.OffsetToData & RESOURCE_OFFSET_MASK;
-                break;
-            }
-        }
-        const type_off = type_offset orelse return null;
-        if (!inImage(self, @as(u64, table.res_dir_rva) + type_off, @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
+        const type_off = self.typeSubdirOffset(table, resource_type, true) orelse return null;
 
         const name_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off])));
         const num_name_entries = name_dir.NumberOfNamedEntries + name_dir.NumberOfIdEntries;
@@ -482,16 +487,7 @@ pub const Module = struct {
     /// Always returns the first language entry found for the given ID.
     pub fn getResource(self: *Module, resource_type: u32, resource_id: u32) ?[]const u8 {
         const table = self.resourceTypeTable() orelse return null;
-
-        var type_offset: ?u32 = null;
-        for (table.entries) |entry| {
-            if ((entryNameValue(self, table.res_dir_rva, entry.NameOrId) orelse continue) == resource_type) {
-                type_offset = entry.OffsetToData & RESOURCE_OFFSET_MASK;
-                break;
-            }
-        }
-        const type_off = type_offset orelse return null;
-        if (!inImage(self, @as(u64, table.res_dir_rva) + type_off, @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
+        const type_off = self.typeSubdirOffset(table, resource_type, true) orelse return null;
 
         const name_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off])));
         const num_name_entries = name_dir.NumberOfNamedEntries + name_dir.NumberOfIdEntries;
@@ -513,17 +509,7 @@ pub const Module = struct {
     /// UTF-16 name string in the resource directory.
     pub fn getResourceByName(self: *Module, resource_type: u32, name: []const u8) ?[]const u8 {
         const table = self.resourceTypeTable() orelse return null;
-
-        // Find the type subdirectory
-        var type_offset: ?u32 = null;
-        for (table.entries) |entry| {
-            if (entry.NameOrId == resource_type) {
-                type_offset = entry.OffsetToData & RESOURCE_OFFSET_MASK;
-                break;
-            }
-        }
-        const type_off = type_offset orelse return null;
-        if (!inImage(self, @as(u64, table.res_dir_rva) + type_off, @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY) + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
+        const type_off = self.typeSubdirOffset(table, resource_type, false) orelse return null;
 
         // Search name entries — named entries have bit 31 set
         const name_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off])));

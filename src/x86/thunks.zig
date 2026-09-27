@@ -11,6 +11,7 @@ const std = @import("std");
 const cpu_mod = @import("cpu.zig");
 const profiler = @import("../profiler.zig");
 const log = @import("../log.zig");
+const trace = @import("../trace.zig");
 const runtime = @import("../runtime.zig");
 const Cpu = cpu_mod.Cpu;
 
@@ -116,8 +117,8 @@ pub fn dispatch(cpu: *Cpu) void {
     if (thunk_entries[thunk_id]) |entry| {
         profiler.tickThunk(thunk_id);
 
-        if (@import("../trace.zig").enable_tracing) {
-            @import("../trace.zig").print("THUNK EXEC: {s}\n", .{entry.name});
+        if (trace.enable_tracing) {
+            trace.print("THUNK EXEC: {s}\n", .{entry.name});
         }
 
         // Stash the guest ESP/EBP so RaiseException can run WASM SEH handlers

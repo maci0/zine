@@ -71,7 +71,6 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(2);
     };
 
-    // Check environment variables (WASI runtimes can pass env vars via --env)
     {
         const env_map = init.environ_map;
         if (env_map.get("ZINE_TRACE") != null) {
@@ -274,17 +273,14 @@ pub fn main(init: std.process.Init) !void {
 
     log.info("wasm: loading PE from '{s}'", .{target_exe});
 
-    // --- Set up Environment and register all stub DLLs ---
     var environment = Environment.init(allocator);
 
     try runner.registerAllStubs(&environment, @intFromPtr(&not_implemented));
 
-    // Search paths: CWD + exe dir + host PATH
     var host_dirs = try runner.getHostPathDirs(allocator);
     defer host_dirs.deinit(allocator);
     try runner.setupSearchPaths(&environment, allocator, target_exe, host_dirs.items);
 
-    // --- Load the main executable via the registry ---
     const exe_name = std.fs.path.basename(target_exe);
     const main_module = try environment.registry.loadModule(exe_name);
     // Per-application registry overrides (app:<MODULE>: sections).
@@ -342,16 +338,13 @@ pub fn main(init: std.process.Init) !void {
     const combined_size = image_size + STACK_SIZE + THUNK_RESERVE + HEAP_RESERVE;
     const combined_buf = try allocator.alloc(u8, combined_size);
 
-    // Zero the stack area
     @memset(combined_buf[image_size .. image_size + STACK_SIZE], 0);
 
     // Fill the thunk area with INT3 (0xCC) for safety
     @memset(combined_buf[image_size + STACK_SIZE ..], 0xCC);
 
-    // Thunks start after PE image + stack
     const thunk_base_addr = preferred_base +% image_size +% STACK_SIZE;
 
-    // Create a GuestMemory view using the combined buffer
     var thunk_guest_mem = x86_memory.GuestMemory{
         .base = combined_buf,
         .base_addr = preferred_base,

@@ -134,8 +134,7 @@ pub fn qsort(base: usize, num: usize, width: usize, compare_ptr: usize) callconv
 /// Implementation status: Partially implemented
 pub fn bsearch(key: usize, base: usize, num: usize, width: usize, compare_ptr: usize) callconv(.c) usize {
     if (key == 0 or base == 0 or num == 0 or width == 0 or compare_ptr == 0) return 0;
-    const trace_mod = @import("../../trace.zig");
-    if (trace_mod.enable_tracing) trace_mod.print("MSVCRT: bsearch(key={x}, base={x}, num={d}, width={d}, cmp={x})\n", .{ key, base, num, width, compare_ptr });
+    if (trace.enable_tracing) trace.print("MSVCRT: bsearch(key={x}, base={x}, num={d}, width={d}, cmp={x})\n", .{ key, base, num, width, compare_ptr });
     var lo: usize = 0;
     var hi: usize = num;
     while (lo < hi) {

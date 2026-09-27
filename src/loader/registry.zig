@@ -10,50 +10,8 @@ const Module = @import("module.zig").Module;
 const builtin = @import("builtin");
 const log = @import("../log.zig");
 const trace = @import("../trace.zig");
+const path_utils = @import("../path_utils.zig");
 const is_wasi = builtin.os.tag == .wasi;
-
-/// On WASI, resolve an absolute path through preopened directories.
-/// Returns a Dir handle for the matching preopen and the relative sub-path.
-/// Caller must close the returned Dir.
-const ResolvedPath = struct {
-    dir: std.Io.Dir,
-    rel_path: []const u8,
-};
-
-fn resolveWasiPath(abs_path: []const u8) ?ResolvedPath {
-    if (comptime !is_wasi) return null;
-    // Iterate WASI preopened fds (start at fd 3, after stdin/stdout/stderr)
-    var fd: std.os.wasi.fd_t = 3;
-    while (true) : (fd += 1) {
-        var prestat: std.os.wasi.prestat_t = undefined;
-        switch (std.os.wasi.fd_prestat_get(fd, &prestat)) {
-            .SUCCESS => {},
-            .OPNOTSUPP, .BADF => break,
-            else => break,
-        }
-        const name_len = prestat.u.dir.pr_name_len;
-        var name_buf: [4096]u8 = undefined;
-        if (name_len > name_buf.len) continue;
-        switch (std.os.wasi.fd_prestat_dir_name(fd, &name_buf, name_len)) {
-            .SUCCESS => {},
-            else => continue,
-        }
-        const preopen_path = name_buf[0..name_len];
-
-        // Check if the absolute path starts with this preopened dir path
-        if (std.mem.startsWith(u8, abs_path, preopen_path)) {
-            var rest = abs_path[preopen_path.len..];
-            // Strip leading / from relative path
-            if (rest.len > 0 and rest[0] == '/') rest = rest[1..];
-            if (rest.len == 0) rest = ".";
-            return .{
-                .dir = .{ .handle = fd },
-                .rel_path = rest,
-            };
-        }
-    }
-    return null;
-}
 
 /// Check if a file exists by trying to open it. Works on WASI (unlike Dir.access).
 fn fileExists(path: []const u8) bool {
@@ -70,7 +28,7 @@ fn fileExists(path: []const u8) bool {
     // On WASI, absolute paths must be resolved through preopened dirs
     if (comptime is_wasi) {
         if (std.fs.path.isAbsolute(path)) {
-            if (resolveWasiPath(path)) |resolved| {
+            if (path_utils.resolveWasiPath(path)) |resolved| {
                 // Don't close resolved.dir — it's a borrowed preopened fd
                 const file = resolved.dir.openFile(runtime.io(), resolved.rel_path, .{}) catch return false;
                 file.close(runtime.io());
@@ -183,7 +141,7 @@ fn openDirPortable(path: []const u8, args: std.Io.Dir.OpenOptions) !std.Io.Dir {
     }
     if (comptime is_wasi) {
         if (std.fs.path.isAbsolute(path)) {
-            if (resolveWasiPath(path)) |resolved| {
+            if (path_utils.resolveWasiPath(path)) |resolved| {
                 // Don't close resolved.dir — it's a borrowed preopened fd
                 return resolved.dir.openDir(runtime.io(), resolved.rel_path, args);
             }

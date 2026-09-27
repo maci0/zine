@@ -62,18 +62,15 @@ fn jitCompile(args: [*c]const c.wasm_val_vec_t, results: [*c]c.wasm_val_vec_t) c
         return null;
     }
 
-    // Read WASM bytes from guest memory
     var wasm_bytes: c.wasm_byte_vec_t = undefined;
     c.wasm_byte_vec_new(&wasm_bytes, wasm_len, mem_data + wasm_ptr);
     defer c.wasm_byte_vec_delete(&wasm_bytes);
 
-    // Compile the module
     const module = c.wasm_module_new(store, &wasm_bytes) orelse {
         results.*.data[0] = .{ .kind = c.WASM_I32, .of = .{ .i32 = -1 } };
         return null;
     };
 
-    // Instantiate with shared memory as the import
     var imports_arr = [_]?*c.wasm_extern_t{c.wasm_memory_as_extern(mem)};
     var imports = c.wasm_extern_vec_t{ .size = 1, .data = &imports_arr };
 
@@ -86,7 +83,6 @@ fn jitCompile(args: [*c]const c.wasm_val_vec_t, results: [*c]c.wasm_val_vec_t) c
         return null;
     }
 
-    // Store in cache
     const block_id = jit_block_count;
     if (block_id >= MaxBlocks) {
         c.wasm_instance_delete(instance.?);
@@ -111,7 +107,6 @@ fn jitCall(args: [*c]const c.wasm_val_vec_t, results: [*c]c.wasm_val_vec_t) call
 
     const instance = jit_instances[@intCast(block_id)] orelse return null;
 
-    // Get the "run" export (function index 0)
     var exports: c.wasm_extern_vec_t = undefined;
     c.wasm_instance_exports(instance, &exports);
     defer c.wasm_extern_vec_delete(&exports);
@@ -119,7 +114,6 @@ fn jitCall(args: [*c]const c.wasm_val_vec_t, results: [*c]c.wasm_val_vec_t) call
     if (exports.size == 0) return null;
     const run_fn = c.wasm_extern_as_func(exports.data[0]) orelse return null;
 
-    // Call it (void -> void)
     var call_args = c.wasm_val_vec_t{ .size = 0, .data = null };
     var call_results = c.wasm_val_vec_t{ .size = 0, .data = null };
     const trap = c.wasm_func_call(run_fn, &call_args, &call_results);
@@ -154,7 +148,6 @@ pub fn main(init: std.process.Init) !void {
     runtime.init(init.io, init.gpa, init.minimal.environ);
     const allocator = init.arena.allocator();
 
-    // Parse args
     var sys_args = try init.minimal.args.iterateAllocator(allocator);
     defer sys_args.deinit();
     _ = sys_args.next(); // skip argv[0]
@@ -209,7 +202,6 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(2);
     }
 
-    // Read WASM file
     const wasm_file = std.Io.Dir.cwd().openFile(runtime.io(), wasm_path.?, .{}) catch {
         writeErr("Error: cannot open '");
         writeErr(wasm_path.?);
@@ -227,7 +219,6 @@ pub fn main(init: std.process.Init) !void {
     };
     defer allocator.free(wasm_data);
 
-    // Create wasmer engine + store
     const engine = c.wasm_engine_new() orelse {
         writeErr("Error: failed to create wasmer engine.\n");
         std.process.exit(1);
@@ -241,7 +232,6 @@ pub fn main(init: std.process.Init) !void {
     defer c.wasm_store_delete(store);
     shared_store = store;
 
-    // Compile the main module
     var wasm_bytes: c.wasm_byte_vec_t = undefined;
     c.wasm_byte_vec_new(&wasm_bytes, wasm_data.len, wasm_data.ptr);
     defer c.wasm_byte_vec_delete(&wasm_bytes);
@@ -253,13 +243,11 @@ pub fn main(init: std.process.Init) !void {
     };
     defer c.wasm_module_delete(module);
 
-    // Set up WASI
     const wasi_config = c.wasi_config_new("zine") orelse {
         writeErr("Error: failed to create WASI config.\n");
         std.process.exit(1);
     };
 
-    // Pass guest args
     for (guest_args.items) |arg| {
         c.wasi_config_arg(wasi_config, arg.ptr);
     }
@@ -292,7 +280,6 @@ pub fn main(init: std.process.Init) !void {
         c.wasi_config_env(wasi_config, kz.ptr, vz.ptr);
     }
 
-    // Get WASI imports
     const wasi_env = c.wasi_env_new(store, wasi_config) orelse {
         writeErr("Error: failed to create WASI environment.\n");
         printWasmerError();
@@ -300,12 +287,10 @@ pub fn main(init: std.process.Init) !void {
     };
     defer c.wasi_env_delete(wasi_env);
 
-    // Get module imports to know what we need to provide
     var import_types: c.wasm_importtype_vec_t = undefined;
     c.wasm_module_imports(module, &import_types);
     defer c.wasm_importtype_vec_delete(&import_types);
 
-    // Create JIT host functions using the wasm-c-api helpers
     // jit_compile: (i32, i32) -> i32
     const compile_functype = blk: {
         var params: c.wasm_valtype_vec_t = undefined;
@@ -396,7 +381,6 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    // Instantiate
     var trap: ?*c.wasm_trap_t = null;
     const instance = c.wasm_instance_new(store, module, &wasi_imports, &trap) orelse {
         writeErr("Error: failed to instantiate WASM module.\n");
@@ -420,7 +404,6 @@ pub fn main(init: std.process.Init) !void {
     // vec must outlive the JIT execution (see shared_exports above).
     c.wasm_instance_exports(instance, &shared_exports);
 
-    // Find the memory export
     for (0..shared_exports.size) |i| {
         if (c.wasm_extern_as_memory(shared_exports.data[i])) |mem| {
             shared_memory = mem;
@@ -435,7 +418,6 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     }
 
-    // Find and call _start
     const start_func = c.wasi_get_start_function(instance) orelse {
         writeErr("Error: no _start function found in WASM module.\n");
         printWasmerError();
@@ -447,7 +429,6 @@ pub fn main(init: std.process.Init) !void {
     const start_trap = c.wasm_func_call(start_func, &start_args, &start_results);
 
     if (start_trap) |t| {
-        // Check if it's a proc_exit (normal termination)
         var msg: c.wasm_message_t = undefined;
         c.wasm_trap_message(t, &msg);
         var exit_code: ?u8 = null;
@@ -474,7 +455,6 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(exit_code orelse 1);
     }
 
-    // Clean up JIT blocks
     for (0..@intCast(jit_block_count)) |i| {
         if (jit_instances[i]) |inst| c.wasm_instance_delete(inst);
         if (jit_modules[i]) |mod| c.wasm_module_delete(mod);
