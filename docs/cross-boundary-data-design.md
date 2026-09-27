@@ -483,6 +483,11 @@ Current thunk behavior in [`src/loader/env.zig`](../src/loader/env.zig):
   parameters still use `translateGuestAddr`, and its final `ap` argument is a
   host pointer to the variadic arguments on the guest stack. Registrations such
   as `printf` and `sprintf` in [`msvcrt.zig`](../src/win32/msvcrt.zig) use this path.
+  Because that translation has no per-parameter flag, a count or handle declared
+  as `usize` is rewritten whenever it lands in the guest VA window, and a pointer
+  left as `usize` invites a second `trace.addr()` in the stub. Stubs on this path
+  therefore declare pointers as pointers and sizes as sized ints, and the
+  registration rejects a `usize` fixed parameter at compile time.
 
 **Sub-phase 2a: Re-enable `usize` auto-translation in `castArg` [HISTORICAL, not applied to the current non-variadic handler]**
 

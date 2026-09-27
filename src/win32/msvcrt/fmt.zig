@@ -244,8 +244,10 @@ pub fn vsnprintf(out: [*]u8, max: usize, fmt: [*:0]const u8, ap: [*]const u32) c
 /// Implementation status: Fully implemented
 pub const snprintf = if (platform.is_wasm or platform.is_x86_64) stub_snprintf_wasm else stub_snprintf_native;
 
-fn stub_snprintf_wasm(out: [*]u8, max: usize, fmt: [*:0]const u8, ap: usize) callconv(.c) i32 {
-    return snprintf_impl(out, max, fmt, ap);
+// `max` is a count, not an address: the variadic registration path translates
+// every usize fixed parameter, so it has to be typed u32 to survive intact.
+fn stub_snprintf_wasm(out: [*]u8, max: u32, fmt: [*:0]const u8, ap: usize) callconv(.c) i32 {
+    return snprintf_impl(out, @as(usize, max), fmt, ap);
 }
 
 fn stub_snprintf_native(buf_ptr: usize, max: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
@@ -278,13 +280,7 @@ pub const swprintf = if (platform.is_wasm or platform.is_x86_64) stub_swprintf_w
 pub fn vsnwprintf(out: [*]u16, max: usize, fmt: [*:0]const u16, ap: [*]const u32) callconv(.c) i32 {
     if (max == 0) return -1;
     var fmt_buf: [4096]u8 = undefined;
-    const fmt_w_len = std.mem.indexOfScalar(u16, fmt[0..4096], 0) orelse 4096;
-    const copy_len = @min(fmt_w_len, 4095);
-    for (0..copy_len) |i| {
-        fmt_buf[i] = @intCast(fmt[i] & 0xFF);
-    }
-    fmt_buf[copy_len] = 0;
-    const fmt_narrow: [*:0]const u8 = @ptrCast(&fmt_buf);
+    const fmt_narrow = narrowWide(fmt, &fmt_buf);
 
     var buf: [4096]u8 = undefined;
     const len = x86_vsnprintf(&buf, 4096, fmt_narrow, @intFromPtr(ap));
@@ -301,8 +297,8 @@ pub fn vsnwprintf(out: [*]u16, max: usize, fmt: [*:0]const u16, ap: [*]const u32
 /// `_snwprintf`: the counted wide form taking a variadic argument list.
 pub const snwprintf = if (platform.is_wasm or platform.is_x86_64) stub_snwprintf_wasm else stub_snwprintf_native;
 
-fn stub_snwprintf_wasm(out: [*]u16, max: usize, fmt: [*:0]const u16, ap: usize) callconv(.c) i32 {
-    return vsnwprintf(out, max, fmt, @ptrFromInt(ap));
+fn stub_snwprintf_wasm(out: [*]u16, max: u32, fmt: [*:0]const u16, ap: usize) callconv(.c) i32 {
+    return vsnwprintf(out, @as(usize, max), fmt, @ptrFromInt(ap));
 }
 
 fn stub_snwprintf_native(buf_ptr: usize, max: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
@@ -324,13 +320,7 @@ fn stub_swprintf_native(buf_ptr: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
 fn swprintf_impl(out: [*]u16, fmt_w: [*]const u16, ap: usize) i32 {
     // Convert wide format to narrow
     var fmt_buf: [4096]u8 = undefined;
-    const fmt_w_len = std.mem.indexOfScalar(u16, fmt_w[0..4096], 0) orelse 4096;
-    const copy_len = @min(fmt_w_len, 4095);
-    for (0..copy_len) |i| {
-        fmt_buf[i] = @intCast(fmt_w[i] & 0xFF);
-    }
-    fmt_buf[copy_len] = 0;
-    const fmt_narrow = @as([*:0]const u8, @ptrCast(&fmt_buf));
+    const fmt_narrow = narrowWide(fmt_w, &fmt_buf);
 
     var buf: [4096]u8 = undefined;
     const len = x86_vsnprintf(&buf, 4096, fmt_narrow, ap);
@@ -419,6 +409,44 @@ fn stub_sscanf_native(buf_ptr: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
     var ap = @cVaStart();
     defer @cVaEnd(&ap);
     return sscanf_impl(@ptrFromInt(buf_ptr), @ptrFromInt(fmt_ptr), va_list_to_usize(ap));
+}
+
+/// Reads formatted data from a wide-character string.
+/// Implementation status: Partially implemented
+///
+/// The input and the format are narrowed before reaching `sscanf_impl`, which
+/// only speaks narrow characters. The va_list is shared with the narrow form,
+/// so `%s` and `%c` still write narrow bytes into what the guest sized as
+/// `wchar_t` buffers; the guest must not read those back as wide strings.
+pub const swscanf = if (platform.is_wasm or platform.is_x86_64) stub_swscanf_wasm else stub_swscanf_native;
+
+fn stub_swscanf_wasm(input: [*:0]const u16, fmt: [*:0]const u16, ap: usize) callconv(.c) i32 {
+    return swscanf_impl(input, fmt, ap);
+}
+
+fn stub_swscanf_native(buf_ptr: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
+    return swscanf_impl(@ptrFromInt(buf_ptr), @ptrFromInt(fmt_ptr), va_list_to_usize(ap));
+}
+
+fn swscanf_impl(input: [*:0]const u16, fmt: [*:0]const u16, ap: usize) i32 {
+    var input_buf: [4096]u8 = undefined;
+    var fmt_buf: [4096]u8 = undefined;
+    return sscanf_impl(narrowWide(input, &input_buf), narrowWide(fmt, &fmt_buf), ap);
+}
+
+/// Copies a wide string into `buf` as narrow characters, truncating and always
+/// terminating. Format handling downstream is single-byte, matching the rest of
+/// this module's wide support.
+fn narrowWide(w: [*]const u16, buf: *[4096]u8) [*:0]const u8 {
+    const w_len = std.mem.indexOfScalar(u16, w[0..4096], 0) orelse 4096;
+    const copy_len = @min(w_len, 4095);
+    for (0..copy_len) |i| {
+        buf[i] = @truncate(w[i]);
+    }
+    buf[copy_len] = 0;
+    return @ptrCast(buf);
 }
 
 /// Accumulate one digit into a parsed number, saturating instead of
@@ -595,4 +623,20 @@ test "sscanf digit accumulation saturates instead of overflowing" {
     try testing.expectEqual(std.math.maxInt(i32), accumulateDigit(i32, 2147483647, 10, 9));
     try testing.expectEqual(std.math.maxInt(u32), accumulateDigit(u32, 0xFFFFFFFF, 16, 0xF));
     try testing.expectEqual(@as(u32, 0), accumulateDigit(u32, 0, 16, 0));
+}
+
+test "narrowWide truncates and always terminates" {
+    var buf: [4096]u8 = undefined;
+
+    const short_in = [_]u16{ 'a', 'b', 'c', 0 };
+    const short_out: [*:0]const u8 = narrowWide(&short_in, &buf);
+    try testing.expectEqualStrings("abc", std.mem.span(short_out));
+
+    // A wide string with no terminator inside the window is cut to the
+    // buffer size minus one, and the result stays NUL-terminated.
+    var long_in: [4096]u16 = undefined;
+    @memset(&long_in, 'x');
+    const long_out: [*:0]const u8 = narrowWide(&long_in, &buf);
+    try testing.expectEqual(@as(usize, 4095), std.mem.span(long_out).len);
+    try testing.expectEqual(@as(u8, 0), long_out[4095]);
 }

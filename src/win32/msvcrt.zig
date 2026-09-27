@@ -401,7 +401,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "wcstoul", string.wcstol);
     try environment.addBuiltinExportComptime(m, "iswxdigit", string.iswctype);
     try environment.addBuiltinExportComptime(m, "_pipe", misc.stub_ignore_i32);
-    try environment.addBuiltinExportComptime(m, "swscanf", fmt.sscanf);
+    try environment.addBuiltinExportComptimeVA(m, "swscanf", fmt.swscanf, 2);
     try environment.addBuiltinExportComptime(m, "wcsstr", string.wcsstr);
     try environment.addBuiltinExportComptime(m, "_vsnwprintf", fmt.vsnwprintf);
     try environment.addBuiltinExportComptime(m, "_wcslwr", misc.stub_ignore_ptr);

@@ -392,6 +392,20 @@ pub const Environment = struct {
             @compileError("Variadic stub must have exactly fixed_params + 1 parameters (last is va_list)");
         }
 
+        // This path has no per-parameter flag: it translates every usize fixed
+        // parameter as a guest address, so a usize count or handle is silently
+        // rewritten when it happens to land in the guest VA window. Pointers
+        // must be declared as pointers, and integers as a sized int type.
+        if (comptime !platform.is_native) {
+            const fn_type = if (is_bare_fn) @TypeOf(func) else @typeInfo(@TypeOf(func)).pointer.child;
+            const fn_info = @typeInfo(fn_type).@"fn";
+            inline for (0..fixed_params) |i| {
+                if (comptime fn_info.params[i].type.? == usize) {
+                    @compileError("Variadic stub fixed parameters must not be usize: declare the parameter as a pointer or a sized int");
+                }
+            }
+        }
+
         const addr = if (is_bare_fn) @intFromPtr(&func) else @intFromPtr(func);
 
         // On WASM, generate a variadic thunk handler that reads fixed params

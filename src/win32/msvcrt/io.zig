@@ -702,24 +702,27 @@ const fmt_mod = @import("fmt.zig");
 /// Implementation status: Partially implemented
 pub const fprintf = if (platform_mod.is_wasm or platform_mod.is_x86_64) stub_fprintf_wasm else stub_fprintf_native;
 
-fn stub_fprintf_wasm(f: ?*anyopaque, format_ptr: usize, ap: usize) callconv(.c) i32 {
-    return fprintf_impl(f, format_ptr, ap);
+// `format` is typed so the variadic registration path translates it. The
+// blanket usize translation of that path would also catch a usize format
+// pointer, leaving the stub to run trace.addr() a second time.
+fn stub_fprintf_wasm(f: ?*anyopaque, format: [*:0]const u8, ap: usize) callconv(.c) i32 {
+    return fprintf_impl(f, format, ap);
 }
 
 fn stub_fprintf_native(f: ?*anyopaque, format_ptr: usize, ...) callconv(.c) i32 {
     var ap = @cVaStart();
     defer @cVaEnd(&ap);
-    return fprintf_impl(f, format_ptr, fmt_mod.va_list_to_usize(ap));
+    return fprintf_impl(f, @ptrFromInt(format_ptr), fmt_mod.va_list_to_usize(ap));
 }
 
-fn fprintf_impl(f: ?*anyopaque, format_ptr: usize, ap: usize) i32 {
+fn fprintf_impl(f: ?*anyopaque, format: [*:0]const u8, ap: usize) i32 {
     // Fall back to stdout when the FILE* can't be resolved (e.g. a child
     // process's _iob FILE* that doesn't match the recorded iob range) — the
     // vfprintf stub does the same. Without this, DUMPBIN/LIB diagnostics were
     // silently dropped (exit 0, no output).
     const file = getFile(f) orelse @import("../host_io.zig").fileFromFd(1);
-    if (format_ptr != 0) {
-        const fmt = @as([*:0]const u8, @ptrFromInt(trace.addr(format_ptr)));
+    if (@intFromPtr(format) != 0) {
+        const fmt = format;
         var buf: [4096]u8 = undefined;
         const len = fmt_mod.x86_vsnprintf(&buf, 4096, fmt, ap);
         @import("../host_io.zig").writeAllToFile(file, buf[0..len]) catch return -1;
