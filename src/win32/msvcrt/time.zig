@@ -215,21 +215,40 @@ pub fn time64(t: ?*align(1) i64) callconv(.c) i64 {
     return ts;
 }
 
-var tm_buf: [64]u8 = [_]u8{0} ** 64;
+var tm64_buf: [64]u8 = [_]u8{0} ** 64;
 
 /// 64-bit version of localtime(). Returns a static buffer.
-/// Implementation status: Stub
+/// struct tm is 40 bytes; the buffer is oversized so a guest that reads past
+/// the struct sees zeroes rather than unrelated memory.
+/// Implementation status: Partially implemented
 pub fn localtime64(t: usize) callconv(.c) *[64]u8 {
-    _ = t;
+    // A null time pointer yields the epoch, matching the 32-bit localtime.
+    // The 64-bit time_t keeps dates past the 2038 32-bit limit, so the value
+    // is read as i64 and clamped to 0 rather than truncated.
+    var ts: u64 = 0;
+    if (t != 0) {
+        const src: *align(1) const i64 = @ptrFromInt(trace.addr(t));
+        const raw = src.*;
+        ts = if (raw >= 0) @intCast(raw) else 0;
+    }
+    var tm: Tm = .{};
+    fillTm(&tm, ts);
     // On WASM, allocate in guest memory so x86 can dereference
     const stub_common = @import("../shared.zig");
     if (x86_memory.guest_memory != null) {
-        const raw = stub_common.raw_alloc(64) orelse return &tm_buf;
+        const raw = stub_common.raw_alloc(64) orelse {
+            @memset(&tm64_buf, 0);
+            @memcpy(tm64_buf[0..@sizeOf(Tm)], std.mem.asBytes(&tm));
+            return &tm64_buf;
+        };
         const ptr = @as(*[64]u8, @ptrCast(raw));
         @memset(ptr, 0);
+        @memcpy(ptr[0..@sizeOf(Tm)], std.mem.asBytes(&tm));
         return ptr;
     }
-    return &tm_buf;
+    @memset(&tm64_buf, 0);
+    @memcpy(tm64_buf[0..@sizeOf(Tm)], std.mem.asBytes(&tm));
+    return &tm64_buf;
 }
 
 // -------------------------------------------------------------------------
@@ -306,6 +325,50 @@ test "mktime updates normalized fields across leap days and year boundaries" {
         try testing.expectEqual(case.timestamp, mktime(&tm));
         try testing.expectEqualDeep(case.expected, tm);
     }
+}
+
+fn tm64Of(t: ?*const i64) Tm {
+    const buf = localtime64(if (t) |p| @intFromPtr(p) else 0);
+    return @as(*align(1) const Tm, @ptrCast(buf)).*;
+}
+
+test "localtime64 converts timestamps the 32-bit time_t cannot hold" {
+    // 2024-02-29T00:00:00Z, past the 2038 32-bit time_t limit.
+    const leap_day: i64 = 1709164800;
+    const tm = tm64Of(&leap_day);
+    try testing.expectEqual(@as(i32, 2024 - 1900), tm.tm_year);
+    try testing.expectEqual(@as(i32, 1), tm.tm_mon);
+    try testing.expectEqual(@as(i32, 29), tm.tm_mday);
+    try testing.expectEqual(@as(i32, 4), tm.tm_wday); // Thursday
+    try testing.expectEqual(@as(i32, 59), tm.tm_yday); // 0-based day of year
+
+    // Year boundaries land on the right day of week in both directions.
+    const new_year: i64 = 1704067200; // 2024-01-01T00:00:00Z
+    const ny = tm64Of(&new_year);
+    try testing.expectEqual(@as(i32, 124), ny.tm_year);
+    try testing.expectEqual(@as(i32, 0), ny.tm_mon);
+    try testing.expectEqual(@as(i32, 1), ny.tm_mday);
+    try testing.expectEqual(@as(i32, 0), ny.tm_yday);
+    try testing.expectEqual(@as(i32, 1), ny.tm_wday); // Monday
+
+    // A null pointer yields the epoch, not a zeroed struct.
+    const null_tm = tm64Of(null);
+    try testing.expectEqual(@as(i32, 70), null_tm.tm_year);
+    try testing.expectEqual(@as(i32, 0), null_tm.tm_mon);
+    try testing.expectEqual(@as(i32, 1), null_tm.tm_mday);
+    try testing.expectEqual(@as(i32, 4), null_tm.tm_wday);
+
+    // Pre-epoch times clamp to the epoch instead of wrapping into a far-future year.
+    const before: i64 = -86400;
+    const old_tm = tm64Of(&before);
+    try testing.expectEqual(@as(i32, 70), old_tm.tm_year);
+    try testing.expectEqual(@as(i32, 1), old_tm.tm_mday);
+    try testing.expectEqual(@as(i32, 0), old_tm.tm_hour);
+}
+
+test "localtime64 keeps tm_isdst at 0 on the UTC guest clock" {
+    const t: i64 = 1709164800;
+    try testing.expectEqual(@as(i32, 0), tm64Of(&t).tm_isdst);
 }
 
 test "localtime inverts mktime on the UTC guest clock" {

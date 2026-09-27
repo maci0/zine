@@ -8,6 +8,9 @@ const civil_time = @import("../civil_time.zig");
 const kernel32_error = @import("error.zig");
 const ERROR_INVALID_PARAMETER: u32 = 87;
 
+const ns_per_tick: i128 = 100;
+const ticks_per_second: i128 = 10_000_000;
+
 /// Implementation status: Partially implemented
 pub fn GetTimeZoneInformation(lpTimeZoneInformation: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetTimeZoneInformation({x})\n", .{lpTimeZoneInformation});
@@ -79,7 +82,9 @@ pub fn GetLocalTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
     if (lpSystemTime == 0) return;
     const st = @as(*w32.SYSTEMTIME, @ptrFromInt(lpSystemTime));
     const ms = runtime.milliTimestamp();
-    const ts: u64 = @intCast(@divTrunc(ms, 1000));
+    // std.time.epoch counts days from 1970 and cannot take a negative second,
+    // so a host clock set before the epoch reports 1970 rather than trapping.
+    const ts: u64 = if (ms < 0) 0 else @intCast(@divTrunc(ms, 1000));
     const epoch_secs = std.time.epoch.EpochSeconds{ .secs = ts };
     const epoch_day = epoch_secs.getEpochDay();
     const year_day = epoch_day.calculateYearDay();
@@ -92,16 +97,26 @@ pub fn GetLocalTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
     st.wHour = @intCast(day_secs.getHoursIntoDay());
     st.wMinute = @intCast(day_secs.getMinutesIntoHour());
     st.wSecond = @intCast(day_secs.getSecondsIntoMinute());
-    st.wMilliseconds = @intCast(@mod(@as(u64, @intCast(ms)), 1000));
+    st.wMilliseconds = @intCast(if (ms < 0) 0 else @as(u64, @intCast(@mod(ms, 1000))));
+}
+
+/// Seconds between the FILETIME epoch (1601-01-01) and the Unix epoch.
+const filetime_epoch_offset_secs: i128 = 11644473600;
+
+/// Convert Unix nanoseconds to a FILETIME tick count (100ns since 1601-01-01).
+/// FILETIME is unsigned: a host clock set before the Unix epoch produces a
+/// negative nanosecond count, which clamps to the FILETIME epoch instead of
+/// wrapping into a date centuries in the future.
+fn unixNsToFileTime(unix_ns: i128) u64 {
+    const ticks = @divFloor(unix_ns, ns_per_tick) + filetime_epoch_offset_secs * ticks_per_second;
+    return @intCast(@max(ticks, 0));
 }
 
 /// Implementation status: Partially implemented
 pub fn GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: GetSystemTimeAsFileTime({x})\n", .{lpSystemTimeAsFileTime});
     if (lpSystemTimeAsFileTime == 0) return;
-    const unix_ns: u128 = @bitCast(runtime.nanoTimestamp());
-    const win_offset: u128 = 11644473600 * 10_000_000;
-    const filetime: u64 = @intCast(unix_ns / 100 + win_offset);
+    const filetime = unixNsToFileTime(runtime.nanoTimestamp());
     const ft = @as(*w32.FILETIME, @ptrFromInt(lpSystemTimeAsFileTime));
     ft.dwLowDateTime = @intCast(filetime & 0xFFFFFFFF);
     ft.dwHighDateTime = @intCast(filetime >> 32);
@@ -351,6 +366,32 @@ test "FileTimeToSystemTime rejects high-bit timestamps without changing output" 
         try testing.expectEqual(ERROR_INVALID_PARAMETER, kernel32_error.GetLastError());
         try testing.expectEqualDeep(sentinel, st);
     }
+}
+
+test "Unix nanoseconds convert to FILETIME ticks, including a pre-epoch clock" {
+    // The Unix epoch is exactly the FILETIME offset.
+    try testing.expectEqual(
+        @as(u64, @intCast(filetime_epoch_offset_secs * ticks_per_second)),
+        unixNsToFileTime(0),
+    );
+    // Sub-tick remainders floor toward negative infinity, so 99ns before the
+    // epoch is the previous tick rather than a jump back up to the epoch.
+    try testing.expectEqual(unixNsToFileTime(0) - 1, unixNsToFileTime(-99));
+    // One second before 1970 is still a valid FILETIME, 1600-12-31 23:59:59.
+    try testing.expectEqual(unixNsToFileTime(0) - ticks_per_second, unixNsToFileTime(-1_000_000_000));
+    // Before 1601-01-01 FILETIME cannot represent the instant, so the value
+    // clamps to the epoch instead of wrapping into a far-future date.
+    try testing.expectEqual(
+        @as(u64, 0),
+        unixNsToFileTime(-(filetime_epoch_offset_secs + 1) * 1_000_000_000),
+    );
+    try testing.expectEqual(@as(u64, 0), unixNsToFileTime(std.math.minInt(i128) + 1));
+    // 2024-02-29T00:00:00Z round-trips through the SYSTEMTIME pair.
+    const leap_ns: i128 = 1_709_164_800 * 1_000_000_000;
+    const ft_lo: u64 = unixNsToFileTime(leap_ns);
+    const ft_hi: u64 = unixNsToFileTime(leap_ns + 999_999_999);
+    try testing.expect(ft_hi > ft_lo);
+    try testing.expectEqual(@as(u64, 9_999_999), ft_hi - ft_lo);
 }
 
 test "GetLocalTime and GetSystemTime agree (UTC guest clock policy)" {

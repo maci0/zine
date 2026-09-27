@@ -385,6 +385,32 @@ pub fn stub_shutdown(s: usize, how: i32) callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
+/// Guest timeval: whole seconds plus a microsecond remainder.
+const TimeVal = extern struct { tv_sec: i32, tv_usec: i32 };
+
+const ms_per_second: i64 = 1000;
+
+/// Convert a guest timeval to whole milliseconds for poll(2).
+/// poll() takes milliseconds, so a sub-millisecond wait rounds up: truncating
+/// would turn a 999us timeout into a non-blocking poll. A negative timeval
+/// means "no wait" rather than a wait of negative length. Returns null for a
+/// negative tv_sec, the only case that cannot be expressed as a duration.
+fn timevalToPollMs(tv_sec: i32, tv_usec: i32) ?i32 {
+    if (tv_sec < 0) return 0;
+    const usec = @as(i64, tv_usec);
+    const ms = @as(i64, tv_sec) * ms_per_second + @divTrunc(usec + std.time.us_per_ms - 1, std.time.us_per_ms);
+    if (ms > std.math.maxInt(i32)) return std.math.maxInt(i32);
+    return @intCast(ms);
+}
+
+/// Convert a guest timeval to nanoseconds for sleep(). Same rounding up as
+/// timevalToPollMs: a wait shorter than a nanosecond still yields at least 1ns
+/// so a non-zero timeout is never silently dropped.
+fn timevalToNs(tv_sec: i32, tv_usec: i32) u64 {
+    const ms = timevalToPollMs(tv_sec, tv_usec) orelse return 0;
+    return @as(u64, @intCast(ms)) * std.time.ns_per_ms;
+}
+
 /// select
 /// Implementation status: Partially implemented
 pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, timeout: usize) callconv(w32cc.WINAPI) i32 {
@@ -406,9 +432,8 @@ pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, time
         if (total == 0) {
             // No fds — just sleep for timeout duration if given
             if (timeout != 0) {
-                const tv = @as(*const extern struct { tv_sec: i32, tv_usec: i32 }, @ptrFromInt(timeout));
-                const ns = @as(u64, @intCast(tv.tv_sec)) * std.time.ns_per_s +
-                    @as(u64, @intCast(@divTrunc(tv.tv_usec, 1000))) * std.time.ns_per_ms;
+                const tv = @as(*const TimeVal, @ptrFromInt(timeout));
+                const ns = timevalToNs(tv.tv_sec, tv.tv_usec);
                 if (ns > 0) @import("../../platform.zig").sleep(ns);
             }
             return 0;
@@ -467,8 +492,8 @@ pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, time
         // Calculate timeout in ms (-1 = infinite)
         var timeout_ms: i32 = -1;
         if (timeout != 0) {
-            const tv = @as(*const extern struct { tv_sec: i32, tv_usec: i32 }, @ptrFromInt(timeout));
-            timeout_ms = @intCast(@as(i64, tv.tv_sec) * 1000 + @divTrunc(@as(i64, tv.tv_usec), 1000));
+            const tv = @as(*const TimeVal, @ptrFromInt(timeout));
+            timeout_ms = timevalToPollMs(tv.tv_sec, tv.tv_usec) orelse -1;
         }
 
         const n_ready = std.posix.poll(pollfds[0..n_poll], timeout_ms) catch |err| {
@@ -888,4 +913,41 @@ fn translateSockOpt(level: u32, optname: i32) u32 {
     }
     // IPPROTO_TCP level: TCP_NODELAY = 1 on both platforms
     return @bitCast(optname);
+}
+
+// -------------------------------------------------------------------------
+// Tests
+// -------------------------------------------------------------------------
+
+const testing = std.testing;
+
+test "select timeout rounds microseconds up to whole milliseconds" {
+    // poll(2) takes milliseconds: truncating here would turn a sub-millisecond
+    // wait into a non-blocking poll and a 1.5s wait into 1s.
+    try testing.expectEqual(@as(?i32, 1), timevalToPollMs(0, 1));
+    try testing.expectEqual(@as(?i32, 1), timevalToPollMs(0, 999));
+    try testing.expectEqual(@as(?i32, 1), timevalToPollMs(0, 1000));
+    try testing.expectEqual(@as(?i32, 2), timevalToPollMs(0, 1001));
+    try testing.expectEqual(@as(?i32, 1500), timevalToPollMs(1, 500_000));
+    try testing.expectEqual(@as(?i32, 60_000), timevalToPollMs(60, 0));
+    // A zeroed timeval is a poll, not an infinite wait.
+    try testing.expectEqual(@as(?i32, 0), timevalToPollMs(0, 0));
+    // Garbage negative fields must not panic or invert the wait.
+    try testing.expectEqual(@as(?i32, 0), timevalToPollMs(-1, 0));
+    try testing.expectEqual(@as(?i32, 0), timevalToPollMs(0, -5));
+    // An out-of-range microsecond field carries into the milliseconds.
+    try testing.expectEqual(@as(?i32, 1500), timevalToPollMs(0, 1_500_000));
+}
+
+test "select timeout never exceeds what poll(2) can express" {
+    try testing.expectEqual(@as(?i32, std.math.maxInt(i32)), timevalToPollMs(std.math.maxInt(i32), 0));
+}
+
+test "timeval to nanoseconds conversion matches the millisecond rounding" {
+    try testing.expectEqual(@as(u64, 0), timevalToNs(0, 0));
+    try testing.expectEqual(@as(u64, std.time.ns_per_ms), timevalToNs(0, 1000));
+    try testing.expectEqual(@as(u64, 1500 * std.time.ns_per_ms), timevalToNs(1, 500_000));
+    // Sub-millisecond waits keep at least one millisecond instead of vanishing.
+    try testing.expectEqual(@as(u64, std.time.ns_per_ms), timevalToNs(0, 1));
+    try testing.expectEqual(@as(u64, 0), timevalToNs(-1, 0));
 }

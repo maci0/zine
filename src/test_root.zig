@@ -56,4 +56,5 @@ comptime {
     _ = @import("win32/gdi32/drawing.zig");
     _ = @import("win32/gdi32/object.zig");
     _ = @import("win32/gdi32/dc.zig");
+    _ = @import("win32/ws2_32/winsock.zig");
 }
