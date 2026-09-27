@@ -5,7 +5,13 @@ unset ZINE_LOG_LEVEL ZINE_WEB_HOST ZINE_WEB_PORT ZINE_VIRTUAL_CLOCK_NS ZINE_CLOC
 
 expected_version=$1
 shift
-workdir=$(mktemp -d)
+# Under the gitignored .scratch/ rather than TMPDIR, which on many hosts is a
+# tmpfs: a suite that writes its captures to RAM adds to the memory the
+# emulator under test is short of. The root comes from the script's own
+# location so a hand-run from another directory lands in the same place.
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+mkdir -p "$root/.scratch"
+workdir=$(mktemp -d "$root/.scratch/test-cli.XXXXXX")
 trap 'rm -rf "$workdir"' EXIT
 
 for flag in --version -v --help -h; do

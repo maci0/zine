@@ -244,8 +244,12 @@ export PATH="$VC_BIN:$COMMON_BIN:$COMMON_TOOLS:$PATH"
 export INCLUDE="$VC_INCLUDE"
 export LIB="$VC_LIB"
 
-# Work in a temp dir so relative paths work for CL/LINK
-WORKDIR=$(mktemp -d)
+# Work in a temp dir so relative paths work for CL/LINK. It lives under the
+# gitignored .scratch/ rather than TMPDIR, which on many hosts is a tmpfs:
+# the fixtures and captured output are disk artifacts, and a guest toolchain
+# under emulation is not short of RAM to spare.
+mkdir -p "$ROOT/.scratch"
+WORKDIR=$(mktemp -d "$ROOT/.scratch/msvc-cli.XXXXXX")
 trap 'rm -rf "$WORKDIR"' EXIT
 cd "$WORKDIR"
 

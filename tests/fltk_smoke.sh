@@ -46,7 +46,10 @@ if ! xdpyinfo -display "$DISPLAY_NO" >/dev/null 2>&1; then
     exit 1
 fi
 
-WORKDIR=$(mktemp -d)
+# Under the gitignored .scratch/ rather than TMPDIR, which on many hosts is a
+# tmpfs; the suite's captures are disk artifacts, not scratch memory.
+mkdir -p "$ROOT/.scratch"
+WORKDIR=$(mktemp -d "$ROOT/.scratch/fltk-smoke.XXXXXX")
 trap 'rm -rf "$WORKDIR"' EXIT
 cd "$WORKDIR" || exit 1
 
