@@ -743,8 +743,9 @@ zig build test-cli -Dhost       # also checks zine-host; requires Wasmer headers
 ### Fuzzing the PE parsers
 
 `zig build fuzz` mutates the seed corpora of the menu, dialog, icon, and PE
-header parsers, the string-table walk, and the batch script interpreter, and
-feeds every input to the parser under Zig's safety checks.
+header parsers, the string-table, resource-directory, and export-directory
+walks, and the batch script interpreter, and feeds every input to the parser
+under Zig's safety checks.
 A failing input is written to `zig-out/fuzz/<target>-<n>.bin`; minimize it, fix
 the cause, and add its bytes to the `seeds` array of that target's harness in
 `src/fuzz/`.
@@ -755,8 +756,10 @@ zig build fuzz -Dfuzz-seconds=30 -- menu.bin pe.exe   # also replay captured fil
 ```
 
 The harnesses assert the parser's output contract, not just absence of
-crashes: a menu that parses must render as a valid JSON menu object, and a
-successful `PEParser.parse` must place its headers inside the file.
+crashes: a menu that parses must render as a valid JSON menu object, a
+successful `PEParser.parse` must place its headers inside the file, and a
+resource or export lookup that resolves must hand back bytes the mapped image
+actually holds, the same way twice.
 `zig build test` replays the same seeds plus a fixed mutation sweep under
 `std.testing.allocator`, so a leak or a broken contract fails the normal gate.
 libFuzzer or AFL++ can drive the same harnesses by calling `harness` in

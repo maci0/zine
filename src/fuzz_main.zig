@@ -23,6 +23,8 @@ const icon_fuzz = @import("fuzz/icon.zig");
 const loadstring_fuzz = @import("fuzz/loadstring.zig");
 const menu_fuzz = @import("fuzz/menu.zig");
 const pe_fuzz = @import("fuzz/pe.zig");
+const export_fuzz = @import("fuzz/export.zig");
+const resource_fuzz = @import("fuzz/resource.zig");
 
 /// Where failing inputs are written, relative to the working directory.
 const crash_dir = "zig-out/fuzz";
@@ -39,6 +41,8 @@ const targets = [_]Target{
     .{ .name = "icon", .seeds = &icon_fuzz.seeds, .run = icon_fuzz.harness },
     .{ .name = "pe", .seeds = &pe_fuzz.seeds, .run = pe_fuzz.harness },
     .{ .name = "loadstring", .seeds = &loadstring_fuzz.seeds, .run = loadstring_fuzz.harness },
+    .{ .name = "resource", .seeds = &resource_fuzz.seeds, .run = resource_fuzz.harness },
+    .{ .name = "export", .seeds = &export_fuzz.seeds, .run = export_fuzz.harness },
     .{ .name = "bat", .seeds = &bat_fuzz.seeds, .run = bat_fuzz.harness },
 };
 

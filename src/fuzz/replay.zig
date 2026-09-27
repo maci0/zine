@@ -15,6 +15,8 @@ const icon_fuzz = @import("icon.zig");
 const loadstring_fuzz = @import("loadstring.zig");
 const menu_fuzz = @import("menu.zig");
 const pe_fuzz = @import("pe.zig");
+const export_fuzz = @import("export.zig");
+const resource_fuzz = @import("resource.zig");
 
 /// Mutations replayed per target in CI. Small enough to keep the unit-test
 /// gate fast, large enough to reach the truncation and boundary paths.
@@ -58,6 +60,47 @@ test "fuzz: pe seeds and mutations hold the parser contract" {
 
 test "fuzz: loadstring seeds and mutations hold the parser contract" {
     try replay(&loadstring_fuzz.seeds, loadstring_fuzz.harness);
+}
+
+test "fuzz: resource seeds and mutations hold the lookup contract" {
+    try replay(&resource_fuzz.seeds, resource_fuzz.harness);
+}
+
+test "fuzz: export seeds and mutations hold the lookup contract" {
+    try replay(&export_fuzz.seeds, export_fuzz.harness);
+}
+
+test "export: the seed directory resolves its names and rejects the rest" {
+    // The mutations only reach the function table if the seeds do, so pin the
+    // lookups the seed directory is built to satisfy.
+    const module = @import("../loader/module.zig");
+    const image = export_fuzz.seeds[0];
+    const rva = std.mem.readInt(u32, image[0..4], .little);
+    const size = std.mem.readInt(u32, image[4..8], .little);
+
+    try testing.expectEqual(@as(u32, 0x800), module.findExportRvaInImage(image, rva, size, "ZineFirst").?);
+    try testing.expectEqual(@as(u32, 0x900), module.findExportRvaInImage(image, rva, size, "ZineSecond").?);
+    // The name compare is exact, so a different case is a different export.
+    try testing.expectEqual(@as(?u32, null), module.findExportRvaInImage(image, rva, size, "zinethird2"));
+    try testing.expectEqual(@as(?u32, null), module.findExportRvaInImage(image, rva, size, "Missing"));
+    try testing.expectEqual(@as(?u32, null), module.findExportRvaInImage(image, 0, size, "ZineFirst"));
+}
+
+test "resource: the seed tree resolves by id and by name" {
+    // The mutations only reach the data entry if the seeds do, so pin the
+    // lookups the seed tree is built to satisfy.
+    const module = @import("../loader/module.zig");
+    const pe_resources = @import("../pe_resources.zig");
+    const image = resource_fuzz.seeds[0];
+    const res_rva = std.mem.readInt(u32, image[0..4], .little);
+
+    try testing.expectEqualStrings("ICONDATA", module.findResourceInImage(image, res_rva, pe_resources.RT_ICON, 1).?);
+    try testing.expectEqualStrings("ICONDATA", module.findFirstResourceInImage(image, res_rva, pe_resources.RT_ICON).?);
+    try testing.expectEqualStrings("NAMEDATA", module.findResourceByNameInImage(image, res_rva, pe_resources.RT_DIALOG, "mainicon").?);
+    // Nothing the tree does not hold resolves, and a directory RVA outside
+    // the image walks nothing at all.
+    try testing.expectEqual(@as(?[]const u8, null), module.findResourceInImage(image, res_rva, pe_resources.RT_ICON, 2));
+    try testing.expectEqual(@as(?[]const u8, null), module.findResourceInImage(image, 0xFFFF_0000, pe_resources.RT_ICON, 1));
 }
 
 test "fuzz: bat seeds and mutations hold the interpreter contract" {
