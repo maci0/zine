@@ -112,6 +112,9 @@ static long bench_memory(void) {
     return iters;
 }
 
+/* The mingw entry point: named by the linker, not called from here. */
+void mainCRTStartup(void);
+
 void mainCRTStartup(void) {
     hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
     long r;

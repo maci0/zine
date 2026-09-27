@@ -133,12 +133,23 @@ check_shell() {
 check_c() {
     local objdir=".scratch/c-check"
     mkdir -p "$objdir"
+    # -Wall stops short of the width, signedness, shadowing, format-argument
+    # and declaration rules below. Every tracked source compiles clean under
+    # them, so they are part of the gate from here on: a warning they name is a
+    # defect class -Wall would have merged without comment.
+    local flags=(
+        -std=c99
+        -Wall -Wextra -Wpedantic -Werror
+        -Wconversion -Wsign-conversion -Wshadow -Wcast-qual -Wundef
+        -Wformat=2 -Wwrite-strings -Wvla -Wdouble-promotion
+        -Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition
+    )
     local src
     while IFS= read -r src; do
-        zig cc -c -o "$objdir/$(basename "$src").o" -std=c99 -Wall -Wextra -Wpedantic -Werror "$src"
+        zig cc -c -o "$objdir/$(basename "$src").o" "${flags[@]}" "$src"
     done < <(git ls-files 'tests/*.c' ':!tests/cpubench_win32.c')
-    zig cc -c -o "$objdir/cpubench_win32.o" -target x86-windows-gnu -std=c99 \
-        -Wall -Wextra -Wpedantic -Werror tests/cpubench_win32.c
+    zig cc -c -o "$objdir/cpubench_win32.o" -target x86-windows-gnu \
+        "${flags[@]}" tests/cpubench_win32.c
 }
 
 # src/gui/fltk_bridge.cpp is the one tracked C++ source, and the Zig build

@@ -47,6 +47,7 @@ NNET.DAT
 test_archive.7z
 
 # Root-level debug scratch (traces, obj/exe dumps, tmp files)
+/*.o
 /*.obj
 /*.exe
 /*.wasm

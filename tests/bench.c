@@ -86,7 +86,7 @@ static long memory_test(long iterations)
     for (i = 0; i < iterations; i++) {
         memset(block1, (int)(i & 0xFF), sizeof(block1));
         memcpy(block2, block1, sizeof(block1));
-        sum += block2[i % sizeof(block2)];
+        sum += block2[(size_t)i % sizeof(block2)];
     }
     return sum;
 }

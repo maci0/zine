@@ -7,6 +7,19 @@ const package_version = @import("build.zig.zon").version;
 const fltk_include_dir = "/usr/include/fltk1.3";
 const fltk_lib_dir = "/usr/lib/fltk1.3";
 
+// One warning set for src/gui/fltk_bridge.cpp, shared by the -Dfltk
+// executable and the gate's check-cxx step: a check that runs in one and not
+// the other means a warning can merge while the gate stays green. The FLTK
+// headers reach the compiler as a system include, so their own warnings do
+// not fail either compile.
+const fltk_bridge_cxx_flags = [_][]const u8{
+    "-std=c++11",    "-fno-exceptions",    "-Werror",
+    "-Wall",         "-Wextra",            "-Wpedantic",
+    "-Wshadow",      "-Wnon-virtual-dtor", "-Woverloaded-virtual",
+    "-Wcast-qual",   "-Wundef",            "-Wformat=2",
+    "-Wswitch-enum", "-Wnull-dereference", "-I" ++ fltk_include_dir,
+};
+
 comptime {
     if (!std.mem.eql(u8, package_version, @import("src/version.zig").string)) {
         @compileError("build.zig.zon version must match src/version.zig");
@@ -103,10 +116,7 @@ fn addNativeExe(
     if (use_fltk) {
         exe.root_module.addCSourceFile(.{
             .file = b.path("src/gui/fltk_bridge.cpp"),
-            // Warnings are errors: the bridge is clean under -Wall -Wextra and
-            // should stay that way. System FLTK headers stay non-fatal via the
-            // -isystem include added below.
-            .flags = &.{ "-std=c++11", "-fno-exceptions", "-Wall", "-Wextra", "-Werror", "-I" ++ fltk_include_dir },
+            .flags = &fltk_bridge_cxx_flags,
         });
         exe.root_module.addIncludePath(b.path("src/gui"));
         exe.root_module.addSystemIncludePath(.{ .cwd_relative = fltk_include_dir });
@@ -709,7 +719,7 @@ pub fn build(b: *std.Build) void {
     });
     cxx_check.root_module.addCSourceFile(.{
         .file = b.path("src/gui/fltk_bridge.cpp"),
-        .flags = &.{ "-std=c++11", "-fno-exceptions", "-Wall", "-Wextra", "-Werror", "-I" ++ fltk_include_dir },
+        .flags = &fltk_bridge_cxx_flags,
     });
     cxx_check.root_module.addIncludePath(b.path("src/gui"));
     cxx_check.root_module.addSystemIncludePath(.{ .cwd_relative = fltk_include_dir });
