@@ -25,13 +25,13 @@
         <div class="resize-handle resize-se" data-dir="se"></div>
         <div class="win2k-titlebar" id="main-titlebar">
             <div class="win2k-titlebar-text">
-                <img id="titlebar-icon" alt="" style="width: 16px; height: 16px; display: none;">
+                <img id="titlebar-icon" alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" style="width: 16px; height: 16px; display: none;">
                 <span id="window-title"></span>
             </div>
             <div class="win2k-titlebar-buttons">
-                <button class="win2k-titlebar-btn" onclick="minimizeWindow()" aria-label="Minimize"><div class="btn-glyph btn-minimize"></div></button>
-                <button class="win2k-titlebar-btn" onclick="maximizeWindow()" aria-label="Maximize"><div class="btn-glyph btn-maximize"></div></button>
-                <button class="win2k-titlebar-btn" onclick="closeWindow()" aria-label="Close"><div class="btn-glyph btn-close"></div></button>
+                <button class="win2k-titlebar-btn" onclick="minimizeWindow()" aria-label="Minimize"><span class="btn-glyph btn-minimize"></span></button>
+                <button class="win2k-titlebar-btn" onclick="maximizeWindow()" aria-label="Maximize"><span class="btn-glyph btn-maximize"></span></button>
+                <button class="win2k-titlebar-btn" onclick="closeWindow()" aria-label="Close"><span class="btn-glyph btn-close"></span></button>
             </div>
         </div>
         <div id="menu-bar" role="menubar"></div>
@@ -50,7 +50,7 @@
                 <span id="dialog-title">Dialog</span>
             </div>
             <div class="win2k-titlebar-buttons">
-                <button class="win2k-titlebar-btn" onclick="closeDialog()" aria-label="Close dialog"><div class="btn-glyph btn-close"></div></button>
+                <button class="win2k-titlebar-btn" onclick="closeDialog()" aria-label="Close dialog"><span class="btn-glyph btn-close"></span></button>
             </div>
         </div>
         <div class="win2k-content" id="dialog-content"></div>
@@ -58,12 +58,12 @@
 
     <!-- Taskbar -->
     <div id="taskbar">
-        <div class="taskbar-start">
-            <img src="assets/start.svg" class="win-flag" width="16" height="16" alt="Start">
+        <button type="button" class="taskbar-start" id="start-button" aria-haspopup="true" aria-expanded="false">
+            <img src="assets/start.svg" class="win-flag" width="16" height="16" alt="">
             <span>Start</span>
-        </div>
+        </button>
         <div class="taskbar-window-btn active" id="taskbar-app-btn">
-            <img id="taskbar-icon" alt="" style="width: 16px; height: 16px; display: none;">
+            <img id="taskbar-icon" alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" style="width: 16px; height: 16px; display: none;">
             <span id="taskbar-title"></span>
         </div>
         <div class="taskbar-tray">
@@ -92,6 +92,9 @@
         </div>
         <div class="taskbar-clock" id="taskbar-clock"></div>
     </div>
+
+    <!-- Start Menu -->
+    <div id="start-menu" class="taskbar-context-menu"></div>
 
     <!-- Taskbar Right-Click Context Menu -->
     <div id="taskbar-context-menu" class="taskbar-context-menu"></div>

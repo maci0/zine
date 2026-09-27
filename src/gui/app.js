@@ -345,6 +345,57 @@ document.getElementById('taskbar-app-btn').addEventListener('click', () => {
     }
 });
 
+// --- Start Menu ---
+// Lists the launchable programs on the virtual Desktop so a guest can be
+// started without double-clicking a desktop icon.
+const startButton = document.getElementById('start-button');
+const startMenu = document.getElementById('start-menu');
+const LAUNCHABLE_EXTENSIONS = ['exe', 'com', 'bat', 'cmd'];
+let desktopItems = [];
+
+function launchDesktopItem(name) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({type: 'launch', path: 'Desktop/' + name}));
+    }
+}
+
+function closeStartMenu() {
+    startMenu.style.display = 'none';
+    startButton.setAttribute('aria-expanded', 'false');
+}
+
+function renderStartMenu() {
+    startMenu.innerHTML = '';
+    const programs = desktopItems.filter(item =>
+        !item.is_dir && LAUNCHABLE_EXTENSIONS.includes((item.ext || '').toLowerCase()));
+
+    van.add(startMenu, div({class: 'popup-header'}, 'Programs'));
+    if (programs.length === 0) {
+        van.add(startMenu, div({class: 'popup-item disabled'},
+            'No programs in drive_c/Desktop'));
+    } else {
+        programs.forEach(p => {
+            van.add(startMenu, div({class: 'popup-item', onclick: () => {
+                closeStartMenu();
+                launchDesktopItem(p.name);
+            }}, p.name));
+        });
+    }
+    van.add(startMenu, div({class: 'popup-separator'}));
+    van.add(startMenu, div({class: 'popup-item', onclick: closeStartMenu}, 'Cancel'));
+}
+
+startButton.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (startMenu.style.display === 'block') {
+        closeStartMenu();
+        return;
+    }
+    renderStartMenu();
+    startMenu.style.display = 'block';
+    startButton.setAttribute('aria-expanded', 'true');
+});
+
 // --- Menu Helpers ---
 
 /** Parse "&File" → DOM fragment with <u>F</u>ile */
@@ -446,6 +497,10 @@ document.getElementById('taskbar-app-btn').addEventListener('contextmenu', (e) =
 
 // Dismiss context menus on outside clicks
 document.addEventListener('click', (e) => {
+    if (startMenu.style.display === 'block' && !startMenu.contains(e.target) &&
+        !startButton.contains(e.target)) {
+        closeStartMenu();
+    }
     const ctxMenu = document.getElementById('taskbar-context-menu');
     if (ctxMenu.style.display === 'block' && !ctxMenu.contains(e.target)) {
         ctxMenu.style.display = 'none';
@@ -459,31 +514,51 @@ document.addEventListener('contextmenu', (e) => {
     }
 });
 
-// Dismiss menus and dialogs via Escape key
+// Escape dismisses the topmost transient surface, in stacking order.
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-        const ctxMenu = document.getElementById('taskbar-context-menu');
-        if (ctxMenu && window.getComputedStyle(ctxMenu).display !== 'none') {
-            ctxMenu.style.display = 'none';
-            return;
-        }
-        
-        const popups = document.querySelectorAll('.popup-menu');
-        let closedMenu = false;
-        popups.forEach(p => {
-            if (window.getComputedStyle(p).display !== 'none') {
-                p.style.display = 'none';
-                closedMenu = true;
-                // De-bounce the popup rendering bug
-                setTimeout(() => p.style.display = '', 100);
-            }
-        });
-        if (closedMenu) return;
+    if (e.key !== 'Escape') return;
 
-        if (dialogOverlay.style.display === 'flex' || window.getComputedStyle(dialogOverlay).display === 'flex') {
-            closeDialog();
-            sendCommand(2); // IDCANCEL
+    if (startMenu.style.display === 'block') {
+        closeStartMenu();
+        return;
+    }
+
+    const volumePopup = document.getElementById('volume-popup');
+    if (volumePopup && volumePopup.style.display === 'flex') {
+        volumePopup.style.display = 'none';
+        return;
+    }
+
+    const ctxMenu = document.getElementById('taskbar-context-menu');
+    if (ctxMenu && ctxMenu.style.display === 'block') {
+        ctxMenu.style.display = 'none';
+        return;
+    }
+
+    const ctxOverlay = document.getElementById('context-menu-overlay');
+    if (ctxOverlay) {
+        ctxOverlay.remove();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'context_menu_select', id: 0 }));
         }
+        return;
+    }
+
+    const popups = document.querySelectorAll('.popup-menu');
+    let closedMenu = false;
+    popups.forEach(p => {
+        if (window.getComputedStyle(p).display !== 'none') {
+            p.style.display = 'none';
+            closedMenu = true;
+            // De-bounce the popup rendering bug
+            setTimeout(() => p.style.display = '', 100);
+        }
+    });
+    if (closedMenu) return;
+
+    // Same dismissal path as the dialog's Cancel button: one cancel_dialog.
+    if (window.getComputedStyle(dialogOverlay).display === 'flex') {
+        closeDialog();
     }
 });
 
@@ -697,11 +772,14 @@ function connect() {
 
     ws.onopen = () => {
         statusEl.style.display = 'none';
+        statusEl.classList.remove('error');
 
         // --- Full UI reset for clean session ---
         closeDialog(true);
+        closeStartMenu();
         menuBar.innerHTML = '';
         currentMenuData = null;
+        desktopItems = [];
         dialogOverlay.style.display = 'none';
 
         // Reset window title
@@ -753,7 +831,7 @@ function connect() {
     ws.onclose = () => {
         statusEl.style.display = 'block';
         statusEl.textContent = "Disconnected. Reconnecting...";
-        statusEl.style.color = "#f87171";
+        statusEl.classList.add('error');
         setTimeout(connect, 1000);
     };
 
@@ -777,7 +855,7 @@ function connect() {
                     console.error("Zine API Error:", msg.message);
                     statusEl.textContent = "API Error: " + msg.message;
                     statusEl.style.display = 'block';
-                    statusEl.style.color = "#f87171";
+                    statusEl.classList.add('error');
                     setTimeout(() => statusEl.style.display = 'none', 4000);
                 } else if (msg.type === "set_resolution") {
                     currentRenderWidth = msg.width;
@@ -890,34 +968,34 @@ function connect() {
                     }
 
                 } else if (msg.type === "show_color_dialog") {
-                    // Simple color picker overlay
-                    let ov = document.getElementById('color-dialog-overlay');
-                    if (!ov) {
-                        ov = document.createElement('div');
-                        ov.id = 'color-dialog-overlay';
-                        ov.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:9998;background:rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;';
-                        ov.innerHTML = '<div style="background:#c0c0c0;border:2px outset;padding:16px;font-family:Tahoma,sans-serif;font-size:12px;"><div style="margin-bottom:8px;">Choose Color</div><input type="color" id="color-dialog-input" value="#000000" style="width:180px;height:32px;border:none;"><div style="margin-top:12px;text-align:right;"><button id="color-dialog-ok" style="margin-right:6px;min-width:60px;">OK</button><button id="color-dialog-cancel" style="min-width:60px;">Cancel</button></div></div>';
-                        document.body.appendChild(ov);
-                    }
-                    const input = document.getElementById('color-dialog-input');
                     const init = msg.initial >>> 0;
-                    const rr = ((init >> 16) & 0xFF).toString(16).padStart(2, '0');
-                    const gg = ((init >> 8) & 0xFF).toString(16).padStart(2, '0');
-                    const bb = (init & 0xFF).toString(16).padStart(2, '0');
-                    input.value = '#' + rr + gg + bb;
-                    ov.style.display = 'flex';
+                    const toHex = (v) => v.toString(16).padStart(2, '0');
+                    const initial = '#' + toHex((init >> 16) & 0xFF) + toHex((init >> 8) & 0xFF) + toHex(init & 0xFF);
+
+                    const colorInput = input({type: 'color', value: initial,
+                        style: 'width:100%; height:34px; padding:0; background:transparent; border:none;'});
                     const sendColor = () => {
-                        const v = input.value;
+                        const v = colorInput.value;
                         const r = parseInt(v.substr(1, 2), 16), g = parseInt(v.substr(3, 2), 16), b = parseInt(v.substr(5, 2), 16);
-                        const rgb = (r << 16) | (g << 8) | b;
-                        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'color_selected', color: rgb}));
-                        ov.style.display = 'none';
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({type: 'color_selected', color: (r << 16) | (g << 8) | b}));
+                        }
+                        closeDialog(true);
                     };
-                    document.getElementById('color-dialog-ok').onclick = sendColor;
-                    document.getElementById('color-dialog-cancel').onclick = () => {
-                        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'color_selected', color: -1}));
-                        ov.style.display = 'none';
-                    };
+
+                    showDialog('Choose Color',
+                        div({style: 'display:flex; flex-direction:column; gap:10px;'},
+                            div({style: 'font-size:11px;'}, 'Color:'),
+                            colorInput,
+                            div({style: 'display:flex; justify-content:flex-end; gap:6px;'},
+                                button({class: 'win2k-button', onclick: sendColor}, 'OK'),
+                                button({class: 'win2k-button', onclick: () => {
+                                    if (ws && ws.readyState === WebSocket.OPEN) {
+                                        ws.send(JSON.stringify({type: 'color_selected', color: -1}));
+                                    }
+                                    closeDialog(true);
+                                }}, 'Cancel'))));
+                    dialogOverlay.style.width = '260px';
 
                 } else if (msg.type === "set_control_color") {
                     // Background color from the parent's WM_CTLCOLOR handler.
@@ -1088,6 +1166,7 @@ function connect() {
                         currentPath = newPath;
                         updateLookIn();
                         updateToolbarState();
+                        updatePlaceState();
                         filenameInput.value = '';
                         // Request directory listing from server
                         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1100,6 +1179,7 @@ function connect() {
                         currentPath = pathHistory.pop();
                         updateLookIn();
                         updateToolbarState();
+                        updatePlaceState();
                         filenameInput.value = '';
                         if (ws && ws.readyState === WebSocket.OPEN) {
                             ws.send(JSON.stringify({ type: 'browse_directory', path: currentPath }));
@@ -1148,6 +1228,7 @@ function connect() {
                         populateFileList(folders, files);
                         updateLookIn();
                         updateToolbarState();
+                        updatePlaceState();
                     };
 
                     // Populate initial listing
@@ -1161,20 +1242,21 @@ function connect() {
                         : [option('All Files (*.*)')];
                     const ftSel = select({id: 'dialog_filetype', class: 'win2k-edit'}, ...filterOptions);
 
-                    // --- Places bar items ---
-                    function makePlace(title, iconSrc, targetPath, isActive) {
-                        return div({
-                            class: 'comdlg-place-item' + (isActive ? ' active' : ''),
-                            title: title,
-                            onclick: () => {
-                                // Highlight active place
-                                document.querySelectorAll('.comdlg-place-item').forEach(el => el.classList.remove('active'));
-                                // Find this element and mark active
-                                const items = document.querySelectorAll('.comdlg-place-item');
-                                items.forEach(el => { if (el.title === title) el.classList.add('active'); });
-                                navigateTo(targetPath);
-                            }
+                    // --- Places bar ---
+                    // The guest browses drive_c/Desktop, so only that place has
+                    // a backing path. The other Win2K places are not listed.
+                    const placeItems = [];
+                    function makePlace(title, iconSrc, targetPath) {
+                        const el = div({
+                            class: 'comdlg-place-item', title: title,
+                            onclick: () => { if (currentPath !== targetPath) navigateTo(targetPath); }
                         }, img({src: iconSrc}), span(title));
+                        placeItems.push({el: el, path: targetPath});
+                        return el;
+                    }
+
+                    function updatePlaceState() {
+                        placeItems.forEach(p => p.el.classList.toggle('active', currentPath === p.path));
                     }
 
                     // --- Build dialog DOM ---
@@ -1186,19 +1268,11 @@ function connect() {
                                 lookInLabel,
                                 div({class: 'comdlg-toolbar-btns'},
                                     backBtn,
-                                    upBtn,
-                                    div({class: 'comdlg-toolbar-sep'}),
-                                    div({class: 'comdlg-toolbar-btn', title: 'Create New Folder'}, img({src: 'assets/newfolder.svg'})),
-                                    div({class: 'comdlg-toolbar-sep'}),
-                                    div({class: 'comdlg-toolbar-btn', title: 'Views'}, img({src: 'assets/views.svg'})))),
+                                    upBtn)),
                             // Main area (places bar + file list)
                             div({class: 'comdlg-main'},
                                 div({class: 'comdlg-places-bar'},
-                                    makePlace('History', 'assets/history.svg', 'Desktop', false),
-                                    makePlace('Desktop', 'assets/desktop.svg', 'Desktop', currentPath === 'Desktop'),
-                                    makePlace('My Documents', 'assets/mydocs.svg', 'Desktop', false),
-                                    makePlace('My Computer', 'assets/mypc.svg', 'Desktop', false),
-                                    makePlace('My Network P...', 'assets/network.svg', 'Desktop', false)),
+                                    makePlace('Desktop', 'assets/desktop.svg', 'Desktop')),
                                 fileListEl),
                             // Bottom rows
                             div({class: 'comdlg-bottom-row'},
@@ -1220,6 +1294,7 @@ function connect() {
                                 button({class: 'win2k-button', onclick: () => closeDialog()}, 'Cancel')))
                     );
                     dialogOverlay.style.width = '475px';
+                    updatePlaceState();
 
                 } else if (msg.type === "directory_listing") {
                     // Server response to browse_directory — update the file dialog
@@ -1755,6 +1830,7 @@ function connect() {
                     // Replace the element to remove all old event listeners
                     const newDesktop = desktop.cloneNode(false);
                     desktop.parentNode.replaceChild(newDesktop, desktop);
+                    desktopItems = msg.items || [];
                     const folderSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><path d="M2 6h12l2 3h14v19H2z" fill="#FEC64F" stroke="#996515" stroke-width="0.5"/><path d="M2 9h28v16H2z" fill="#FEC64F"/></svg>`;
                     const docSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><path d="M6 2h14l6 6v22H6z" fill="#fff" stroke="#888" stroke-width="0.8"/><path d="M20 2l6 6h-6z" fill="#ccc" stroke="#888" stroke-width="0.5"/><line x1="10" y1="14" x2="22" y2="14" stroke="#999" stroke-width="0.8"/><line x1="10" y1="17" x2="22" y2="17" stroke="#999" stroke-width="0.8"/><line x1="10" y1="20" x2="18" y2="20" stroke="#999" stroke-width="0.8"/></svg>`;
                     const exeSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><rect x="4" y="2" width="24" height="28" rx="2" fill="#ddd" stroke="#666" stroke-width="0.8"/><rect x="7" y="5" width="18" height="12" fill="#000080"/><rect x="9" y="8" width="4" height="2" fill="#0f0"/><rect x="15" y="8" width="6" height="2" fill="#0ff"/><rect x="9" y="11" width="8" height="2" fill="#ff0"/><rect x="8" y="20" width="7" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/><rect x="17" y="20" width="7" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/><rect x="8" y="25" width="16" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/></svg>`;
@@ -1764,6 +1840,8 @@ function connect() {
                     (msg.items || []).forEach(item => {
                         const iconEl = document.createElement('div');
                         iconEl.className = 'win2k-desktop-icon';
+                        // Enter launches, so double-click is not the only route.
+                        iconEl.tabIndex = 0;
 
                         const imgContainer = document.createElement('div');
                         if (item.icon) {
@@ -1790,16 +1868,23 @@ function connect() {
                         // Click to select
                         iconEl.addEventListener('click', (e) => {
                             e.stopPropagation();
+                            closeStartMenu();
                             if (selectedIcon) selectedIcon.classList.remove('selected');
                             iconEl.classList.add('selected');
                             selectedIcon = iconEl;
                         });
 
+                        // Enter activates the selected icon
+                        iconEl.addEventListener('keydown', (e) => {
+                            if (e.key !== 'Enter' && e.key !== ' ') return;
+                            e.preventDefault();
+                            e.stopPropagation();
+                            launchDesktopItem(item.name);
+                        });
+
                         // Double-click to launch
                         iconEl.addEventListener('dblclick', () => {
-                            if (ws && ws.readyState === WebSocket.OPEN) {
-                                ws.send(JSON.stringify({type:'launch', path: 'Desktop/' + item.name}));
-                            }
+                            launchDesktopItem(item.name);
                         });
 
                         newDesktop.appendChild(iconEl);
@@ -1831,40 +1916,14 @@ window.addEventListener('resize', () => {
     }
 });
 
-// --- Global Escape Key Handler ---
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-        // Close volume popup
-        const volumePopup = document.getElementById('volume-popup');
-        if (volumePopup && volumePopup.style.display === 'flex') {
-            volumePopup.style.display = 'none';
-            return;
-        }
-        // Close taskbar context menu
-        const ctxMenu = document.getElementById('taskbar-context-menu');
-        if (ctxMenu && ctxMenu.style.display === 'block') {
-            ctxMenu.style.display = 'none';
-            return;
-        }
-        // Close canvas context menu overlay
-        const ctxOverlay = document.getElementById('context-menu-overlay');
-        if (ctxOverlay) {
-            ctxOverlay.remove();
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'context_menu_select', id: 0 }));
-            }
-            return;
-        }
-        // Close dialog
-        if (dialogOverlay.style.display !== 'none' && dialogOverlay.style.display !== '') {
-            closeDialog();
-            return;
-        }
-    }
-});
-
 // --- Keyboard Input ---
+// Keystrokes aimed at a dialog control belong to that control, not the guest.
+function isUiInputTarget(t) {
+    return t instanceof Element && t.matches('input, textarea, select, [contenteditable="true"]');
+}
+
 window.addEventListener('keydown', (e) => {
+    if (isUiInputTarget(e.target)) return;
     if (hasEditControl.val && document.activeElement === document.getElementById('edit-control')) {
         if (e.ctrlKey && !e.altKey) {
             if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1879,6 +1938,7 @@ window.addEventListener('keydown', (e) => {
     }
 });
 window.addEventListener('keyup', (e) => {
+    if (isUiInputTarget(e.target)) return;
     if (hasEditControl.val && document.activeElement === document.getElementById('edit-control')) return;
     if (e.altKey || e.code.startsWith('F') && !e.ctrlKey) e.preventDefault();
     if (ws && ws.readyState === WebSocket.OPEN) {

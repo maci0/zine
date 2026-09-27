@@ -591,6 +591,11 @@ canvas {
     z-index: 100;
 }
 
+/* Connection and API error text over the desktop background */
+#status.error {
+    color: #FFB0B0;
+}
+
 /* ===================================================================
  * Taskbar  (height 30px, task-button 22px)
  * =================================================================== */
@@ -627,10 +632,22 @@ canvas {
     letter-spacing: 0.2px;
 }
 
-.taskbar-start:active {
+.taskbar-start:active,
+.taskbar-start[aria-expanded="true"] {
     border-color: var(--sys-dk-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-dk-shadow);
     box-shadow: inset 1px 1px 0 var(--sys-shadow);
     padding: 3px 4px 1px 4px;
+}
+
+button.taskbar-start {
+    font-family: inherit;
+    color: var(--sys-text);
+    cursor: default;
+}
+
+.taskbar-start:focus-visible {
+    outline: 1px dotted var(--sys-dk-shadow);
+    outline-offset: -3px;
 }
 
 .taskbar-start .win-flag {
@@ -997,6 +1014,14 @@ input[type="file"]::file-selector-button:active {
     color: var(--sys-gray-text);
     font-size: 10px;
     font-weight: bold;
+}
+
+/* Start menu drops above the taskbar's left edge */
+
+#start-menu {
+    left: 3px;
+    bottom: 32px;
+    min-width: 180px;
 }
 
 /* ===================================================================
