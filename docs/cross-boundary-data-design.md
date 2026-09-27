@@ -466,10 +466,10 @@ as separate APIs (`FindFirstFileA`/`FindNextFileA` keep their own handle pool in
 
 Goal: Stubs use `[*]u8`, `*T`, `?[*:0]const u8` instead of `usize`. The comptime thunk handler auto-translates pointer types. All `trace.addr()` calls removed from stubs.
 
-Status: NOT fully done. 116 `trace.addr()` call sites remain across
+Status: NOT fully done. 114 `trace.addr()` call sites remain across
 `src/win32/` (concentrated in `user32/message.zig`, `comdlg32/dialogs.zig`,
 `advapi32/registry.zig`, `kernel32/locale.zig`/`path.zig`/`mem.zig`, and the
-msvcrt modules below; this count is the 2026-08 snapshot).
+msvcrt modules below; count checked 2026-09-27).
 Verify current counts with: `rg -c "trace\.addr\(" src/win32`.
 
 Current thunk behavior in [`src/loader/env.zig`](../src/loader/env.zig):
@@ -491,46 +491,46 @@ for migrating individual signatures. The separate variadic behavior above remain
 an exception to the target design.
 
 **Sub-phase 2b: Convert MSVCRT stubs (highest impact)**
-- [ ] `msvcrt/path.zig`: `splitpath`, `makepath`, `fullpath`, `searchenv`, `getcwd`, `tempnam`, `mktemp`
+- [ ] `msvcrt/path.zig`: done for `splitpath`, `makepath`, `mktemp`; still `usize`: `fullpath`, `searchenv`, `getcwd`, `tempnam`
   - Change `path_ptr: usize` → `path: [*:0]const u8`
   - Change `drive: usize` → `drive: ?[*]u8`
   - Remove all `trace.addr()` and `trace.c_span()` calls
   - Use `std.mem.span(path)` instead of `trace.c_span(path_ptr)`
-- [ ] `msvcrt/file.zig`: `access`, `sopen`, `read`, `write`, `stat`, `fstat`, `fileno`
+- [ ] `msvcrt/file.zig`: done for `read`, `stat`, `fstat`, `fileno`; still `usize`: `access`, `sopen`, `write`
   - Same pattern
-- [ ] `msvcrt/string.zig`: `strcpy`, `strncpy`, `strcmp`, `strlen`, etc.
+- [ ] `msvcrt/string.zig`: done for `strlen`, `strcpy`, `strncpy`, `strcat`, `strcmp`; 3 `trace.addr()` sites remain further down the file
   - All `s1_ptr: usize` → `s1: [*:0]const u8`
 - [ ] `msvcrt/fmt.zig`: `printf`, `sprintf`, `sscanf`, etc.
   - Format string: `fmt_ptr: usize` → `fmt: [*:0]const u8`
   - Buffer: `buf_ptr: usize` → `buf: [*]u8`
-- [ ] `msvcrt/mem.zig`: `memcpy`, `memset`, `memmove`
+- [x] `msvcrt/mem.zig`: `memcpy`, `memset`, `memmove`
   - `dest_ptr: usize` → `dest: [*]u8`
-- [ ] `msvcrt/io.zig`: `fopen`, `fclose`, `fread`, `fwrite`, `fgets`, `fprintf`
+- [ ] `msvcrt/io.zig`: done for `fclose`, `fread`, `fwrite`; still `usize`: `fopen`, `fgets`, `fsopen`, `freopen`, `fprintf` (wasm path), `fwprintf`
   - File pointers, buffers: pointer types
-- [ ] `msvcrt/time.zig`: `time`, `localtime`, `ctime`, `ftime`, `mktime`
+- [ ] `msvcrt/time.zig`: done for `time`, `localtime`, `ctime`, `ftime`, `mktime`; still `usize`: `stub_utime`, `stub_futime`, `asctime`, `localtime64`
   - Output pointers: `*i32`, `*Tm`, etc.
 - [ ] `msvcrt/process.zig`: `getmainargs`, `getenv`, `putenv`, `spawnvp`
   - String params: `[*:0]const u8`
   - Output pointer params: `*i32`, `*u32`
-- [ ] `msvcrt/misc.zig`: `errno`, `setlocale`, `qsort`, etc.
+- [ ] `msvcrt/misc.zig`: done for `errno` and `setlocale`; still `usize`: `qsort`, `bsearch`
 - [ ] Run test suite after each file. Fix any regressions immediately.
 
 **Sub-phase 2c: Convert KERNEL32 stubs**
-- [ ] `kernel32/file.zig`: `CreateFileA`, `ReadFile`, `WriteFile`, `GetFileSize`, `SetFilePointer`, `MapViewOfFileEx`, `GetDiskFreeSpaceA`
-- [ ] `kernel32/process.zig`: `LoadLibraryA`, `GetProcAddress`, `GetModuleHandleA`, `GetModuleFileNameA`, `GetStartupInfoA`, `GetEnvironmentVariableA`, `CreateProcessA`
-- [ ] `kernel32/mem.zig`: `VirtualAlloc`, `HeapAlloc`, `LocalAlloc`
-- [ ] `kernel32/console.zig`: `GetConsoleScreenBufferInfo`, `ReadConsoleW`, `WriteConsoleA`
-- [ ] `kernel32/sync.zig`: `InterlockedIncrement`, `InterlockedExchange`, `InitializeCriticalSection`
-- [ ] `kernel32/sysinfo.zig`: `GetSystemInfo`, `GlobalMemoryStatusEx`
+- [ ] `kernel32/file.zig`: `CreateFileA`, `GetFileSize`, `SetFilePointer`, `MapViewOfFileEx`, `GetDiskFreeSpaceA` (`ReadFile` and `WriteFile` are done)
+- [ ] `kernel32/process.zig`: `LoadLibraryA`, `GetProcAddress`, `GetModuleHandleA`, `GetModuleFileNameA`, `GetEnvironmentVariableA`, `CreateProcessA` (`GetStartupInfoA` is done)
+- [ ] `kernel32/mem.zig`: `VirtualAlloc` (`HeapAlloc` and `LocalAlloc` are done)
+- [x] `kernel32/console.zig`: `GetConsoleScreenBufferInfo`, `ReadConsoleW`, `WriteConsoleA`
+- [ ] `kernel32/sync.zig`: `InterlockedExchange`, `InitializeCriticalSection` (`InterlockedIncrement` is done)
+- [x] `kernel32/sysinfo.zig`: `GetSystemInfo`, `GlobalMemoryStatusEx`
 - [ ] `kernel32/path.zig`: `GetCurrentDirectoryA`, `GetWindowsDirectoryA`, `GetFullPathNameA`
 - [ ] `kernel32/process.zig`: `GetModuleFileNameA`
 
 **Sub-phase 2d: Convert remaining DLL stubs** [PARTIAL — several groups still contain `trace.addr()`]
 - [ ] `advapi32/registry.zig` (6 sites remain); `advapi32/security.zig`, `advapi32/services.zig` clean
-- [ ] `user32/message.zig` (29 sites), `user32/dialog.zig` (4), `user32/window.zig` (3) remain; `user32/resource.zig` clean
+- [ ] `user32/message.zig` (27 sites), `user32/dialog.zig` (4) remain; `user32/window.zig`, `user32/resource.zig` clean
 - [ ] `gdi32/drawing.zig` (2 sites remain); `gdi32/object.zig` clean
 - [ ] `rpcrt4.zig` (4 sites), `ole32/com.zig` (1 site), `comdlg32/dialogs.zig` (11 sites) remain; `shell32.zig` clean
-- [x] All remaining DLL stubs registered through the comptime thunk handler where pointer-typed
+- [ ] Register the remaining raw exports through the comptime thunk handler. `msvcrt.zig` (`_EH_prolog`, `_setjmp3`, `longjmp`, `_ftol`) and `ntdll.zig` (`_chkstk`, `_allmul`, `_alldiv`) still go through `addBuiltinExport`, which sets `param_bytes = 0` and no `thunk_handler`.
 
 **Sub-phase 2e: Remove `usize` auto-translation [PARTIAL]**
 - [x] Non-variadic `castArg` translates only pointer-typed parameters; integer and HANDLE values pass through without address translation.
@@ -538,17 +538,18 @@ an exception to the target design.
 - [ ] Verify that migrated stubs never translate an already-translated pointer; the final variadic `ap` remains a host pointer.
 - [ ] Run full test suite (current counts tracked in [`STATUS.md`](STATUS.md))
 
-### Phase 3: Fix static data returns for WASM [DONE via different mechanism]
+### Phase 3: Fix static data returns for WASM [PARTIAL]
 (COM/DirectX vtable guest allocation deferred to future feature — not needed for CLI tests)
 
 Goal: Functions that return `&host_static` work on WASM by pre-allocating guest memory.
 
-Status: Implemented, but NOT as a separate `guest_statics.zig` module. Guest
+Status: Partially implemented, and NOT as a separate `guest_statics.zig` module. Guest
 slots are carved out of the guest globals block allocated by
 `ensureGuestGlobals()` in `msvcrt/process.zig`, and the affected stubs
 (`errno`, `setlocale`, ...) sync/return those slots inline. This keeps the
 guest-visible behavior but deviates from the "stub stays pure" structure below:
-the stubs do check `x86_memory.guest_memory`.
+the stubs do check `x86_memory.guest_memory`. Still outstanding: `localtime`,
+`ctime`, and `asctime` return the bare host static with no guest slot.
 
 - [ ] Create `src/win32/guest_statics.zig`: module that pre-allocates guest memory slots for all static return values during CRT init
 - [ ] Slots needed:

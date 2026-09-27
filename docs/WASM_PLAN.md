@@ -32,7 +32,7 @@ level, which is what CheerpX does with Linux syscalls but one layer higher.
 | JIT host execution (zine-host) | ✅ Working (`--jit` via `zine-host`; SEH/nested-SEH/registry tests green) |
 | JIT host execution (browser) | ⬚ Not implemented |
 | Browser JS host frontend | ⬚ Not implemented |
-| Basic block caching | ✅ Complete (`decode_cache.zig`: 1024-entry hash-indexed; JIT block ring: 4096-entry) |
+| Basic block caching | ⚠️ Partial ([`JIT.md`](JIT.md#jit-block-caching-strategy-partial): interpreter decode cache 1024-entry hash-indexed; JIT block caches fixed 4096-entry with no trace linking) |
 
 ### Test Results
 

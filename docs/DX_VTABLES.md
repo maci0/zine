@@ -1,5 +1,7 @@
 # DirectX COM Vtable Reference (from Wine headers)
 
+Status: reference for the `src/win32/ddraw/` and `src/win32/d3d7/` vtable layouts; slot counts are checked against those files.
+
 ## IDirect3D3
 
 | Slot | Offset | Method |

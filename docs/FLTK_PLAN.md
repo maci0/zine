@@ -73,7 +73,7 @@ Rationale: System has FLTK 1.3.11 shared libs, but zfltk requires cfltk (targeti
 
 | File | Purpose |
 |---|---|
-| [`fltk_bridge.h`](../src/gui/fltk_bridge.h) | C header — 15 bridge functions, 5 event type constants |
+| [`fltk_bridge.h`](../src/gui/fltk_bridge.h) | C header — 49 bridge functions, 13 event type constants |
 | [`fltk_bridge.cpp`](../src/gui/fltk_bridge.cpp) | C++ implementation: `ZineWindow` subclass, `Fl_RGB_Image` framebuffer, JSON menu parser, Win2K colors, keyboard→VK mapping |
 | [`fltk_ui.zig`](../src/gui/fltk_ui.zig) | Zig backend: conditional `@cImport`, thread-safe command queue, event callback dispatch |
 
@@ -118,7 +118,7 @@ zig-out/bin/zine.x86_64 --fltk -i path/to/gui_app.exe
 | Resize event | `ZineWindow::resize()` → `renderer.on_resize()` |
 | Menu clicks | `menu_cb()` → `renderer.on_command(id)` |
 
-#### Remaining Stubs 🔲
+#### Bridge Coverage
 
 Status as of 2026-08: most of this table shipped (see `src/gui/fltk_bridge.h` and
 [`STATUS.md`](STATUS.md)); only audio remains a stub.
@@ -191,7 +191,7 @@ Uses `Fl::scheme("none")` for the classic look closest to Win2K.
 
 | Check | Result |
 |---|---|
-| `zig build -Dfltk=true` | ✅ Clean build |
+| `zig build -Darch=x86_64 -Dfltk=true` | ✅ Clean build (the option requires `-Darch=x86_64`; plain `-Dfltk=true` on the default x86 target is not a supported configuration) |
 | `zig build` (default x86, no FLTK) | ✅ No regressions |
 | `zig build test` | ✅ All tests pass |
 | GUI smoke suite (`tests/fltk_smoke.sh`, 20 self-exiting apps under Xvfb) | ✅ 20 PASS / 0 FAIL (see [`STATUS.md`](STATUS.md)) |

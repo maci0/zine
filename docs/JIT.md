@@ -63,7 +63,7 @@ WebAssembly executes on a stack machine, but standard blocks and functions decla
 A crucial component of any dynamic recompiler is avoiding re-translating the same blocks of code.
 
 ### Interpreter Decode Cache (Implemented)
-The interpreter uses a 1024-entry hash-indexed **instruction decode cache** (`decode_cache.zig`) that maps guest EIP addresses to previously decoded `Instruction` structs. Each entry is validated by the EIP tag, the fetch length, and every fetched byte, which provides self-modifying code detection — if code is modified, the comparison fails on the next lookup, causing a cache miss and re-decode from the modified bytes.
+The interpreter uses a 1024-entry hash-indexed **instruction decode cache** (`decode_cache.zig`) that maps guest EIP addresses to previously decoded `Instruction` structs. Each entry is validated by the EIP tag, the fetch length, and every fetched byte (up to `MAX_CODE_BYTES`, 16), which provides self-modifying code detection — if code is modified, the comparison fails on the next lookup, causing a cache miss and re-decode from the modified bytes.
 
 ### JIT Block Caching Strategy (Partial)
 1. **Instruction Pointer Mapping (implemented):** `compiler.zig` tracks attempted compilation in fixed 4096-entry arrays (`JitCompiler.block_cache_keys`/`block_cache_vals`, suppressing recompilation of a block already emitted). `runWithJitHost` in `wasm_main.zig` maps guest EIP to a host block ID with `JitCompiler.BlockIndex`, a 4096-entry direct-mapped table that also stores the x86 bytes each block was compiled from. Both index by `eip & 4095` and check the full EIP tag; collisions replace the previous entry. These replaced unbounded hash maps in commit `a76c8eb`.
@@ -130,7 +130,7 @@ The shipped execution boundary is described in [Control Flow](#control-flow); br
 Operating outside of local registers requires translating hardware pointers into WebAssembly linear `memory` addressing.
 - [x] **Dereferencing**: Full ModR/M effective-address support (Base + Index × Scale + Displacement) via `translate.emitEffectiveAddress`. Supports `i32.load`, `i32.load8_u`, `i32.load16_u`, `i32.store`, `i32.store8`, `i32.store16`.
 - [x] **Operand Abstraction**: Unified `emitLoadOperand`/`emitStoreOperand` handles reg, memory, immediate, and relative operands with correct sizing.
-- [ ] **Memory Segments**: Validate legacy Segment mappings (`CS`, `DS`, `SS`) during WASM pointer calculation, especially for Windows 32-bit TEB (Thread Environment Block) pointer accesses via the `FS` register.
+- [ ] **Memory Segments**: Validate legacy Segment mappings (`CS`, `DS`, `SS`) during WASM pointer calculation. `FS` is done: the block prologue loads `fs_base` and `translate.zig` adds `LOCAL_FS_BASE` to FS-relative loads and stores, so Windows 32-bit TEB (Thread Environment Block) accesses resolve.
 - [ ] **Linkage**: Connect standard WebAssembly `memory` exports securely to the primary `zine` x86 4GB virtual address space.
 
 ### Phase 6: Advanced Recompilation (Dynarec Integration) (Partial)
@@ -142,7 +142,7 @@ The final phase lifts the JIT from compiling one-off instruction structures into
 ### 5. JIT Host Interface (`host.zig` / `host_wasm.zig`)
 Manages CPU state transfer between the interpreter and JIT-compiled blocks:
 - **`JitCpuState`**: A 64-byte struct in linear memory containing all 8 GPRs, EIP, packed EFLAGS, an execution status code, `mem_base` (guest VA → linear memory offset adjustment), and the FS segment base — used to pass state between the host and compiled WASM modules.
-- **`host.zig`**: Defines the `JitCpuState` struct and state transfer functions (`cpuToJitState` / `jitStateToCpu`).
+- **`host.zig`**: Defines the `JitCpuState` struct, its field offsets, the status codes, and the `JitHost` interface. State transfer is written inline by the callers (`wasm_main.zig` for the host runtime, `runner.zig` for the compile-only loop), not by shared helpers.
 - **`host_wasm.zig`**: WASM-side imports for `jit_compile` and `jit_call` that communicate with the host runtime (wasmer/wasmtime) to compile and execute JIT blocks.
 
 ## Usage

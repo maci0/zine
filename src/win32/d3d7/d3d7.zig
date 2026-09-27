@@ -3,7 +3,7 @@
 // Europa 1400 uses IDirect3D3 (obtained via IDirectDraw::QueryInterface).
 // It then calls IDirect3D3::CreateDevice to get IDirect3DDevice3.
 // These have DIFFERENT vtable layouts from IDirect3D7/IDirect3DDevice7.
-// See dx_headers/VTABLES.md for the authoritative reference.
+// See docs/DX_VTABLES.md for the authoritative reference.
 
 const std = @import("std");
 const trace = @import("../../trace.zig");
