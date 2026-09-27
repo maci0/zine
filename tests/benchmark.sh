@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # benchmark.sh — Run CPU benchmark across all available execution modes
 #
 # Modes tested:

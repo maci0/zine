@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Test MSVC 6.0 CLI tools via zine
 # Runs each tool with realistic arguments and verifies expected behavior.
 #

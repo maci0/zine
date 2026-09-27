@@ -91,8 +91,14 @@ step_commands=(
 
 # Every tracked script, wherever it lives, must stay shellcheck-clean. This
 # matches the CI command so a script outside tests/ cannot slip through locally.
+# The NUL-delimited read keeps paths with spaces intact, and the array keeps
+# the argument list off xargs, whose -r is a GNU extension BSD xargs rejects.
 check_shell() {
-    git ls-files '*.sh' | xargs -r shellcheck -x
+    local scripts=() script
+    while IFS= read -r -d '' script; do
+        scripts+=("$script")
+    done < <(git ls-files -z '*.sh')
+    ((${#scripts[@]} == 0)) || shellcheck -x "${scripts[@]}"
 }
 
 # Nothing else in the gate analyzes the tracked C sources: the Zig build never

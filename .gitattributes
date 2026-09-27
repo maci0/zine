@@ -1,2 +1,14 @@
-# Shell scripts must stay LF: CRLF breaks bash (`\r': command not found)
-*.sh text eol=lf
+# Every checkout uses LF: `zig fmt --check`, the C sources and the Zig tests
+# see the same bytes on Windows as on Linux, and CRLF breaks bash
+# (`\r': command not found`). `text=auto` leaves detected binaries alone.
+* text=auto eol=lf
+
+# cmd.exe needs CRLF, so batch files are the one exception.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary fixtures: a translation pass would corrupt the ROM header the
+# loader tests parse.
+*.gb binary
+*.gbc binary
+*.gbx binary
