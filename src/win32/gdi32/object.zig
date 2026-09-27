@@ -65,7 +65,12 @@ pub fn SelectObject(hdc: usize, h: usize) callconv(w32cc.WINAPI) usize {
             dc_entry.bitmap = h;
         }
     }
-    return if (old_obj != 0) old_obj else h; // Return previous object, or requested if failed
+    // Win32 returns the object that was previously selected, and NULL when
+    // nothing was selected (or the object could not be selected). Returning
+    // the requested handle on failure would make a guest's
+    // `SelectObject(hdc, bad)` check pass and its `DeleteObject(old)` free a
+    // live object.
+    return old_obj;
 }
 
 /// Deletes a GDI object, releasing its pixel buffer when zine allocated one.

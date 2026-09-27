@@ -417,11 +417,12 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "DrawAnimatedRects", stub_ret0_4);
     try environment.addBuiltinExportComptime(m, "GetMenuStringW", stub_ret0_5);
     try environment.addBuiltinExportComptime(m, "InsertMenuW", menu.stub_InsertMenuA);
-    try environment.addBuiltinExportComptime(m, "IsCharAlphaNumericA", stub_IsCharFunc);
-    try environment.addBuiltinExportComptime(m, "IsCharAlphaNumericW", stub_IsCharFunc);
-    try environment.addBuiltinExportComptime(m, "IsCharLowerA", stub_IsCharFunc);
-    try environment.addBuiltinExportComptime(m, "IsCharLowerW", stub_IsCharFunc);
-    try environment.addBuiltinExportComptime(m, "IsCharUpperW", stub_IsCharFunc);
+    try environment.addBuiltinExportComptime(m, "IsCharAlphaNumericA", stub_IsCharAlphaNumericA);
+    try environment.addBuiltinExportComptime(m, "IsCharAlphaNumericW", stub_IsCharAlphaNumericW);
+    try environment.addBuiltinExportComptime(m, "IsCharLowerA", stub_IsCharLowerA);
+    try environment.addBuiltinExportComptime(m, "IsCharLowerW", stub_IsCharLowerW);
+    try environment.addBuiltinExportComptime(m, "IsCharUpperA", stub_IsCharUpperA);
+    try environment.addBuiltinExportComptime(m, "IsCharUpperW", stub_IsCharUpperW);
     try environment.addBuiltinExportComptime(m, "IsWindowUnicode", window.IsWindowUnicode);
     try environment.addBuiltinExportComptime(m, "MessageBoxExW", stub_ret0_5);
     try environment.addBuiltinExportComptime(m, "MessageBoxIndirectW", dialog.stub_MessageBoxIndirectA);
@@ -461,7 +462,8 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "LookupIconIdFromDirectoryEx", stub_ret0_5);
     try environment.addBuiltinExportComptime(m, "LockWindowUpdate", stub_ret0_1);
     try environment.addBuiltinExportComptime(m, "LoadKeyboardLayoutA", stub_ret0_2);
-    try environment.addBuiltinExportComptime(m, "IsCharAlphaA", stub_IsCharFunc);
+    try environment.addBuiltinExportComptime(m, "IsCharAlphaA", stub_IsCharAlphaA);
+    try environment.addBuiltinExportComptime(m, "IsCharAlphaW", stub_IsCharAlphaW);
     try environment.addBuiltinExportComptime(m, "InsertMenuItemW", stub_ret0_4);
     try environment.addBuiltinExportComptime(m, "GetTabbedTextExtentW", stub_ret0_5);
     try environment.addBuiltinExportComptime(m, "GetTabbedTextExtentA", stub_ret0_5);
@@ -1263,10 +1265,37 @@ test "calcFrameAdjustments returns correct bounds" {
     try std.testing.expectEqual(@as(i32, SM_CYBORDER + SM_CYEDGE), adj3.bottom);
 }
 
-// IsCharAlphaNumericA/W, IsCharLowerA/W, IsCharUpperW: simple ascii check
-fn stub_IsCharFunc(c: usize) callconv(w32cc.WINAPI) i32 {
-    const ch = @as(u8, @intCast(c & 0xFF));
-    return if (std.ascii.isAlphanumeric(ch)) 1 else 0;
+// IsCharAlphaA/W, IsCharAlphaNumericA/W, IsCharLowerA/W, IsCharUpperA/W.
+// The A variants take a CHAR, the W variants a WCHAR, so each test reads the
+// argument at the width the guest passed it with.
+fn isCharTest(comptime wide: bool, comptime pred: fn (u8) bool, c: usize) i32 {
+    const ch: u8 = if (wide) @truncate(@as(u16, @truncate(c))) else @truncate(c);
+    return if (pred(ch)) 1 else 0;
+}
+
+fn stub_IsCharAlphaNumericA(c: usize) callconv(w32cc.WINAPI) i32 {
+    return isCharTest(false, std.ascii.isAlphanumeric, c);
+}
+fn stub_IsCharAlphaNumericW(c: usize) callconv(w32cc.WINAPI) i32 {
+    return isCharTest(true, std.ascii.isAlphanumeric, c);
+}
+fn stub_IsCharAlphaA(c: usize) callconv(w32cc.WINAPI) i32 {
+    return isCharTest(false, std.ascii.isAlphabetic, c);
+}
+fn stub_IsCharAlphaW(c: usize) callconv(w32cc.WINAPI) i32 {
+    return isCharTest(true, std.ascii.isAlphabetic, c);
+}
+fn stub_IsCharLowerA(c: usize) callconv(w32cc.WINAPI) i32 {
+    return isCharTest(false, std.ascii.isLower, c);
+}
+fn stub_IsCharLowerW(c: usize) callconv(w32cc.WINAPI) i32 {
+    return isCharTest(true, std.ascii.isLower, c);
+}
+fn stub_IsCharUpperA(c: usize) callconv(w32cc.WINAPI) i32 {
+    return isCharTest(false, std.ascii.isUpper, c);
+}
+fn stub_IsCharUpperW(c: usize) callconv(w32cc.WINAPI) i32 {
+    return isCharTest(true, std.ascii.isUpper, c);
 }
 
 // CallWindowProcA: call a window procedure directly (used by subclassing)

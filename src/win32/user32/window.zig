@@ -69,12 +69,12 @@ pub fn GetSystemMetrics(nIndex: i32) callconv(w32cc.WINAPI) i32 {
         6 => 1, // SM_CYBORDER
         7 => 3, // SM_CXDLGFRAME / SM_CXFIXEDFRAME
         8 => 3, // SM_CYDLGFRAME / SM_CYFIXEDFRAME
-        9 => 0, // SM_CXHTHUMB (same as CXHSCROLL = 16, but index 9 is unused)
-        10 => 0, // SM_CYVTHUMB (index 10 unused)
-        11 => 16, // SM_CXHTHUMB
-        12 => 16, // SM_CYVTHUMB
-        13 => 32, // SM_CXICON
-        14 => 32, // SM_CYICON
+        9 => 112, // SM_CXMINTRACK
+        10 => 27, // SM_CYMINTRACK
+        11 => 32, // SM_CXICON
+        12 => 32, // SM_CYICON
+        13 => 32, // SM_CXCURSOR
+        14 => 32, // SM_CYCURSOR
         15 => 19, // SM_CYMENU
         16 => 1024, // SM_CXFULLSCREEN
         17 => 741, // SM_CYFULLSCREEN (768 - caption - menu)

@@ -101,6 +101,24 @@ retroactively.
   convert them, `GetLocaleInfoA`/`W` fail on a negative buffer size, and
   `Ellipse`, `ExtTextOutA`, `time`, and `_ftime` compute in a wide enough type
   to cover extreme rectangles, a pre-1970 clock, and dates past 2038.
+- `GetSystemMetrics` answers the real `SM_CXMINTRACK` through `SM_CYCURSOR`
+  indices, so a scrollbar or icon sized from them is not half-scale.
+- `IsCharLowerA`/`W`, `IsCharUpperA`/`W`, `IsCharAlphaA`/`W` and
+  `IsCharAlphaNumericA`/`W` each test their own class, and `IsCharUpperA` and
+  `IsCharAlphaW` resolve instead of failing to import.
+- `GetPixel` reports `CLR_INVALID` outside the surface, `SelectObject` returns
+  the previous object (NULL when there was none), and `SetDIBitsToDevice` with
+  `cLines == 0` copies the whole bitmap and returns the lines transferred.
+- `GetVersionExA`/`W` fail with `ERROR_INVALID_PARAMETER` instead of writing
+  past a caller-supplied struct that is too small.
+- `_snprintf`/`_vsnprintf` report truncation with -1, and `_snwprintf`/
+  `_vsnwprintf` format into a wide buffer instead of the narrow one.
+- The synthetic export table no longer overlaps each jump thunk's target with
+  the next thunk, and its `SizeOfImage` lands at the optional-header offset a
+  guest reads.
+- A PE section whose `VirtualAddress + VirtualSize` wraps, or a resource
+  directory whose entry counts overflow or run past the image, is rejected
+  instead of producing a reversed slice or an out-of-bounds read.
 
 ### 0.2.0 (2026-09-18)
 

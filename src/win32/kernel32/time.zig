@@ -46,28 +46,36 @@ pub fn QueryPerformanceFrequency(lpFrequency: usize) callconv(w32cc.WINAPI) i32 
 /// Implementation status: Partially implemented
 pub fn GetVersionExA(lpVersionInfo: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetVersionExA({x})\n", .{lpVersionInfo});
-    if (lpVersionInfo != 0) {
-        const info = @as(*w32.OSVERSIONINFOA, @ptrFromInt(lpVersionInfo));
-        info.dwMajorVersion = 5;
-        info.dwMinorVersion = 1;
-        info.dwBuildNumber = 2600;
-        info.dwPlatformId = w32.VER_PLATFORM_WIN32_NT;
-        info.szCSDVersion = [_]u8{0} ** 128;
+    if (lpVersionInfo == 0) return 0;
+    // The caller states how much room it has; a smaller struct must fail
+    // rather than be written past.
+    const info = @as(*w32.OSVERSIONINFOA, @ptrFromInt(lpVersionInfo));
+    if (info.dwOSVersionInfoSize < @sizeOf(w32.OSVERSIONINFOA)) {
+        kernel32_error.SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
     }
+    info.dwMajorVersion = 5;
+    info.dwMinorVersion = 1;
+    info.dwBuildNumber = 2600;
+    info.dwPlatformId = w32.VER_PLATFORM_WIN32_NT;
+    info.szCSDVersion = [_]u8{0} ** 128;
     return 1;
 }
 
 /// Implementation status: Partially implemented
 pub fn GetVersionExW(lpVersionInfo: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetVersionExW({x})\n", .{lpVersionInfo});
-    if (lpVersionInfo != 0) {
-        const info = @as(*w32.OSVERSIONINFOW, @ptrFromInt(lpVersionInfo));
-        info.dwMajorVersion = 5;
-        info.dwMinorVersion = 1;
-        info.dwBuildNumber = 2600;
-        info.dwPlatformId = w32.VER_PLATFORM_WIN32_NT;
-        info.szCSDVersion = [_]u8{0} ** 256;
+    if (lpVersionInfo == 0) return 0;
+    const info = @as(*w32.OSVERSIONINFOW, @ptrFromInt(lpVersionInfo));
+    if (info.dwOSVersionInfoSize < @sizeOf(w32.OSVERSIONINFOW)) {
+        kernel32_error.SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
     }
+    info.dwMajorVersion = 5;
+    info.dwMinorVersion = 1;
+    info.dwBuildNumber = 2600;
+    info.dwPlatformId = w32.VER_PLATFORM_WIN32_NT;
+    info.szCSDVersion = [_]u8{0} ** 256;
     return 1;
 }
 

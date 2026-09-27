@@ -235,7 +235,9 @@ pub fn vsnprintf(out: [*]u8, max: usize, fmt: [*:0]const u8, ap: [*]const u32) c
     const copy_len = @min(len, max - 1);
     @memcpy(out[0..copy_len], buf[0..copy_len]);
     out[copy_len] = 0;
-    return @intCast(copy_len);
+    // The counted `_s` family reports -1 when the output did not fit; it does
+    // not report the truncated count, which a guest would read as success.
+    return if (len >= max) -1 else @as(i32, @intCast(copy_len));
 }
 
 /// Writes formatted data to a string.
@@ -260,12 +262,54 @@ fn snprintf_impl(out: [*]u8, max: usize, fmt: [*:0]const u8, ap: usize) i32 {
     const copy_len = @min(len, max - 1);
     @memcpy(out[0..copy_len], buf[0..copy_len]);
     out[copy_len] = 0;
-    return @intCast(copy_len);
+    // -1 signals truncation to the caller; the copied length would look like
+    // a complete write.
+    return if (len >= max) -1 else @as(i32, @intCast(copy_len));
 }
 
 /// Writes formatted data to a wide-character string.
 /// Implementation status: Partially implemented
 pub const swprintf = if (platform.is_wasm or platform.is_x86_64) stub_swprintf_wasm else stub_swprintf_native;
+
+/// `_vsnwprintf`: the counted wide form. The guest buffer holds `u16`
+/// characters, so the narrow `_vsnprintf` result cannot be written into it.
+/// Returns the number of wide characters written, or -1 when the output did
+/// not fit in `max` characters (always NUL-terminated).
+pub fn vsnwprintf(out: [*]u16, max: usize, fmt: [*:0]const u16, ap: [*]const u32) callconv(.c) i32 {
+    if (max == 0) return -1;
+    var fmt_buf: [4096]u8 = undefined;
+    const fmt_w_len = std.mem.indexOfScalar(u16, fmt[0..4096], 0) orelse 4096;
+    const copy_len = @min(fmt_w_len, 4095);
+    for (0..copy_len) |i| {
+        fmt_buf[i] = @intCast(fmt[i] & 0xFF);
+    }
+    fmt_buf[copy_len] = 0;
+    const fmt_narrow: [*:0]const u8 = @ptrCast(&fmt_buf);
+
+    var buf: [4096]u8 = undefined;
+    const len = x86_vsnprintf(&buf, 4096, fmt_narrow, @intFromPtr(ap));
+    if (trace.enable_tracing) trace.print("MSVCRT: _vsnwprintf '{s}'\n", .{buf[0..len]});
+
+    const written = @min(len, max - 1);
+    for (0..written) |i| {
+        out[i] = buf[i];
+    }
+    out[written] = 0;
+    return if (len >= max) -1 else @as(i32, @intCast(written));
+}
+
+/// `_snwprintf`: the counted wide form taking a variadic argument list.
+pub const snwprintf = if (platform.is_wasm or platform.is_x86_64) stub_snwprintf_wasm else stub_snwprintf_native;
+
+fn stub_snwprintf_wasm(out: [*]u16, max: usize, fmt: [*:0]const u16, ap: usize) callconv(.c) i32 {
+    return vsnwprintf(out, max, fmt, @ptrFromInt(ap));
+}
+
+fn stub_snwprintf_native(buf_ptr: usize, max: usize, fmt_ptr: usize, ...) callconv(.c) i32 {
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
+    return vsnwprintf(@ptrFromInt(buf_ptr), max, @ptrFromInt(fmt_ptr), @ptrFromInt(va_list_to_usize(ap)));
+}
 
 fn stub_swprintf_wasm(out: [*]u16, fmt_w: [*]const u16, ap: usize) callconv(.c) i32 {
     return swprintf_impl(out, fmt_w, ap);

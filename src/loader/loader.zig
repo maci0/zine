@@ -196,10 +196,12 @@ pub fn zeroFillBss(buf: []u8, sections: anytype) void {
     for (sections) |sec| {
         const vsize = sec.Misc.VirtualSize;
         if (vsize > sec.SizeOfRawData) {
-            const bss_start = sec.VirtualAddress + sec.SizeOfRawData;
-            const bss_end = sec.VirtualAddress + vsize;
-            if (bss_end <= buf.len) {
-                @memset(buf[bss_start..bss_end], 0);
+            // u64 arithmetic: a wrapping section address must not produce a
+            // reversed slice.
+            const bss_start: u64 = @as(u64, sec.VirtualAddress) + sec.SizeOfRawData;
+            const bss_end: u64 = @as(u64, sec.VirtualAddress) + vsize;
+            if (bss_end <= buf.len and bss_start <= bss_end) {
+                @memset(buf[@intCast(bss_start)..@intCast(bss_end)], 0);
             }
         }
     }

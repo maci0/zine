@@ -391,7 +391,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "?terminate@@YAXXZ", terminate);
     try environment.addBuiltinExportComptime(m, "_wcsrev", misc.stub_ignore_ptr);
     try environment.addBuiltinExportComptime(m, "wcsspn", misc.stub_ignore_i32);
-    try environment.addBuiltinExportComptime(m, "_snwprintf", fmt.snprintf);
+    try environment.addBuiltinExportComptimeVA(m, "_snwprintf", fmt.snwprintf, 3);
     try environment.addBuiltinExportComptime(m, "_pclose", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "_popen", misc.stub_ignore_ptr);
     try environment.addBuiltinExportComptime(m, "iswspace", string.iswctype);
@@ -403,7 +403,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "_pipe", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "swscanf", fmt.sscanf);
     try environment.addBuiltinExportComptime(m, "wcsstr", string.wcsstr);
-    try environment.addBuiltinExportComptime(m, "_vsnwprintf", fmt.vsnprintf);
+    try environment.addBuiltinExportComptime(m, "_vsnwprintf", fmt.vsnwprintf);
     try environment.addBuiltinExportComptime(m, "_wcslwr", misc.stub_ignore_ptr);
     try environment.addBuiltinExportComptime(m, "_getdcwd", path.getcwd);
     try environment.addBuiltinExportComptime(m, "_itow", string.itoa);

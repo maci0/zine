@@ -262,10 +262,12 @@ pub const Module = struct {
             // On native Linux, mmap returns zero-filled pages so this happens
             // implicitly. On WASM, the allocator fills with 0xAA in debug mode.
             if (vsize > section.SizeOfRawData) {
-                const bss_start = section.VirtualAddress + section.SizeOfRawData;
-                const bss_end = section.VirtualAddress + vsize;
-                if (bss_end <= mapped_slice.len) {
-                    @memset(mapped_slice[bss_start..bss_end], 0);
+                // u64 arithmetic: a section whose VirtualAddress + VirtualSize
+                // wraps a u32 would otherwise produce a reversed slice.
+                const bss_start: u64 = @as(u64, section.VirtualAddress) + section.SizeOfRawData;
+                const bss_end: u64 = @as(u64, section.VirtualAddress) + vsize;
+                if (bss_end <= mapped_slice.len and bss_start <= bss_end) {
+                    @memset(mapped_slice[@intCast(bss_start)..@intCast(bss_end)], 0);
                 }
             }
         }
@@ -418,7 +420,7 @@ pub const Module = struct {
         if (!inImage(self, res_dir_rva, @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY))) return null;
 
         const root_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva])));
-        const num_type_entries = root_dir.NumberOfNamedEntries + root_dir.NumberOfIdEntries;
+        const num_type_entries: u32 = @as(u32, root_dir.NumberOfNamedEntries) + root_dir.NumberOfIdEntries;
         if (!inImage(self, @as(u64, res_dir_rva) + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY), @as(u64, num_type_entries) * @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
 
         const type_entries = @as([*]pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[res_dir_rva + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)])));
@@ -467,8 +469,9 @@ pub const Module = struct {
         const type_off = self.typeSubdirOffset(table, resource_type, true) orelse return null;
 
         const name_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off])));
-        const num_name_entries = name_dir.NumberOfNamedEntries + name_dir.NumberOfIdEntries;
+        const num_name_entries: u32 = @as(u32, name_dir.NumberOfNamedEntries) + name_dir.NumberOfIdEntries;
         if (num_name_entries == 0) return null;
+        if (!inImage(self, @as(u64, table.res_dir_rva) + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY), @as(u64, num_name_entries) * @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
         const name_entries = @as([*]pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)])));
         var name_offset: ?u32 = null;
         for (0..num_name_entries) |i| {
@@ -490,7 +493,9 @@ pub const Module = struct {
         const type_off = self.typeSubdirOffset(table, resource_type, true) orelse return null;
 
         const name_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off])));
-        const num_name_entries = name_dir.NumberOfNamedEntries + name_dir.NumberOfIdEntries;
+        const num_name_entries: u32 = @as(u32, name_dir.NumberOfNamedEntries) + name_dir.NumberOfIdEntries;
+        if (num_name_entries == 0) return null;
+        if (!inImage(self, @as(u64, table.res_dir_rva) + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY), @as(u64, num_name_entries) * @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
         const name_entries = @as([*]pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)])));
 
         var name_offset: ?u32 = null;
@@ -513,7 +518,7 @@ pub const Module = struct {
 
         // Search name entries — named entries have bit 31 set
         const name_dir = @as(*pe_resources.IMAGE_RESOURCE_DIRECTORY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off])));
-        const num_name_entries = name_dir.NumberOfNamedEntries + name_dir.NumberOfIdEntries;
+        const num_name_entries: u32 = @as(u32, name_dir.NumberOfNamedEntries) + name_dir.NumberOfIdEntries;
         if (!inImage(self, @as(u64, table.res_dir_rva) + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY), @as(u64, num_name_entries) * @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY))) return null;
         const name_entries = @as([*]pe_resources.IMAGE_RESOURCE_DIRECTORY_ENTRY, @ptrCast(@alignCast(&self.mapped_memory[table.res_dir_rva + type_off + @sizeOf(pe_resources.IMAGE_RESOURCE_DIRECTORY)])));
 

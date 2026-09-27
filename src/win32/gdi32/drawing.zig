@@ -5,6 +5,9 @@ const gdi32 = @import("../gdi32.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
 
+/// GetPixel's "the pixel is not on the surface" sentinel.
+const CLR_INVALID: u32 = 0xFFFFFFFF;
+
 /// Performs a bit-block transfer of the color data corresponding to a rectangle of pixels
 /// from the specified source device context into a destination device context.
 /// Implementation status: Partially implemented (supports basic raster operations: SRCCOPY, SRCPAINT, SRCAND, SRCINVERT)
@@ -453,7 +456,11 @@ pub const FramebufferInfo = struct {
     }
 
     pub fn getPixel(self: *const FramebufferInfo, x: i32, y: i32) u32 {
-        if (x < 0 or y < 0 or x >= @as(i32, @intCast(self.w)) or y >= @as(i32, @intCast(self.h))) return 0;
+        // Win32 reports a read outside the surface as CLR_INVALID, which is
+        // not a color: a guest flood fill must be able to tell it apart from
+        // an actual black pixel.
+        if (self.buf.len == 0) return CLR_INVALID;
+        if (x < 0 or y < 0 or x >= @as(i32, @intCast(self.w)) or y >= @as(i32, @intCast(self.h))) return CLR_INVALID;
         const di: u32 = (@as(u32, @intCast(y)) * self.w + @as(u32, @intCast(x))) * 4;
         // Invert of setPixel: framebuffer is BGRA, COLORREF is 0x00BBGGRR.
         const b = @as(u32, self.buf[di + 0]);
@@ -596,7 +603,7 @@ pub fn GetPixel(hdc: usize, x: i32, y: i32) callconv(w32cc.WINAPI) u32 {
     if (getFramebufferForDc(hdc)) |fb| {
         return fb.getPixel(x, y);
     }
-    return 0;
+    return CLR_INVALID;
 }
 
 // Map DC handle to its current path position
@@ -697,7 +704,9 @@ pub fn SetDIBitsToDevice(hdc: usize, xDest: i32, yDest: i32, w: u32, h: u32, xSr
         renderer.markScreenDirty();
     }
 
-    return @intCast(cLines);
+    // cLines == 0 means "copy the whole bitmap", and the scan lines actually
+    // transferred are what the caller gets back.
+    return @intCast(if (cLines != 0) cLines else @as(u32, @intCast(@abs(hdr.biHeight))));
 }
 
 pub fn stub_GetDIBits(hdc: usize, hbm: usize, start: u32, cLines: u32, lpvBits: usize, lpbmi: usize, usage: u32) callconv(w32cc.WINAPI) i32 {

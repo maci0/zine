@@ -604,6 +604,7 @@ pub const Environment = struct {
         //   0x44: COFF header (20 bytes)
         //   0x58: Optional header (PE32, 224 bytes)
         //     +28 (0x74): ImageBase
+        //     +56 (0x90): SizeOfImage
         //     +92 (0xB4): NumberOfRvaAndSizes
         //     +96 (0xB8): DataDirectory[0] = Export (VA, Size)
 
@@ -613,8 +614,8 @@ pub const Environment = struct {
         @as(*align(1) u16, @ptrFromInt(base + 0x58)).* = 0x10B;
         // ImageBase = actual base (so game adds 0 displacement)
         @as(*align(1) u32, @ptrFromInt(base + 0x74)).* = base32;
-        // SizeOfImage = 0x1000 (one page)
-        @as(*align(1) u32, @ptrFromInt(base + 0x80)).* = 0x1000;
+        // SizeOfImage = 0x1000 (one page). Optional header offset 56.
+        @as(*align(1) u32, @ptrFromInt(base + 0x90)).* = 0x1000;
         // NumberOfRvaAndSizes = 16
         @as(*align(1) u32, @ptrFromInt(base + 0xB4)).* = 16;
 
@@ -622,7 +623,7 @@ pub const Environment = struct {
         // Layout within page (all offsets from base):
         //   0x200: IMAGE_EXPORT_DIRECTORY (40 bytes)
         //   0x228: DLL name string (up to 64 bytes)
-        //   0x268: Thunks — 8 bytes each: FF 25 [addr32] + 2 pad (for up to 32 exports)
+        //   0x268: Thunks — 10 bytes each: FF 25 [addr32] + the 4-byte target (for up to 32 exports)
         //   0x368: AddressOfFunctions array (n * 4) — RVAs to thunks
         //   after: AddressOfNames array (n * 4) — RVAs to name strings
         //   after: AddressOfNameOrdinals array (n * 2)
@@ -631,7 +632,7 @@ pub const Environment = struct {
         const export_dir_off: u32 = 0x200;
         const dll_name_off: u32 = 0x228;
         const thunks_off: u32 = 0x268;
-        const thunk_size: u32 = 8; // 6 bytes for jmp + 2 pad
+        const thunk_size: u32 = 10; // 6 bytes for jmp + 4 bytes for the target address
         const funcs_off: u32 = thunks_off + @as(u32, @intCast(n)) * thunk_size;
         const names_off: u32 = funcs_off + @as(u32, @intCast(n)) * 4;
         const ords_off: u32 = names_off + @as(u32, @intCast(n)) * 4;
