@@ -215,6 +215,15 @@ release, not a 0.2.1 patch.
   reconnecting clients. The cached copy was dropped without being freed, and
   the next dialog had nothing left to free, so a guest that cycled dialogs
   leaked one string per cycle.
+- A `.bat`/`.cmd` target runs on the WASI builds. Resolving `%~dp0` asked for
+  `realpath`, which WASI has no call for, so every batch file there exited with
+  `cannot open batch file`. The path is now used as spelled when the host
+  cannot canonicalize it, and a relative one expands to the drive-relative
+  `C:\` form rather than `C:name`.
+- A preopened WASI directory no longer claims a path that merely starts with its
+  name: with `/home/user` preopened, `Z:\home\username\file.txt` was read as
+  `name/file.txt` inside `/home/user`. The match ends on a component boundary
+  and the longest matching preopen wins.
 - The web UI's content-addressed stylesheet and scripts are served again. The
   document names each asset by its digest (`/win2k-<digest>.css`), and those
   names exist only inside the build, so the server answered the document's own

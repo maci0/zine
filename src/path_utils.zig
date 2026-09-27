@@ -28,14 +28,39 @@ const is_wasi = builtin.os.tag == .wasi;
 
 /// On WASI, resolve an absolute path through preopened directories.
 /// Returns a Dir handle for the matching preopen and the relative sub-path.
-/// Caller must close the returned Dir.
+/// The Dir is a borrowed preopen fd, so the caller must not close it.
 pub const ResolvedPath = struct {
     dir: std.Io.Dir,
     rel_path: []const u8,
 };
 
+/// Longest preopen name accepted, so one fd_prestat_dir_name call has a
+/// bounded buffer. Longer preopens are skipped rather than truncated.
+const wasi_preopen_name_max = 4096;
+
+/// The part of `abs_path` below a preopen named `preopen_path`, or null when
+/// that preopen does not own the path. A preopen owns a path only when the
+/// remainder starts at a component boundary, so "/home/user" does not claim
+/// "/home/username/file". The directory itself resolves to ".".
+fn wasiPreopenSubPath(abs_path: []const u8, preopen_path: []const u8) ?[]const u8 {
+    if (preopen_path.len == 0) return null;
+    if (!std.mem.startsWith(u8, abs_path, preopen_path)) return null;
+    if (preopen_path.len == abs_path.len) return ".";
+    if (preopen_path[preopen_path.len - 1] == '/') {
+        // A preopen ending in a separator ("/" and friends) has the boundary
+        // in its own last byte.
+        return abs_path[preopen_path.len..];
+    }
+    if (abs_path[preopen_path.len] != '/') return null;
+    return abs_path[preopen_path.len + 1 ..];
+}
+
 pub fn resolveWasiPath(abs_path: []const u8) ?ResolvedPath {
     if (comptime !is_wasi) return null;
+    // The longest matching preopen wins, so a nested preopen stays reachable
+    // when a broader one has a lower fd.
+    var best: ?ResolvedPath = null;
+    var best_len: usize = 0;
     var fd: std.os.wasi.fd_t = 3;
     while (true) : (fd += 1) {
         var prestat: std.os.wasi.prestat_t = undefined;
@@ -45,7 +70,7 @@ pub fn resolveWasiPath(abs_path: []const u8) ?ResolvedPath {
             else => break,
         }
         const name_len = prestat.u.dir.pr_name_len;
-        var name_buf: [4096]u8 = undefined;
+        var name_buf: [wasi_preopen_name_max]u8 = undefined;
         if (name_len > name_buf.len) continue;
         switch (std.os.wasi.fd_prestat_dir_name(fd, &name_buf, name_len)) {
             .SUCCESS => {},
@@ -53,17 +78,37 @@ pub fn resolveWasiPath(abs_path: []const u8) ?ResolvedPath {
         }
         const preopen_path = name_buf[0..name_len];
 
-        if (std.mem.startsWith(u8, abs_path, preopen_path)) {
-            var rest = abs_path[preopen_path.len..];
-            if (rest.len > 0 and rest[0] == '/') rest = rest[1..];
-            if (rest.len == 0) rest = ".";
-            return .{
-                .dir = .{ .handle = fd },
-                .rel_path = rest,
-            };
-        }
+        const rel_path = wasiPreopenSubPath(abs_path, preopen_path) orelse continue;
+        if (preopen_path.len <= best_len) continue;
+        best = .{ .dir = .{ .handle = fd }, .rel_path = rel_path };
+        best_len = preopen_path.len;
     }
-    return null;
+    return best;
+}
+
+/// Open `host_path` for reading. An absolute path resolves through the WASI
+/// preopened directories there and through the host root everywhere else, so
+/// a caller that only has a POSIX path does not have to know which.
+pub fn openHostFile(host_path: []const u8) !std.Io.File {
+    const io = runtime.io();
+    if (std.fs.path.isAbsolute(host_path)) {
+        if (comptime is_wasi) {
+            const resolved = resolveWasiPath(host_path) orelse return error.FileNotFound;
+            return resolved.dir.openFile(io, resolved.rel_path, .{});
+        }
+        return std.Io.Dir.openFileAbsolute(io, host_path, .{});
+    }
+    return std.Io.Dir.cwd().openFile(io, host_path, .{});
+}
+
+/// Absolute POSIX form of `host_path`, for a directory handed back to the
+/// guest. `realpath` also resolves symlinks, and WASI has no `realpath` at all
+/// (std returns `error.OperationUnsupported` for every path there), so a host
+/// that cannot canonicalize falls back to the path as spelled and a relative
+/// path stays relative. The returned bytes are owned by `allocator`.
+pub fn absoluteHostPath(host_path: []const u8, allocator: std.mem.Allocator) ![:0]u8 {
+    if (std.Io.Dir.cwd().realPathFileAlloc(runtime.io(), host_path, allocator)) |abs| return abs else |_| {}
+    return allocator.dupeZ(u8, host_path);
 }
 
 /// Check if a POSIX path is inside drive_c/ (`drive_c/` or `drive_c\`).
@@ -424,6 +469,29 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
 // -----------------------------------------------------------------------
 
 const testing = @import("std").testing;
+
+test "wasiPreopenSubPath: preopen must end on a component boundary" {
+    try testing.expectEqualStrings(
+        "file.txt",
+        wasiPreopenSubPath("/tmp/file.txt", "/tmp").?,
+    );
+    // A preopen of "/home/user" does not own "/home/username/file.txt"; the
+    // old prefix test read "name/file.txt" out of the wrong directory.
+    try testing.expect(wasiPreopenSubPath("/home/username/file.txt", "/home/user") == null);
+    try testing.expectEqualStrings(
+        "file.txt",
+        wasiPreopenSubPath("/home/user/file.txt", "/home/user").?,
+    );
+    try testing.expect(wasiPreopenSubPath("/tmp/file.txt", "/var") == null);
+}
+
+test "wasiPreopenSubPath: root preopen and the preopen itself" {
+    try testing.expectEqualStrings("tmp/a.txt", wasiPreopenSubPath("/tmp/a.txt", "/").?);
+    try testing.expectEqualStrings("a/b", wasiPreopenSubPath("/tmp/a/b", "/tmp/").?);
+    try testing.expectEqualStrings(".", wasiPreopenSubPath("/tmp", "/tmp").?);
+    try testing.expectEqualStrings(".", wasiPreopenSubPath("/", "/").?);
+    try testing.expect(wasiPreopenSubPath("/tmp", "") == null);
+}
 
 test "posixToWin32: drive_c/ prefix → C:\\" {
     var buf: [256]u8 = undefined;

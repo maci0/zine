@@ -6,6 +6,10 @@
 
 const std = @import("std");
 const runtime = @import("runtime.zig");
+const path_utils = @import("path_utils.zig");
+
+/// Longest `%~dp0` string `scriptDir` builds, including the drive prefix.
+const max_script_dir_len = 1024;
 
 pub const BatEnv = struct {
     allocator: std.mem.Allocator,
@@ -146,7 +150,7 @@ pub const BatEnv = struct {
             open_path = open_path[2..];
         }
         const io = runtime.io();
-        var file = try std.Io.Dir.cwd().openFile(io, open_path, .{});
+        var file = try path_utils.openHostFile(open_path);
         defer file.close(io);
 
         // Read the entire file into a string
@@ -156,20 +160,29 @@ pub const BatEnv = struct {
         defer self.allocator.free(file_content);
 
         // Resolve absolute dir of the bat file for %~dp0
-        const abs_path = try std.Io.Dir.cwd().realPathFileAlloc(io, open_path, self.allocator);
+        const abs_path = try path_utils.absoluteHostPath(open_path, self.allocator);
         defer self.allocator.free(abs_path);
 
         const parent_dir = std.fs.path.dirname(abs_path) orelse ".";
-
-        // Convert to Windows style path
-        const win_parent_dir = try self.allocator.dupe(u8, parent_dir);
-        defer self.allocator.free(win_parent_dir);
-        std.mem.replaceScalar(u8, win_parent_dir, '/', '\\');
-
-        const win_parent_dir_c = try std.fmt.allocPrint(self.allocator, "C:{s}", .{win_parent_dir});
+        const win_parent_dir_c = try self.scriptDir(parent_dir);
         defer self.allocator.free(win_parent_dir_c);
 
         return self.runScript(file_content, win_parent_dir_c, args);
+    }
+
+    /// The Windows-form directory `%~dp0` expands to, from the POSIX directory
+    /// the batch file was read from. A host without realpath (WASI) reports the
+    /// path as spelled, so a relative one arrives without a leading separator;
+    /// "C:sub" would name the drive-relative path rather than a directory on
+    /// the drive, and the separator is what tells them apart.
+    fn scriptDir(self: *BatEnv, parent_dir: []const u8) ![]u8 {
+        var buf: [max_script_dir_len]u8 = undefined;
+        const lead: []const u8 = if (parent_dir.len > 0 and parent_dir[0] == '/') "C:" else "C:\\";
+        const total = lead.len + parent_dir.len;
+        if (total > buf.len) return error.NameTooLong;
+        const out = std.fmt.bufPrint(buf[0..total], "{s}{s}", .{ lead, parent_dir }) catch return error.NameTooLong;
+        std.mem.replaceScalar(u8, out, '/', '\\');
+        return self.allocator.dupe(u8, out);
     }
 
     /// Interprets a batch script already in memory, which is what
@@ -464,6 +477,26 @@ test "parseFile: state machine and env tracking" {
     const not_var = bat.env.get("NOT_VAR");
     try testing.expect(not_var != null);
     try testing.expectEqualStrings("yes", not_var.?);
+}
+
+// The %~dp0 of a batch file reached by a path relative to the working
+// directory. A host without realpath (WASI) has no absolute path to report,
+// and the drive-relative spelling is what such a path expands to there.
+test "scriptDir: a relative POSIX directory becomes C:\\, not C:" {
+    var bat = testBatEnv();
+    defer bat.deinit();
+
+    const absolute = try bat.scriptDir("/usr/local/bin");
+    defer testing.allocator.free(absolute);
+    try testing.expectEqualStrings("C:\\usr\\local\\bin", absolute);
+
+    const relative = try bat.scriptDir("sub");
+    defer testing.allocator.free(relative);
+    try testing.expectEqualStrings("C:\\sub", relative);
+
+    const bare = try bat.scriptDir(".");
+    defer testing.allocator.free(bare);
+    try testing.expectEqualStrings("C:\\.", bare);
 }
 
 test "parseFile: empty expansion of if/call lines does not crash" {
