@@ -26,7 +26,7 @@
         <div class="win2k-titlebar" id="main-titlebar">
             <div class="win2k-titlebar-text">
                 <img id="titlebar-icon" alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" style="width: 16px; height: 16px; display: none;">
-                <span id="window-title"></span>
+                <span id="window-title" dir="auto"></span>
             </div>
             <div class="win2k-titlebar-buttons">
                 <button class="win2k-titlebar-btn" onclick="minimizeWindow()" aria-label="Minimize"><span class="btn-glyph btn-minimize"></span></button>
@@ -38,7 +38,7 @@
         <div id="game-container">
             <div class="canvas-inset">
                 <canvas id="screen" aria-label="Application display"></canvas>
-                <textarea id="edit-control" aria-label="Text editor" style="display:none;"></textarea>
+                <textarea id="edit-control" dir="auto" aria-label="Text editor" style="display:none;"></textarea>
             </div>
         </div>
     </div>
@@ -47,7 +47,7 @@
     <div id="dialog-overlay" class="win2k-window win2k-dialog" role="dialog" aria-labelledby="dialog-title">
         <div class="win2k-titlebar" id="dialog-titlebar">
             <div class="win2k-titlebar-text">
-                <span id="dialog-title">Dialog</span>
+                <span id="dialog-title" dir="auto">Dialog</span>
             </div>
             <div class="win2k-titlebar-buttons">
                 <button class="win2k-titlebar-btn" onclick="closeDialog()" aria-label="Close dialog"><span class="btn-glyph btn-close"></span></button>
@@ -64,7 +64,7 @@
         </button>
         <div class="taskbar-window-btn active" id="taskbar-app-btn">
             <img id="taskbar-icon" alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" style="width: 16px; height: 16px; display: none;">
-            <span id="taskbar-title"></span>
+            <span id="taskbar-title" dir="auto"></span>
         </div>
         <div class="taskbar-tray">
             <button type="button" class="tray-volume" id="tray-volume" aria-label="Volume" onclick="toggleVolumePopup(event)">

@@ -220,7 +220,7 @@ function fitCanvasToContainer() {
 // --- Dialog Management ---
 function showDialog(title, content) {
     const dialogContent = document.getElementById('dialog-content');
-    document.getElementById('dialog-title').textContent = title;
+    setGuestText(document.getElementById('dialog-title'), title);
 
     // Accept either a DOM node or an HTML string
     if (typeof content === 'string') {
@@ -398,18 +398,33 @@ startButton.addEventListener('click', (e) => {
 
 // --- Menu Helpers ---
 
+// Placeholder for an escaped "&&" while the accelerator markers are split out.
+const AMPERSAND = '\u0000';
+
 /** Parse "&File" → DOM fragment with <u>F</u>ile */
 function menuLabel(name) {
     const frag = document.createDocumentFragment();
-    const parts = name.split(/&([A-Za-z0-9])/);
+    // Win32 puts the accelerator marker before any character, not just A-Z, and
+    // escapes a literal ampersand as "&&". A guest localized in a non-Latin
+    // script marks its accelerators with its own letters, so a pattern limited
+    // to ASCII leaves a stray "&" in front of them.
+    const parts = String(name).replace(/&&/g, AMPERSAND).split(/&([^\s&])/);
     for (let i = 0; i < parts.length; i++) {
         if (i % 2 === 0) {
-            if (parts[i]) frag.appendChild(document.createTextNode(parts[i]));
+            const text = parts[i].split(AMPERSAND).join('&');
+            if (text) frag.appendChild(document.createTextNode(text));
         } else {
             frag.appendChild(u(parts[i]));
         }
     }
     return frag;
+}
+
+/** Put guest text in an element, letting the browser pick the paragraph
+ * direction from the first strong character of the text itself. */
+function setGuestText(el, text) {
+    el.textContent = text;
+    el.setAttribute('dir', 'auto');
 }
 
 /** Send a WM_COMMAND to the backend */
@@ -471,7 +486,7 @@ document.getElementById('taskbar-app-btn').addEventListener('contextmenu', (e) =
         if (idx > 0) van.add(ctxMenu, div({class: 'popup-separator'}));
 
         if (topItem.popup && topItem.popup.length > 0) {
-            van.add(ctxMenu, div({class: 'popup-header'}, topItem.name.replace(/&/g, '')));
+            van.add(ctxMenu, div({class: 'popup-header'}, menuLabel(topItem.name)));
             topItem.popup.forEach(sub => {
                 van.add(ctxMenu, PopupItem(sub, () => ctxMenu.style.display = 'none'));
             });
@@ -694,10 +709,15 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
 
     // Fallback
     if (item.text && item.text !== '') {
-        if (item.id === 1 || item.id === 2 || item.text === 'OK' || item.text === 'Cancel') {
-            return button({class: 'win2k-button', style: absPos, "data-id": item.id, onclick: () => { closeDialog(); sendCommand(item.id); }}, item.text);
+        // An item the parser could not classify is a button when the guest
+        // gave it a control id. Matching the English caption ("OK", "Cancel")
+        // left every localized dialog without clickable buttons.
+        const isButton = cls === 'Button' || (cls === '' || cls === 'Unknown') && item.id !== 0;
+        if (isButton) {
+            const label = (item.text || '').replace(/&([^&])/g, '$1').replace(/&&/g, '&');
+            return button({class: 'win2k-button', style: absPos, dir: 'auto', "data-id": item.id, onclick: () => { closeDialog(); sendCommand(item.id); }}, label);
         }
-        return div({style: absPos + ' white-space:pre-wrap; overflow:hidden; font-size:11px; line-height:1.3;'}, item.text);
+        return div({style: absPos + ' white-space:pre-wrap; overflow:hidden; font-size:11px; line-height:1.3;', dir: 'auto'}, item.text);
     }
 
     return div({style: absPos + ' border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow);', "data-id": item.id});
@@ -892,7 +912,7 @@ function connect() {
                     }
 
                 } else if (msg.type === "message_box") {
-                    const textEl = div({style: 'padding:8px 12px; margin:0 0 12px 0;'});
+                    const textEl = div({style: 'padding:8px 12px; margin:0 0 12px 0;', dir: 'auto'});
                     // Safely render message text: escape HTML entities, then
                     // convert newlines to <br> elements to preserve formatting.
                     const rawText = msg.text || '';
@@ -941,8 +961,8 @@ function connect() {
 
                     if (msg.title && msg.title.length > 0) {
                         document.title = msg.title;
-                        document.getElementById('window-title').textContent = msg.title;
-                        document.getElementById('taskbar-title').textContent = msg.title;
+                        setGuestText(document.getElementById('window-title'), msg.title);
+                        setGuestText(document.getElementById('taskbar-title'), msg.title);
                     }
 
                 } else if (msg.type === "add_control") {
@@ -961,7 +981,7 @@ function connect() {
                         // Status bar: text goes into its pane, not the container.
                         const sbPane = el.querySelector('.win2k-statusbar-pane');
                         if (sbPane) {
-                            sbPane.textContent = displayText;
+                            setGuestText(sbPane, displayText);
                         } else {
                             el.textContent = displayText;
                         }
@@ -1675,11 +1695,11 @@ function connect() {
                     if (sb) {
                         const pane = Array.from(sb.querySelectorAll('[data-pane-idx]')).find(e => e.dataset.paneIdx == msg.part);
                         if (pane) {
-                            pane.textContent = msg.text;
+                            setGuestText(pane, msg.text);
                         } else {
                             // Fallback: if no panes exist, set entire statusbar text
                             const firstPane = sb.querySelector('.win2k-statusbar-pane') || sb;
-                            firstPane.textContent = msg.text;
+                            setGuestText(firstPane, msg.text);
                         }
                     }
 
@@ -1725,7 +1745,7 @@ function connect() {
                             mi.className = 'popup-item';
                             if (item.disabled) mi.classList.add('disabled');
                             if (item.checked) mi.classList.add('checked');
-                            mi.textContent = item.text || '';
+                            setGuestText(mi, item.text || '');
                             mi.addEventListener('click', () => {
                                 ctxOverlay.remove();
                                 if (ws.readyState === WebSocket.OPEN) {
@@ -1749,8 +1769,8 @@ function connect() {
 
                 } else if (msg.type === "set_title") {
                     document.title = msg.title;
-                    document.getElementById('window-title').textContent = msg.title;
-                    document.getElementById('taskbar-title').textContent = msg.title;
+                    setGuestText(document.getElementById('window-title'), msg.title);
+                    setGuestText(document.getElementById('taskbar-title'), msg.title);
 
                 } else if (msg.type === "set_window_pos") {
                     const clientWidth = msg.clientW || Math.max(1, msg.cx - 8);
@@ -1862,7 +1882,7 @@ function connect() {
 
                         const lbl = document.createElement('div');
                         lbl.className = 'win2k-desktop-icon-label';
-                        lbl.textContent = item.name;
+                        setGuestText(lbl, item.name);
                         iconEl.appendChild(lbl);
 
                         // Click to select

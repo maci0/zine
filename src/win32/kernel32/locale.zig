@@ -493,14 +493,11 @@ pub fn LCMapStringEx(lpLocaleName: usize, dwMapFlags: u32, lpSrcStr: usize, cchS
     return @intCast(copy_len);
 }
 
-/// Retrieves information about a locale specified by identifier.
-/// Implementation status: Partially implemented
-pub fn GetLocaleInfoA(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) callconv(w32cc.WINAPI) i32 {
-    _ = Locale;
-    if (trace.enable_tracing) trace.print("KERNEL32: GetLocaleInfoA(LCType={x})\n", .{LCType});
-
-    // Return en-US locale data for common LCType values
-    const val = switch (LCType & 0xFFFF) { // mask off flags
+/// The emulated en-US locale string for `LCType`, or null when the code is
+/// not one the emulator knows. Both GetLocaleInfoA and GetLocaleInfoW read
+/// this table so the two cannot drift apart.
+fn localeInfoValue(LCType: u32) ?[]const u8 {
+    return switch (LCType & 0xFFFF) { // mask off flags
         0x0001 => "0409", // LOCALE_ILANGUAGE
         0x0002 => "English (United States)", // LOCALE_SLANGUAGE
         0x0003 => "ENU", // LOCALE_SABBREVLANGNAME
@@ -565,12 +562,18 @@ pub fn GetLocaleInfoA(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) c
         0x0050 => "$", // LOCALE_SCURRENCY
         0x1003 => "ENU", // LOCALE_SABBREVLANGNAME
         0x1004 => "English", // LOCALE_SNATIVELANGNAME
-        else => "", // return empty for unknown — avoids poisoning with wrong data
+        else => null, // unknown LCType
     };
+}
 
-    if (val.len == 0) return 0; // unknown LCType
+/// Retrieves information about a locale specified by identifier.
+/// Implementation status: Partially implemented
+pub fn GetLocaleInfoA(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) callconv(w32cc.WINAPI) i32 {
+    _ = Locale;
+    if (trace.enable_tracing) trace.print("KERNEL32: GetLocaleInfoA(LCType={x})\n", .{LCType});
 
-    if (cchData == 0) {
+    const val = localeInfoValue(LCType) orelse return 0;
+    if (cchData <= 0) {
         return @intCast(val.len + 1);
     }
 
@@ -589,12 +592,19 @@ pub fn GetLocaleInfoA(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) c
 pub fn GetLocaleInfoW(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     if (trace.enable_tracing) trace.print("KERNEL32: GetLocaleInfoW(LCType={x})\n", .{LCType});
-    const default_val = "1252";
-    if (cchData == 0) return @intCast(default_val.len + 1);
+
+    // The wide call returns the same locale data as the narrow one; a caller
+    // asking for the language or the date separator must not receive the
+    // answer of a different code page constant.
+    const val = localeInfoValue(LCType) orelse return 0;
+    if (cchData <= 0) {
+        return @intCast(val.len + 1);
+    }
+
     if (lpLCData != 0) {
         const out = @as([*]u16, @ptrFromInt(lpLCData));
-        const copy_len = @min(default_val.len, @as(usize, @intCast(cchData)) - 1);
-        for (0..copy_len) |i| out[i] = default_val[i];
+        const copy_len = @min(val.len, @as(usize, @intCast(cchData)) - 1);
+        for (0..copy_len) |i| out[i] = val[i];
         out[copy_len] = 0;
         return @intCast(copy_len + 1);
     }
@@ -988,4 +998,35 @@ test "GetTimeFormatA formats en-US 12-hour clock with AM/PM" {
     try testing.expectEqualStrings("1:05 PM", formatTime(&afternoon, 0x2, &buf));
     try testing.expectEqualStrings("1 PM", formatTime(&afternoon, 0x1, &buf));
     try testing.expectEqualStrings("13:05:09", formatTime(&afternoon, 0x8, &buf));
+}
+
+test "GetLocaleInfoW returns the same locale data as GetLocaleInfoA" {
+    const LCType_ILANGUAGE: u32 = 0x0001;
+    const LCType_SDECIMAL: u32 = 0x001D;
+    const LCType_IDEFAULTANSICODEPAGE: u32 = 0x000B;
+
+    var narrow: [64]u8 = undefined;
+    var wide: [64]u16 = undefined;
+
+    inline for (.{ LCType_ILANGUAGE, LCType_SDECIMAL, LCType_IDEFAULTANSICODEPAGE }) |lc| {
+        const n = GetLocaleInfoA(0, lc, @intFromPtr(&narrow), @intCast(narrow.len));
+        try testing.expect(n > 0);
+        const w = GetLocaleInfoW(0, lc, @intFromPtr(&wide), @intCast(wide.len));
+        try testing.expectEqual(n, w);
+        const narrow_text = std.mem.sliceTo(narrow[0..@intCast(n - 1)], 0);
+        const wide_text = std.mem.sliceTo(wide[0..@intCast(w - 1)], 0);
+        for (wide_text, narrow_text) |wc, nc| try testing.expectEqual(nc, @as(u16, wc));
+    }
+
+    // A language identifier is not a code page number: the wide call used to
+    // answer "1252" for every query.
+    try testing.expectEqualStrings("0409", localeInfoValue(LCType_ILANGUAGE) orelse return error.TestUnexpectedResult);
+    try testing.expectEqualStrings("1252", localeInfoValue(LCType_IDEFAULTANSICODEPAGE) orelse return error.TestUnexpectedResult);
+}
+
+test "GetLocaleInfo rejects an unknown LCType on both widths" {
+    var buf: [16]u8 = undefined;
+    var wbuf: [16]u16 = undefined;
+    try testing.expectEqual(@as(i32, 0), GetLocaleInfoA(0, 0x7FFF, @intFromPtr(&buf), @intCast(buf.len)));
+    try testing.expectEqual(@as(i32, 0), GetLocaleInfoW(0, 0x7FFF, @intFromPtr(&wbuf), @intCast(wbuf.len)));
 }
