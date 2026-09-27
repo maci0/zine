@@ -1,6 +1,7 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const ansi = @import("../ansi.zig");
+const text_utils = @import("../../text_utils.zig");
 const user32 = @import("../user32.zig");
 const renderer = @import("../../gui/renderer.zig");
 const w32 = @import("../constants.zig");
@@ -273,12 +274,12 @@ pub fn SetDlgItemTextW(hDlg: usize, nIDDlgItem: i32, lpString: usize) callconv(w
     _ = hDlg;
     const text = if (lpString != 0) trace.c_span_w(lpString) else &[_]u16{};
     var buf: [512]u8 = undefined;
-    const n = std.unicode.utf16LeToUtf8(&buf, text) catch 0;
+    const converted = text_utils.wideToUtf8(text, &buf);
     if (trace.enable_tracing) {
-        trace.print("USER32: SetDlgItemTextW(id={d}, text='{s}')\n", .{ nIDDlgItem, buf[0..n] });
+        trace.print("USER32: SetDlgItemTextW(id={d}, text='{s}')\n", .{ nIDDlgItem, converted });
     }
-    setCtrlText(nIDDlgItem, buf[0..n]);
-    renderer.updateControlText(nIDDlgItem, buf[0..n]);
+    setCtrlText(nIDDlgItem, converted);
+    renderer.updateControlText(nIDDlgItem, converted);
     return 1;
 }
 
@@ -304,34 +305,12 @@ pub fn GetDlgItemTextW(hDlg: usize, nIDDlgItem: i32, lpString: usize, cchMax: i3
     const text = getCtrlText(nIDDlgItem);
     if (lpString != 0 and cchMax > 0) {
         const dst: [*]u16 = @ptrFromInt(trace.addr(lpString));
-        var pos: usize = 0;
-        // UTF-8 -> UTF-16LE
-        var it = (std.unicode.Utf8View.init(text) catch return 0).iterator();
-        while (it.nextCodepoint()) |cp| {
-            var pair: [2]u16 = undefined;
-            const n = encodeUtf16(cp, &pair);
-            if (pos + n >= @as(usize, @intCast(cchMax))) break;
-            for (pair[0..n]) |u| {
-                dst[pos] = u;
-                pos += 1;
-            }
-        }
+        // One code unit is reserved for the terminator.
+        const pos = text_utils.utf8ToWide(text, dst[0 .. @as(usize, @intCast(cchMax)) - 1]);
         dst[pos] = 0;
         return @intCast(pos);
     }
     return 0;
-}
-
-/// Encode a Unicode codepoint as UTF-16 (1 or 2 code units, surrogate pair).
-fn encodeUtf16(cp: u21, out: *[2]u16) usize {
-    if (cp < 0x10000) {
-        out[0] = @intCast(cp);
-        return 1;
-    }
-    const v = cp - 0x10000;
-    out[0] = @intCast(0xD800 + (v >> 10));
-    out[1] = @intCast(0xDC00 + (v & 0x3FF));
-    return 2;
 }
 
 pub fn stub_SendDlgItemMessageA(hDlg: usize, nIDDlgItem: i32, Msg: u32, wParam: usize, lParam: isize) callconv(w32cc.WINAPI) isize {
@@ -493,9 +472,9 @@ pub fn MessageBoxW(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32) cal
         const text_w = trace.c_span_w(lpText);
         var caption_buf: [256]u8 = undefined;
         var text_buf: [2048]u8 = undefined;
-        const cap_len = std.unicode.utf16LeToUtf8(&caption_buf, caption_w) catch 0;
-        const txt_len = std.unicode.utf16LeToUtf8(&text_buf, text_w) catch 0;
-        renderer.showMessageBox(caption_buf[0..cap_len], text_buf[0..txt_len]);
+        const caption = text_utils.wideToUtf8(caption_w, &caption_buf);
+        const body = text_utils.wideToUtf8(text_w, &text_buf);
+        renderer.showMessageBox(caption, body);
     }
     return 1; // IDOK
 }

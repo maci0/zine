@@ -11,6 +11,18 @@ const platform = @import("../../platform.zig");
 const w32 = @import("../constants.zig");
 const x86_thunks = @import("../../x86/thunks.zig");
 const w32cc = @import("../calling_convention.zig");
+const ansi = @import("../ansi.zig");
+
+/// Narrow a guest wide string to the CP1252 bytes its `A` twin takes, leaving
+/// room for the terminator. Truncating each code unit to its low byte instead
+/// would turn a character above U+00FF into an unrelated one and split a
+/// surrogate pair, so the code point is what gets encoded; what CP1252 cannot
+/// represent becomes the default character.
+fn narrowWide(wide: []const u16, buf: []u8) []const u8 {
+    const n = ansi.wideToAnsi(wide, buf[0 .. buf.len - 1]);
+    buf[n.len] = 0;
+    return buf[0..n.len];
+}
 
 /// Detect if a Win32 path references a system directory.
 /// Matches patterns like C:\Windows\System32\*, C:\WINDOWS\system32\*
@@ -428,15 +440,10 @@ pub fn GetModuleHandleW(lpModuleName_ptr: usize) callconv(w32cc.WINAPI) usize {
         return kernel32.main_module_handle;
     }
     // Convert wide string to narrow, then delegate to the A version
-    const wstr = trace.c_span_w(lpModuleName_ptr);
     var narrow_buf: [256]u8 = undefined;
-    const copy_len = @min(wstr.len, 255);
-    for (0..copy_len) |i| {
-        narrow_buf[i] = @intCast(wstr[i] & 0xFF);
-    }
-    narrow_buf[copy_len] = 0;
-    if (trace.enable_tracing) trace.print("KERNEL32: GetModuleHandleW('{s}')\n", .{narrow_buf[0..copy_len]});
-    return GetModuleHandleA(@intFromPtr(&narrow_buf));
+    const name = narrowWide(trace.c_span_w(lpModuleName_ptr), &narrow_buf);
+    if (trace.enable_tracing) trace.print("KERNEL32: GetModuleHandleW('{s}')\n", .{name});
+    return GetModuleHandleA(@intFromPtr(name.ptr));
 }
 
 var cmdline_initialized: bool = false;
@@ -659,15 +666,12 @@ pub fn GetEnvironmentVariableW(lpName: usize, lpBuffer: usize, nSize: u32) callc
     if (name_w.len == 0) return 0;
     if (trace.enable_tracing) trace.print("KERNEL32: GetEnvironmentVariableW(len={d})\n", .{name_w.len});
 
-    // Narrow the name (ASCII subset) and look up through the shared helper.
+    // Narrow the name to the code page the A twin takes and look up through
+    // the shared helper.
     var narrow_buf: [512]u8 = undefined;
-    if (name_w.len >= narrow_buf.len) return 0;
-    for (name_w, 0..) |c, i| {
-        narrow_buf[i] = @intCast(c & 0xFF);
-    }
-    narrow_buf[name_w.len] = 0;
+    const name = narrowWide(name_w, &narrow_buf);
 
-    const value = getEnvValue(narrow_buf[0..name_w.len]) orelse return 0;
+    const value = getEnvValue(name) orelse return 0;
 
     if (lpBuffer != 0 and @as(usize, nSize) > value.len) {
         // lpBuffer is a guest VA (usize param — not auto-translated).
@@ -969,27 +973,17 @@ pub fn CreateProcessW(
     var narrow_app: [1024]u8 = undefined;
     var narrow_app_addr: usize = 0;
     if (lpApplicationName != 0) {
-        const wstr = trace.c_span_w(lpApplicationName);
-        const copy_len = @min(wstr.len, 1023);
-        for (0..copy_len) |i| {
-            narrow_app[i] = @intCast(wstr[i] & 0xFF);
-        }
-        narrow_app[copy_len] = 0;
-        narrow_app_addr = @intFromPtr(&narrow_app);
-        if (trace.enable_tracing) trace.print("KERNEL32: CreateProcessW(app='{s}')\n", .{narrow_app[0..copy_len]});
+        const app = narrowWide(trace.c_span_w(lpApplicationName), &narrow_app);
+        narrow_app_addr = @intFromPtr(app.ptr);
+        if (trace.enable_tracing) trace.print("KERNEL32: CreateProcessW(app='{s}')\n", .{app});
     }
 
     var narrow_cmd: [4096]u8 = undefined;
     var narrow_cmd_addr: usize = 0;
     if (lpCommandLine != 0) {
-        const wstr = trace.c_span_w(lpCommandLine);
-        const copy_len = @min(wstr.len, 4095);
-        for (0..copy_len) |i| {
-            narrow_cmd[i] = @intCast(wstr[i] & 0xFF);
-        }
-        narrow_cmd[copy_len] = 0;
-        narrow_cmd_addr = @intFromPtr(&narrow_cmd);
-        if (trace.enable_tracing) trace.print("KERNEL32: CreateProcessW(cmd='{s}')\n", .{narrow_cmd[0..copy_len]});
+        const cmd = narrowWide(trace.c_span_w(lpCommandLine), &narrow_cmd);
+        narrow_cmd_addr = @intFromPtr(cmd.ptr);
+        if (trace.enable_tracing) trace.print("KERNEL32: CreateProcessW(cmd='{s}')\n", .{cmd});
     }
 
     return CreateProcessA(
@@ -1440,13 +1434,9 @@ pub fn LoadLibraryW(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: LoadLibraryW (len={d})\n", .{wstr.len});
     // Convert wide to narrow
     var narrow_buf: [1024]u8 = undefined;
-    const copy_len = @min(wstr.len, 1023);
-    for (0..copy_len) |i| {
-        narrow_buf[i] = @intCast(wstr[i] & 0xFF);
-    }
-    narrow_buf[copy_len] = 0;
+    const name = narrowWide(wstr, &narrow_buf);
     // Delegate to LoadLibraryA
-    return LoadLibraryA(@intFromPtr(&narrow_buf));
+    return LoadLibraryA(@intFromPtr(name.ptr));
 }
 
 /// Implementation status: Stub
@@ -1520,14 +1510,8 @@ pub fn GetModuleHandleExW(dwFlags: u32, lpModuleName: usize, phModule: usize) ca
         handle = kernel32.main_module_handle;
     } else {
         // Convert wide to narrow and use existing GetModuleHandleA
-        const wstr = trace.c_span_w(lpModuleName);
         var narrow_buf: [1024]u8 = undefined;
-        const copy_len = @min(wstr.len, 1023);
-        for (0..copy_len) |i| {
-            narrow_buf[i] = @intCast(wstr[i] & 0xFF);
-        }
-        narrow_buf[copy_len] = 0;
-        handle = GetModuleHandleA(@intFromPtr(&narrow_buf));
+        handle = GetModuleHandleA(@intFromPtr(narrowWide(trace.c_span_w(lpModuleName), &narrow_buf).ptr));
     }
 
     if (phModule != 0) {

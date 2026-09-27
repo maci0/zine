@@ -1,6 +1,7 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const ansi = @import("../ansi.zig");
+const text_utils = @import("../../text_utils.zig");
 const user32 = @import("../user32.zig");
 const w32cc = @import("../calling_convention.zig");
 
@@ -115,8 +116,8 @@ pub fn AppendMenuW(hMenu: usize, uFlags: u32, uIDNewItem: usize, lpNewItem: usiz
     } else if (lpNewItem != 0) {
         const w = trace.c_span_w(lpNewItem);
         var buf: [256]u8 = undefined;
-        const n = std.unicode.utf16LeToUtf8(&buf, w) catch 0;
-        addPopupItem(hMenu, @intCast(uIDNewItem & 0xFFFF), buf[0..n], uFlags);
+        const name = text_utils.wideToUtf8(w, &buf);
+        addPopupItem(hMenu, @intCast(uIDNewItem & 0xFFFF), name, uFlags);
         const key = menuItemKey(hMenu, @as(u32, @intCast(uIDNewItem & 0xFFFF)));
         const slot = findOrAllocMenuSlot(key);
         slot.flags = (slot.flags & ~(MF_CHECKED | MF_GRAYED | MF_DISABLED)) | (uFlags & (MF_CHECKED | MF_GRAYED | MF_DISABLED));

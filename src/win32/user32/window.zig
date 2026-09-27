@@ -1,6 +1,7 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const ansi = @import("../ansi.zig");
+const text_utils = @import("../../text_utils.zig");
 const user32 = @import("../user32.zig");
 const kernel32 = @import("../kernel32.zig");
 const gdi32 = @import("../gdi32.zig");
@@ -149,28 +150,7 @@ var wide_conv_buf: [1024]u8 = undefined;
 
 pub fn wideToUtf8(ptr: usize) []const u8 {
     if (ptr == 0) return "";
-    const wide = trace.c_span_w(ptr);
-    var n: usize = 0;
-    var i: usize = 0;
-    while (i < wide.len) : (i += 1) {
-        // Combine a high surrogate with its low surrogate; an unpaired
-        // surrogate has no UTF-8 form and becomes U+FFFD.
-        var cp: u21 = wide[i];
-        if (wide[i] >= 0xD800 and wide[i] < 0xDC00) {
-            if (i + 1 < wide.len and wide[i + 1] >= 0xDC00 and wide[i + 1] < 0xE000) {
-                cp = @as(u21, 0x10000) + ((@as(u21, wide[i]) - 0xD800) << 10) + (@as(u21, wide[i + 1]) - 0xDC00);
-                i += 1;
-            } else {
-                cp = 0xFFFD;
-            }
-        } else if (wide[i] >= 0xDC00 and wide[i] < 0xE000) {
-            cp = 0xFFFD;
-        }
-        const width = std.unicode.utf8CodepointSequenceLength(cp) catch break;
-        if (n + width > wide_conv_buf.len) break;
-        n += std.unicode.utf8Encode(cp, wide_conv_buf[n..]) catch break;
-    }
-    return wide_conv_buf[0..n];
+    return text_utils.wideToUtf8(trace.c_span_w(ptr), &wide_conv_buf);
 }
 
 fn applyWindowSize(dwStyle: u32, dwExStyle: u32, nWidth: i32, nHeight: i32) void {

@@ -2,6 +2,7 @@ const std = @import("std");
 const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const ansi = @import("../ansi.zig");
+const text_utils = @import("../../text_utils.zig");
 const user32 = @import("../user32.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
@@ -1315,8 +1316,7 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
                 if (lParam != 0) {
                     const w = trace.c_span_w(@intCast(lParam));
                     var buf: [512]u8 = undefined;
-                    const n = std.unicode.utf16LeToUtf8(&buf, w) catch 0;
-                    renderer.updateControlText(@intCast(hWnd), buf[0..n]);
+                    renderer.updateControlText(@intCast(hWnd), text_utils.wideToUtf8(w, &buf));
                 }
                 return 1;
             },

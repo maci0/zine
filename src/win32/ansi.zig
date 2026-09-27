@@ -84,6 +84,35 @@ pub fn truncateUtf8(text: []const u8, max: usize) []const u8 {
     return text[0..end];
 }
 
+/// Encode a UTF-16 string into `out` as CP1252, the width a wide `W` API
+/// string would have in its narrow form. Surrogate pairs are combined first,
+/// so a character outside the BMP encodes as the default character per code
+/// point rather than as two broken halves; a surrogate pair the code page
+/// cannot represent likewise becomes one default character. Returns the
+/// written prefix of `out`.
+pub fn wideToAnsi(wide: []const u16, out: []u8) []const u8 {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < wide.len) {
+        var cp: u21 = wide[i];
+        i += 1;
+        if (cp >= 0xD800 and cp < 0xDC00) {
+            if (i < wide.len and wide[i] >= 0xDC00 and wide[i] < 0xE000) {
+                cp = 0x10000 + ((@as(u21, cp) - 0xD800) << 10) + (@as(u21, wide[i]) - 0xDC00);
+                i += 1;
+            } else {
+                cp = 0xFFFD;
+            }
+        } else if (cp >= 0xDC00 and cp < 0xE000) {
+            cp = 0xFFFD;
+        }
+        if (n >= out.len) break;
+        out[n] = codepointToByte(cp) orelse default_char;
+        n += 1;
+    }
+    return out[0..n];
+}
+
 test "cp1252 round trip for the 0x80..0x9F range" {
     for (0x80..0xA0) |i| {
         const b: u8 = @intCast(i);
@@ -141,4 +170,26 @@ test "truncateUtf8 never splits a code point" {
     try std.testing.expectEqualStrings("ab\u{00e9}", truncateUtf8(s, 5));
     try std.testing.expectEqualStrings("ab\u{00e9}", truncateUtf8(s, 6));
     try std.testing.expectEqualStrings(s, truncateUtf8(s, 100));
+}
+
+test "wideToAnsi keeps Latin-1 characters and substitutes the rest" {
+    var out: [16]u8 = undefined;
+    const path = [_:0]u16{ 'C', ':', '\\', 'c', 'a', 'f', 0x00E9, '.', 't', 'x', 't' };
+    // C:\café.txt survives, since CP1252 is Latin-1 above 0xA0.
+    try std.testing.expectEqualStrings("C:\\caf\xE9.txt", wideToAnsi(&path, &out));
+    // A CJK character is not the low byte of its code point.
+    const cjk = [_:0]u16{0x4f60};
+    try std.testing.expectEqualStrings("?", wideToAnsi(&cjk, &out));
+    // A surrogate pair is one character, so it is one default character.
+    const emoji = [_:0]u16{ 0xD83D, 0xDE00 };
+    try std.testing.expectEqualStrings("?", wideToAnsi(&emoji, &out));
+    // An unpaired half is not silently dropped.
+    const lone = [_:0]u16{ 'a', 0xD800, 'b' };
+    try std.testing.expectEqualStrings("a?b", wideToAnsi(&lone, &out));
+}
+
+test "wideToAnsi stops when out is full" {
+    var out: [2]u8 = undefined;
+    const text = [_:0]u16{ 'a', 'b', 'c' };
+    try std.testing.expectEqualStrings("ab", wideToAnsi(&text, &out));
 }

@@ -7,6 +7,7 @@ const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
 const platform = @import("../../platform.zig");
 const host_io = @import("../host_io.zig");
+const ansi = @import("../ansi.zig");
 const kernel32_error = @import("error.zig");
 const log = @import("../../log.zig");
 
@@ -16,6 +17,17 @@ const ERROR_INVALID_PARAMETER = 87;
 const ERROR_INVALID_ADDRESS = 487;
 const ERROR_INVALID_HANDLE = 6;
 const ERROR_DISK_FULL = 112;
+
+/// Narrow a guest wide string to the CP1252 bytes its `A` twin takes, leaving
+/// room for the terminator. Truncating each code unit to its low byte instead
+/// would turn a character above U+00FF into an unrelated one and split a
+/// surrogate pair, so the code point is what gets encoded; what CP1252 cannot
+/// represent becomes the default character.
+fn narrowWide(wide: []const u16, buf: []u8) []const u8 {
+    const n = ansi.wideToAnsi(wide, buf[0 .. buf.len - 1]);
+    buf[n.len] = 0;
+    return buf[0..n.len];
+}
 
 // KERNEL32.dll file I/O functions.
 /// Retrieves file system attributes for a specified file or directory.
@@ -591,18 +603,16 @@ pub fn MoveFileW(lpExistingFileName_ptr: usize, lpNewFileName_ptr: usize) callco
     if (lpExistingFileName_ptr == 0 or lpNewFileName_ptr == 0) return 0;
     const wstr = trace.c_span_w(lpExistingFileName_ptr);
     var old_buf: [1024]u8 = undefined;
-    const old_len = @min(wstr.len, old_buf.len - 1);
-    for (0..old_len) |i| old_buf[i] = @intCast(wstr[i] & 0xFF);
+    const old_name = narrowWide(wstr, &old_buf);
 
     const wstr_new = trace.c_span_w(lpNewFileName_ptr);
     var new_buf: [1024]u8 = undefined;
-    const new_len = @min(wstr_new.len, new_buf.len - 1);
-    for (0..new_len) |i| new_buf[i] = @intCast(wstr_new[i] & 0xFF);
+    const new_name = narrowWide(wstr_new, &new_buf);
 
-    if (trace.enable_tracing) trace.print("KERNEL32: MoveFileW(len={d} -> len={d})\n", .{ old_len, new_len });
+    if (trace.enable_tracing) trace.print("KERNEL32: MoveFileW(len={d} -> len={d})\n", .{ old_name.len, new_name.len });
 
     const posix_fs = @import("../msvcrt/posix_fs.zig");
-    return if (posix_fs.moveFileWin32(old_buf[0..old_len], new_buf[0..new_len]) == 0) 1 else 0;
+    return if (posix_fs.moveFileWin32(old_name, new_name) == 0) 1 else 0;
 }
 
 /// MoveFileExA/W: same as MoveFile; MOVEFILE_* flags only tune failure
@@ -629,10 +639,7 @@ pub fn DeleteFileA(lpFileName: usize) callconv(w32cc.WINAPI) i32 {
 pub fn DeleteFileW(lpFileName_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (lpFileName_ptr == 0) return 0;
     var narrow_buf: [1024]u8 = undefined;
-    const wstr = trace.c_span_w(lpFileName_ptr);
-    const len = @min(wstr.len, narrow_buf.len - 1);
-    for (0..len) |i| narrow_buf[i] = @intCast(wstr[i] & 0xFF);
-    return deleteFileWin32(narrow_buf[0..len]);
+    return deleteFileWin32(narrowWide(trace.c_span_w(lpFileName_ptr), &narrow_buf));
 }
 
 fn deleteFileWin32(name: []const u8) i32 {
@@ -1100,16 +1107,11 @@ pub fn WriteFile(hFile: usize, lpBuffer: [*]const u8, nNumberOfBytesToWrite: u32
 pub fn CreateFileW(lpFileName_ptr: usize, dwDesiredAccess: u32, dwShareMode: u32, lpSecurityAttributes: usize, dwCreationDisposition: u32, dwFlagsAndAttributes: u32, hTemplateFile: usize) callconv(w32cc.WINAPI) usize {
     if (lpFileName_ptr == 0) return w32.INVALID_HANDLE_VALUE;
     // Convert wide string to narrow
-    const wstr = trace.c_span_w(lpFileName_ptr);
     var narrow_buf: [1024]u8 = undefined;
-    const copy_len = @min(wstr.len, 1023);
-    for (0..copy_len) |i| {
-        narrow_buf[i] = @intCast(wstr[i] & 0xFF);
-    }
-    narrow_buf[copy_len] = 0;
-    if (trace.enable_tracing) trace.print("KERNEL32: CreateFileW -> delegating to CreateFileA('{s}')\n", .{narrow_buf[0..copy_len]});
+    const name = narrowWide(trace.c_span_w(lpFileName_ptr), &narrow_buf);
+    if (trace.enable_tracing) trace.print("KERNEL32: CreateFileW -> delegating to CreateFileA('{s}')\n", .{name});
     // Delegate to CreateFileA
-    return CreateFileA(@intFromPtr(&narrow_buf), dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+    return CreateFileA(@intFromPtr(name.ptr), dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
 }
 
 /// Maps a view of a file mapping into the address space of a calling process.
@@ -1134,16 +1136,11 @@ pub fn stub_OpenFileMappingA(dwDesiredAccess: u32, bInheritHandle: i32, lpName: 
 pub fn GetFileAttributesW(lpFileName_ptr: usize) callconv(w32cc.WINAPI) u32 {
     if (lpFileName_ptr == 0) return w32.INVALID_FILE_ATTRIBUTES;
     // Convert wide to narrow
-    const wstr = trace.c_span_w(lpFileName_ptr);
     var narrow_buf: [1024]u8 = undefined;
-    const copy_len = @min(wstr.len, 1023);
-    for (0..copy_len) |i| {
-        narrow_buf[i] = @intCast(wstr[i] & 0xFF);
-    }
-    narrow_buf[copy_len] = 0;
-    if (trace.enable_tracing) trace.print("KERNEL32: GetFileAttributesW('{s}')\n", .{narrow_buf[0..copy_len]});
+    const name = narrowWide(trace.c_span_w(lpFileName_ptr), &narrow_buf);
+    if (trace.enable_tracing) trace.print("KERNEL32: GetFileAttributesW('{s}')\n", .{name});
     // Delegate to GetFileAttributesA logic
-    return GetFileAttributesA(@intFromPtr(&narrow_buf));
+    return GetFileAttributesA(@intFromPtr(name.ptr));
 }
 
 /// Retrieves information about the amount of space that is available on a disk volume.
@@ -1354,31 +1351,22 @@ pub fn CopyFileW(lpExistingFileName_ptr: usize, lpNewFileName_ptr: usize, bFailI
     if (lpExistingFileName_ptr == 0 or lpNewFileName_ptr == 0) return 0;
     var src_narrow: [1024]u8 = undefined;
     var dst_narrow: [1024]u8 = undefined;
-    if (!narrowWide(trace.c_span_w(lpExistingFileName_ptr), &src_narrow)) return 0;
-    if (!narrowWide(trace.c_span_w(lpNewFileName_ptr), &dst_narrow)) return 0;
+    const src_name = narrowWide(trace.c_span_w(lpExistingFileName_ptr), &src_narrow);
+    const dst_name = narrowWide(trace.c_span_w(lpNewFileName_ptr), &dst_narrow);
     if (trace.enable_tracing) trace.print("KERNEL32: CopyFileW -> CopyFileA\n", .{});
 
     const path_utils = @import("../../path_utils.zig");
     var src_buf: [1024]u8 = undefined;
-    const src_len = path_utils.toHostPath(std.mem.span(@as([*:0]const u8, @ptrCast(&src_narrow))), &src_buf);
+    const src_len = path_utils.toHostPath(src_name, &src_buf);
     if (src_len == 0) return 0;
     var dst_buf: [1024]u8 = undefined;
-    const dst_len = path_utils.toHostPath(std.mem.span(@as([*:0]const u8, @ptrCast(&dst_narrow))), &dst_buf);
+    const dst_len = path_utils.toHostPath(dst_name, &dst_buf);
     if (dst_len == 0) return 0;
 
     // Win32 contract: fail when the destination exists and bFailIfExists is TRUE
     if (bFailIfExists != 0 and fileExistsPosix(dst_buf[0..dst_len])) return 0;
 
     return copyFileHost(src_buf[0..src_len], dst_buf[0..dst_len]);
-}
-
-/// Narrow a UTF-16 span into a caller-provided NUL-terminated buffer (truncating).
-fn narrowWide(wstr: []const u16, buf: []u8) bool {
-    if (buf.len < 1) return false;
-    const len = @min(wstr.len, buf.len - 1);
-    for (0..len) |i| buf[i] = @intCast(wstr[i] & 0xFF);
-    buf[len] = 0;
-    return true;
 }
 
 /// Check existence of a host POSIX path.
@@ -1485,19 +1473,14 @@ pub fn FindFirstFileW(lpFileName: usize, lpFindFileData: usize) callconv(w32cc.W
     if (lpFileName == 0 or lpFindFileData == 0) return 0xFFFFFFFF;
 
     // Convert wide filename to narrow
-    const wstr = trace.c_span_w(lpFileName);
     var narrow_buf: [1024]u8 = undefined;
-    const copy_len = @min(wstr.len, 1023);
-    for (0..copy_len) |i| {
-        narrow_buf[i] = @intCast(wstr[i] & 0xFF);
-    }
-    narrow_buf[copy_len] = 0;
+    const pattern = narrowWide(trace.c_span_w(lpFileName), &narrow_buf);
 
-    if (trace.enable_tracing) trace.print("KERNEL32: FindFirstFileW('{s}')\\n", .{narrow_buf[0..copy_len]});
+    if (trace.enable_tracing) trace.print("KERNEL32: FindFirstFileW('{s}')\\n", .{pattern});
 
     // Use a temporary narrow find data buffer
     var narrow_find_data: w32.WIN32_FIND_DATAA = .{};
-    const result = FindFirstFileA(@intFromPtr(&narrow_buf), &narrow_find_data);
+    const result = FindFirstFileA(@intFromPtr(pattern.ptr), &narrow_find_data);
 
     if (result == 0xFFFFFFFF) {
         if (trace.enable_tracing) trace.print("KERNEL32: FindFirstFileW -> INVALID_HANDLE_VALUE\n", .{});

@@ -75,6 +75,16 @@ release, not a 0.2.1 patch.
   `text/plain; charset=utf-8` carrying the reason; the JSON `error` frame stays
   on the WebSocket side. Routes and message types are specified in
   [`docs/WEB_UI_PROTOCOL.md`](docs/WEB_UI_PROTOCOL.md).
+- Wide (`W`) API strings convert as whole code points instead of one truncated
+  byte per UTF-16 unit. Text set through `SetDlgItemTextW`, `MessageBoxW`,
+  `AppendMenuW`, the status bar, or a window title keeps its characters when a
+  string is longer than the stub's buffer (the cut now lands on a character
+  boundary), an unpaired surrogate becomes U+FFFD rather than blanking the whole
+  string, and a filename passed to a `W` file or module API is encoded per code
+  point rather than losing everything above U+00FF.
+- Case-insensitive path fallback folds case per code point, so a guest opening
+  `CAFÉ.TXT` finds `café.txt` on disk. Names that are not valid UTF-8 keep the
+  previous byte comparison, since the host filesystem accepts arbitrary bytes.
 
 #### Security fixes
 

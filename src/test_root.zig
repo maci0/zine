@@ -34,6 +34,7 @@ comptime {
     _ = @import("runtime.zig");
     _ = @import("log.zig");
     _ = @import("path_utils.zig");
+    _ = @import("text_utils.zig");
     _ = @import("bat.zig");
     _ = @import("pe.zig");
     _ = @import("runner.zig");

@@ -8,6 +8,7 @@
 /// Otherwise, absolute POSIX paths map through `Z:\`.
 const std = @import("std");
 const runtime = @import("runtime.zig");
+const text_utils = @import("text_utils.zig");
 
 /// The host-side folder that represents the C: drive root.
 pub const DRIVE_ROOT = "drive_c/";
@@ -757,6 +758,31 @@ test "tryCaseInsensitiveResolve matches on-disk filename casing" {
     try testing.expect(tryCaseInsensitiveResolve(missing, &buf) == null);
 }
 
+/// Case-insensitive filename match, as Win32 names files. Folding is per
+/// code point, so "CAFÉ.TXT" finds "café.txt"; a name that is not valid UTF-8
+/// falls back to the byte comparison, since the filesystem accepts arbitrary
+/// bytes and a mangled name still has to resolve.
+fn filenameEqlIgnoreCase(a: []const u8, b: []const u8) bool {
+    return text_utils.eqlIgnoreCase(a, b) or std.ascii.eqlIgnoreCase(a, b);
+}
+
+test "tryCaseInsensitiveResolve matches non-ASCII filename casing" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const io = runtime.io();
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "Café.TXT", .data = "x" });
+
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_len = try tmp_dir.dir.realPath(io, &dir_buf);
+    const abs_dir = dir_buf[0..dir_len];
+
+    var buf: [1024]u8 = undefined;
+    var query_buf: [1024]u8 = undefined;
+    const wrong_case = try std.fmt.bufPrint(&query_buf, "{s}/café.txt", .{abs_dir});
+    const resolved = tryCaseInsensitiveResolve(wrong_case, &buf) orelse return error.TestUnexpectedResult;
+    try testing.expect(std.mem.endsWith(u8, resolved, "/Café.TXT"));
+}
+
 /// Case-insensitive path resolution: scan parent directory for matching filename.
 pub fn tryCaseInsensitiveResolve(path: []const u8, buf: []u8) ?[]const u8 {
     if (comptime builtin.target.os.tag == .linux) return tryCaseInsensitiveResolveLinux(path, buf);
@@ -841,7 +867,7 @@ pub fn tryCaseInsensitiveResolve(path: []const u8, buf: []u8) ?[]const u8 {
     var iter = dir.iterate();
     while (iter.next(runtime.io()) catch null) |entry| {
         if (entry.name.len == filename.len) {
-            if (std.ascii.eqlIgnoreCase(entry.name, filename)) {
+            if (filenameEqlIgnoreCase(entry.name, filename)) {
                 if (found_slash) {
                     const total = resolved_dir_len + 1 + entry.name.len;
                     if (total > buf.len) return null;
@@ -914,7 +940,7 @@ fn tryCaseInsensitiveResolveLinux(path: []const u8, buf: []u8) ?[]const u8 {
             const name_ptr: [*:0]const u8 = @ptrCast(&d.name);
             const name = std.mem.sliceTo(name_ptr, 0);
             pos += d.reclen;
-            if (name.len == filename.len and std.ascii.eqlIgnoreCase(name, filename)) {
+            if (name.len == filename.len and filenameEqlIgnoreCase(name, filename)) {
                 @memcpy(matched_name[0..name.len], name);
                 matched = true;
                 break;
