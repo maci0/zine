@@ -26,7 +26,7 @@ pub var active_backend: Backend = .web_ui;
 /// Escapes a string for safe embedding in a JSON string value.
 /// Handles quotes, backslashes, newlines, tabs, and control characters.
 /// Returns the number of bytes written to `out`.
-fn jsonEscape(text: []const u8, out: []u8) usize {
+pub fn jsonEscape(text: []const u8, out: []u8) usize {
     var pos: usize = 0;
     for (text) |c| {
         if (pos + 6 > out.len) break; // worst case: \u00XX = 6 chars

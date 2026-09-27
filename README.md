@@ -79,6 +79,11 @@ retroactively.
 
 #### Fixed
 
+- Web UI `error` frames are parseable again. A rejection that names a field
+  (`resize`, `color_selected`, a missing `type`) embedded its quotes unescaped,
+  so the browser dropped the frame and the reason never reached the status bar.
+- A web UI request for a path that names a directory answers 404 with the usual
+  plain-text body instead of closing the connection with no response.
 - `localtime64` fills a real `struct tm` instead of returning zeroes, reads its
   argument as a 64-bit `time_t`, and clamps negative input to the epoch.
 - `select` timeouts and `poll` convert a guest `timeval` to whole milliseconds

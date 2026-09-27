@@ -214,9 +214,24 @@ fn handleClient(stream: std.Io.net.Stream) void {
     };
 }
 
+/// Upper bound on one error message. The longest is a static literal, so the
+/// escape buffer only has to hold a rejection reason, not client text.
+const max_error_message_len = 256;
+
+/// Builds the `{"type":"error","message":...}` frame payload. A message names
+/// the field that failed, so it carries quotes and is escaped before it is
+/// embedded: an unescaped quote leaves the client with a frame it cannot
+/// parse, which is the one thing this envelope exists to prevent. Returns
+/// null when `buf` cannot hold the escaped form.
+fn errorFrame(msg: []const u8, buf: []u8) ?[]const u8 {
+    var escaped: [max_error_message_len]u8 = undefined;
+    const esc_len = renderer.jsonEscape(msg, &escaped);
+    return std.fmt.bufPrint(buf, "{{\"type\":\"error\",\"message\":\"{s}\"}}", .{escaped[0..esc_len]}) catch null;
+}
+
 fn sendError(ws: *std.http.Server.WebSocket, msg: []const u8) void {
-    var buf: [1024]u8 = undefined;
-    const json = std.fmt.bufPrint(&buf, "{{\"type\":\"error\",\"message\":\"{s}\"}}", .{msg}) catch return;
+    var buf: [max_error_message_len * 6 + 64]u8 = undefined;
+    const json = errorFrame(msg, &buf) orelse return;
     _ = ws.writeMessage(json, .text) catch {};
 }
 
@@ -278,6 +293,19 @@ fn contentTypeForPath(req_path: []const u8) ?[]const u8 {
 /// page-sized; anything larger is a client bug and is rejected before it
 /// reaches the cached strings.
 const max_sync_text_len = 65536;
+
+/// Largest color a client may report from a color dialog, `0xRRGGBB`.
+const max_dialog_color = 0xFFFFFF;
+
+/// Actions the find and replace dialogs answer with. An unlisted value would
+/// otherwise reach the guest as a find-next request, because the handler
+/// treats everything it does not recognize as find-next.
+fn isFindAction(action: []const u8) bool {
+    return std.mem.eql(u8, action, "find_next") or
+        std.mem.eql(u8, action, "replace") or
+        std.mem.eql(u8, action, "replace_all") or
+        std.mem.eql(u8, action, "close");
+}
 
 // A message field is either present with the right JSON type or it is not:
 // `null` covers a missing key and a wrong-typed value alike, so every handler
@@ -484,6 +512,13 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                             sendError(&ws, "resize field \"clientH\" is out of range");
                             continue;
                         };
+                        // A non-positive client size reaches the guest as a zero or
+                        // wrapped window dimension, so it is refused here rather
+                        // than dropped without telling the client.
+                        if (new_cw <= 0 or new_ch <= 0) {
+                            sendError(&ws, "resize fields \"clientW\" and \"clientH\" must be positive");
+                            continue;
+                        }
                         const size_type: usize = @intCast(@max(jsonInt(root.object, "sizeType") orelse 0, 0));
                         if (renderer.on_resize) |cb| cb(new_cw, new_ch, size_type);
                     } else if (std.mem.eql(u8, type_val.string, "close")) {
@@ -557,6 +592,10 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                         const replace_str = jsonStr(root.object, "replaceText") orelse "";
                         const match_case = jsonBool(root.object, "matchCase", false);
                         const search_down = jsonBool(root.object, "searchDown", true);
+                        if (!isFindAction(action)) {
+                            sendError(&ws, "find_action field \"action\" must be \"find_next\", \"replace\", \"replace_all\", or \"close\"");
+                            continue;
+                        }
                         if (renderer.on_find_action) |cb| cb(action, find_text, replace_str, match_case, search_down);
                     } else if (std.mem.eql(u8, type_val.string, "text_sync")) {
                         // Frontend syncs textarea content to backend cache
@@ -581,10 +620,12 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                             sendError(&ws, "clipboard_sync requires a string field \"text\"");
                         }
                     } else if (std.mem.eql(u8, type_val.string, "color_selected")) {
-                        // Color dialog result: { color: 0xRRGGBB } (-1 = cancel)
+                        // Color dialog result: { color: 0xRRGGBB } (negative = cancel)
                         if (jsonInt(root.object, "color")) |color| {
                             if (color < 0) {
                                 if (renderer.on_cancel_dialog) |cb| cb();
+                            } else if (color > max_dialog_color) {
+                                sendError(&ws, "color_selected field \"color\" is out of range");
                             } else if (renderer.on_color_selected) |cb| {
                                 cb(@intCast(@as(u64, @bitCast(color)) & 0xFFFFFF));
                             }
@@ -733,9 +774,22 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
             };
             defer file.close(runtime.io());
 
+            // Opening a directory succeeds on Linux, and reading it fails with
+            // IsDir, so the request would end in a dropped connection instead of
+            // a status the client can act on. A directory is not an asset.
+            const stat = file.stat(runtime.io()) catch |err| {
+                try respondStatus(&req, .internal_server_error, "Internal server error", null);
+                std.debug.print("Closing FD {} (stat error: {s})\n", .{ stream.socket.handle, @errorName(err) });
+                return stream.close(runtime.io());
+            };
+            if (stat.kind != .file) {
+                try respondStatus(&req, .not_found, "Not found", null);
+                return stream.close(runtime.io());
+            }
+
             const content_type = contentTypeForPath(asset_path) orelse "application/octet-stream";
 
-            const file_size = try file.length(runtime.io());
+            const file_size = stat.size;
             if (file_size > max_static_file_size) {
                 try respondStatus(&req, .payload_too_large, "File too large", null);
                 return stream.close(runtime.io());
@@ -744,7 +798,11 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                 try respondStatus(&req, .internal_server_error, "Out of memory", null);
                 return stream.close(runtime.io());
             };
-            const bytes_read = try file.readPositionalAll(runtime.io(), content, 0);
+            const bytes_read = file.readPositionalAll(runtime.io(), content, 0) catch |err| {
+                try respondStatus(&req, .internal_server_error, "Internal server error", null);
+                std.debug.print("Closing FD {} (read error: {s})\n", .{ stream.socket.handle, @errorName(err) });
+                return stream.close(runtime.io());
+            };
             try respondStaticContent(&req, content[0..bytes_read], content_type);
         }
     }
@@ -857,6 +915,32 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
         .{ .name = "content-encoding", .value = "gzip" },
     };
     try req.respond(body, .{ .keep_alive = true, .extra_headers = response_headers[0 .. response_headers.len - @intFromBool(compressed == null)] });
+}
+
+test "the error envelope stays parseable when the message names a field" {
+    const messages = [_][]const u8{
+        "field \"type\" must be a string",
+        "resize requires integer fields \"clientW\" and \"clientH\"",
+        "Path too long",
+        "a\\b",
+    };
+    for (messages) |message| {
+        var buf: [max_error_message_len * 6 + 64]u8 = undefined;
+        const frame = errorFrame(message, &buf).?;
+        const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, frame, .{});
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings("error", parsed.value.object.get("type").?.string);
+        try std.testing.expectEqualStrings(message, parsed.value.object.get("message").?.string);
+    }
+}
+
+test "only the dialog's find actions are accepted" {
+    for ([_][]const u8{ "find_next", "replace", "replace_all", "close" }) |action| {
+        try std.testing.expect(isFindAction(action));
+    }
+    for ([_][]const u8{ "", "next", "findnext", "replaceall", "Find_Next", "close " }) |action| {
+        try std.testing.expect(!isFindAction(action));
+    }
 }
 
 test "endpoints answer an unsupported method with 405 and their Allow list" {
