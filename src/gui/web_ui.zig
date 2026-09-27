@@ -3,6 +3,7 @@
 const std = @import("std");
 const runtime = @import("../runtime.zig");
 const platform = @import("../platform.zig");
+const path_utils = @import("../path_utils.zig");
 const renderer = @import("renderer.zig");
 const log = @import("../log.zig");
 
@@ -53,7 +54,10 @@ pub fn pushFrame() void {
             .key = "",
         };
 
-        const len: u64 = renderer.global_width * renderer.global_height * 4;
+        const len: u64 = @min(
+            @as(u64, renderer.global_width) * @as(u64, renderer.global_height) * 4,
+            renderer.global_framebuf.len,
+        );
         const payload = renderer.global_framebuf[0..@intCast(len)];
 
         if (ws.writeMessage(payload, .binary)) {
@@ -285,22 +289,19 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                                     else
                                         "Desktop";
 
-                                    // Security: reject path traversal in both dir and filename
-                                    if (std.mem.indexOf(u8, dir_path, "..") != null or
-                                        std.mem.indexOf(u8, file_val.string, "..") != null or
-                                        std.mem.indexOfScalar(u8, dir_path, 0) != null or
-                                        std.mem.indexOfScalar(u8, file_val.string, 0) != null)
-                                    {
-                                        sendError(&ws, "Invalid path traversal attempt");
+                                    var rel_buf: [1024]u8 = undefined;
+                                    const rel = std.fmt.bufPrint(&rel_buf, "{s}/{s}", .{ dir_path, file_val.string }) catch {
+                                        sendError(&ws, "Path too long");
                                         continue;
-                                    }
-
+                                    };
+                                    // Reject anything that resolves outside drive_c/
+                                    // (absolute, drive-qualified, "..", NUL).
                                     var path_buf: [1024]u8 = undefined;
-                                    const path = std.fmt.bufPrint(&path_buf, "drive_c/{s}/{s}", .{ dir_path, file_val.string }) catch null;
-                                    if (path) |p| {
-                                        if (renderer.on_file_uploaded) |cb| {
-                                            cb(p);
-                                        }
+                                    const resolved = path_utils.virtualPathToDriveC(rel, &path_buf);
+                                    if (resolved == 0) {
+                                        sendError(&ws, "Invalid path");
+                                    } else if (renderer.on_file_uploaded) |cb| {
+                                        cb(path_buf[0..resolved]);
                                     }
                                 }
                             }
@@ -308,35 +309,23 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                             // Client requests directory listing for navigation
                             if (root.object.get("path")) |path_val| {
                                 if (path_val == .string) {
-                                    const req_path = path_val.string;
-                                    // Security: reject path traversal and null bytes
-                                    if (std.mem.indexOf(u8, req_path, "..") != null or
-                                        std.mem.indexOfScalar(u8, req_path, 0) != null)
-                                    {
-                                        sendError(&ws, "Invalid path traversal attempt");
-                                        continue;
-                                    }
-                                    renderer.listDirectory(req_path);
+                                    // Listing stays inside drive_c/; listDirectory
+                                    // resolves and rejects escaping paths itself.
+                                    renderer.listDirectory(path_val.string);
                                 }
                             }
                         } else if (std.mem.eql(u8, type_val.?.string, "launch")) {
                             // Desktop icon double-click: launch a file from drive_c/
                             if (root.object.get("path")) |path_val| {
                                 if (path_val == .string) {
-                                    const req_path = path_val.string;
-                                    // Security: reject path traversal and null bytes
-                                    if (std.mem.indexOf(u8, req_path, "..") != null or
-                                        std.mem.indexOfScalar(u8, req_path, 0) != null)
-                                    {
-                                        sendError(&ws, "Invalid path traversal attempt");
-                                        continue;
-                                    }
                                     var path_buf: [1024]u8 = undefined;
-                                    const path = std.fmt.bufPrint(&path_buf, "drive_c/{s}", .{req_path}) catch null;
-                                    if (path) |p| {
+                                    const resolved = path_utils.virtualPathToDriveC(path_val.string, &path_buf);
+                                    if (resolved != 0) {
                                         if (renderer.on_file_uploaded) |cb| {
-                                            cb(p);
+                                            cb(path_buf[0..resolved]);
                                         }
+                                    } else {
+                                        sendError(&ws, "Invalid path");
                                     }
                                 }
                             }

@@ -222,6 +222,56 @@ pub fn ensureDriveRoot() void {
 // The result is written to `out` and the length is returned.
 // Returns 0 if the input is empty/null.
 
+/// Component capacity of `normalizePath`'s in-place stack.
+const MAX_PATH_COMPONENTS = 128;
+
+/// Count the non-empty, '/'-separated components of a path.
+fn countComponents(path: []const u8) usize {
+    var count: usize = 0;
+    var in_component = false;
+    for (path) |c| {
+        if (c == '/') {
+            in_component = false;
+        } else if (!in_component) {
+            in_component = true;
+            count += 1;
+        }
+    }
+    return count;
+}
+
+/// Map a client-supplied virtual path (what the Web UI sends over the socket,
+/// e.g. "Desktop/games") to a host path confined to drive_c/.
+///
+/// Unlike `toHostPath`, this rejects anything that could leave the sandbox:
+/// absolute paths, drive letters, backslashes, NUL bytes, and `.`/`..`
+/// components are refused outright rather than resolved. The result is written
+/// to `out` (NUL-terminated) and its length returned, or 0 when the input is
+/// unusable or does not fit.
+pub fn virtualPathToDriveC(virtual_path: []const u8, out: []u8) usize {
+    if (virtual_path.len == 0) return 0;
+    if (std.mem.indexOfScalar(u8, virtual_path, 0) != null) return 0;
+    if (std.mem.indexOfScalar(u8, virtual_path, '\\') != null) return 0;
+    if (virtual_path[0] == '/') return 0;
+    if (hasDriveLetter(virtual_path)) return 0;
+    if (drive_root_len + virtual_path.len >= out.len) return 0;
+    // normalizePath drops components past its stack capacity, which would
+    // silently retarget the request at a different path. Refuse instead.
+    if (countComponents(virtual_path) > MAX_PATH_COMPONENTS) return 0;
+
+    var it = std.mem.splitScalar(u8, virtual_path, '/');
+    while (it.next()) |comp| {
+        if (comp.len == 0) continue;
+        if (std.mem.eql(u8, comp, ".") or std.mem.eql(u8, comp, "..")) return 0;
+    }
+
+    @memcpy(out[0..drive_root_len], DRIVE_ROOT);
+    @memcpy(out[drive_root_len..][0..virtual_path.len], virtual_path);
+    const pos = drive_root_len + virtual_path.len;
+    out[pos] = 0;
+    return normalizePath(out, pos, drive_root_len);
+}
+
 /// Normalize a path in-place by resolving `.` and `..` components.
 /// Prevents directory traversal attacks (e.g. `drive_c/game/../../etc/passwd`).
 /// The `anchor` parameter specifies a prefix length that `..` cannot escape past
@@ -229,8 +279,8 @@ pub fn ensureDriveRoot() void {
 fn normalizePath(buf: []u8, len: usize, anchor: usize) usize {
     // Split into components, resolve . and .., then rejoin.
     // We work in-place using a stack of component start offsets.
-    var comp_starts: [128]usize = undefined;
-    var comp_lens: [128]usize = undefined;
+    var comp_starts: [MAX_PATH_COMPONENTS]usize = undefined;
+    var comp_lens: [MAX_PATH_COMPONENTS]usize = undefined;
     var n_comps: usize = 0;
 
     var i: usize = anchor;
@@ -619,6 +669,58 @@ test "toHostPath: insufficient capacity does not discard virtual CWD" {
     const len = toHostPath("file.txt", buf[0 .. expected.len + 1]);
     try testing.expectEqualStrings(expected, buf[0..len]);
     try testing.expectEqual(@as(u8, 0), buf[len]);
+}
+
+test "virtualPathToDriveC: maps inside the sandbox" {
+    var buf: [256]u8 = undefined;
+    const len = virtualPathToDriveC("Desktop/games", &buf);
+    try testing.expectEqualStrings("drive_c/Desktop/games", buf[0..len]);
+    try testing.expectEqual(@as(u8, 0), buf[len]);
+}
+
+test "virtualPathToDriveC: rejects dot components" {
+    var buf: [256]u8 = undefined;
+    try testing.expectEqual(@as(usize, 0), virtualPathToDriveC("Desktop/../Windows", &buf));
+    try testing.expectEqual(@as(usize, 0), virtualPathToDriveC(".", &buf));
+}
+
+test "virtualPathToDriveC: refuses inputs that escape the sandbox" {
+    const rejected = [_][]const u8{
+        "/etc",
+        "//etc/passwd",
+        "C:\\Windows",
+        "c:/Windows",
+        ".",
+        "..",
+        "./Desktop",
+        "Desktop/./games",
+        "Desktop/../Windows",
+        "Desktop/../../etc",
+        "Desktop\\..\\..\\etc",
+        "Desktop/\x00/etc",
+        "",
+    };
+    var buf: [256]u8 = undefined;
+    for (rejected) |path| {
+        try testing.expectEqual(@as(usize, 0), virtualPathToDriveC(path, &buf));
+    }
+}
+
+test "virtualPathToDriveC: rejects input that does not fit" {
+    const input = [_]u8{'a'} ** 512;
+    var buf: [64]u8 = undefined;
+    try testing.expectEqual(@as(usize, 0), virtualPathToDriveC(&input, &buf));
+}
+
+test "virtualPathToDriveC: rejects deeper paths than normalizePath can hold" {
+    var deep_buf: [4096]u8 = undefined;
+    const deep = "a/" ** 200 ++ "file.txt";
+    var buf: [4096]u8 = undefined;
+    try testing.expectEqual(@as(usize, 0), virtualPathToDriveC(deep, &buf));
+    // 128 components is still accepted and keeps its full depth.
+    const ok_deep = "a/" ** 127 ++ "file.txt";
+    const len = virtualPathToDriveC(ok_deep, &deep_buf);
+    try testing.expect(std.mem.endsWith(u8, deep_buf[0..len], "a/file.txt"));
 }
 
 test "toHostPath: dot-backslash prefix stripped" {

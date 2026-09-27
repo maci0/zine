@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const runtime = @import("../runtime.zig");
+const path_utils = @import("../path_utils.zig");
 const web_ui = @import("web_ui.zig");
 const fltk_ui = @import("fltk_ui.zig");
 
@@ -408,15 +409,52 @@ pub fn pushFrame() void {
     }
 }
 
+/// Largest framebuffer dimension the shared surface can hold, in pixels.
+const MAX_DIMENSION: u32 = 4096;
+
+/// Clamp a guest-supplied resolution to what the framebuffer can hold.
+///
+/// The guest picks these dimensions (window size, D3D back buffer). Every
+/// consumer multiplies them by 4 to index `global_framebuf`, so an oversized
+/// request would read and write far past the buffer and abort the process.
+/// Dimensions are scaled down proportionally, keeping the aspect ratio.
+fn clampResolution(w_in: u32, h_in: u32) struct { w: u32, h: u32 } {
+    const w0 = @min(@max(w_in, 1), MAX_DIMENSION);
+    const h0 = @min(@max(h_in, 1), MAX_DIMENSION);
+    if (global_framebuf.len == 0) return .{ .w = w0, .h = h0 };
+    const max_pixels: u64 = @max(global_framebuf.len / 4, 1);
+    const total: u64 = @as(u64, w0) * h0;
+    if (total <= max_pixels) return .{ .w = w0, .h = h0 };
+
+    const scale = @sqrt(@as(f64, @floatFromInt(max_pixels)) / @as(f64, @floatFromInt(total)));
+    var w: u32 = @intFromFloat(@as(f64, @floatFromInt(w0)) * scale);
+    var h: u32 = @intFromFloat(@as(f64, @floatFromInt(h0)) * scale);
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    // Rounding up can overshoot the budget; trim the longer axis until it fits.
+    while (@as(u64, w) * h > max_pixels) {
+        if (w >= h) w -= 1 else h -= 1;
+    }
+    return .{ .w = w, .h = h };
+}
+
 /// Sets the window resolution and re-initializes the framebuffer.
-pub fn setResolution(w: u32, h: u32) void {
+///
+/// The guest picks these dimensions (window size, D3D back buffer), so they
+/// are clamped to what the framebuffer can hold. Without the clamp a guest
+/// asking for 65535x65535 makes every consumer of `global_width * height * 4`
+/// index far past `global_framebuf` and abort the process.
+pub fn setResolution(w_in: u32, h_in: u32) void {
+    const clamped = clampResolution(w_in, h_in);
+    const w = clamped.w;
+    const h = clamped.h;
     global_width = w;
     global_height = h;
     resolution_set = true;
 
     // Re-initialize visible framebuffer area to gray (BGRA) when resolution
     // changes to prevent stale pixels from a previous stride causing stagger artifacts.
-    const area = w * h * 4;
+    const area = @as(usize, w) * @as(usize, h) * 4;
     if (area <= global_framebuf.len) {
         var i: usize = 0;
         while (i + 3 < area) : (i += 4) {
@@ -921,9 +959,11 @@ pub fn listDirectory(path: []const u8) void {
 
             json.appendSlice(g_allocator, "{\"type\":\"directory_listing\"") catch {};
 
-            // Include the path in the response
+            // Include the path in the response. The client controls this
+            // string, so it must be escaped: an unescaped quote or newline
+            // would let a request corrupt the JSON broadcast to every client.
             json.appendSlice(g_allocator, ",\"path\":\"") catch {};
-            json.appendSlice(g_allocator, path) catch {};
+            jsonEscapeAppend(&json, path);
             json.appendSlice(g_allocator, "\"") catch {};
 
             appendDirectoryListing(&json, path);
@@ -940,14 +980,18 @@ pub fn listDirectory(path: []const u8) void {
 /// by iterating the given path relative to cwd.
 fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) void {
     // The path is a logical Win32 path (e.g. "Desktop", "Desktop/subfolder").
-    // Map it to the host filesystem under drive_c/.
-    var host_path_buf: [512]u8 = undefined;
-    const host_path = std.fmt.bufPrint(&host_path_buf, "drive_c/{s}", .{path}) catch path;
+    // Map it to the host filesystem under drive_c/. Paths that do not resolve
+    // inside the sandbox (absolute, drive-qualified, containing "..") yield an
+    // empty listing rather than a fallback to the raw string, which would let a
+    // client read directories outside drive_c/.
+    var host_path_buf: [1024]u8 = undefined;
+    const host_path_len = path_utils.virtualPathToDriveC(path, &host_path_buf);
+    const host_path = host_path_buf[0..@min(host_path_len, host_path_buf.len)];
 
-    var dir = std.Io.Dir.cwd().openDir(runtime.io(), host_path, .{ .iterate = true }) catch blk: {
-        // Fallback: try the path as-is (in case cwd is already inside drive_c)
-        break :blk std.Io.Dir.cwd().openDir(runtime.io(), path, .{ .iterate = true }) catch null;
-    };
+    var dir: ?std.Io.Dir = if (host_path_len == 0)
+        null
+    else
+        (std.Io.Dir.cwd().openDir(runtime.io(), host_path, .{ .iterate = true }) catch null);
 
     // Folders
     json.appendSlice(g_allocator, ",\"folders\":[") catch {};
@@ -968,9 +1012,10 @@ fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) v
     json.appendSlice(g_allocator, "]") catch {};
 
     // Re-open for files (iterator is consumed)
-    var dir2 = std.Io.Dir.cwd().openDir(runtime.io(), host_path, .{ .iterate = true }) catch blk: {
-        break :blk std.Io.Dir.cwd().openDir(runtime.io(), path, .{ .iterate = true }) catch null;
-    };
+    var dir2: ?std.Io.Dir = if (host_path_len == 0)
+        null
+    else
+        (std.Io.Dir.cwd().openDir(runtime.io(), host_path, .{ .iterate = true }) catch null);
 
     // Files
     json.appendSlice(g_allocator, ",\"files\":[") catch {};
@@ -994,12 +1039,18 @@ fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) v
 /// Append a string to the JSON builder, escaping special JSON characters.
 fn jsonEscapeAppend(json: *std.ArrayListUnmanaged(u8), s: []const u8) void {
     for (s) |c| {
-        if (c == '"') {
-            json.appendSlice(g_allocator, "\\\"") catch {};
-        } else if (c == '\\') {
-            json.appendSlice(g_allocator, "\\\\") catch {};
-        } else {
-            json.append(g_allocator, c) catch {};
+        switch (c) {
+            '"', '\\' => {
+                json.append(g_allocator, '\\') catch {};
+                json.append(g_allocator, c) catch {};
+            },
+            0x00...0x1f => {
+                const hex = "0123456789abcdef";
+                json.appendSlice(g_allocator, "\\u00") catch {};
+                json.append(g_allocator, hex[c >> 4]) catch {};
+                json.append(g_allocator, hex[c & 0xf]) catch {};
+            },
+            else => json.append(g_allocator, c) catch {},
         }
     }
 }
@@ -1444,4 +1495,24 @@ fn getResourceDataById(data: []const u8, dir_offset: u32, rsrc_base: u32, rsrc_r
         entry += 8;
     }
     return null;
+}
+
+test "clampResolution keeps guest dimensions inside the framebuffer" {
+    const saved = global_framebuf;
+    defer global_framebuf = saved;
+    global_framebuf = try std.testing.allocator.alloc(u8, 1024 * 1024 * 4);
+    defer std.testing.allocator.free(global_framebuf);
+
+    const ordinary = clampResolution(800, 600);
+    try std.testing.expectEqual(@as(u32, 800), ordinary.w);
+    try std.testing.expectEqual(@as(u32, 600), ordinary.h);
+
+    // 65535x65535 needs 17 GiB of BGRA; the clamp scales it into the surface.
+    const huge = clampResolution(65535, 65535);
+    try std.testing.expect(@as(u64, huge.w) * huge.h * 4 <= global_framebuf.len);
+    try std.testing.expect(@as(u64, huge.w) * huge.h * 4 > global_framebuf.len / 2);
+
+    const degenerate = clampResolution(0, 0);
+    try std.testing.expectEqual(@as(u32, 1), degenerate.w);
+    try std.testing.expectEqual(@as(u32, 1), degenerate.h);
 }
