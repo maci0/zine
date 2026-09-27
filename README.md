@@ -7,7 +7,7 @@ No Windows installation, no Wine.
 ## What works
 
 - Full MSVC 6.0 toolchain: CL.EXE, LINK.EXE, RC.EXE, NMAKE.EXE, and 8 more utilities run to completion
-- 329 unit tests pass (2 skipped) on the host with `zig build test`; the gate in
+- 337 unit tests pass (2 skipped, 339 total) on the host with `zig build test`; the gate in
   `tests/check.sh` adds the CLI suites on native x86 and x86_64
 - 158/128 integration checks on native/WASM, 20 FLTK smoke tests (these need guest
   binaries and are not part of `tests/check.sh`)
@@ -31,7 +31,8 @@ build.
 Changes after the last tag are listed under **Unreleased** below. The package
 version, `--version`, and `build.zig.zon` stay at the last released number until
 a release moves all three together; a released version is never edited
-retroactively.
+retroactively. The Unreleased set carries breaking changes, so it is a **0.3.0**
+release, not a 0.2.1 patch.
 
 ### Unreleased
 
@@ -57,6 +58,21 @@ retroactively.
   synthetic input from the network. It logs a warning and restricts accepted
   WebSocket origins to that address, so a browser reaching the UI through
   another hostname is refused with HTTP 403.
+- `zig build` builds **ReleaseSafe**. At 0.2.0 it used Zig's Debug default, so
+  the installed binaries are faster and carry no DWARF. Pass
+  `zig build -Doptimize=Debug` for a debugging loop and debugger symbols;
+  `--release=fast` and `--release=small` still select their own modes.
+- `-Dfltk` requires `-Darch=x86_64`, as the 0.2.0 notes already say, and is now
+  rejected during configuration with that requirement named, instead of failing
+  later in the C compiler or linker. The bridge still looks for FLTK only in the
+  Debian and Ubuntu 1.3 layout and names the packages when they are missing.
+- The web UI's static paths answer `405` with `Allow: GET, HEAD` for any method
+  other than `GET` or `HEAD`, and `/ws` answers `405` with `Allow: GET` for
+  anything else, so a frontend that posts to an asset path gets a refusal
+  instead of the file. Every non-file response is
+  `text/plain; charset=utf-8` carrying the reason; the JSON `error` frame stays
+  on the WebSocket side. Routes and message types are specified in
+  [`docs/WEB_UI_PROTOCOL.md`](docs/WEB_UI_PROTOCOL.md).
 
 #### Fixes
 
@@ -89,6 +105,9 @@ retroactively.
 - Named gate steps in `tests/check.sh`: `bash tests/check.sh --list` prints
   them and `bash tests/check.sh <name>` runs one, so a single check no longer
   means running the whole gate.
+- `zine --quiet` (`-q`) raises the log level to `warn` for one run, on native and
+  WASI, so a chatty environment can be quieted without rewriting
+  `ZINE_LOG_LEVEL`.
 
 #### Fixed
 
@@ -157,6 +176,32 @@ retroactively.
   the window is maximized.
 - The web Start menu waits briefly for the desktop listing, then names an empty
   Desktop the way the rest of the interface names it.
+- The x86 shift overflow flag is defined for a count of 1 (`shl`: the top bit of
+  the result XOR CF, `shr`: the sign bit the shift moved out) and pinned to 0 for
+  any other count, so a guest that branches on `OF` after a shift reads a
+  defined value.
+- A PE image that needs more writable-section entries than the protection table
+  holds is rejected at load with `PE write-protection table overflow`, instead
+  of dropping a section and silently discarding the guest's writes to it.
+- File and stream I/O failures report the error instead of reading as success or
+  EOF: `CopyFileA`/`CopyFileW` return FALSE with `ERROR_WRITE_FAULT`, a host read
+  error in a file mapping sets `ERROR_READ_FAULT` rather than zero-filling, and
+  MSVCRT sets the stream error indicator that `ferror` reports.
+- The guest argv array is read as 32-bit pointers on a 64-bit host (x86_64 and
+  wasm64) rather than as host-width values, which on wasm64 straddled the array
+  elements and gave the guest a wrong command line. The host stack range is read
+  from a streamed `/proc/self/maps`, so it no longer depends on the `[stack]`
+  mapping fitting in one read.
+- A JIT block cache entry is reused only while the guest bytes at its entry EIP
+  are the bytes it was compiled from, so a guest that patches its own code, or a
+  region that is unmapped and remapped at the same address, no longer runs a
+  stale translation. A module already mapped is reused when a later
+  `LoadLibrary` names it as a path (`bin/GAME.DLL` finds `game.dll`), so one
+  file no longer gets two module bases with separate writable data.
+- Keyboard state, pointer deltas, the timer table, and the web UI's socket sends
+  are taken under their locks, so a second GUI thread or a web command cannot
+  read a half-rewritten keyboard map, lose a mouse delta, or race the cached
+  dialog JSON.
 
 ### 0.2.0 (2026-09-18)
 
