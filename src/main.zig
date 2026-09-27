@@ -425,8 +425,12 @@ pub fn main(init: std.process.Init) !void {
                 const cwd_copy_len = @min(cwd_win_len, path_utils.current_directory.len - 1);
                 @memcpy(path_utils.current_directory[0..cwd_copy_len], cwd_win_buf[0..cwd_copy_len]);
                 path_utils.current_directory_len = cwd_copy_len;
-            } else |_| {
-                // Fallback: use exe dir if we can't get the real cwd
+            } else |err| {
+                // Fallback: use exe dir if we can't get the real cwd. The
+                // guest resolves relative paths against this, so say which one
+                // it got rather than letting relative opens land somewhere the
+                // user never named.
+                log.warn("Cannot resolve the current directory ({}), relative paths resolve against the target's directory", .{err});
                 @memcpy(path_utils.current_directory[0..win_dir_len], win_dir_buf[0..win_dir_len]);
                 path_utils.current_directory_len = win_dir_len;
             }

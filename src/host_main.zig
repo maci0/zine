@@ -206,19 +206,23 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(2);
     }
 
-    const wasm_file = std.Io.Dir.cwd().openFile(runtime.io(), wasm_path.?, .{}) catch {
+    const wasm_file = std.Io.Dir.cwd().openFile(runtime.io(), wasm_path.?, .{}) catch |err| {
         writeErr("Error: cannot open '");
         writeErr(wasm_path.?);
-        writeErr("'.\n");
+        writeErr("': ");
+        writeErr(@errorName(err));
+        writeErr(".\n");
         std.process.exit(1);
     };
     defer wasm_file.close(runtime.io());
     var file_reader_buf: [4096]u8 = undefined;
     var file_reader = wasm_file.reader(runtime.io(), &file_reader_buf);
-    const wasm_data = file_reader.interface.allocRemaining(allocator, .limited(256 * 1024 * 1024)) catch {
+    const wasm_data = file_reader.interface.allocRemaining(allocator, .limited(256 * 1024 * 1024)) catch |err| {
         writeErr("Error: cannot read '");
         writeErr(wasm_path.?);
-        writeErr("'.\n");
+        writeErr("': ");
+        writeErr(@errorName(err));
+        writeErr(".\n");
         std.process.exit(1);
     };
     defer allocator.free(wasm_data);
@@ -265,7 +269,14 @@ pub fn main(init: std.process.Init) !void {
     // that with mapdir so relative paths and absolute paths both resolve.
     {
         var cwd_buf: [4096]u8 = undefined;
-        const cwd_len = std.process.currentPath(runtime.io(), &cwd_buf) catch 0;
+        var cwd_len: usize = 0;
+        if (std.process.currentPath(runtime.io(), &cwd_buf)) |len| {
+            cwd_len = len;
+        } else |err| {
+            writeErr("Warning: cannot read the current directory, preopening '.' instead: ");
+            writeErr(@errorName(err));
+            writeErr(".\n");
+        }
         const cwd = if (cwd_len > 0) cwd_buf[0..cwd_len] else ".";
         const cwd_z = std.heap.page_allocator.dupeZ(u8, cwd) catch ".";
         // First preopen = fd 3 = the WASI cwd (Zig's Dir.cwd() on WASI uses
@@ -275,12 +286,29 @@ pub fn main(init: std.process.Init) !void {
         _ = c.wasi_config_preopen_dir(wasi_config, "/");
     }
 
-    // Inherit environment (wasi_config_env needs null-terminated C strings)
+    // Inherit environment (wasi_config_env needs null-terminated C strings).
+    // A variable that cannot be copied would otherwise vanish from the guest's
+    // environment with no trace, which reads as the program misbehaving on a
+    // setting the host plainly had.
     const env_iter = init.environ_map;
     var env_it = env_iter.iterator();
     while (env_it.next()) |entry| {
-        const kz = std.heap.page_allocator.dupeZ(u8, entry.key_ptr.*) catch continue;
-        const vz = std.heap.page_allocator.dupeZ(u8, entry.value_ptr.*) catch continue;
+        const kz = std.heap.page_allocator.dupeZ(u8, entry.key_ptr.*) catch |err| {
+            writeErr("Warning: dropping environment variable, cannot copy its name: ");
+            writeErr(entry.key_ptr.*);
+            writeErr(" (");
+            writeErr(@errorName(err));
+            writeErr(").\n");
+            continue;
+        };
+        const vz = std.heap.page_allocator.dupeZ(u8, entry.value_ptr.*) catch |err| {
+            writeErr("Warning: dropping environment variable, cannot copy its value: ");
+            writeErr(entry.key_ptr.*);
+            writeErr(" (");
+            writeErr(@errorName(err));
+            writeErr(").\n");
+            continue;
+        };
         c.wasi_config_env(wasi_config, kz.ptr, vz.ptr);
     }
 

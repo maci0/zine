@@ -166,11 +166,9 @@ fn replayCachedState(allocator: std.mem.Allocator) void {
     renderer.cache_mutex.lock();
     for (renderer.cached_control_text_updates.items) |owned| {
         const copy = allocator.dupe(u8, owned) catch continue;
-        updates.append(allocator, copy) catch {
-            // The arena is out of room; drop this entry rather than send a
-            // truncated message.
-            continue;
-        };
+        // The arena is out of room; drop this entry rather than send a
+        // truncated message.
+        updates.append(allocator, copy) catch allocator.free(copy);
     }
     renderer.cache_mutex.unlock();
 
@@ -194,14 +192,57 @@ fn serverLoop() void {
     var url_buf: [config.max_url_len]u8 = undefined;
     std.debug.print("\n>>> Zine Web UI running on {s} <<<\n\n", .{web.url(&url_buf)});
 
+    var consecutive_failures: u32 = 0;
     while (true) {
-        const stream = server.accept(io) catch continue;
-        const client_thread = std.Thread.spawn(.{}, handleClient, .{stream}) catch {
+        const stream = server.accept(io) catch |err| {
+            // A failed accept on a live listening socket is resource
+            // exhaustion (EMFILE, ENFILE, ENOBUFS, ENOMEM), and it is usually
+            // transient. Retrying it with no delay spins a core for as long as
+            // the condition lasts, so each failure waits a little longer, and
+            // a run of failures long enough to mean the listener is not coming
+            // back ends the loop instead of hanging on it.
+            consecutive_failures += 1;
+            if (consecutive_failures == 1) {
+                log.warn("WebUI: accept failed: {}", .{err});
+            }
+            if (consecutive_failures >= max_consecutive_accept_failures) {
+                log.err("WebUI: stopped listening on {s} after {d} consecutive accept failures (last: {})", .{
+                    web.url(&url_buf), consecutive_failures, err,
+                });
+                return;
+            }
+            std.Io.sleep(io, .fromMilliseconds(acceptRetryDelayMs(consecutive_failures)), .awake) catch {};
+            continue;
+        };
+        consecutive_failures = 0;
+
+        const client_thread = std.Thread.spawn(.{}, handleClient, .{stream}) catch |err| {
+            log.warn("WebUI: dropping connection, cannot spawn a client thread: {}", .{err});
             stream.close(io);
             continue;
         };
         client_thread.detach();
     }
+}
+
+/// Consecutive `accept` failures tolerated before `serverLoop` stops. Sized so
+/// the growing delays between failures add up to under half a second of
+/// retrying before the listener gives up.
+const max_consecutive_accept_failures = 12;
+
+/// First retry delay after a failed `accept`, in milliseconds.
+const accept_retry_base_delay_ms = 1;
+
+/// Ceiling for the doubling retry delay, in milliseconds. Caps the cost of a
+/// persistent failure at 16 accept attempts per second instead of a busy loop.
+const accept_retry_max_delay_ms = 60;
+
+/// Doubles the retry delay per consecutive failure up to
+/// `accept_retry_max_delay_ms`, so a blip retries at once and an exhausted
+/// process backs off.
+fn acceptRetryDelayMs(consecutive_failures: u32) i64 {
+    const shift: u5 = @intCast(@min(consecutive_failures - 1, 8));
+    return @min(@as(i64, accept_retry_base_delay_ms) << shift, accept_retry_max_delay_ms);
 }
 
 fn handleClient(stream: std.Io.net.Stream) void {
@@ -932,6 +973,17 @@ test "the error envelope stays parseable when the message names a field" {
         try std.testing.expectEqualStrings("error", parsed.value.object.get("type").?.string);
         try std.testing.expectEqualStrings(message, parsed.value.object.get("message").?.string);
     }
+}
+
+test "accept retries back off from the base delay and stop at the ceiling" {
+    try std.testing.expectEqual(accept_retry_base_delay_ms, acceptRetryDelayMs(1));
+    try std.testing.expectEqual(@as(i64, 2), acceptRetryDelayMs(2));
+    try std.testing.expectEqual(@as(i64, 4), acceptRetryDelayMs(3));
+    // A long run of failures must keep the delay bounded, not double forever.
+    for (1..1000) |failures| {
+        try std.testing.expect(acceptRetryDelayMs(@intCast(failures)) <= accept_retry_max_delay_ms);
+    }
+    try std.testing.expectEqual(accept_retry_max_delay_ms, acceptRetryDelayMs(1000));
 }
 
 test "only the dialog's find actions are accepted" {

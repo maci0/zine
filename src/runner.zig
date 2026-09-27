@@ -145,7 +145,10 @@ pub const target_load_failure_status: u8 = 1;
 
 /// Reports a target image that failed to load and exits. A mistyped path or a
 /// file that is not a PE is a user error, so the message names the argument the
-/// user typed instead of letting the Zig error trace escape.
+/// user typed instead of letting the Zig error trace escape. Every other cause
+/// keeps the error name, so an unreadable file, an exhausted address space, or
+/// an out-of-memory mapping is distinguishable from a malformed PE without
+/// reading the source.
 pub fn failTargetLoad(target: []const u8, err: anyerror) noreturn {
     switch (err) {
         error.ModuleNotFound => std.debug.print(
@@ -153,9 +156,9 @@ pub fn failTargetLoad(target: []const u8, err: anyerror) noreturn {
             .{target},
         ),
         else => std.debug.print(
-            "Error: cannot load '{s}' as a Win32 PE executable.\n" ++
+            "Error: cannot load '{s}' as a Win32 PE executable: {s}\n" ++
                 "Pass an uncompressed 32-bit Windows .exe or .dll; the file may be truncated or a different format.\n",
-            .{target},
+            .{ target, @errorName(err) },
         ),
     }
     std.process.exit(target_load_failure_status);
@@ -189,44 +192,50 @@ pub fn setupSearchPaths(
 pub fn getHostPathDirs(allocator: std.mem.Allocator) !std.ArrayListUnmanaged([]const u8) {
     const path_utils = @import("path_utils.zig");
     var dirs: std.ArrayListUnmanaged([]const u8) = .empty;
-    if (runtime.environ().getAlloc(allocator, "PATH")) |host_path| {
-        defer allocator.free(host_path);
-        var i: usize = 0;
-        var start: usize = 0;
-        while (i <= host_path.len) {
-            const is_end = (i == host_path.len);
-            var is_delim = false;
-            if (!is_end) {
-                const c = host_path[i];
-                if (c == ';') {
+    // A PATH that cannot be read is not the same as a PATH that is not set: a
+    // read failure here would otherwise yield an empty search path and make
+    // every later module miss look like a missing file. A genuinely unset PATH
+    // is normal and stays silent.
+    const host_path = runtime.environ().getAlloc(allocator, "PATH") catch |err| {
+        log.warn("Cannot read PATH, module search falls back to the target's directory: {}", .{err});
+        return dirs;
+    };
+    defer allocator.free(host_path);
+    var i: usize = 0;
+    var start: usize = 0;
+    while (i <= host_path.len) {
+        const is_end = (i == host_path.len);
+        var is_delim = false;
+        if (!is_end) {
+            const c = host_path[i];
+            if (c == ';') {
+                is_delim = true;
+            } else if (c == ':') {
+                // Check if it's a drive letter like C:
+                if (i > 0 and i == start + 1 and std.ascii.isAlphabetic(host_path[i - 1])) {
+                    is_delim = false;
+                } else {
                     is_delim = true;
-                } else if (c == ':') {
-                    // Check if it's a drive letter like C:
-                    if (i > 0 and i == start + 1 and std.ascii.isAlphabetic(host_path[i - 1])) {
-                        is_delim = false;
-                    } else {
-                        is_delim = true;
-                    }
                 }
             }
-            if (is_delim or is_end) {
-                if (i > start) {
-                    var p = host_path[start..i];
-                    if (p.len >= 2 and p[0] == '"' and p[p.len - 1] == '"') {
-                        p = p[1 .. p.len - 1];
-                    }
-                    var posix_buf: [1024]u8 = undefined;
-                    if (path_utils.win32ToPosix(p, &posix_buf)) |posix_len| {
-                        try dirs.append(allocator, try allocator.dupe(u8, posix_buf[0..posix_len]));
-                    } else |_| {
-                        try dirs.append(allocator, try allocator.dupe(u8, p));
-                    }
-                }
-                start = i + 1;
-            }
-            i += 1;
         }
-    } else |_| {}
+        if (is_delim or is_end) {
+            if (i > start) {
+                var p = host_path[start..i];
+                if (p.len >= 2 and p[0] == '"' and p[p.len - 1] == '"') {
+                    p = p[1 .. p.len - 1];
+                }
+                var posix_buf: [1024]u8 = undefined;
+                if (path_utils.win32ToPosix(p, &posix_buf)) |posix_len| {
+                    try dirs.append(allocator, try allocator.dupe(u8, posix_buf[0..posix_len]));
+                } else |_| {
+                    try dirs.append(allocator, try allocator.dupe(u8, p));
+                }
+            }
+            start = i + 1;
+        }
+        i += 1;
+    }
     return dirs;
 }
 
