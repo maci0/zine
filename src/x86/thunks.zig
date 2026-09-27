@@ -365,6 +365,27 @@ var import_registry: [MAX_IMPORTS]ImportEntry = undefined;
 var import_count: u32 = 0;
 var imports_sorted: bool = false;
 
+/// One bit per registered import address, set when the address is registered
+/// and never cleared (the registry only grows, see registerNativeImport).
+/// `isNativeImport` runs on every interpreted instruction, where the address
+/// is almost never an import, so a clear bit answers the question in one load
+/// instead of a binary search over the registry. A set bit only means the
+/// address might be registered: findImport still does the real lookup, so
+/// collisions cost an extra binary search and nothing else.
+const FILTER_WORDS = 1 << 10; // 8 KiB of filter, one bit per slot
+/// Address bits below the shift are ignored, so neighbouring stubs (a vtable
+/// of them lands in one page) share a bit instead of each taking their own.
+const FILTER_ADDR_SHIFT = 8;
+var import_filter = [_]u64{0} ** FILTER_WORDS;
+
+/// The filter slot an address lands in: a word index and the bit within it.
+const FilterSlot = struct { word: usize, bit: u64 };
+
+inline fn filterSlot(addr: usize) FilterSlot {
+    const h = (addr >> FILTER_ADDR_SHIFT) ^ (addr >> 19);
+    return .{ .word = (h >> 6) & (FILTER_WORDS - 1), .bit = @as(u64, 1) << @intCast(h & 63) };
+}
+
 /// Register a COM vtable method with param count derived from the function type.
 /// Returns the truncated 32-bit address for use in COM vtable u32 fields.
 /// Deduplicates: shared stubs (Dummy, noop) are only registered once.
@@ -418,6 +439,7 @@ pub fn registerNativeImport(addr: usize, dll_name: []const u8, func_name: []cons
     };
     import_count += 1;
     imports_sorted = false; // invalidate sort
+    import_filter[filterSlot(addr).word] |= filterSlot(addr).bit;
 }
 
 /// Sort the import registry by addr for binary search, if not already sorted.
@@ -434,6 +456,10 @@ fn ensureImportsSorted() void {
 
 /// Binary search for an import entry by address.
 fn findImport(addr: usize) ?*const ImportEntry {
+    // A clear filter bit means no registered address hashes there, so the
+    // search below cannot match and is skipped.
+    const slot = filterSlot(addr);
+    if (import_filter[slot.word] & slot.bit == 0) return null;
     ensureImportsSorted();
     const slice = import_registry[0..import_count];
     const idx = std.sort.binarySearch(ImportEntry, slice, addr, struct {
@@ -667,4 +693,31 @@ test "thunks: duplicate native import registration keeps first entry" {
     registerNativeImport(0x12345000, "KERNEL32.dll", "FakeB", 20);
     // The second registration of the same address must be ignored.
     try testing.expectEqual(@as(u32, 12), getImportInfo(0x12345000).param_bytes);
+}
+
+test "thunks: import address filter never hides a registered address" {
+    reset();
+    defer reset();
+    // Addresses chosen to differ only in the bits the filter hashes, plus one
+    // that shares a filter word with an earlier entry: the filter may collide,
+    // but it must never clear a bit that a registered address needs.
+    const addrs = [_]u32{
+        0x1000_0000,
+        0x1000_0100,
+        0x1000_1000,
+        0x2000_0001,
+        0x0804_1234,
+        @intCast(@intFromPtr(&testHandler)),
+    };
+    for (addrs, 0..) |addr, i| {
+        registerNativeImport(addr, "KERNEL32.dll", "Filtered", @intCast(i + 1));
+    }
+    for (addrs, 0..) |addr, i| {
+        try testing.expect(isNativeImport(addr));
+        try testing.expectEqual(@as(u32, @intCast(i + 1)), getImportInfo(addr).param_bytes);
+    }
+    // An unregistered address whose filter bits are all clear is a miss, and
+    // one whose bits happen to be set still resolves to nothing.
+    try testing.expect(!isNativeImport(0x7000_0000));
+    try testing.expectEqual(@as(u32, 0), getImportInfo(0).param_bytes);
 }
