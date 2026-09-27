@@ -99,7 +99,18 @@
     <!-- Taskbar Right-Click Context Menu -->
     <div id="taskbar-context-menu" class="taskbar-context-menu"></div>
 
-    <script defer src="/van.min.js"></script>
-    <script defer src="/app.js"></script>
+    <script>
+        // Both scripts are deferred, so a load failure is indistinguishable
+        // from a slow guest: the status line would sit on "Connecting..."
+        // forever. Report it instead.
+        function assetFailed(name) {
+            const status = document.getElementById('status');
+            status.textContent = 'Failed to load ' + name + '. Reload the page to try again.';
+            status.classList.add('error');
+            status.style.display = 'block';
+        }
+    </script>
+    <script defer src="/van.min.js" onerror="assetFailed('van.min.js')"></script>
+    <script defer src="/app.js" onerror="assetFailed('app.js')"></script>
 </body>
 </html>

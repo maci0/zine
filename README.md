@@ -74,6 +74,8 @@ retroactively.
   for the native web UI, and `ZINE_CWD` for the WASI guest working directory.
 - `tests/check.sh` and `CONTRIBUTING.md` describing the single pre-PR gate.
 - `docs/THREAT_MODEL.md`, a risk ranking of the host process.
+- A transfer budget for the four precompressed web UI assets, checked by
+  `zig build test`, so the bytes a visitor downloads cannot grow unnoticed.
 
 #### Fixed
 
@@ -84,6 +86,10 @@ retroactively.
   non-blocking wait.
 - Web desktop Start button, common dialogs, and modal dismissal behave
   consistently across the desktop, the taskbar, and Escape.
+- The web UI serves the document, stylesheet, and both scripts over one
+  keep-alive connection instead of closing the socket after every asset.
+- A web UI script that fails to load reports it in the status bar instead of
+  leaving the page on "Connecting..." with no working interface.
 - Guest input no longer aborts the runtime through arithmetic traps: `sscanf`
   clamps digit runs that overrun the target type, D3D triangle rasterization
   drops triangles with non-finite screen coordinates instead of failing to
