@@ -509,16 +509,29 @@ test "registry: sameFile separates two real files sharing a basename" {
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "a/game.dll", .data = "first" });
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "b/game.dll", .data = "second" });
 
-    // std.testing.tmpDir roots the directory at .zig-cache/tmp under the cwd;
-    // the identity check takes a path, not a Dir, so spell it out.
-    const a = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/a/game.dll", .{tmp.sub_path});
+    // sameFile takes a path, not a Dir, so resolve each file the way the
+    // loader would see it. Spelling the temp root out by hand would make the
+    // test silently fall back to path text the moment the layout changed,
+    // which is the very branch this test exists to reject.
+    const a = try tmp.dir.realPathFileAlloc(testing.io, "a/game.dll", testing.allocator);
     defer testing.allocator.free(a);
-    const b = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/b/game.dll", .{tmp.sub_path});
+    const b = try tmp.dir.realPathFileAlloc(testing.io, "b/game.dll", testing.allocator);
     defer testing.allocator.free(b);
-    const a_alias = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/a/./game.dll", .{tmp.sub_path});
-    defer testing.allocator.free(a_alias);
+
+    // The inode path must be the one under test; a null id means the test
+    // would pass on the fallback alone.
+    if (comptime builtin.os.tag == .linux) {
+        const ida = fileIdLinux(a) orelse return error.TestUnexpectedResult;
+        const idb = fileIdLinux(b) orelse return error.TestUnexpectedResult;
+        try testing.expect(ida.ino != idb.ino);
+    }
 
     try testing.expect(!sameFile(a, b));
     try testing.expect(sameFile(a, a));
+    // A `./` segment in the text must not change the identity.
+    const dir_a = try tmp.dir.realPathFileAlloc(testing.io, "a", testing.allocator);
+    defer testing.allocator.free(dir_a);
+    var alias_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const a_alias = try std.fmt.bufPrint(&alias_buf, "{s}/./game.dll", .{dir_a});
     try testing.expect(sameFile(a, a_alias));
 }

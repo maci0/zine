@@ -342,11 +342,13 @@ test "guest memory: read/write 32-bit little-endian" {
 }
 
 test "guest memory: out of bounds returns zero/no-ops" {
-    var buf: [4]u8 = .{0} ** 4;
+    var buf: [4]u8 = .{0xA5} ** 4;
     var mem = GuestMemory{ .base = &buf };
     try testing.expectEqual(@as(u8, 0), mem.read8(100));
     try testing.expectEqual(@as(u32, 0), mem.read32(100));
-    mem.write32(100, 0xDEAD); // should not crash
+    // The write must not land anywhere, not even clamped into the buffer.
+    mem.write32(100, 0xDEAD);
+    for (buf) |byte| try testing.expectEqual(@as(u8, 0xA5), byte);
 }
 
 test "guest memory: unaligned multi-byte access matches little-endian layout" {

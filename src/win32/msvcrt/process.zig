@@ -992,13 +992,18 @@ test "putenv empty value deletes; getenv sees deletion" {
     set_buf[8] = 0;
     try std.testing.expectEqual(@as(i32, 0), putenv(@intFromPtr(&set_buf)));
 
+    var name_buf: [8]u8 = undefined;
+    @memcpy(name_buf[0..5], "MYVAR");
+    name_buf[5] = 0;
+    // The insert has to be observable, or a putenv that drops the write
+    // passes on the return code alone.
+    const found = getenv(@intFromPtr(&name_buf)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("1", std.mem.span(@as([*:0]const u8, @ptrCast(@alignCast(found)))));
+
     var del_buf: [8]u8 = undefined;
     @memcpy(del_buf[0..6], "MYVAR=");
     del_buf[6] = 0;
     try std.testing.expectEqual(@as(i32, 0), putenv(@intFromPtr(&del_buf)));
 
-    var name_buf: [8]u8 = undefined;
-    @memcpy(name_buf[0..5], "MYVAR");
-    name_buf[5] = 0;
     try std.testing.expect(getenv(@intFromPtr(&name_buf)) == null);
 }

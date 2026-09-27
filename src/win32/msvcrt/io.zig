@@ -757,6 +757,14 @@ pub fn fwprintf(f: ?*anyopaque, format_ptr: usize) callconv(.c) i32 {
 // -------------------------------------------------------------------------
 
 test "fclose recycles FILE structs across fopen cycles" {
+    const saved_handles = file_handles;
+    const saved_ptrs = file_ptrs;
+    const saved_free_count = file_ptr_free_count;
+    defer {
+        file_handles = saved_handles;
+        file_ptrs = saved_ptrs;
+        file_ptr_free_count = saved_free_count;
+    }
     file_handles = [_]?std.Io.File{null} ** max_files;
     file_ptrs = [_]usize{0} ** max_files;
     file_ptr_free_count = 0;

@@ -1879,19 +1879,23 @@ test "jit compiler stops at control flow" {
 
     const wasm_jcc = try compiler.compile(0x4000, &code_with_jcc);
     defer std.testing.allocator.free(wasm_jcc);
+    try expectValidWasmModule(wasm_jcc);
 
-    // Compile same first instruction without control flow
+    // Compile the same first instruction on its own, from the same base
+    // address, so the only variable is the trailing bytes the compiler must
+    // not reach.
     compiler.module.deinit();
     compiler.module = @import("emitter.zig").WasmModule.init(std.testing.allocator);
-    const code_no_jcc = [_]u8{
+    const code_mov_only = [_]u8{
         0xB8, 0x01, 0x00, 0x00, 0x00, // MOV EAX, 1
-        0xB9, 0x02, 0x00, 0x00, 0x00, // MOV ECX, 2
     };
-    const wasm_no_jcc = try compiler.compile(0x5000, &code_no_jcc);
-    defer std.testing.allocator.free(wasm_no_jcc);
+    const wasm_mov_only = try compiler.compile(0x4000, &code_mov_only);
+    defer std.testing.allocator.free(wasm_mov_only);
+    try expectValidWasmModule(wasm_mov_only);
 
-    // With JE present, only 1 instruction translated → smaller output than 2 instructions
-    try std.testing.expect(wasm_jcc.len < wasm_no_jcc.len);
+    // The Jcc and the MOV ECX past it must contribute nothing. A size
+    // comparison would pass on any delta, including a truncated MOV EAX.
+    try std.testing.expectEqualSlices(u8, wasm_mov_only, wasm_jcc);
 }
 
 test "jit compiler shifts" {

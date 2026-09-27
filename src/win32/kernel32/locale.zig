@@ -1038,7 +1038,9 @@ test "GetDateFormatA buffer semantics follow Win32" {
     try testing.expectEqual(@as(i32, "2/29/2024".len + 1), stub_GetDateFormatA(0, 0, @intFromPtr(&st), 0, 0, 0));
 
     // A buffer that cannot hold text + NUL fails without touching it.
+    @memset(&buf, 0xCD);
     try testing.expectEqual(@as(i32, 0), stub_GetDateFormatA(0, 0, @intFromPtr(&st), 0, @intFromPtr(&buf), "2/29/2024".len));
+    for (buf) |byte| try testing.expectEqual(@as(u8, 0xCD), byte);
 
     // Exactly text + NUL succeeds.
     try testing.expectEqual(@as(i32, "2/29/2024".len + 1), stub_GetDateFormatA(0, 0, @intFromPtr(&st), 0, @intFromPtr(&buf), "2/29/2024".len + 1));

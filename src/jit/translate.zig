@@ -604,3 +604,266 @@ pub fn emitPop32(body: *Body) !void {
     try body.appendOpcode(.local_set);
     try body.appendUleb128(REG_ESP);
 }
+
+// --- tests ---
+//
+// These assert the exact instruction stream each helper emits, not merely
+// that some plausible opcode is present: a substring search over a function
+// body also matches immediates and local indices, so it cannot tell
+// `i32_sub` the operation from `i32_sub` the byte 0x6B in a displacement.
+
+const Token = struct {
+    op: u8,
+    /// Local index following a `local.get`/`local.set`/`local.tee` opcode.
+    arg: ?u8 = null,
+};
+
+fn token(op: wasm.Opcode) Token {
+    return .{ .op = @intFromEnum(op) };
+}
+
+fn localToken(op: wasm.Opcode, index: u32) Token {
+    return .{ .op = @intFromEnum(op), .arg = @intCast(index) };
+}
+
+/// Split an emitted body into one token per opcode, dropping the immediates of
+/// `i32.const` and the local index of the local.* opcodes so a constant or a
+/// local number cannot be mistaken for an operation.
+fn decodeTokens(bytes: []const u8, out: *std.ArrayListUnmanaged(Token)) !void {
+    var i: usize = 0;
+    while (i < bytes.len) {
+        const op = bytes[i];
+        i += 1;
+        if (op == @intFromEnum(wasm.Opcode.i32_const)) {
+            // Skip the ILEB128 immediate: a byte whose bit 6 is set is the
+            // last one, because bit 6 is the sign bit.
+            while (true) {
+                if (i >= bytes.len) return error.TestUnexpectedResult;
+                const byte = bytes[i];
+                i += 1;
+                if (byte & 0x80 == 0 or byte & 0x40 != 0) break;
+            }
+            try out.append(std.testing.allocator, .{ .op = op });
+        } else if (op == @intFromEnum(wasm.Opcode.i32_load) or
+            op == @intFromEnum(wasm.Opcode.i32_store) or
+            op == @intFromEnum(wasm.Opcode.i32_load8_u) or
+            op == @intFromEnum(wasm.Opcode.i32_load16_u))
+        {
+            // Skip the two ULEB128 alignment and offset immediates.
+            if (i + 1 >= bytes.len) return error.TestUnexpectedResult;
+            if (bytes[i] > 0x7F or bytes[i + 1] > 0x7F) return error.TestUnexpectedResult;
+            i += 2;
+            try out.append(std.testing.allocator, .{ .op = op });
+        } else if (op == @intFromEnum(wasm.Opcode.local_get) or
+            op == @intFromEnum(wasm.Opcode.local_set) or
+            op == @intFromEnum(wasm.Opcode.local_tee))
+        {
+            if (i >= bytes.len or bytes[i] > 0x7F) return error.TestUnexpectedResult;
+            try out.append(std.testing.allocator, .{ .op = op, .arg = bytes[i] });
+            i += 1;
+        } else {
+            try out.append(std.testing.allocator, .{ .op = op });
+        }
+    }
+}
+
+fn expectTokens(expected: []const Token, bytes: []const u8) !void {
+    var actual: std.ArrayListUnmanaged(Token) = .empty;
+    defer actual.deinit(std.testing.allocator);
+    try decodeTokens(bytes, &actual);
+    try std.testing.expectEqualSlices(Token, expected, actual.items);
+}
+
+test "every ALU group maps to the x86 operation it stands for" {
+    const table = [_]struct { group: u3, op: wasm.Opcode }{
+        .{ .group = 0, .op = .i32_add }, // ADD
+        .{ .group = 1, .op = .i32_or }, // OR
+        .{ .group = 2, .op = .i32_add }, // ADC (carry in added separately)
+        .{ .group = 3, .op = .i32_sub }, // SBB (borrow in subtracted separately)
+        .{ .group = 4, .op = .i32_and }, // AND
+        .{ .group = 5, .op = .i32_sub }, // SUB
+        .{ .group = 6, .op = .i32_xor }, // XOR
+        .{ .group = 7, .op = .i32_sub }, // CMP (result discarded)
+    };
+    for (table) |entry| {
+        try std.testing.expectEqual(entry.op, aluGroupToWasmOp(entry.group).?);
+    }
+    // u3 is fully covered by the table, so no group may return null.
+    for (0..8) |group| {
+        _ = aluGroupToWasmOp(@intCast(group)) orelse return error.TestUnexpectedResult;
+    }
+}
+
+test "effective address emits base, scaled index, and displacement" {
+    const insn: decoder.Instruction = .{
+        .op0_kind = .mem,
+        .mem_base = REG_EAX + 1, // EBX
+        .mem_index = REG_EAX, // EAX
+        .mem_scale = 2, // *4
+        .mem_disp = 0x10,
+    };
+    var body: Body = .init(std.testing.allocator);
+    defer body.deinit();
+    try emitEffectiveAddress(&body, &insn, 0);
+    try expectTokens(&.{
+        localToken(.local_get, REG_EAX + 1),
+        localToken(.local_get, REG_EAX),
+        token(.i32_const),
+        token(.i32_mul),
+        token(.i32_add),
+        token(.i32_const),
+        token(.i32_add),
+    }, body.bytes.items);
+    // The scale constant and the displacement, not just their opcodes.
+    try expectConstAt(body.bytes.items, 0, &.{4});
+    try expectConstAt(body.bytes.items, 1, &.{0x10});
+}
+test "effective address with no base, index, or displacement is address 0" {
+    const insn: decoder.Instruction = .{ .op0_kind = .mem };
+    var body: Body = .init(std.testing.allocator);
+    defer body.deinit();
+    try emitEffectiveAddress(&body, &insn, 0);
+    try expectTokens(&.{token(.i32_const)}, body.bytes.items);
+    try expectOnlyConst(body.bytes.items, 0);
+
+    // Displacement alone is a constant offset, not base+disp. The negative
+    // sign must survive the ILEB128 encoding, so the body carries 0x78 (-8)
+    // and not 0x08.
+    const disp_only: decoder.Instruction = .{ .op0_kind = .mem, .mem_disp = -8 };
+    var disp_body: Body = .init(std.testing.allocator);
+    defer disp_body.deinit();
+    try emitEffectiveAddress(&disp_body, &disp_only, 0);
+    try expectTokens(&.{token(.i32_const)}, disp_body.bytes.items);
+    try expectOnlyConst(disp_body.bytes.items, 0x78);
+}
+
+test "effective address of a non-memory operand ignores the memory fields" {
+    const insn: decoder.Instruction = .{
+        .op0_kind = .reg,
+        .op0_reg = REG_ESP,
+        // Deliberate garbage: operand 0 is a register, so no addressing mode
+        // fields apply and none of these may reach the output.
+        .mem_base = REG_EBP,
+        .mem_index = REG_ESI,
+        .mem_scale = 3,
+        .mem_disp = 0x40,
+    };
+    var body: Body = .init(std.testing.allocator);
+    defer body.deinit();
+    try emitEffectiveAddress(&body, &insn, 0);
+    try expectTokens(&.{token(.i32_const)}, body.bytes.items);
+}
+
+/// Assert the `n`-th `i32.const` in an emitted body carries `expected` as its
+/// immediate, comparing the encoded bytes rather than a decoded value.
+fn expectConstAt(bytes: []const u8, n: usize, expected: []const u8) !void {
+    var seen: usize = 0;
+    var i: usize = 0;
+    while (i < bytes.len) : (i += 1) {
+        if (bytes[i] != @intFromEnum(wasm.Opcode.i32_const)) continue;
+        if (seen == n) {
+            try std.testing.expectEqualSlices(u8, expected, bytes[i + 1 .. i + 1 + expected.len]);
+            return;
+        }
+        seen += 1;
+    }
+    return error.TestUnexpectedResult;
+}
+
+/// The whole body is a single `i32.const <v>`.
+fn expectOnlyConst(bytes: []const u8, v: u8) !void {
+    try std.testing.expectEqualSlices(u8, &.{ @intFromEnum(wasm.Opcode.i32_const), v }, bytes);
+}
+
+test "each Jcc condition reads exactly the flags its x86 encoding defines" {
+    const G = struct {
+        fn op(comptime o: wasm.Opcode) Token {
+            return .{ .op = @intFromEnum(o) };
+        }
+        fn local(index: u32) Token {
+            return .{ .op = @intFromEnum(wasm.Opcode.local_get), .arg = @intCast(index) };
+        }
+    };
+    const table = [_]struct { cc: u4, expected: []const Token }{
+        // cc encodes the condition directly: 0x8x tests a single flag, 0x4x
+        // and 0xCx pair it with another.
+        .{ .cc = 0x0, .expected = &.{G.local(LOCAL_OF)} }, // JO   OF
+        .{ .cc = 0x1, .expected = &.{ G.local(LOCAL_OF), G.op(.i32_eqz) } }, // JNO
+        .{ .cc = 0x2, .expected = &.{G.local(LOCAL_CF)} }, // JB   CF
+        .{ .cc = 0x3, .expected = &.{ G.local(LOCAL_CF), G.op(.i32_eqz) } }, // JNB
+        .{ .cc = 0x4, .expected = &.{G.local(LOCAL_ZF)} }, // JZ   ZF
+        .{ .cc = 0x5, .expected = &.{ G.local(LOCAL_ZF), G.op(.i32_eqz) } }, // JNZ
+        .{ .cc = 0x6, .expected = &.{ G.local(LOCAL_CF), G.local(LOCAL_ZF), G.op(.i32_or) } }, // JBE
+        .{ .cc = 0x7, .expected = &.{ G.local(LOCAL_CF), G.op(.i32_eqz), G.local(LOCAL_ZF), G.op(.i32_eqz), G.op(.i32_and) } }, // JA
+        .{ .cc = 0x8, .expected = &.{G.local(LOCAL_SF)} }, // JS   SF
+        .{ .cc = 0x9, .expected = &.{ G.local(LOCAL_SF), G.op(.i32_eqz) } }, // JNS
+        .{ .cc = 0xA, .expected = &.{G.local(LOCAL_PF)} }, // JP   PF
+        .{ .cc = 0xB, .expected = &.{ G.local(LOCAL_PF), G.op(.i32_eqz) } }, // JNP
+        .{ .cc = 0xC, .expected = &.{ G.local(LOCAL_SF), G.local(LOCAL_OF), G.op(.i32_ne) } }, // JL  SF!=OF
+        .{ .cc = 0xD, .expected = &.{ G.local(LOCAL_SF), G.local(LOCAL_OF), G.op(.i32_eq) } }, // JGE SF==OF
+        .{ .cc = 0xE, .expected = &.{ G.local(LOCAL_ZF), G.local(LOCAL_SF), G.local(LOCAL_OF), G.op(.i32_ne), G.op(.i32_or) } }, // JLE
+        .{ .cc = 0xF, .expected = &.{ G.local(LOCAL_ZF), G.op(.i32_eqz), G.local(LOCAL_SF), G.local(LOCAL_OF), G.op(.i32_eq), G.op(.i32_and) } }, // JG
+    };
+    for (table) |entry| {
+        var body: Body = .init(std.testing.allocator);
+        defer body.deinit();
+        try emitConditionCode(&body, entry.cc);
+        try expectTokens(entry.expected, body.bytes.items);
+    }
+}
+
+test "PUSH stores at the decremented ESP and POP loads from the old one" {
+    var push_body: Body = .init(std.testing.allocator);
+    defer push_body.deinit();
+    try emitPush32(&push_body);
+    // value -> scratch; ESP = ESP-4; address = ESP+mem_base; store
+    try expectTokens(&.{
+        localToken(.local_set, LOCAL_SCRATCH),
+        localToken(.local_get, REG_ESP),
+        token(.i32_const),
+        token(.i32_sub),
+        localToken(.local_tee, REG_ESP),
+        localToken(.local_get, LOCAL_MEM_BASE),
+        token(.i32_add),
+        localToken(.local_get, LOCAL_SCRATCH),
+        token(.i32_store),
+    }, push_body.bytes.items);
+    // The decrement is 4 bytes and the store is 4-byte aligned at offset 0.
+    try expectConstAt(push_body.bytes.items, 0, &.{4});
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ @intFromEnum(wasm.Opcode.i32_store), 2, 0 },
+        push_body.bytes.items[push_body.bytes.items.len - 3 ..],
+    );
+
+    var pop_body: Body = .init(std.testing.allocator);
+    defer pop_body.deinit();
+    try emitPop32(&pop_body);
+    // load [ESP+mem_base] first, then bump ESP, so the result is the old top.
+    try expectTokens(&.{
+        localToken(.local_get, REG_ESP),
+        localToken(.local_get, LOCAL_MEM_BASE),
+        token(.i32_add),
+        token(.i32_load),
+        localToken(.local_get, REG_ESP),
+        token(.i32_const),
+        token(.i32_add),
+        localToken(.local_set, REG_ESP),
+    }, pop_body.bytes.items);
+    try expectConstAt(pop_body.bytes.items, 0, &.{4});
+}
+
+test "logic ops clear CF and OF to zero" {
+    var body: Body = .init(std.testing.allocator);
+    defer body.deinit();
+    try emitClearCfOf(&body);
+    try expectTokens(&.{
+        token(.i32_const),
+        localToken(.local_set, LOCAL_CF),
+        token(.i32_const),
+        localToken(.local_set, LOCAL_OF),
+    }, body.bytes.items);
+    // Both stored values must be literal 0, not "whatever the stack held".
+    try expectConstAt(body.bytes.items, 0, &.{0});
+    try expectConstAt(body.bytes.items, 1, &.{0});
+}

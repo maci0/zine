@@ -570,9 +570,9 @@ test "normalizePath: removes . components" {
 test "toHostPath: C: drive traversal is blocked" {
     var buf: [256]u8 = undefined;
     const len = toHostPath("C:\\game\\..\\..\\..\\..\\etc\\passwd", &buf);
-    // Should stay inside drive_c/ — ".." cannot escape the sandbox
-    const result = buf[0..len];
-    try testing.expect(std.mem.startsWith(u8, result, "drive_c/"));
+    // ".." cannot escape the sandbox: game/ is popped and the surplus
+    // components are dropped once the drive root is reached.
+    try testing.expectEqualStrings("drive_c/etc/passwd", buf[0..len]);
 }
 
 test "win32ToPosix: empty string" {

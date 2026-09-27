@@ -202,6 +202,8 @@ test "defaults bind loopback only" {
 }
 
 test "host and port override the defaults" {
+    const saved = web_server;
+    defer web_server = saved;
     var env = std.process.Environ.Map.init(std.testing.allocator);
     try env.put("ZINE_WEB_HOST", "0.0.0.0");
     try env.put("ZINE_WEB_PORT", "8080");

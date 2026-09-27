@@ -398,6 +398,49 @@ test "lazy flags: toEflags roundtrip" {
     try testing.expectEqual(f.getSF(), f2.getSF());
 }
 
+test "lazy flags: toEflags places each flag at its architectural bit" {
+    // A round trip alone survives a toEflags and fromEflags that agree on a
+    // wrong layout, so pin the EFLAGS bit positions themselves: CF=0, PF=2,
+    // AF=4, ZF=6, SF=7, DF=10, OF=11, with reserved bit 1 and IF always set.
+    const cases = [_]struct {
+        name: []const u8,
+        op: FlagOp,
+        size: OpSize,
+        result: u32,
+        op1: u32,
+        op2: u32,
+        expected: u32,
+    }{
+        // A logic result of zero: ZF set, SF clear, zero has even parity, and
+        // logic ops always clear CF, AF and OF.
+        .{ .name = "and to zero", .op = .logic, .size = .byte, .result = 0x00, .op1 = 0xF0, .op2 = 0x0F, .expected = EFLAGS_DEFAULT | FLAG_ZF | FLAG_PF },
+        // 0xFF: bit 7 sets SF, 8 set bits means even parity.
+        .{ .name = "and to 0xFF", .op = .logic, .size = .byte, .result = 0xFF, .op1 = 0xFF, .op2 = 0xFF, .expected = EFLAGS_DEFAULT | FLAG_SF | FLAG_PF },
+        // 0x01: one set bit means odd parity, so PF stays clear.
+        .{ .name = "and to 0x01", .op = .logic, .size = .byte, .result = 0x01, .op1 = 0x01, .op2 = 0x01, .expected = EFLAGS_DEFAULT },
+        // SF comes from the operand size's sign bit, so the same bit 7 that
+        // sets SF for a byte result leaves SF clear for a word result.
+        .{ .name = "and to word 0x0080", .op = .logic, .size = .word, .result = 0x0080, .op1 = 0x0080, .op2 = 0x0080, .expected = EFLAGS_DEFAULT },
+        .{ .name = "and to word 0x8000", .op = .logic, .size = .word, .result = 0x8000, .op1 = 0x8000, .op2 = 0x8000, .expected = EFLAGS_DEFAULT | FLAG_SF | FLAG_PF },
+    };
+    for (cases) |case| {
+        var f = LazyFlags{};
+        f.update(case.op, case.size, case.result, case.op1, case.op2);
+        try testing.expectEqual(case.expected, f.toEflags());
+    }
+
+    // Carry and overflow only come out of an arithmetic op: 0xFF + 0x01 wraps
+    // to 0x00, carrying out of bit 7 and out of the low nibble.
+    var carry = LazyFlags{};
+    carry.update(.add, .byte, 0x00, 0xFF, 0x01);
+    try testing.expectEqual(EFLAGS_DEFAULT | FLAG_CF | FLAG_ZF | FLAG_PF | FLAG_AF, carry.toEflags());
+
+    // 0x7F + 0x01 stays below 0x100 (no carry) but overflows the signed byte.
+    var overflow = LazyFlags{};
+    overflow.update(.add, .byte, 0x80, 0x7F, 0x01);
+    try testing.expectEqual(EFLAGS_DEFAULT | FLAG_SF | FLAG_OF | FLAG_AF, overflow.toEflags());
+}
+
 test "lazy flags: byte-size SF" {
     var f = LazyFlags{};
     f.update(.sub, .byte, 0x80, 0x00, 0x80); // result = 0x80, sign bit set for byte

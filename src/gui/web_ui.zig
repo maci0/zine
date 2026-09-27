@@ -1330,23 +1330,30 @@ test "static asset encoding negotiation preserves identity and edited files" {
         .{ .encoding = "br, gzip;q=0.5", .gzip = true },
         .{ .encoding = "*;q=0.5", .gzip = true },
     };
+    // The body is named alongside whether it is the precompressed asset, so
+    // the expectation does not come from comparing lengths.
+    const bodies = [_]struct { content: []const u8, compressed: bool }{
+        .{ .content = @embedFile("app.js"), .compressed = true },
+        .{ .content = "edited asset", .compressed = false },
+        .{ .content = "", .compressed = false },
+    };
     for (cases) |case| {
         const request = try std.fmt.allocPrint(std.testing.allocator, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: {s}\r\n\r\n", .{case.encoding});
         defer std.testing.allocator.free(request);
-        for ([_][]const u8{ @embedFile("app.js"), "edited asset", "" }) |content| {
+        for (bodies) |body| {
             var input = std.Io.Reader.fixed(request);
             var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
             defer output.deinit();
             var server = std.http.Server.init(&input, &output.writer);
             var req = try server.receiveHead();
-            try respondStaticContent(&req, content, "application/javascript");
+            try respondStaticContent(&req, body.content, "application/javascript");
             const response = output.written();
-            const encoded = case.gzip and content.len == @embedFile("app.js").len;
+            const encoded = case.gzip and body.compressed;
             try std.testing.expectEqual(encoded, std.mem.indexOf(u8, response, "\r\ncontent-encoding: gzip\r\n") != null);
             try std.testing.expect(std.mem.indexOf(u8, response, "\r\nvary: Accept-Encoding\r\n") != null);
             if (!encoded) {
                 const body_start = (std.mem.indexOf(u8, response, "\r\n\r\n") orelse return error.TestUnexpectedResult) + 4;
-                try std.testing.expectEqualStrings(content, response[body_start..]);
+                try std.testing.expectEqualStrings(body.content, response[body_start..]);
             }
         }
     }

@@ -599,6 +599,7 @@ fn testHandler(cpu: *Cpu) void {
 
 test "thunks: register and dispatch" {
     reset();
+    defer reset();
     const id = registerThunk(.{
         .name = "test_add",
         .param_count = 2,
