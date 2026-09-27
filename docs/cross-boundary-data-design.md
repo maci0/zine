@@ -473,10 +473,12 @@ as separate APIs (`FindFirstFileA`/`FindNextFileA` keep their own handle pool in
 
 Goal: Stubs use `[*]u8`, `*T`, `?[*:0]const u8` instead of `usize`. The comptime thunk handler auto-translates pointer types. All `trace.addr()` calls removed from stubs.
 
-Status: NOT fully done. 118 `trace.addr()` call sites remain across
+Status: NOT fully done. 114 `trace.addr()` call sites remain across
 `src/win32/` (concentrated in `user32/message.zig`, `kernel32/locale.zig`,
 `comdlg32/dialogs.zig`, `advapi32/registry.zig`, `kernel32/path.zig`/`mem.zig`,
-and the msvcrt modules below; count checked 2026-09-27).
+and the msvcrt modules below; count checked 2026-09-27). The other four sites
+in the tree are loader or entry-point code: 3 in `src/wasm_main.zig`, 1 in
+`src/loader/env.zig`, for 118 across `src/`.
 Verify current counts with: `rg -c "trace\.addr\(" src/win32` (this counts
 lines, so it also counts the one mention in a `shared.zig` doc comment).
 
@@ -543,7 +545,7 @@ an exception to the target design.
 - [ ] `rpcrt4.zig` (4 sites), `ole32/com.zig` (1 site), `comdlg32/dialogs.zig` (11 sites) remain; `shell32.zig` clean
 - [ ] `msvcrt/path.zig` (3), `msvcrt/io.zig` (3), `msvcrt/process.zig` (3), `msvcrt/except.zig` (3), `msvcrt/time.zig` (2), `msvcrt/string.zig` (2), `msvcrt/misc.zig` (2), `msvcrt/fmt.zig` (2), `msvcrt/file.zig` (2) remain
 - [ ] `rcdll.zig` (1 site), `imagehlp.zig` (1 site) remain
-- [ ] Register the remaining raw exports through the comptime thunk handler. `msvcrt.zig` (`_EH_prolog`, `_setjmp3`, `longjmp`, `_ftol`) and `ntdll.zig` (`_chkstk`, `_allmul`, `_alldiv`) still go through `addBuiltinExport`, which sets `param_bytes = 0` and no `thunk_handler`.
+- [ ] Register the remaining raw exports through the comptime thunk handler. `msvcrt.zig` (`_EH_prolog`, `_setjmp3`, `longjmp`, `_ftol`) and `ntdll.zig` (`_chkstk`, `_allmul`, `_alldiv`) still go through `addBuiltinExport`, which sets `param_bytes = 0` and no `thunk_handler`. `msvcp60.zig` (two data symbols) and the `TESTDLL.dll` fake handle use the same raw path by design: a data symbol has no parameters to translate, and `TESTDLL.dll` is a fixed value, not a callable.
 
 **Sub-phase 2e: Remove `usize` auto-translation [PARTIAL]**
 - [x] Non-variadic `castArg` translates only pointer-typed parameters; integer and HANDLE values pass through without address translation.
