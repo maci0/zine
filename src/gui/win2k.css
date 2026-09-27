@@ -170,7 +170,7 @@ canvas                      { cursor: none; }
     /* The Win2k faces carry no glyphs outside Latin-1, so the stacks end in
      * families that cover Cyrillic, Greek, Arabic, Hebrew, CJK and Devanagari
      * before the generic fallback picks a system face for the whole range. */
-    --font-ui:   'MS Sans Serif', 'Microsoft Sans Serif', 'Tahoma', 'Segoe UI', 'Noto Sans', 'DejaVu Sans', 'Liberation Sans', sans-serif;
+    --font-ui:   'MS Sans Serif', 'Microsoft Sans Serif', 'Tahoma', 'Noto Sans', 'DejaVu Sans', 'Liberation Sans', sans-serif;
     --font-mono: 'Lucida Console', 'Consolas', 'Courier New', 'DejaVu Sans Mono', 'Noto Sans Mono', monospace;
 
     /* ===== Surfaces outside the GetSysColor set =====
@@ -183,7 +183,7 @@ canvas                      { cursor: none; }
     --sys-places-bar:    linear-gradient(to bottom, #7B98BF, #6585B2 30%, #5A7AAA);
     --sys-banner:        linear-gradient(to top, var(--sys-title), var(--sys-title) 70%, var(--sys-title-grad));
     --sys-today:         #FF0000;  /* month calendar current-date marker       */
-    --sys-visit-link:    #551A8B;  /* followed hyperlink                       */
+    --sys-visit-link:    #800080;  /* followed hyperlink                       RGB 128,0,128   */
 }
 
 /* ===== Base ===== */
@@ -1181,6 +1181,23 @@ select.win2k-edit:disabled {
     width: 16px;
     height: 16px;
     flex-shrink: 0;
+}
+
+/* Report rows, filled in from a set_listbox_items message. Same metrics as
+   the icon items above, so a list keeps one row rhythm in both fill paths. */
+.win2k-listview-row,
+.win2k-treeview-row {
+    padding: 1px 4px;
+    font-size: 11px;
+    cursor: default;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.win2k-listview-row:hover,
+.win2k-treeview-row:hover {
+    background-color: var(--sys-sel);
+    color: var(--sys-sel-text);
 }
 
 /* ===================================================================

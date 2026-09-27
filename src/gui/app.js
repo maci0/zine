@@ -1127,7 +1127,7 @@ function connect() {
                         const items = (msg.items || '').split('\n');
                         el.innerHTML = '';
                         items.forEach((it, idx) => {
-                            const d = div({class: 'win2k-treeview-row', style: 'padding:1px 4px; font-size:11px; cursor:default; white-space:nowrap; overflow:hidden;', onclick: (e) => {
+                            const d = div({class: 'win2k-treeview-row', onclick: (e) => {
                                 e.stopPropagation();
                                 sendCommand(msg.id);
                                 if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
@@ -1139,7 +1139,7 @@ function connect() {
                         const items = (msg.items || '').split('\n');
                         el.innerHTML = '';
                         items.forEach((it, idx) => {
-                            const d = div({class: 'win2k-listview-row', style: 'padding:1px 4px; font-size:11px; cursor:default; white-space:nowrap; overflow:hidden; border-bottom:1px solid #ddd;', onclick: (e) => {
+                            const d = div({class: 'win2k-listview-row', onclick: (e) => {
                                 e.stopPropagation();
                                 sendCommand(msg.id);
                                 if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
