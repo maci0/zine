@@ -119,6 +119,10 @@ retroactively.
 - A PE section whose `VirtualAddress + VirtualSize` wraps, or a resource
   directory whose entry counts overflow or run past the image, is rejected
   instead of producing a reversed slice or an out-of-bounds read.
+- A target file that is not a usable PE reports a plain-language cause and a
+  hint instead of the loader's internal error name.
+- The native and WASI `--help` option lists lost a stray blank line, and
+  `--jit-max-eip` is documented as the u32 it accepts (decimal or 0x hex).
 
 ### 0.2.0 (2026-09-18)
 

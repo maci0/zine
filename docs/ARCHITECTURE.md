@@ -60,13 +60,14 @@ The native entry point handles:
   - `-i`, `--interpret` — use x86 software interpreter
   - `--jit` — use JIT compiler (x86-to-WASM translation)
   - `--profile` — enable profiling (hot code pages, opcodes, stub calls)
+  - `-q`, `--quiet` — report only warnings and errors on stderr
   - `--argv0 <name>` — override argv[0] passed to the target
   - `--fltk` — use native FLTK GUI instead of web UI
   - `--no-gui` — disable GUI (no web server), even for GUI subsystem apps
   - `-h`, `--help` — show help
   - `-v`, `--version` — show version
   - `--` — end of zine options (allows target names starting with `-`)
-  - Environment variables: `ZINE_TRACE` (API tracing), `ZINE_TRACE_INSN` (instruction tracing), `ZINE_PROFILE` (profiling), `ZINE_WEB_HOST` / `ZINE_WEB_PORT` (web UI bind address)
+  - Environment variables: `ZINE_LOG_LEVEL` (log level), `ZINE_TRACE` (API tracing), `ZINE_TRACE_INSN` (instruction tracing), `ZINE_PROFILE` (profiling), `ZINE_WEB_HOST` / `ZINE_WEB_PORT` (web UI bind address)
 - `.bat`/`.cmd` file preprocessing via `bat.zig`
 - SIGSEGV/SIGFPE (segmentation fault / floating-point exception) signal handler for SEH (Structured Exception Handling) dispatch and AppCompat (Application Compatibility) shims
 - Environment setup (combining BAT-defined PATH, argv, envp)

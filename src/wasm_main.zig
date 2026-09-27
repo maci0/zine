@@ -172,9 +172,10 @@ pub fn main(init: std.process.Init) !void {
                 \\Options:
                 \\  -i, --interpret     Use x86 software interpreter (default on WASM)
                 \\      --jit           Use JIT compiler (x86-to-WASM translation)
-                \\      --jit-max-eip=<hex>  Only JIT blocks below this EIP (debugging)
+                \\      --jit-max-eip=<u32>
+                \\                      Only JIT blocks below this EIP (decimal or
+                \\                      0x-prefixed hex; debugging)
                 \\      --argv0 <name>  Override argv[0] passed to the target
-                \\
                 \\  -t, --trace         Enable all tracing (API + instructions)
                 \\      --trace-api     Enable API tracing only
                 \\      --trace-insn    Enable x86 instruction tracing only

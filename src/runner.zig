@@ -153,8 +153,9 @@ pub fn failTargetLoad(target: []const u8, err: anyerror) noreturn {
             .{target},
         ),
         else => std.debug.print(
-            "Error: cannot load '{s}' as a Win32 PE executable ({s}).\n",
-            .{ target, @errorName(err) },
+            "Error: cannot load '{s}' as a Win32 PE executable.\n" ++
+                "Pass an uncompressed 32-bit Windows .exe or .dll; the file may be truncated or a different format.\n",
+            .{target},
         ),
     }
     std.process.exit(target_load_failure_status);
