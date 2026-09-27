@@ -96,13 +96,74 @@ pub const Mutex = struct {
     }
 };
 
-/// Returns milliseconds since UNIX epoch using the process-wide io.
+/// Guest-visible clock under a virtual (simulated) time source.
+///
+/// One cursor serves both the wall and the monotonic readings, so a simulated
+/// guest sees the two move together from a fixed origin, where the host clocks
+/// differ by the boot time. Every read advances the cursor by `step_ns`, and
+/// every guest wait advances it by the wait's duration (see
+/// `advanceVirtualClock`), so the observable clock depends only on the order
+/// of guest calls, not on how long the host took to serve them.
+pub const VirtualClock = struct {
+    now_ns: i128,
+    step_ns: i128,
+};
+
+var virtual_clock: ?*VirtualClock = null;
+
+/// Guards `VirtualClock.now_ns`: a guest may read the clock from any of its
+/// threads, and the cursor is a plain field. The section is a few adds.
+var virtual_clock_mutex: Mutex = .{};
+
+pub fn installVirtualClock(clock: *VirtualClock) void {
+    virtual_clock_mutex.lock();
+    defer virtual_clock_mutex.unlock();
+    virtual_clock = clock;
+}
+
+/// Returns to the host clocks. The counterpart of `installVirtualClock`, so a
+/// caller that simulates a run can hand the process back its real time.
+pub fn useHostClock() void {
+    virtual_clock_mutex.lock();
+    defer virtual_clock_mutex.unlock();
+    virtual_clock = null;
+}
+
+pub fn useVirtualClock() bool {
+    return virtual_clock != null;
+}
+
+/// Charges a guest wait to the virtual clock and reports whether it did. A
+/// real clock is never advanced, so the caller must sleep for the same
+/// duration when this returns false.
+pub fn advanceVirtualClock(ns: u64) bool {
+    virtual_clock_mutex.lock();
+    defer virtual_clock_mutex.unlock();
+    const clock = virtual_clock orelse return false;
+    clock.now_ns += ns;
+    return true;
+}
+
+/// Reads and advances the virtual clock; null when the host clocks are in use.
+fn virtualNow() ?i128 {
+    virtual_clock_mutex.lock();
+    defer virtual_clock_mutex.unlock();
+    const clock = virtual_clock orelse return null;
+    const now = clock.now_ns;
+    clock.now_ns += clock.step_ns;
+    return now;
+}
+
+/// Returns milliseconds since UNIX epoch using the process-wide io, or the
+/// virtual clock when one is installed.
 pub fn milliTimestamp() i64 {
+    if (virtualNow()) |ns| return @intCast(@divTrunc(ns, std.time.ns_per_ms));
     const ts = std.Io.Timestamp.now(io(), .real);
     return ts.toMilliseconds();
 }
 
 pub fn nanoTimestamp() i128 {
+    if (virtualNow()) |ns| return ns;
     const ts = std.Io.Timestamp.now(io(), .real);
     return ts.nanoseconds;
 }
@@ -111,6 +172,7 @@ pub fn nanoTimestamp() i128 {
 /// wall-clock steps (NTP, manual setting). Use for measuring elapsed time;
 /// the absolute value is meaningless across processes or boots.
 pub fn monoMilliTimestamp() i64 {
+    if (virtualNow()) |ns| return @intCast(@divTrunc(ns, std.time.ns_per_ms));
     const ts = std.Io.Timestamp.now(io(), .awake);
     return ts.toMilliseconds();
 }
@@ -118,8 +180,16 @@ pub fn monoMilliTimestamp() i64 {
 /// Nanoseconds on the monotonic clock. Pairs with `monoMilliTimestamp`
 /// (same underlying clock); never comparable with `nanoTimestamp`.
 pub fn monoNanoTimestamp() i128 {
+    if (virtualNow()) |ns| return ns;
     const ts = std.Io.Timestamp.now(io(), .awake);
     return ts.nanoseconds;
+}
+
+/// Elapsed time measured by the emulator itself (log timestamps, profiler).
+/// Always the host monotonic clock: instrumentation must not report the
+/// simulated time a guest asked for.
+pub fn hostMonoNanoTimestamp() i128 {
+    return std.Io.Timestamp.now(io(), .awake).nanoseconds;
 }
 
 /// Spin-based condition variable (see `Mutex` above for why we avoid
@@ -143,3 +213,69 @@ pub const Condition = struct {
         _ = self.epoch.fetchAdd(1, .release);
     }
 };
+
+const testing = std.testing;
+
+/// A scripted run: alternating clock reads and guest waits, the shape of
+/// everything a Win32 guest does to the passage of time.
+const run_reads = 6;
+
+fn scriptedRun(seed_ns: i128) [run_reads]i128 {
+    var clock = VirtualClock{ .now_ns = seed_ns, .step_ns = std.time.ns_per_ms };
+    installVirtualClock(&clock);
+    defer useHostClock();
+
+    var out: [run_reads]i128 = undefined;
+    for (0..run_reads) |i| {
+        if (i % 2 == 0) {
+            _ = advanceVirtualClock(std.time.ns_per_ms);
+        } else {
+            out[i] = monoNanoTimestamp();
+        }
+    }
+    return out;
+}
+
+test "virtual clock: readings follow the configured start and step" {
+    var clock = VirtualClock{ .now_ns = 1_700_000_000_000_000_000, .step_ns = std.time.ns_per_ms };
+    installVirtualClock(&clock);
+    defer useHostClock();
+
+    try testing.expect(useVirtualClock());
+    try testing.expectEqual(@as(i128, 1_700_000_000_000_000_000), nanoTimestamp());
+    try testing.expectEqual(@as(i128, 1_700_000_000_000_000_000 + std.time.ns_per_ms), milliTimestamp() * std.time.ns_per_ms);
+    // Wall and monotonic share the cursor, so a tick delta the guest computes
+    // matches the wait it asked for.
+    const before = monoMilliTimestamp();
+    try testing.expect(advanceVirtualClock(50 * std.time.ns_per_ms));
+    // The wait plus the step this reading itself advances the cursor by.
+    try testing.expectEqual(@as(i64, 50) + @divExact(clock.step_ns, std.time.ns_per_ms), monoMilliTimestamp() - before);
+}
+
+test "virtual clock: the same start replays the same readings" {
+    const first = scriptedRun(1_700_000_000_000_000_000);
+    const second = scriptedRun(1_700_000_000_000_000_000);
+    try testing.expectEqualSlices(i128, &first, &second);
+    try testing.expect(first[1] != first[3]);
+}
+
+test "virtual clock: waits are charged to it and never to the host clock" {
+    var clock = VirtualClock{ .now_ns = 0, .step_ns = 1 };
+    installVirtualClock(&clock);
+    defer useHostClock();
+
+    const host_before = hostMonoNanoTimestamp();
+    _ = nanoTimestamp();
+    try testing.expect(advanceVirtualClock(std.time.ns_per_s));
+    // A virtual second moved the guest clock by a second, so a host clock
+    // still tracking real time cannot differ from it by nearly that much.
+    try testing.expectEqual(@as(i128, std.time.ns_per_s + 1), nanoTimestamp());
+    try testing.expect(@abs(hostMonoNanoTimestamp() - host_before) < std.time.ns_per_s);
+}
+
+test "host clock: without a virtual clock the host clocks answer" {
+    useHostClock();
+    try testing.expect(!useVirtualClock());
+    try testing.expect(!advanceVirtualClock(std.time.ns_per_ms));
+    try testing.expect(hostMonoNanoTimestamp() > 0);
+}

@@ -63,7 +63,7 @@ fn getElapsedMs() u64 {
     if (comptime builtin.target.cpu.arch.isWasm()) return 0;
     // Elapsed-since-start is a duration: monotonic clock, immune to
     // wall-clock steps that would skew or negate log timestamps.
-    const now: i128 = runtime.monoNanoTimestamp();
+    const now: i128 = runtime.hostMonoNanoTimestamp();
     if (start_ns == null) {
         start_ns = now;
         return 0;

@@ -149,7 +149,10 @@ pub fn GetTickCount() callconv(w32cc.WINAPI) u32 {
 pub fn Sleep(dwMilliseconds: u32) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: Sleep({d})\n", .{dwMilliseconds});
     if (dwMilliseconds > 0) {
-        @import("../../platform.zig").sleep(@as(u64, dwMilliseconds) * std.time.ns_per_ms);
+        const ns = @as(u64, dwMilliseconds) * std.time.ns_per_ms;
+        // Under a virtual clock the wait costs simulated time only, so a
+        // replay reaches the same clock values without spending real time.
+        if (!runtime.advanceVirtualClock(ns)) @import("../../platform.zig").sleep(ns);
     } else {
         platform.yield();
     }

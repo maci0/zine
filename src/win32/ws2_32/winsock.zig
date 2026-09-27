@@ -417,7 +417,8 @@ pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, time
             if (timeout != 0) {
                 const tv = @as(*const TimeVal, @ptrFromInt(timeout));
                 const ns = timevalToNs(tv.tv_sec, tv.tv_usec);
-                if (ns > 0) @import("../../platform.zig").sleep(ns);
+                if (ns > 0 and !@import("../../runtime.zig").advanceVirtualClock(ns))
+                    @import("../../platform.zig").sleep(ns);
             }
             return 0;
         }

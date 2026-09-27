@@ -1699,8 +1699,8 @@ pub fn SendMessageTimeoutA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize, 
 /// On real Windows this blocks the thread. We sleep briefly to avoid
 /// burning 100% CPU in the Delphi message loop.
 pub fn WaitMessage() callconv(w32cc.WINAPI) i32 {
-    const platform = @import("../../platform.zig");
-    platform.sleep(10 * 1000000); // 10ms
+    const ns: u64 = 10 * 1000000; // 10ms
+    if (!runtime.advanceVirtualClock(ns)) @import("../../platform.zig").sleep(ns);
     return 1; // TRUE = success
 }
 
@@ -1718,9 +1718,9 @@ pub fn stub_MsgWaitForMultipleObjects(nCount: u32, pHandles: usize, fWaitAll: i3
     _ = .{ pHandles, fWaitAll, dwWakeMask };
     // Sleep briefly to avoid burning CPU. Return nCount = message queue signaled.
     if (dwMilliseconds > 0 and dwMilliseconds != 0xFFFFFFFF) {
-        const platform = @import("../../platform.zig");
         const ms = @min(dwMilliseconds, 50);
-        platform.sleep(@as(u64, ms) * 1000000);
+        const ns = @as(u64, ms) * 1000000;
+        if (!runtime.advanceVirtualClock(ns)) @import("../../platform.zig").sleep(ns);
     }
     return nCount;
 }

@@ -72,6 +72,9 @@ retroactively.
 
 - `ZINE_WEB_HOST` (default `127.0.0.1`) and `ZINE_WEB_PORT` (default `1995`)
   for the native web UI, and `ZINE_CWD` for the WASI guest working directory.
+- `ZINE_VIRTUAL_CLOCK_NS` and `ZINE_CLOCK_STEP_NS` drive the guest clock from a
+  fixed start instead of the host clocks, so two runs of the same guest that
+  issue the same calls in the same order see the same time values.
 - `tests/check.sh` and `CONTRIBUTING.md` describing the single pre-PR gate.
 - `docs/THREAT_MODEL.md`, a risk ranking of the host process.
 - A transfer budget for the four precompressed web UI assets, checked by
@@ -262,6 +265,8 @@ the runtime's environment options, for example
 | `ZINE_PROFILE` | Any value, including empty, enables profiling; unset disables it |
 | `ZINE_WEB_HOST` | IPv4 or IPv6 literal the native web UI binds; default `127.0.0.1` |
 | `ZINE_WEB_PORT` | Native web UI port, 1-65535; default `1995` |
+| `ZINE_VIRTUAL_CLOCK_NS` | Nanoseconds since the Unix epoch that the first guest clock read returns; unset uses the host clock |
+| `ZINE_CLOCK_STEP_NS` | Nanoseconds the virtual clock advances per read, default `1000000`; requires `ZINE_VIRTUAL_CLOCK_NS` |
 | `ZINE_CWD` | WASI builds only: absolute POSIX path used as the guest working directory; unset uses `.` |
 | `NO_COLOR` | Any value disables native diagnostic colors; WASI never emits colors |
 
@@ -292,6 +297,27 @@ ZINE_WEB_PORT=3000 ./zig-out/bin/zine.x86_64 drive_c/myapp/app.exe
 The default binds loopback only. A non-loopback `ZINE_WEB_HOST` exposes the
 emulator's screen and accepts synthetic input from the network, so it logs a
 warning and restricts the accepted WebSocket origins to that address.
+
+`ZINE_VIRTUAL_CLOCK_NS` replaces the host clock the guest reads through
+`GetTickCount`, `GetSystemTime`, `QueryPerformanceCounter`, `time`, and the
+rest, with a cursor that starts at the given number of nanoseconds since the
+Unix epoch and advances by `ZINE_CLOCK_STEP_NS` on every read. A guest wait
+(`Sleep`, `SleepEx`, `WaitForSingleObject`, `select`, a Win32 timer) advances
+that cursor by the duration it asked for instead of blocking the host, so a
+replay reaches the same clock values without spending the run's worth of real
+time in sleeps:
+
+```sh
+ZINE_VIRTUAL_CLOCK_NS=1700000000000000000 ./zig-out/bin/zine.x86_64 drive_c/myapp/app.exe
+```
+
+Emulator instrumentation (log timestamps, the profiler) always reads the host
+clock, so simulated time never distorts the measurements of the run itself.
+`ZINE_CLOCK_STEP_NS` without `ZINE_VIRTUAL_CLOCK_NS` exits with status 2, as
+does a negative or malformed value for either variable. The clock covers time
+only: file contents, network results, and OS thread interleaving still come
+from the host, so a replay is byte-for-byte reproducible only for a guest whose
+behavior does not depend on them.
 
 `ZINE_CWD` is how a WASI runtime tells the build where the guest should run,
 since WASI has no `realpath`. It must be an absolute POSIX path; a relative or

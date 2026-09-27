@@ -117,7 +117,10 @@ fn mmTimerThread(idx: usize) void {
     const builtin = @import("builtin");
 
     while (timer.active.load(.acquire)) {
-        @import("../../platform.zig").sleep(delay_ns);
+        // A virtual clock advances simulated time instead of sleeping, which
+        // fixes the number of callbacks a replay produces.
+        if (!@import("../../runtime.zig").advanceVirtualClock(delay_ns))
+            @import("../../platform.zig").sleep(delay_ns);
         if (!timer.active.load(.acquire)) break;
 
         if (timer.callback != 0) {

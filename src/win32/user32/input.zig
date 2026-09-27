@@ -80,13 +80,18 @@ var timer_thread_started: std.atomic.Value(bool) = std.atomic.Value(bool).init(f
 /// Monotonic clock: timer bookkeeping diffs these values against readings in
 /// user32/message.zig, and neither side may step with the wall clock.
 fn safeMilliTs() i64 {
+    const rt = @import("../../runtime.zig");
+    // A virtual clock reads a spinlock-guarded field, so it is as safe here as
+    // a raw clock_gettime, and it keeps the timer bookkeeping on the same
+    // timeline as the guest-facing readings in user32/message.zig.
+    if (rt.useVirtualClock()) return rt.monoMilliTimestamp();
     if (comptime @import("builtin").os.tag == .linux) {
         const linux = std.os.linux;
         var ts: linux.timespec = .{ .sec = 0, .nsec = 0 };
         _ = linux.clock_gettime(linux.CLOCK.MONOTONIC, &ts);
         return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
     }
-    return @import("../../runtime.zig").monoMilliTimestamp();
+    return rt.monoMilliTimestamp();
 }
 
 /// Spawn the WM_TIMER dispatcher thread on first SetTimer. It wakes every
@@ -130,9 +135,16 @@ fn timerThread() void {
             }
         }
         timers_mutex.unlock();
-        if (comptime builtin.os.tag == .linux) {
-            var req = std.os.linux.timespec{ .sec = 0, .nsec = 10 * std.time.ns_per_ms };
-            _ = std.os.linux.nanosleep(&req, null);
+        // Under a virtual clock each pass advances simulated time instead of
+        // sleeping, so WM_TIMER fires after a count of passes that does not
+        // depend on how fast the host is.
+        if (!@import("../../runtime.zig").advanceVirtualClock(10 * std.time.ns_per_ms)) {
+            if (comptime builtin.os.tag == .linux) {
+                var req = std.os.linux.timespec{ .sec = 0, .nsec = 10 * std.time.ns_per_ms };
+                _ = std.os.linux.nanosleep(&req, null);
+            } else {
+                @import("../../platform.zig").sleep(10 * std.time.ns_per_ms);
+            }
         }
     }
 }

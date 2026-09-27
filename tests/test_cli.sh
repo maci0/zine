@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-unset ZINE_LOG_LEVEL ZINE_WEB_HOST ZINE_WEB_PORT
+unset ZINE_LOG_LEVEL ZINE_WEB_HOST ZINE_WEB_PORT ZINE_VIRTUAL_CLOCK_NS ZINE_CLOCK_STEP_NS
 
 expected_version=$1
 shift
@@ -108,6 +108,43 @@ if [[ "$expected_version" == zine\ * ]]; then
                 exit 1
             fi
         done
+        # The virtual guest clock is validated the same way. A run on it says
+        # so at startup, so an accepted start has that one diagnostic line.
+        for value in '' -1 1e9 '1000ns'; do
+            status=0
+            timeout 60 env "ZINE_VIRTUAL_CLOCK_NS=$value" "$@" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+            if [[ "$status" != 2 || -s "$workdir/stdout" ]]; then
+                printf 'ZINE_VIRTUAL_CLOCK_NS=<%s> must exit with status 2 and no stdout (got %s)\n' "$value" "$status" >&2
+                exit 1
+            fi
+            grep -q 'Error: ZINE_VIRTUAL_CLOCK_NS must be' "$workdir/stderr"
+        done
+        status=0
+        timeout 60 env 'ZINE_CLOCK_STEP_NS=1000' "$@" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+        if [[ "$status" != 2 || -s "$workdir/stdout" ]]; then
+            printf 'ZINE_CLOCK_STEP_NS without ZINE_VIRTUAL_CLOCK_NS must exit with status 2 (got %s)\n' "$status" >&2
+            exit 1
+        fi
+        grep -q 'Error: ZINE_CLOCK_STEP_NS must be' "$workdir/stderr"
+        for value in -1 1e9; do
+            status=0
+            timeout 60 env 'ZINE_VIRTUAL_CLOCK_NS=1700000000000000000' "ZINE_CLOCK_STEP_NS=$value" "$@" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+            if [[ "$status" != 2 || -s "$workdir/stdout" ]]; then
+                printf 'ZINE_CLOCK_STEP_NS=<%s> must exit with status 2 and no stdout (got %s)\n' "$value" "$status" >&2
+                exit 1
+            fi
+            grep -q 'Error: ZINE_CLOCK_STEP_NS must be' "$workdir/stderr"
+        done
+        status=0
+        timeout 60 env 'ZINE_VIRTUAL_CLOCK_NS=1700000000000000000' "$@" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+        printf '%s\n' "$expected_version" >"$workdir/expected"
+        if [[ "$status" != 0 ]]; then
+            printf 'ZINE_VIRTUAL_CLOCK_NS must be accepted (got %s)\n' "$status" >&2
+            cat "$workdir/stderr" >&2
+            exit 1
+        fi
+        cmp "$workdir/expected" "$workdir/stdout"
+        grep -q 'virtual clock: first read 1700000000000000000 ns' "$workdir/stderr"
     else
         # ZINE_CWD is the WASI-only guest working directory. It is validated at
         # startup like the other ZINE_* settings, so --version reports it.

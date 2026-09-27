@@ -108,17 +108,37 @@ fn originEql(origin: []const u8, scheme: []const u8, host: []const u8, port: u16
     return std.mem.eql(u8, origin, expected);
 }
 
+/// Guest clock. `start_ns` is the nanosecond count the first guest clock read
+/// returns; with it set, the wall and monotonic readings both come from a
+/// virtual cursor that advances by `step_ns` per read and by the duration of
+/// each guest wait, instead of from the host clocks. Two runs that issue the
+/// same calls in the same order then see the same time values, which is what
+/// makes a guest run replayable. `null` keeps the host clocks.
+pub const Clock = struct {
+    start_ns: ?i64 = null,
+    step_ns: i64 = default_clock_step_ns,
+};
+
+/// One millisecond per clock read: enough that a guest loop waiting on
+/// GetTickCount deltas terminates, small enough that timestamps stay distinct.
+pub const default_clock_step_ns: i64 = std.time.ns_per_ms;
+
 /// Active configuration. Set once by `initFromEnv` at startup.
 pub var web_server: WebServer = .{};
+
+/// Same lifetime, for the guest clock.
+pub var clock: Clock = .{};
 
 pub const InitError = error{
     InvalidWebHost,
     InvalidWebPort,
+    InvalidVirtualClock,
+    InvalidClockStep,
 };
 
-/// Reads `ZINE_WEB_HOST` and `ZINE_WEB_PORT` and validates both. Leaves
-/// `web_server` untouched when a value is rejected, so a failed startup never
-/// runs on a half-applied configuration.
+/// Reads `ZINE_WEB_HOST`, `ZINE_WEB_PORT`, and the guest clock settings, and
+/// validates them. Leaves `web_server` and `clock` untouched when a value is
+/// rejected, so a failed startup never runs on a half-applied configuration.
 pub fn initFromEnv(env: *const std.process.Environ.Map) InitError!void {
     var parsed = WebServer{};
 
@@ -135,7 +155,33 @@ pub fn initFromEnv(env: *const std.process.Environ.Map) InitError!void {
         parsed.port = port;
     }
 
+    const parsed_clock = try parseClock(env);
     web_server = parsed;
+    clock = parsed_clock;
+}
+
+/// Parses `ZINE_VIRTUAL_CLOCK_NS` and `ZINE_CLOCK_STEP_NS`. A step without a
+/// start is rejected: the operator set a clock no reading would ever consult.
+fn parseClock(env: *const std.process.Environ.Map) InitError!Clock {
+    var parsed = Clock{};
+    var step_given = false;
+
+    if (env.get("ZINE_VIRTUAL_CLOCK_NS")) |start_text| {
+        const start = std.fmt.parseInt(i64, start_text, 10) catch return error.InvalidVirtualClock;
+        if (start < 0) return error.InvalidVirtualClock;
+        parsed.start_ns = start;
+    }
+
+    if (env.get("ZINE_CLOCK_STEP_NS")) |step_text| {
+        const step = std.fmt.parseInt(i64, step_text, 10) catch return error.InvalidClockStep;
+        if (step < 0) return error.InvalidClockStep;
+        parsed.step_ns = step;
+        step_given = true;
+    }
+
+    if (step_given and parsed.start_ns == null) return error.InvalidClockStep;
+
+    return parsed;
 }
 
 fn isValidHost(host: []const u8) bool {
@@ -221,4 +267,50 @@ test "ipv6 hosts are bracketed in urls" {
     web.setHost("::1");
     try std.testing.expectEqualStrings("http://[::1]:1995", web.url(&buf));
     try std.testing.expect(web.originAllowed("http://[::1]:1995"));
+}
+
+test "guest clock defaults to the host clocks" {
+    const saved = clock;
+    defer clock = saved;
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+
+    try initFromEnv(&env);
+    try std.testing.expect(clock.start_ns == null);
+    try std.testing.expectEqual(default_clock_step_ns, clock.step_ns);
+}
+
+test "guest clock start and step are read from the environment" {
+    const saved = clock;
+    defer clock = saved;
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("ZINE_VIRTUAL_CLOCK_NS", "1700000000000000000");
+    try env.put("ZINE_CLOCK_STEP_NS", "2500000");
+
+    try initFromEnv(&env);
+    try std.testing.expectEqual(@as(?i64, 1_700_000_000_000_000_000), clock.start_ns);
+    try std.testing.expectEqual(@as(i64, 2_500_000), clock.step_ns);
+}
+
+test "guest clock rejects a step without a start and leaves the config alone" {
+    const saved = clock;
+    defer clock = saved;
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+    try initFromEnv(&env);
+
+    try env.put("ZINE_CLOCK_STEP_NS", "1000");
+    try std.testing.expectError(error.InvalidClockStep, initFromEnv(&env));
+    try std.testing.expect(clock.start_ns == null);
+
+    for ([_][]const u8{ "", "-1", "1e9", "1000ns" }) |bad| {
+        try env.put("ZINE_VIRTUAL_CLOCK_NS", bad);
+        try std.testing.expectError(error.InvalidVirtualClock, initFromEnv(&env));
+        try std.testing.expect(clock.start_ns == null);
+    }
+    _ = env.swapRemove("ZINE_VIRTUAL_CLOCK_NS");
+    try env.put("ZINE_CLOCK_STEP_NS", "-1");
+    try std.testing.expectError(error.InvalidClockStep, initFromEnv(&env));
+    try std.testing.expectEqual(default_clock_step_ns, clock.step_ns);
 }

@@ -322,7 +322,7 @@ pub fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.W
     // Fallback: unknown handle — yield
     if (dwMilliseconds > 0) {
         const sleep_ns: u64 = @min(@as(u64, dwMilliseconds) * 1_000_000, 10_000_000); // Cap at 10ms
-        @import("../../platform.zig").sleep(sleep_ns);
+        if (!runtime.advanceVirtualClock(sleep_ns)) @import("../../platform.zig").sleep(sleep_ns);
     }
     return 0; // WAIT_OBJECT_0
 }
@@ -344,7 +344,10 @@ fn waitOnKernelObject(ko: *KernelObject, dwMilliseconds: u32) u32 {
                         ko.event.cond.wait(&ko.event.mutex);
                     } else {
                         ko.event.mutex.unlock();
-                        platform.sleep(1_000_000); // 1ms
+                        // The poll interval is charged to the virtual clock
+                        // when one is installed; the spin count is then a
+                        // function of the timeout, not of host speed.
+                        if (!runtime.advanceVirtualClock(1_000_000)) platform.sleep(1_000_000); // 1ms
                         ko.event.mutex.lock();
                         if (!ko.event.signaled and runtime.monoMilliTimestamp() >= deadline_ms)
                             return 258; // WAIT_TIMEOUT (defer releases the mutex)
@@ -388,7 +391,7 @@ fn waitOnKernelObject(ko: *KernelObject, dwMilliseconds: u32) u32 {
                         ko.semaphore.cond.wait(&ko.semaphore.mutex);
                     } else {
                         ko.semaphore.mutex.unlock();
-                        platform.sleep(1_000_000);
+                        if (!runtime.advanceVirtualClock(1_000_000)) platform.sleep(1_000_000);
                         ko.semaphore.mutex.lock();
                         if (ko.semaphore.count <= 0 and runtime.monoMilliTimestamp() >= deadline_ms)
                             return 258; // WAIT_TIMEOUT (defer releases the mutex)

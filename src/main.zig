@@ -37,6 +37,11 @@ const build_options = @import("build_options");
 const pe = @import("pe.zig");
 const runtime = @import("runtime.zig");
 
+/// Storage for the virtual clock `runtime` points at when
+/// `ZINE_VIRTUAL_CLOCK_NS` is set. Lives for the whole process, like the
+/// runtime singletons it feeds.
+var virtual_clock: runtime.VirtualClock = undefined;
+
 fn buildCmdLineString(allocator: std.mem.Allocator, app_args_items: []const ?[*:0]u8) !usize {
     var cmdline_buf = try allocator.alloc(u8, 4096);
     @memset(cmdline_buf, 0);
@@ -77,7 +82,20 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("{s}", .{"Error: ZINE_WEB_PORT must be a number from 1 to 65535.\n"});
             std.process.exit(2);
         },
+        error.InvalidVirtualClock => {
+            std.debug.print("{s}", .{"Error: ZINE_VIRTUAL_CLOCK_NS must be a non-negative nanosecond count since the Unix epoch.\n"});
+            std.process.exit(2);
+        },
+        error.InvalidClockStep => {
+            std.debug.print("{s}", .{"Error: ZINE_CLOCK_STEP_NS must be a non-negative nanosecond count and requires ZINE_VIRTUAL_CLOCK_NS.\n"});
+            std.process.exit(2);
+        },
     };
+    if (config.clock.start_ns) |start_ns| {
+        virtual_clock = .{ .now_ns = start_ns, .step_ns = config.clock.step_ns };
+        runtime.installVirtualClock(&virtual_clock);
+        log.info("virtual clock: first read {d} ns, {d} ns per read", .{ start_ns, config.clock.step_ns });
+    }
     if (!config.web_server.isLoopback()) {
         log.warn("Web UI is bound to {s}, reachable from other hosts", .{config.web_server.host()});
     }

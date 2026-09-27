@@ -67,7 +67,7 @@ The native entry point handles:
   - `-h`, `--help` — show help
   - `-v`, `--version` — show version
   - `--` — end of zine options (allows target names starting with `-`)
-  - Environment variables: `ZINE_LOG_LEVEL` (log level), `ZINE_TRACE` (API tracing), `ZINE_TRACE_INSN` (instruction tracing), `ZINE_PROFILE` (profiling), `ZINE_WEB_HOST` / `ZINE_WEB_PORT` (web UI bind address)
+  - Environment variables: `ZINE_LOG_LEVEL` (log level), `ZINE_TRACE` (API tracing), `ZINE_TRACE_INSN` (instruction tracing), `ZINE_PROFILE` (profiling), `ZINE_WEB_HOST` / `ZINE_WEB_PORT` (web UI bind address), `ZINE_VIRTUAL_CLOCK_NS` / `ZINE_CLOCK_STEP_NS` (virtual guest clock)
 - `.bat`/`.cmd` file preprocessing via `bat.zig`
 - SIGSEGV/SIGFPE (segmentation fault / floating-point exception) signal handler for SEH (Structured Exception Handling) dispatch and AppCompat (Application Compatibility) shims
 - Environment setup (combining BAT-defined PATH, argv, envp)
@@ -308,10 +308,10 @@ On native targets, Zine installs a `SIGSEGV`/`SIGFPE` handler that implements:
 | Module | Path | Purpose |
 |--------|------|---------|
 | **runner.zig** | [`src/runner.zig`](../src/runner.zig) | Shared PE loading and execution pipeline used by both native and WASM entry points. Handles stub registration, search path setup, import resolution, reverse relocations, and JIT execution loops. |
-| **runtime.zig** | [`src/runtime.zig`](../src/runtime.zig) | Process-global singletons (`std.Io`, allocator, environment, main-exe dir) for code that cannot take parameters: Win32 stubs called from guest code, signal handlers, and thunks. |
+| **runtime.zig** | [`src/runtime.zig`](../src/runtime.zig) | Process-global singletons (`std.Io`, allocator, environment, main-exe dir) for code that cannot take parameters: Win32 stubs called from guest code, signal handlers, and thunks. Also the seam the guest's time passes through: `installVirtualClock` swaps the wall and monotonic readings for a fixed cursor (`ZINE_VIRTUAL_CLOCK_NS`), `advanceVirtualClock` charges a guest wait to it instead of blocking the host, and `hostMonoNanoTimestamp` keeps emulator instrumentation on the real clock. |
 | **bat.zig** | [`src/bat.zig`](../src/bat.zig) | Parses `.bat`/`.cmd` launcher scripts, expands `%VARIABLE%` references, and extracts the final command to execute. |
 | **log.zig** | [`src/log.zig`](../src/log.zig) | Structured diagnostic logging with colored level prefixes (`[FATAL]`, `[ERROR]`, `[WARN]`, `[INFO]`, `[TRACE]`). Auto-detects TTY for color; respects `NO_COLOR` env var. Redacts the host home directory (`HOME`/`USERPROFILE`) from every record. |
-| **config.zig** | [`src/config.zig`](../src/config.zig) | Runtime configuration read from `ZINE_*` environment variables at startup. Validates each value before use and exits with status 2 on a rejected one. Owns the web UI bind address (`ZINE_WEB_HOST`, `ZINE_WEB_PORT`), the URL printed at startup, the CSP `connect-src` origin, and the WebSocket origin allowlist. |
+| **config.zig** | [`src/config.zig`](../src/config.zig) | Runtime configuration read from `ZINE_*` environment variables at startup. Validates each value before use and exits with status 2 on a rejected one. Owns the web UI bind address (`ZINE_WEB_HOST`, `ZINE_WEB_PORT`), the URL printed at startup, the CSP `connect-src` origin, and the WebSocket origin allowlist. Also parses the guest clock settings (`ZINE_VIRTUAL_CLOCK_NS`, `ZINE_CLOCK_STEP_NS`) that `main` hands to `runtime.installVirtualClock`. |
 | **trace.zig** | [`src/trace.zig`](../src/trace.zig) | Conditional debug printing. Activated by `--trace`, `--trace-api`, `--trace-insn` flags or `ZINE_TRACE`/`ZINE_TRACE_INSN` environment variables. |
 | **profiler.zig** | [`src/profiler.zig`](../src/profiler.zig) | Lightweight profiling: EIP heat map (per-4KB page), opcode frequency table, and stub call counters. Activated by `--profile` flag or `ZINE_PROFILE` environment variable. |
 | **path_utils.zig** | [`src/path_utils.zig`](../src/path_utils.zig) | Converts between POSIX and Win32 paths (`drive_c/... ↔ C:\...`). |
@@ -402,7 +402,7 @@ The build system includes a `test` step that runs embedded unit tests in the x86
 zig build test
 ```
 
-Tested modules (see `src/test_root.zig` for the authoritative list): `x86/{flags,memory,fpu,cpu,decoder,decode_cache,execute,sse,thunks}.zig`, `jit/compiler.zig`, `loader/{menu_parser,module,registry,loader}.zig`, `fuzz/replay.zig`, `profiler.zig`, `config.zig`, `log.zig`, `path_utils.zig`, `bat.zig`, `pe.zig`, `runner.zig`, `gui/web_ui.zig`, and the `win32/` modules listed there.
+Tested modules (see `src/test_root.zig` for the authoritative list): `x86/{flags,memory,fpu,cpu,decoder,decode_cache,execute,sse,thunks}.zig`, `jit/compiler.zig`, `loader/{menu_parser,module,registry,loader}.zig`, `fuzz/replay.zig`, `profiler.zig`, `config.zig`, `runtime.zig`, `log.zig`, `path_utils.zig`, `bat.zig`, `pe.zig`, `runner.zig`, `gui/web_ui.zig`, and the `win32/` modules listed there.
 
 ---
 
