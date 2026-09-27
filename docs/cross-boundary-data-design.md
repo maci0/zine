@@ -128,14 +128,14 @@ Stubs that need to interact with the host (file system, memory allocation, conso
 // Platform-neutral file operations. On real Windows, these are pass-through.
 // On Linux/WASM, they convert Win32 paths to POSIX.
 
-pub fn openFile(win32_path: [*:0]const u8, flags: u32) i32 {
+pub fn open(win32_path: []const u8, flags: u32, mode: u32) i32 {
     if (comptime builtin.os.tag == .windows) {
         return windows.CreateFileA(win32_path, ...);
     } else {
         var posix_buf: [1024]u8 = undefined;
-        const len = path_utils.win32ToPosix(std.mem.span(win32_path), &posix_buf);
+        const len = path_utils.win32ToPosix(win32_path, &posix_buf) catch return -1;
         posix_buf[len] = 0;
-        return posix_open(@ptrCast(&posix_buf), flags);
+        return posix_fs.open(@ptrCast(&posix_buf), flags, mode);
     }
 }
 ```
@@ -346,11 +346,11 @@ This keeps the stub pure while handling the WASM special case at the registratio
 
 | Data | Source (stub) | Conversion | Destination (host) |
 |------|---------------|------------|--------------------|
-| File path | Win32 (`C:\foo`) | `host_io.openFile` | POSIX on Linux, native on Windows |
+| File path | Win32 (`C:\foo`) | `host_io.open` | POSIX on Linux, native on Windows |
 | CWD query | N/A | `host_io.getCwd` | POSIX -> Win32 on Linux, native on Windows |
 | Path search | Win32 path list (`;` sep) | Each component via `host_io` | POSIX on Linux |
 
-**Owner**: `host_io.zig` (new module) or `posix_fs.zig`. The only place path conversion happens.
+**Owner**: `host_io.zig` or `posix_fs.zig`. The only place path conversion happens.
 
 ### Boundary 5: Parent PE -> Child PE (Spawn)
 
@@ -784,8 +784,9 @@ baseline.
 |------|-------------|-------------|
 | `src/win32/msvcrt/*.zig` | Stubs with `trace.addr()` workarounds | Pure C-callable stubs, no loader deps |
 | `src/win32/kernel32/*.zig` | Same | Same |
-| `src/win32/host_io.zig` | Implemented: file I/O + path conversion (`open`, `access`, `stat`, `getCwd`, `getFullPath`, `fileFromFd`) | Single choke point for all stub file/path operations |
+| `src/win32/host_io.zig` | Implemented: file I/O + path conversion (`open`, `access`, `stat`, `deleteFile`, `getCwd`, `getFullPath`, `fileFromFd`) | Single choke point for all stub file/path operations |
 | `src/loader/env.zig` | Thunk handler with `castArg` | Thunk handler translates ALL pointer params |
 | `src/trace.zig` | `addr()`, `c_span()` for manual translation | Deprecated for stubs; used only by loader internals |
 | `src/path_utils.zig` | Win32 <-> POSIX conversion | Called only from `host_io.zig` |
-| `src/win32/shared.zig` | `guest_memory`, `raw_alloc` | Loader-internal only; stubs don't import it |
+| `src/x86/memory.zig` | `guest_memory`, the guest VA window the interpreter maps | Same; stubs that must return guest-visible addresses keep reading it |
+| `src/win32/shared.zig` | `raw_alloc` and other guest-memory helpers | Loader-internal only; stubs don't import it |

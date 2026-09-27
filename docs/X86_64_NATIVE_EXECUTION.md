@@ -33,17 +33,18 @@ This fails because `CS` remains `0x33`. We need a mechanism to switch `CS` to `0
 
 ### 1. 32-bit Addressable Memory (`mmap`)
 All allocations for the guest (the PE image, its heap, its stack) *must* reside in the lower 4GB of the address space so that 32-bit pointers can reference them.
-- **Current State**: `platform.mmap` uses `MAP_FIXED_NOREPLACE`, which attempts to map the PE at its preferred address (e.g., `0x00400000`), which often succeeds. It also sets `MAP_32BIT` on x86_64 Linux for every non-fixed allocation, so anonymous guest maps land in the low 4GB; fixed-address mappings skip the flag because the address is already known.
+- **Current State**: `mmap` uses `MAP_FIXED_NOREPLACE`, which attempts to map the PE at its preferred address (e.g., `0x00400000`), which often succeeds. It also sets `MAP_32BIT` on x86_64 Linux for every non-fixed allocation, so anonymous guest maps land in the low 4GB; fixed-address mappings skip the flag because the address is already known.
 - **Missing**: Nothing for the low-4GB requirement itself. The remaining work is auditing call sites that still assume 32-bit host pointers.
 
 ### 2. A 32-bit Compatible Stack
 The native 64-bit Zine host stack is allocated by Linux in high memory (e.g., `0x7FFFFFF...`). A 32-bit program's `ESP` cannot point there.
-- **Current State**: The guest program inherits the host's stack through standard function calls.
-- **Missing**: Before doing the mode switch, we must allocate a dedicated 32-bit stack (e.g., `mmap` with `MAP_32BIT` or `MAP_FIXED` to an address like `0x70000000`) and manually pivot the stack pointer (`ESP`/`RSP`) to this new region.
+- **Current State**: `main.zig` maps a 16MB guest stack with `MAP_FIXED` at `0x05000000` and pushes an exit stub as the return address before entering 32-bit mode.
+- **Missing**: Nothing. See "Bootstrapping & Mode Transition" below.
 
 ### 3. The 64 → 32 Context Switch Trampoline
 We cannot just `call` the entry point. We must use a far jump, far return (`lret`), or `iretq` to load the 32-bit `CS` register.
-- **Missing**: An inline assembly trampoline to enter the 32-bit application.
+- **Missing**: Nothing. `compat_thunks.enterCompatMode` builds this frame and executes `iretq`; the sequence below is the conceptual shape.
+
 ```asm
 // Conceptual 64 -> 32 transition
 pushq $0x2B         // 32-bit SS
@@ -57,7 +58,7 @@ iretq               // Pops the above, switches to 32-bit mode
 ### 4. The 32 → 64 Thunk Mechanism (Win32 API Stubs)
 When the 32-bit application wants to call a Win32 API (e.g., `kernel32.dll!GetVersion`), it cannot directly call a 64-bit Zine stub function pointer.
 - **Current State**: On the native `x86` build, the IAT is patched with direct pointers to the Zine `.winapi` host functions. On `wasm32`, `INT 0xFE` thunks are used which are trapped by the software interpreter.
-- **Missing**: We need a thunking layer for x86_64 similar to the WASM build.
+- **Missing**: Nothing. The steps below are the original sketch; what shipped is the `INT 0xFE` + signal-handler variant of step 2, described under "Implementation Status" below.
   1. Patch the IAT with pointers to trampolines placed in low memory.
   2. The trampoline executes a transition instruction to get back to 64-bit mode (e.g., a far call to `0x33:ThunkHandler_64`, or a software interrupt mapped via a custom signal handler, or `syscall`).
   3. A 64-bit marshalling function reads the 32-bit arguments from the 32-bit guest stack.
@@ -69,8 +70,8 @@ When the 32-bit application wants to call a Win32 API (e.g., `kernel32.dll!GetVe
 - **Status**: This actually works perfectly for both 64-bit and 32-bit code under an x86_64 host! The TEB memory just needs to be allocated in the lower 4GB.
 
 ### 6. Signal Handling (SIGSEGV/SIGFPE)
-- **Current State**: `sigsegvHandler` assumes all registers are 64-bit on an x86_64 build.
-- **Missing**: When a crash happens in 32-bit compat mode, the `ucontext_t` still contains 64-bit registers, but we must reconstruct the `teb.CONTEXT` structure using 32-bit semantics. The exception handler must correctly identify whether the fault happened in 32-bit mode (checking if `CS == 0x23` from the `ucontext_t`) or 64-bit mode.
+- **Current State**: `sigsegvHandler` sees 64-bit registers on an x86_64 build. It detects `CD FE` at the faulting IP and dispatches to `compat_thunks`, and a `CS == 0x23` fault that is not a thunk falls through to SEH dispatch.
+- **Missing**: Reconstructing the `teb.CONTEXT` structure with 32-bit semantics from the 64-bit `ucontext_t`.
 
 ## Implementation Status
 
@@ -101,7 +102,7 @@ mechanism from the WASM/interpreter path. This avoids complex GDT manipulation a
 ### Checklist
 
 #### Sub-4GB Memory Management
-- [x] `platform.mmap` uses `MAP_32BIT` on x86_64 — every non-fixed guest mmap lands in the low 4GB (`src/platform/native.zig:132`; fixed mappings skip the flag)
+- [x] `platform.mmap` uses `MAP_32BIT` on x86_64 — every non-fixed guest mmap lands in the low 4GB (`src/platform/native.zig:142`; fixed mappings skip the flag)
 - [x] `teb.zig` allocates TEB via `platform.mmap` on x86_64 (ensures < 4GB)
 - [x] PEB/ProcessParameters allocated via `win32/shared.zig:raw_alloc` (uses platform.mmap)
 
@@ -162,7 +163,7 @@ On 32-bit Windows, SEH uses a dynamic linked list stored in `FS:0`. On 64-bit Wi
 - [ ] Ensure image loading correctly applies 64-bit base relocations if the preferred base is unavailable.
 
 ### Phase 2: Calling Convention & API Stubs
-- [ ] Update `src/win32/calling_convention.zig` to define `WINAPI` as `callconv(.Win64)` for 64-bit builds.
+- [x] `src/win32/calling_convention.zig` already defines `WINAPI` as `.winapi`, which is Win64 on x86_64.
 - [ ] Audit `loader/env.zig` to ensure function pointers for unresolved stubs match the `.Win64` calling convention.
 - [ ] Review all 36 Win32 stub modules (the DLL source list in `build.zig`) to ensure no hardcoded 32-bit types are used where pointers or handle-sized integers should scale to 64-bit.
 - [ ] Ensure Zig correctly allocates 32-byte shadow space when Zine's `.Win64` functions call back into native Windows code (e.g., callbacks in GUI/Event loops).

@@ -9,8 +9,9 @@ Zig fetches the one TOML dependency on the first build, so that first build
 needs network access and later ones do not.
 
 No global installs, no services, no Windows fixtures are needed for the unit
-suite or the pre-pull-request gate. Everything below runs from the repository
-root.
+suite or the pre-pull-request gate. The gate enumerates sources with
+`git ls-files`, so it needs a real work tree; a source archive has none and the
+tracked-file steps stop there. Everything below runs from the repository root.
 
 | Task | Command |
 |---|---|
@@ -41,8 +42,9 @@ embeds. Pass `-Doptimize=Debug` when stepping through code.
 in the same order, as the `static-analysis` job in `.github/workflows/ci.yml`:
 `zig fmt --check`, shellcheck over every tracked script, a warning-free
 `zig cc` compile of every tracked C source, all four architecture builds, the
-unit tests, and both native `test-cli` runs. If you add a check,
-add it in both places or local runs stop predicting CI.
+external-stub DLL and `-Dexternal-stubs` builds, the unit tests, both native
+`test-cli` runs, and a short fuzz run. If you add a check, add it in both
+places or local runs stop predicting CI.
 
 Each check is a named step, and `bash tests/check.sh <step> [step...]` runs
 just those, still in gate order: `fmt`, `check_shell`, `check_c`, `build`,

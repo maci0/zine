@@ -21,24 +21,24 @@ The combined buffer is typically laid out as follows:
 
 ### 2. Stack
 - **Location**: Immediately follows the PE image.
-- **Size**: Default is 64 KB (can be adjusted).
+- **Size**: 64 KB (`STACK_SIZE` in `wasm_main.zig`).
 - **Purpose**: The guest x86 stack. `ESP` is initialized to the top of this region.
 
 ### 3. Thunks
 - **Location**: Follows the stack.
-- **Size**: Default is 32 KB.
-- **Purpose**: Contains generated x86 code snippets (e.g., `INT 0xFE` followed by a thunk ID) used to bridge guest x86 calls to host WASM functions (Win32 API stubs).
+- **Size**: 32 KB (`THUNK_RESERVE` in `wasm_main.zig`), pre-filled with `0xCC`.
+- **Purpose**: Contains generated x86 code snippets (`CD FE`, `INT 0xFE`, followed by a 4-byte little-endian thunk ID) used to bridge guest x86 calls to host WASM functions (Win32 API stubs).
 
 ### 4. Heap
 - **Location**: Follows the thunks.
-- **Size**: Default is 512 MB (`HEAP_RESERVE` in `wasm_main.zig`; raised from an earlier 32 MB because MSVC `c1.dll` requests ~50 MB+ compiler arenas). An in-process child PE spawned by `_spawnvp` gets its own buffer with a 128 MB heap and a 64 KB stack (`CHILD_HEAP`, `CHILD_STACK`).
+- **Size**: 512 MB (`HEAP_RESERVE` in `wasm_main.zig`; raised from an earlier 32 MB because MSVC `c1.dll` requests ~50 MB+ compiler arenas). An in-process child PE spawned by `_spawnvp` gets its own buffer laid out the same way, with a 128 MB heap and a 64 KB stack (`CHILD_HEAP`, `CHILD_STACK`, `CHILD_THUNK`).
 - **Purpose**: The guest heap, used by `HeapAlloc`, `malloc`, and other guest memory allocation functions.
 
 ## Address Translation
 
-The `GuestMemory` structure uses a `base` pointer (to the host buffer) and a `base_addr` (the preferred guest virtual address).
+The `GuestMemory` structure uses a `base` pointer (to the host buffer) and a `base_addr`, the guest virtual address that maps to `base[0]`. In WASM mode `base_addr` is the PE's preferred `ImageBase`, so:
 
-- `Host Address = Buffer Base + (Guest Virtual Address - ImageBase)`
-- `Guest Virtual Address = ImageBase + (Host Address - Buffer Base)`
+- `Host Address = Buffer Base + (Guest Virtual Address - base_addr)`
+- `Guest Virtual Address = base_addr + (Host Address - Buffer Base)`
 
 This allows the x86 interpreter to dereference 32-bit pointers by translating them to indices within the WASM linear memory buffer.

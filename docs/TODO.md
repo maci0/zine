@@ -31,10 +31,10 @@ RCDLL raw-syscall file IO).
       ops, etc.) so fewer blocks degrade; plus hot-block pre-warming (compile
       the hottest blocks on startup instead of on first encounter).
 - [ ] **zine-host CLI toolchain** — CL.EXE gets to the C1.DLL spawn under
-      zine-host but the child spawn (C1.EXE) fails — a pre-existing
+      zine-host but that child spawn fails, a pre-existing
       spawn/file gap in zine-host, unrelated to JIT (the wasmtime suite is
       unaffected). Would let the full MSVC toolchain run under
-      `zine-host --jit`.
+      `zine-host zine.wasm -- --jit <exe>`.
 
 ## MSVCRT / stdio
 

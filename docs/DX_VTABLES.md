@@ -2,6 +2,58 @@
 
 Status: reference for the `src/win32/ddraw/` and `src/win32/d3d7/` vtable layouts; slot counts are checked against those files.
 
+## IDirectDraw7
+
+`src/win32/ddraw/ddraw.zig` declares one struct, `IDirectDrawVtbl`, that carries both the
+`IDirectDraw` and `IDirectDraw7` layouts (30 entries).
+
+| Slot | Offset | Method |
+|------|--------|--------|
+| 0 | 0x00 | QueryInterface |
+| 1 | 0x04 | AddRef |
+| 2 | 0x08 | Release |
+| 3 | 0x0C | Compact |
+| 4 | 0x10 | CreateClipper |
+| 5 | 0x14 | CreatePalette |
+| 6 | 0x18 | CreateSurface |
+| 7 | 0x1C | DuplicateSurface |
+| 8 | 0x20 | EnumDisplayModes |
+| 9 | 0x24 | EnumSurfaces |
+| 10 | 0x28 | FlipToGDISurface |
+| 11 | 0x2C | GetCaps |
+| 12 | 0x30 | GetDisplayMode |
+| 13 | 0x34 | GetFourCCCodes |
+| 14 | 0x38 | GetGDISurface |
+| 15 | 0x3C | GetMonitorFrequency |
+| 16 | 0x40 | GetScanLine |
+| 17 | 0x44 | GetVerticalBlankStatus |
+| 18 | 0x48 | Initialize |
+| 19 | 0x4C | RestoreDisplayMode |
+| 20 | 0x50 | SetCooperativeLevel |
+| 21 | 0x54 | SetDisplayMode |
+| 22 | 0x58 | WaitForVerticalBlank |
+| 23 | 0x5C | GetAvailableVidMem (IDirectDraw7) |
+| 24 | 0x60 | GetSurfaceFromDC (IDirectDraw7) |
+| 25 | 0x64 | RestoreAllSurfaces (IDirectDraw7) |
+| 26 | 0x68 | TestCooperativeLevel (IDirectDraw7) |
+| 27 | 0x6C | GetDeviceIdentifier (IDirectDraw7) |
+| 28 | 0x70 | StartModeTest (IDirectDraw7) |
+| 29 | 0x74 | EvaluateMode (IDirectDraw7) |
+
+## IDirectDrawClipper
+
+| Slot | Offset | Method |
+|------|--------|--------|
+| 0 | 0x00 | QueryInterface |
+| 1 | 0x04 | AddRef |
+| 2 | 0x08 | Release |
+| 3 | 0x0C | GetClipList |
+| 4 | 0x10 | GetHWnd |
+| 5 | 0x14 | Initialize |
+| 6 | 0x18 | IsClipListChanged |
+| 7 | 0x1C | SetClipList |
+| 8 | 0x20 | SetHWnd |
+
 ## IDirect3D3
 
 | Slot | Offset | Method |
@@ -132,6 +184,31 @@ Status: reference for the `src/win32/ddraw/` and `src/win32/d3d7/` vtable layout
 | 33 | 0x84 | UpdateOverlay |
 | 34 | 0x88 | UpdateOverlayDisplay |
 | 35 | 0x8C | UpdateOverlayZOrder |
+
+`IDirectDrawSurfaceVtbl` is the `IDirectDrawSurface7` superset, so the same slot sequence
+continues with 13 more entries (49 total):
+
+| Slot | Offset | Method |
+|------|--------|--------|
+| 36 | 0x90 | GetDDInterface |
+| 37 | 0x94 | PageLock |
+| 38 | 0x98 | PageUnlock |
+| 39 | 0x9C | SetSurfaceDesc |
+| 40 | 0xA0 | SetPrivateData |
+| 41 | 0xA4 | GetPrivateData |
+| 42 | 0xA8 | FreePrivateData |
+| 43 | 0xAC | GetUniquenessValue |
+| 44 | 0xB0 | ChangeUniquenessValue |
+| 45 | 0xB4 | SetPriority |
+| 46 | 0xB8 | GetPriority |
+| 47 | 0xBC | SetLOD |
+| 48 | 0xC0 | GetLOD |
+
+In the DirectDraw tables above, a slot the emulator does not implement holds a tracing dummy
+that returns `DD_OK` rather than a null pointer, so an unexpected call does not jump to EIP 0.
+Which slots are real is visible in the source: the vtable structs declare unimplemented entries
+as `usize` and `register` fills them with those dummies. The d3d7 tables use the same scheme
+with per-arity no-op stubs.
 
 ## D3DPRIMCAPS (56 bytes / 14 DWORDs)
 

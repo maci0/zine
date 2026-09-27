@@ -1,6 +1,6 @@
 # CLI Binaries Execution Status
 
-Status: progress tracker, not a specification. Counts are per-binary observations from
+Status: progress tracker, not a specification. Each status is a per-binary observation from
 `tests/test_msvc_cli.sh` runs; the binary list lives outside this repository.
 
 This document tracks our progress attempting to run the MSVC CLI utilities listed in `tests/test_msvc_cli.sh` via the `zine` minimal environment. Suite-level pass/fail counts live in [`STATUS.md`](STATUS.md).

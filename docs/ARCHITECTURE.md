@@ -102,7 +102,7 @@ The loader subsystem consists of four core modules and three resource parsers:
 | [module.zig](../src/loader/module.zig) | Loads a PE file from disk, maps it into memory via `platform.mmap`, copies section data, and applies base relocations if the image was loaded at a non-preferred address. |
 | [registry.zig](../src/loader/registry.zig) | Maintains a name → `Module*` mapping and search path list. Handles DLL (Dynamic Link Library) search order. |
 | [env.zig](../src/loader/env.zig) | The `Environment` struct ties together the module registry and built-in stub exports. Provides `resolveExport()` which first checks built-in stubs (our verified implementations), then falls back to PE DLLs loaded from disk. Also contains `addBuiltinExportComptime()`, which registers a comptime thunk handler as a builtin export and picks the cdecl calling convention for the `MSVCRT.dll` and `MSVCP*` modules. |
-| [loader.zig](../src/loader/loader.zig) | Walks the PE import directory, resolves each function by name or ordinal, and patches the IAT (Import Address Table). On native targets, writes host function addresses directly. On WASM, allocates `INT 0xFE` thunk stubs in guest memory. Also calls `DllMain` (`DLL_PROCESS_ATTACH`) for loaded PE DLLs. |
+| [loader.zig](../src/loader/loader.zig) | Walks the PE import directory, resolves each function by name or ordinal, and patches the IAT (Import Address Table). On native targets, writes host function addresses directly. On WASM, allocates `INT 0xFE` thunk stubs in guest memory. The `DllMain` (`DLL_PROCESS_ATTACH`) call for a loaded PE DLL belongs to KERNEL32's `LoadLibraryA` path ([kernel32/process.zig](../src/win32/kernel32/process.zig)), not here. |
 
 #### Import Resolution Flow
 
@@ -163,7 +163,7 @@ On WASM and x86_64, Win32 API calls can't be dispatched by jumping to native fun
 
 [`src/win32/`](../src/win32/)
 
-Zine implements 37 DLL stub modules that provide Win32 API compatibility: 35 registered on every target, plus `mspdb60` (WASM only) and `rcdll` (registered everywhere because the real RCDLL.DLL fails to compile DIALOG templates on native). Each module exports a `register()` function that adds its exports to the `Environment`. Unresolved functions fall back to `not_implemented`, which prints a diagnostic and exits.
+Zine implements 37 DLL stub modules that provide Win32 API compatibility: 36 registered on every target, plus `mspdb60` (WASM only), for 37 in total. `rcdll` is registered on every target because the real RCDLL.DLL fails to compile DIALOG templates on native. Each module exports a `register()` function that adds its exports to the `Environment`. Unresolved functions fall back to `not_implemented`, which prints a diagnostic and exits.
 
 | Category | Stubs |
 |----------|-------|
@@ -234,7 +234,7 @@ A comptime-selected backend that abstracts OS-specific functionality:
 | `readExceptionList` | Reads `FS:0` (SEH chain head) on x86 | Returns `0xFFFFFFFF` |
 | `getProcessId` | Host PID | Fixed constant |
 | `getStackBounds` | Reads `/proc/self/maps` | Returns zeros (not available on WASM) |
-| `installSegfaultHandler` | `sigaction(SIGSEGV, SIGFPE)` | No-op |
+| `installSegfaultHandler` | `sigaction(SIGSEGV, SIGFPE, SIGILL)` | No-op |
 | `mapNullPage` | `mmap` at address 0 | No-op |
 | `raiseStackLimit` | Raises `RLIMIT_STACK` to its hard limit | No-op |
 | `exitProcess` | `std.process.exit` | `std.process.exit` |
@@ -261,7 +261,8 @@ The GUI subsystem presents Win32 GUI applications in a web browser (web backend)
             ▼
 ┌─────────────────────────┐
 │    renderer.zig          │   Framebuffer (BGRA — Blue/Green/Red/Alpha)
-│    Shared API surface    │   Up to 1024×1024 pixels
+│    Shared API surface    │   Fixed 4 MB surface (1024×1024 pixels);
+│                          │   up to 4096 per axis, scaled down to fit
 │                          │   State caching (menu, title, dialogs, audio)
 └───────────┬─────────────┘
             │ delegates to
@@ -293,13 +294,14 @@ The GUI subsystem presents Win32 GUI applications in a web browser (web backend)
 
 ### 9. Signal Handling & SEH (Native)
 
-On native targets, Zine installs a `SIGSEGV`/`SIGFPE` handler that implements:
+On native targets, Zine installs a `SIGSEGV`/`SIGFPE`/`SIGILL` handler that implements:
 
 1. **SIGFPE recovery**: Skip divide-by-zero instructions in game code, clear result registers.
 2. **Bad function pointer recovery**: When EIP (the instruction pointer) is in an invalid range, walk the stack to find a plausible return address in app code and redirect execution there.
 3. **NULL pointer AppCompat shims**: Detect common NULL-pointer dereference patterns (`mov [eax], ...` where EAX=0) and skip the instruction, matching Windows behavior for some buggy games.
 4. **SEH dispatch**: Read the exception chain from `FS:0`, build `EXCEPTION_RECORD` + `CONTEXT` structs, and walk the handler chain. Supports `ExceptionContinueExecution` and `ExceptionContinueSearch` dispositions.
-5. **Top-level exception filter**: Calls `SetUnhandledExceptionFilter`-registered handler as a last resort.
+
+`SetUnhandledExceptionFilter` records the guest's handler pointer but nothing invokes it: an exception that escapes the chain prints `Unhandled exception, terminating.` and exits.
 
 ---
 
@@ -307,7 +309,7 @@ On native targets, Zine installs a `SIGSEGV`/`SIGFPE` handler that implements:
 
 | Module | Path | Purpose |
 |--------|------|---------|
-| **runner.zig** | [`src/runner.zig`](../src/runner.zig) | Shared PE loading and execution pipeline used by both native and WASM entry points. Handles stub registration, search path setup, import resolution, reverse relocations, and JIT execution loops. |
+| **runner.zig** | [`src/runner.zig`](../src/runner.zig) | Shared PE loading and execution pipeline used by both native and WASM entry points. Handles stub registration, search path setup, import resolution, basic block scanning, and the JIT execution loop. |
 | **runtime.zig** | [`src/runtime.zig`](../src/runtime.zig) | Process-global singletons (`std.Io`, allocator, environment, main-exe dir) for code that cannot take parameters: Win32 stubs called from guest code, signal handlers, and thunks. Also the seam the guest's time passes through: `installVirtualClock` swaps the wall and monotonic readings for a fixed cursor (`ZINE_VIRTUAL_CLOCK_NS`), `advanceVirtualClock` charges a guest wait to it instead of blocking the host, and `hostMonoNanoTimestamp` keeps emulator instrumentation on the real clock. |
 | **bat.zig** | [`src/bat.zig`](../src/bat.zig) | Parses `.bat`/`.cmd` launcher scripts, expands `%VARIABLE%` references, and extracts the final command to execute. |
 | **log.zig** | [`src/log.zig`](../src/log.zig) | Structured diagnostic logging with colored level prefixes (`[FATAL]`, `[ERROR]`, `[WARN]`, `[INFO]`, `[TRACE]`). Auto-detects TTY for color; respects `NO_COLOR` env var. Redacts the host home directory (`HOME`/`USERPROFILE`) from every record, and `redactEnvValue` withholds the value of the identity variables (`USER`, `USERNAME`, `LOGNAME`, `EMAIL`) from environment traces. |
@@ -376,7 +378,7 @@ sequenceDiagram
 
     CLI->>Main: Parse arguments
     Main->>Env: Environment.init()
-    Main->>Stubs: Register 35 DLL stub modules (36 on WASM, 0 with -Dexternal-stubs)
+    Main->>Stubs: Register 36 DLL stub modules (37 on WASM, 0 with -Dexternal-stubs)
     Main->>Reg: Add search paths (cwd, exe dir)
     Main->>Reg: loadModule(target.exe)
     Reg->>Mod: Module.load() — parse PE, mmap, relocate
@@ -435,6 +437,7 @@ zine/
 │   ├── wasm_main.zig        # WASM entry point
 │   ├── host_main.zig        # zine-host entry point (wasmer wrapper with JIT)
 │   ├── test_root.zig        # Unified test root (imports all tested modules)
+│   ├── fuzz_main.zig        # Fuzz target entry point (zig build fuzz)
 │   ├── win32_dll_api.zig    # Public API surface for standalone DLL builds
 │   ├── runner.zig           # Shared PE loading and execution pipeline
 │   ├── pe.zig               # PE format structures and parser
@@ -442,6 +445,7 @@ zine/
 │   ├── bat.zig              # .bat/.cmd file parser
 │   ├── trace.zig            # Conditional tracing output
 │   ├── log.zig              # Structured diagnostic logging with colored prefixes
+│   ├── config.zig           # ZINE_* runtime configuration and validation
 │   ├── path_utils.zig       # POSIX ↔ Win32 path conversion
 │   ├── platform.zig         # Platform abstraction (re-export)
 │   ├── runtime.zig          # Process-global Io/allocator/env + exe dir
@@ -484,6 +488,7 @@ zine/
 │   │   ├── civil_time.zig    # Gregorian/UTC calendar arithmetic
 │   │   ├── host_io.zig      # I/O abstraction layer (native/WASM)
 │   │   ├── ansi.zig         # CP1252 (ANSI code page) conversion and UTF-8 truncation
+│   │   ├── unicase.zig      # Case mapping tables for the API stubs
 │   │   ├── ordinals.zig     # Ordinal-to-name mapping
 │   │   ├── kernel32.zig, kernel32/   # Process, memory, file I/O, sync, time
 │   │   ├── msvcrt.zig, msvcrt/       # C runtime (io, math, mem, string, process)
@@ -527,7 +532,7 @@ zine/
 │   │   ├── van.min.js       # Vendored JS runtime
 │   │   └── assets/          # SVGs used by the frontend
 │   ├── fuzz/                 # Fuzz harnesses for untrusted-input parsers
-│   │   ├── pe.zig, menu.zig, mutation.zig, replay.zig
+│   │   ├── pe.zig, menu.zig, dialog.zig, icon.zig, mutation.zig, replay.zig
 │   └── dll/                 # Standalone DLL build sources (zig build -Ddll=all)
 │       ├── msvcrt_dll.zig, kernel32_dll.zig, user32_dll.zig, ...
 │       └── dll_common.zig   # Shared DLL build utilities

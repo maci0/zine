@@ -7,7 +7,7 @@ No Windows installation, no Wine.
 ## What works
 
 - Full MSVC 6.0 toolchain: CL.EXE, LINK.EXE, RC.EXE, NMAKE.EXE, and 8 more utilities run to completion
-- 372 unit tests pass (2 skipped, 374 total) on the host with `zig build test`; the gate in
+- 385 unit tests pass (2 skipped, 387 total) on the host with `zig build test`; the gate in
   `tests/check.sh` adds the CLI suites on native x86 and x86_64
 - 158/128 integration checks on native/WASM, 20 FLTK smoke tests (these need guest
   binaries and are not part of `tests/check.sh`)
@@ -474,6 +474,8 @@ empty value exits with status 2 instead of silently running the guest in `.`.
 | Flag | Purpose |
 |---|---|
 | `-Darch=x86\|x86_64\|wasm32\|wasm64` | Target architecture (default: x86) |
+| `-Dall` | Build all four architectures |
+| `-Doptimize=Debug\|ReleaseSafe\|ReleaseFast\|ReleaseSmall` | Optimization mode (default: ReleaseSafe) |
 | `-Dfltk` | Enable native FLTK GUI backend (x86_64 only) |
 | `-Djit_host` | Enable JIT host imports for WASM builds |
 | `-Dexternal-stubs` | Load Win32 stubs from DLLs instead of embedding |
@@ -513,10 +515,11 @@ zig build test-cli -Dhost       # also checks zine-host; requires Wasmer headers
 
 ### Fuzzing the PE parsers
 
-`zig build fuzz` mutates a seed corpus of menu resources and PE images and
-feeds every input to the parser under Zig's safety checks. A failing input is
-written to `zig-out/fuzz/<target>-<n>.bin`; minimize it, fix the cause, and
-add the minimized input to the seed corpus in `src/fuzz/`.
+`zig build fuzz` mutates the seed corpora of the menu, dialog, icon, and PE
+header parsers and feeds every input to the parser under Zig's safety checks.
+A failing input is written to `zig-out/fuzz/<target>-<n>.bin`; minimize it, fix
+the cause, and add its bytes to the `seeds` array of that target's harness in
+`src/fuzz/`.
 
 ```sh
 zig build fuzz -Dfuzz-seconds=30            # per target
@@ -542,10 +545,10 @@ checking log-level validation.
 ### Before opening a pull request
 
 Run from the repository root on x86_64 Linux with 32-bit executable support.
-Besides Zig 0.16.0, the CI checks require Bash, ShellCheck, GNU coreutils
-(including `timeout`), `cmp`, and `grep`. Zig fetches the pinned TOML dependency
-on the first build; no Windows fixtures, GUI libraries, or WASM runtime are
-needed for these checks.
+Besides Zig 0.16.0, the CI checks require Bash, Git, ShellCheck, `sed`, `cmp`,
+`grep`, and GNU coreutils (including `timeout`). Zig fetches the pinned TOML
+dependency on the first build; no Windows fixtures, GUI libraries, or WASM
+runtime are needed for these checks.
 
 ```sh
 bash tests/check.sh
@@ -591,6 +594,6 @@ src/
   wasm_main.zig  WASM entry point
 ```
 
-~68K lines of Zig.
+~70K lines of Zig.
 
 See [`docs/`](docs/README.md) for the documentation index: memory layout, JIT strategy, native execution, and Win32 API coverage. `docs/THREAT_MODEL.md` records the attack surface, trust boundaries, and known gaps. The web UI's HTTP routes and WebSocket message types are specified in [`docs/WEB_UI_PROTOCOL.md`](docs/WEB_UI_PROTOCOL.md).

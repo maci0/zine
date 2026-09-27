@@ -67,7 +67,9 @@ JIT correctness fixes in this slice (all were silent mis-execution bugs):
   and preserve untouched upper bits (AH/CH/DH/BH via offset 8).
 
 The suite runs the MSVC CLI toolchain end-to-end (CL/LINK/RC/CVTRES/DUMPBIN/
-LIB/NMAKE/…) plus the GUI app sections below. GUI apps are driven against the
+LIB/…) plus the GUI app sections below. The remaining tools (NMAKE, MIDL, MC,
+UNDNAME, EDITBIN, and the rest) are covered by startup checks that run the real
+binary and check its output. GUI apps are driven against the
 **web backend**; the **FLTK backend** is verified by `tests/fltk_smoke.sh`
 (compiles + runs the 20 self-exiting GUI apps under Xvfb with `zine.x86_64
 --fltk`, checking each app's `-check`/`-done` output — 20/0 green). The
@@ -225,8 +227,7 @@ whole CLI suite (158/0), including LINK.EXE (ReadSymbolTable) and LIB.EXE
   MIDL, MC, and more; `.bat`/`.cmd` wrappers (VCVARS32.BAT) parsed
   natively. See `CLI_STATUS.md`.
 - **PE loading** — imports/relocations, resource trees (dialogs, menus, icons,
-  string tables, version), delayed loads, DLL mode (35+ stub DLLs as real
-  Windows DLLs).
+  string tables, version), DLL mode (35+ stub DLLs as real Windows DLLs).
 - **x86 core** — interpreter with decode cache, SSE/SSE2, x87 FPU, JIT
   x86→WASM compiler with end-to-end host execution (see the JIT section
   above).

@@ -323,22 +323,24 @@ These loader dependencies must be removed from stubs and moved to the registrati
 
 ## Audit 6: `host_io.zig` API Surface (needed for Phase 1)
 
-Functions that currently call `path_utils.win32ToPosix()` or `std.fs.*` directly from stubs:
+Functions that called `path_utils.win32ToPosix()` or `std.fs.*` directly from stubs, with
+the `host_io` function each one ended up on (the final column is as built, not as
+originally proposed):
 
-| Current call site | Uses | Needed host_io function |
+| Current call site | Uses | `host_io` function |
 |-------------------|------|------------------------|
-| `msvcrt/file.zig:access` | `posix_fs.access` | `host_io.accessFile` |
-| `msvcrt/file.zig:sopen` | `posix_fs.open` | `host_io.openFile` |
-| `msvcrt/file.zig:stat` | `posix_fs.stat` | `host_io.statFile` |
-| `msvcrt/io.zig:fopen` | `posix_fs.open` | `host_io.openFile` |
+| `msvcrt/file.zig:access` | `posix_fs.access` | `host_io.access` |
+| `msvcrt/file.zig:sopen` | `posix_fs.open` | `host_io.open` |
+| `msvcrt/file.zig:stat` | `posix_fs.stat` | `host_io.stat` |
+| `msvcrt/io.zig:fopen` | `posix_fs.open` | none; still calls `posix_fs.open` directly |
 | `msvcrt/path.zig:getcwd` | `std.process.getCwdAlloc` | `host_io.getCwd` |
 | `msvcrt/path.zig:fullpath` | copies input | `host_io.getFullPath` |
-| `msvcrt/path.zig:searchenv` | `file.access` + PATH search | `host_io.searchPath` |
-| `kernel32/file.zig:CreateFileA` | `posix_fs.open` via `toHostPath` | `host_io.openFile` |
-| `kernel32/file.zig:FindFirstFileA` | `std.fs.cwd().openDir` | `host_io.findFirst` |
-| `kernel32/file.zig:GetFileAttributesA` | `posix_fs.stat` | `host_io.statFile` |
-| `kernel32/path.zig:GetWindowsDirectoryA` | hardcoded | `host_io.getWindowsDir` |
-| `kernel32/profile.zig:GetProfileStringA` | `std.fs.cwd().openFile` | `host_io.openFile` |
+| `msvcrt/path.zig:searchenv` | `file.access` + PATH search | none; it inlines its own PATH walk against `posix_fs.access` |
+| `kernel32/file.zig:CreateFileA` | `posix_fs.open` via `toHostPath` | `host_io.open` |
+| `kernel32/file.zig:FindFirstFileA` | `std.fs.cwd().openDir` | none; it keeps its own find-handle pool |
+| `kernel32/file.zig:GetFileAttributesA` | `posix_fs.stat` | `host_io.stat` |
+| `kernel32/path.zig:GetWindowsDirectoryA` | hardcoded | none; still hardcoded |
+| `kernel32/profile.zig:GetProfileStringA` | `std.fs.cwd().openFile` | `host_io.open` |
 
 ---
 
@@ -358,18 +360,18 @@ Created `src/win32/host_io.zig` with:
 - [x] `host_io.open(win32_path, flags, mode)` — delegates to posix_fs.open
 - [x] `host_io.access(win32_path, mode)` — delegates to posix_fs.access
 - [x] `host_io.stat(win32_path)` — delegates to posix_fs.stat
-- [x] `host_io.deleteFile(win32_path)` — toHostPath + std.fs delete
-- [x] `host_io.getCwd(buf)` — std.process.getCwd + posixToWin32
+- [x] `host_io.deleteFile(win32_path)` — toHostPath + unlink
+- [x] `host_io.getCwd(buf)` — getcwd syscall + posixToWin32
 - [x] `host_io.getFullPath(rel, buf)` — resolves relative paths against CWD
-- [x] `host_io.searchPath(filename, dirs, result)` — searches exe dir + PATH
+- [x] `host_io.searchPath(filename, dirs, result)` — later removed as dead code
 
 Migrated stubs:
 - [x] `msvcrt/file.zig: access()` — now uses `host_io.access`
 - [x] `msvcrt/file.zig: sopen()` — now uses `host_io.open`
-- [x] `msvcrt/io.zig: fopen()` — now uses `host_io.open` (was bypassing posix_fs)
+- [x] `msvcrt/io.zig: fopen()` — later reverted to `posix_fs.open` (still bypassing `host_io.open`)
 - [x] `msvcrt/path.zig: getcwd()` — now uses `host_io.getCwd` (returns Win32 format)
 - [x] `msvcrt/path.zig: fullpath()` — now uses `host_io.getFullPath` (actually resolves paths)
-- [x] `msvcrt/path.zig: searchenv()` — now uses `host_io.searchPath`
+- [x] `msvcrt/path.zig: searchenv()` — later inlined its own PATH walk against `posix_fs.access`
 - [x] `kernel32/path.zig: GetCurrentDirectoryA()` — lazy-inits from `host_io.getCwd`
 - [x] `kernel32/path.zig: GetFullPathNameA()` — now uses `host_io.getFullPath`
 - [x] `kernel32/profile.zig: readIniValue()` — now uses `host_io.open` (was using std.fs directly)
@@ -515,21 +517,18 @@ CPU registers, etc.
 
 See [X86_64_NATIVE_EXECUTION.md](X86_64_NATIVE_EXECUTION.md) Part 2 for details.
 
-### Phase 5: x86_64 compat mode — TODO
+### Phase 5: x86_64 compat mode — DONE
 
-Run 32-bit PEs natively on x86_64 Linux hosts using CPU compatibility mode (CS segment
-switching between 32-bit and 64-bit mode). Independent of PE64 — runs existing 32-bit PEs
-on a 64-bit host.
+Run 32-bit PEs natively on x86_64 Linux hosts using CPU compatibility mode. Independent
+of PE64 — it runs existing 32-bit PEs on a 64-bit host.
 
-See [X86_64_NATIVE_EXECUTION.md](X86_64_NATIVE_EXECUTION.md) Part 1 for full design.
+Implemented with a different mechanism than the original `lcall $0x33` plan: the build
+reuses the WASM `INT 0xFE + thunk_id` dispatch, and in 32-bit compat mode `INT 0xFE`
+raises SIGSEGV, which a signal handler turns into a call to the 64-bit stub. Sub-4GB
+memory, the 16MB guest stack at `0x05000000`, the `iretq` mode switch, and the `CS == 0x23`
+fault check are all in place; the `--native64` suite is green.
 
-**What's needed:**
-1. Sub-4GB memory (MAP_32BIT for guest allocations)
-2. 32-bit guest stack allocation
-3. 64→32 mode switch trampoline (iretq with CS=0x23)
-4. 32→64 thunk trampolines in low memory (lcall $0x33 for API calls)
-5. Signal handler updates (detect CS==0x23 faults)
-6. FS segment TEB in low 4GB
+See [X86_64_NATIVE_EXECUTION.md](X86_64_NATIVE_EXECUTION.md) Part 1 for the shipped design.
 
 ### Phase 6 DONE (36 DLLs cross-compile into zig-out/bin/dll/)
 

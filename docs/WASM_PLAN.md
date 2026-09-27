@@ -268,7 +268,7 @@ a browser runtime).
 
 | Limitation | Impact |
 |-----------|--------|
-| **Single-threaded** | `CreateThread` is a stub |
+| **Single-threaded** | `CreateThread` runs the start routine synchronously, so the guest sees one thread |
 | **No GUI rendering** | GUI apps load but don't display on WASM |
 | **No file persistence** | WASI preopened dirs only |
 | **No networking** | Winsock stubs are minimal |

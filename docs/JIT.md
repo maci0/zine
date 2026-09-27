@@ -155,6 +155,7 @@ Manages CPU state transfer between the interpreter and JIT-compiled blocks:
 The JIT compiler is integrated into both the native and WASM execution paths:
 - **Native** (`--jit`): `runner.runWithJit()` runs a compile-only JIT loop that validates x86→WASM translation but falls back to the interpreter for execution.
 - **WASM** (`--jit`): Without `-Djit_host=true`, uses the same compile-only loop as native. With `-Djit_host=true` and a runtime providing `jit_compile`/`jit_call`, `wasm_main.runWithJitHost()` compiles and executes blocks through shared `JitCpuState` memory. Cache misses trigger compilation; unsupported blocks or host compilation failures fall back to the interpreter.
+- **WASM** (`--jit-max-eip=<u32>`): Debugging cap accepted by the WASM CLI only, decimal or `0x`-prefixed hex. `runWithJitHost` compiles and executes blocks only below that EIP, so the same run can be narrowed to the region under investigation. The native CLI does not parse this option.
 
 Unit tests are run via `zig build test`.
 
