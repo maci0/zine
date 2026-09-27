@@ -2,9 +2,12 @@
 
 ## Setup
 
-Zig 0.16.0 and a POSIX shell environment. The pinned minimum lives in
+Zig 0.16.0 and a POSIX shell environment. The pinned toolchain lives in
 `build.zig.zon` (`.minimum_zig_version`); `tests/check.sh` compares it against
-the installed `zig version` and tells you what to install when they differ.
+the installed `zig version` for equality and tells you what to install when
+they differ, because a patch release is free to change codegen and the shipped
+artifacts are the ones the pinned compiler produces. Bumping that field is
+what moves the project to a newer Zig.
 Zig fetches the one TOML dependency on the first build, so that first build
 needs network access and later ones do not.
 

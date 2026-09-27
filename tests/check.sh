@@ -16,9 +16,14 @@
 # added to the lists below reaches CI without a second copy.
 set -euo pipefail
 
+# Sort order, formatted numbers and the tool's own diagnostics follow the
+# ambient locale, and dates follow the ambient timezone, so a gate that runs
+# under a developer's locale can disagree with CI about which step failed.
+export LC_ALL=C TZ=UTC
+
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-required=(zig shellcheck git timeout cmp grep sed mktemp)
+required=(zig shellcheck git timeout cmp grep sed mktemp find sort cp)
 missing=()
 for cmd in "${required[@]}"; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
@@ -44,9 +49,14 @@ if [[ -z "$minimum_zig" ]]; then
     printf 'cannot read .minimum_zig_version from build.zig.zon\n' >&2
     exit 1
 fi
+# An exact match, not a prefix: the shipped artifacts are compiled by the
+# exact toolchain CI installs, and a patch release is free to change codegen,
+# so a newer zig that passes a `0.16.0*` test can produce bytes and diagnostics
+# the maintainers never see. Bumping the field in build.zig.zon is what moves
+# the project forward; zig enforces the same version as its own floor.
 have_zig=$(zig version)
-if [[ "$have_zig" != "$minimum_zig"* ]]; then
-    printf 'zig %s is installed, this project requires %s (see build.zig.zon)\n' "$have_zig" "$minimum_zig" >&2
+if [[ "$have_zig" != "$minimum_zig" ]]; then
+    printf 'zig %s is installed, this project builds with exactly %s (see build.zig.zon)\n' "$have_zig" "$minimum_zig" >&2
     printf 'install it from https://ziglang.org/download/\n' >&2
     exit 1
 fi
@@ -70,6 +80,7 @@ step_names=(
     # Embedding stubs is the default; external-stubs is the other half of
     # that switch and compiles src/dll/ through a different path.
     external-stubs
+    reproducible
     test
     test-cli
     test-cli-x86_64
@@ -86,6 +97,7 @@ step_commands=(
     'zig build -Darch=wasm64 --summary all'
     'zig build -Ddll=all --summary all'
     'zig build -Dexternal-stubs --summary all'
+    'reproducible'
     'zig build test --summary all'
     'zig build test-cli --summary all'
     'zig build test-cli -Darch=x86_64 --summary all'
@@ -152,6 +164,52 @@ check_cxx() {
 # raises it with ZINE_FUZZ_SECONDS.
 fuzz() {
     zig build fuzz -Dfuzz-seconds="${ZINE_FUZZ_SECONDS:-10}" --summary all
+}
+
+# Byte-for-byte reproducibility of a shipped artifact. The x86 executable is
+# built twice into two install prefixes, the second run starting from a copy
+# of the tree at a different path, so anything the compiler records about the
+# checkout directory or the toolchain's own lib path shows up as a byte
+# difference rather than as a report the maintainers have to take on trust.
+#
+# The second build reuses .zig-cache, so this costs one compile, not two. The
+# source copy is made into a temporary directory and removed on the way out;
+# nothing is written inside the work tree. The two installs are compared with
+# cmp, which stops at the first differing byte and names the file.
+reproducible() {
+    local scratch a b
+    scratch=$(mktemp -d)
+    # shellcheck disable=SC2064  # expand $scratch now, not at trap time
+    trap "rm -rf '$scratch'" EXIT
+    a="$scratch/out-a"
+    b="$scratch/out-b"
+    zig build -p "$a" --summary all
+    mkdir -p "$scratch/tree"
+    # -a keeps the copy's timestamps, and only src/ plus the two build files
+    # reach the compiler; the rest of the checkout is not an input. zig-pkg
+    # comes along when it exists so the copied tree resolves the pinned TOML
+    # dependency from disk rather than over the network.
+    cp -a src build.zig build.zig.zon "$scratch/tree/"
+    if [[ -d zig-pkg ]]; then cp -a zig-pkg "$scratch/tree/"; fi
+    (cd "$scratch/tree" && zig build -p "$b" --summary all)
+    # The two install trees must hold the same set of files as well as the same
+    # bytes: a file one build emits and the other does not is just as much a
+    # difference, and comparing only the first tree's files would miss it.
+    local rel
+    (cd "$a" && find . -type f | sort) >"$scratch/list-a"
+    (cd "$b" && find . -type f | sort) >"$scratch/list-b"
+    if ! cmp -s "$scratch/list-a" "$scratch/list-b"; then
+        printf 'not reproducible: the two installs hold different files\n' >&2
+        diff "$scratch/list-a" "$scratch/list-b" >&2 || true
+        return 1
+    fi
+    while IFS= read -r rel; do
+        if ! cmp -s "$a/$rel" "$b/$rel"; then
+            printf 'not reproducible: %s differs between two builds of one source tree\n' "$rel" >&2
+            return 1
+        fi
+    done <"$scratch/list-a"
+    printf 'reproducible: every installed file is byte-identical across builds\n'
 }
 
 # No argument means the whole gate. Named steps always run in gate order, so

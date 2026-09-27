@@ -19,6 +19,12 @@ jobs:
     runs-on: ubuntu-24.04
     # Builds default to ReleaseSafe, which is slower to compile than Debug.
     timeout-minutes: 45
+    # Sorting, number formatting and the toolchain's own diagnostics follow the
+    # ambient locale, and logs follow the ambient timezone. Pinning both keeps
+    # a failure here comparable with a run on a developer's machine.
+    env:
+      LC_ALL: C
+      TZ: UTC
     steps:
       # Pinned by commit SHA (third-party actions execute repo-owned code);
       # update the SHA deliberately when bumping the commented version.
@@ -102,6 +108,8 @@ jobs:
         run: bash tests/check.sh dll
       - name: Build external stubs
         run: bash tests/check.sh external-stubs
+      - name: Byte-identical rebuild
+        run: bash tests/check.sh reproducible
       - name: Unit tests
         run: bash tests/check.sh test
       - name: CLI tests (x86)

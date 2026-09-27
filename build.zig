@@ -411,6 +411,23 @@ pub fn build(b: *std.Build) void {
 
         const build_all_dlls = std.mem.eql(u8, arg, "true") or std.mem.eql(u8, arg, "all");
 
+        // A name that matches nothing would otherwise build only the default
+        // executable and report success, hiding a typo in a DLL name from a
+        // release cut. Reject it and list the real names.
+        if (!build_all_dlls) {
+            for (dll_names) |entry| {
+                if (std.mem.eql(u8, arg, entry.name)) break;
+            } else {
+                var names: [2048]u8 = undefined;
+                var stream = std.Io.Writer.fixed(&names);
+                for (dll_names, 0..) |entry, i| {
+                    stream.print("{s}'{s}'", .{ if (i == 0) "" else ", ", entry.name }) catch break;
+                }
+                std.log.err("no DLL is named '{s}'. Names: all, {s}", .{ arg, stream.buffered() });
+                @panic("unknown -Ddll name");
+            }
+        }
+
         for (dll_names) |entry| {
             if (build_all_dlls or std.mem.eql(u8, arg, entry.name)) {
                 const dll = b.addLibrary(.{

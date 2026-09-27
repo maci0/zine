@@ -40,6 +40,16 @@ release, not a 0.2.1 patch.
 
 #### Breaking and migration
 
+- The build now requires exactly the Zig version pinned in `build.zig.zon`
+  (`.minimum_zig_version`), where a newer patch release used to pass the
+  version check. The shipped binaries are produced by that compiler, and a
+  patch release is free to change codegen, so builds on a newer Zig were not
+  comparable with CI or with a release. Bump the field in `build.zig.zon` to
+  move the project forward.
+- `zig build -Ddll=<name>` now fails and lists the valid names when `<name>`
+  matches no stub. It used to build only the default executable, install
+  nothing extra and report success, so a typo in a DLL name could reach a
+  release cut unnoticed.
 - Guest ANSI strings are decoded as CP1252, the Windows default code page,
   instead of being passed through as UTF-8. Window titles, dialog and menu text,
   and PE string-table resources with non-ASCII bytes now render as on Win98,
@@ -123,6 +133,12 @@ release, not a 0.2.1 patch.
   fixed start instead of the host clocks, so two runs of the same guest that
   issue the same calls in the same order see the same time values.
 - `tests/check.sh` and `CONTRIBUTING.md` describing the single pre-PR gate.
+- A `reproducible` step in that gate: it builds the x86 executable twice, the
+  second time from a copy of the sources at a different path, and requires
+  every installed file to be byte-identical. CI runs it after the four
+  architecture builds, so a build that starts recording the checkout
+  directory, the host or the clock in the artifact fails the gate instead of
+  shipping two different binaries from one commit.
 - `docs/THREAT_MODEL.md`, a risk ranking of the host process.
 - A transfer budget for the four precompressed web UI assets, checked by
   `zig build test`, so the bytes a visitor downloads cannot grow unnoticed.
@@ -351,11 +367,15 @@ command table, and pull-request expectations.
 
 ## Build
 
-Requires [Zig 0.16.0](https://ziglang.org/download/). Builds are ReleaseSafe by
+Requires [Zig 0.16.0](https://ziglang.org/download/); the gate requires that
+exact version. Builds are ReleaseSafe by
 default; add `-Doptimize=Debug` for a debugging loop. Every build except
 `-Doptimize=Debug` strips debug info: unstripped DWARF records the checkout
 directory and the toolchain's lib path, so the same source would produce a
-different binary on every machine.
+different binary on every machine. The remaining output is path-independent:
+the `reproducible` gate step builds the x86 executable twice from copies of
+the tree at different paths and requires the installed files to match byte
+for byte.
 
 ```sh
 # Default 32-bit x86 interpreter
@@ -554,9 +574,11 @@ checking log-level validation.
 
 Run from the repository root on x86_64 Linux with 32-bit executable support.
 Besides Zig 0.16.0, the CI checks require Bash, Git, ShellCheck, `sed`, `cmp`,
-`grep`, and GNU coreutils (including `timeout`). Zig fetches the pinned TOML
-dependency on the first build; no Windows fixtures, GUI libraries, or WASM
-runtime are needed for these checks.
+`grep`, and GNU coreutils (including `timeout`, `find` and `sort -z`). Zig
+fetches the pinned TOML dependency on the first build; no Windows fixtures,
+GUI libraries, or WASM runtime are needed for these checks. The gate exports
+`LC_ALL=C` and `TZ=UTC` so its own output, and the sort order inside it, do
+not follow the developer's locale.
 
 ```sh
 bash tests/check.sh
@@ -575,6 +597,7 @@ bash tests/check.sh check_c        # warning-free compile of every tracked C sou
 bash tests/check.sh check_cxx      # the FLTK bridge, compiled without linking it
 bash tests/check.sh build build-x86_64 build-wasm32 build-wasm64
 bash tests/check.sh dll external-stubs
+bash tests/check.sh reproducible  # two builds of one source tree, byte-identical
 bash tests/check.sh test
 bash tests/check.sh test-cli test-cli-x86_64
 bash tests/check.sh fuzz
