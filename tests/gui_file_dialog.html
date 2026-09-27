@@ -69,7 +69,9 @@
             block3();
             block4();
             block5();
-            document.getElementById('result').textContent = 'PASS: dialogs, filter, print range, font style, start menu';
+            block6();
+            block7();
+            document.getElementById('result').textContent = 'PASS: dialogs, filter, print range, font style, start menu, name error, enter key';
         } catch (error) {
             document.getElementById('result').textContent = 'FAIL: ' + error.message;
         }
@@ -161,6 +163,59 @@
                 'Start must list the launchable programs only, got ' + listed);
             receive({type: 'desktop_icons', items: []});
             assert(openStart() === 'No programs on the Desktop|Cancel', 'An empty Desktop must say so, got ' + openStart());
+        }
+
+        // An empty file name is reported instead of doing nothing, and typing
+        // clears the report
+        function block6() {
+            for (const mode of ['open', 'save']) {
+                sent.length = 0;
+                receive({type: 'open_file_dialog', mode, path: 'Desktop', folders: [], files: []});
+                const filename = document.getElementById('dialog_filename');
+                const err = document.querySelector('#dialog-content .dlg-error');
+                const action = [...document.querySelectorAll('#dialog-content button')]
+                    .find(el => el.textContent === (mode === 'save' ? 'Save' : 'Open'));
+                action.click();
+                assert(sent.length === 0, 'An empty name must not reach the guest');
+                assert(err.style.display === 'block' && err.textContent.length > 0,
+                    'An empty name must be reported, got "' + err.textContent + '"');
+                filename.value = 'report.txt';
+                filename.dispatchEvent(new Event('input'));
+                assert(err.style.display === 'none', 'Typing must clear the report');
+                action.click();
+                assert(sent.length === 1 && sent[0].type === 'open_file' && sent[0].filename === 'report.txt',
+                    'A named file must open, got ' + JSON.stringify(sent));
+                closeDialog();
+            }
+        }
+
+        // Enter in the file name box runs the dialog action, and a folder being
+        // browsed shows a pending state rather than the folder just left
+        function block7() {
+            sent.length = 0;
+            receive({type: 'open_file_dialog', mode: 'open', path: 'Desktop',
+                folders: ['Documents'], files: ['old.txt']});
+            const filename = document.getElementById('dialog_filename');
+            filename.value = 'old.txt';
+            filename.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+            assert(sent.length === 1 && sent[0].type === 'open_file' && sent[0].filename === 'old.txt',
+                'Enter must open the named file, got ' + JSON.stringify(sent));
+            closeDialog();
+
+            sent.length = 0;
+            receive({type: 'open_file_dialog', mode: 'open', path: 'Desktop',
+                folders: ['Documents'], files: ['old.txt']});
+            document.querySelector('[data-type="folder"]')
+                .dispatchEvent(new MouseEvent('dblclick', {bubbles: true}));
+            assert(sent.length === 1 && sent[0].type === 'browse_directory', 'Double click must browse');
+            assert(document.querySelectorAll('#dialog-content .file-item').length === 0,
+                'The listing of the folder just left must not stay on screen');
+            assert(document.querySelector('#dialog-content .comdlg-empty').textContent === 'Loading...',
+                'A browse in progress must say so');
+            receive({type: 'directory_listing', path: 'Desktop/Documents', folders: [], files: ['note.txt']});
+            assert(document.querySelectorAll('#dialog-content .file-item').length === 1,
+                'The listing must appear when it arrives');
+            closeDialog();
         }
     </script>
 </body>

@@ -76,6 +76,24 @@ release, not a 0.2.1 patch.
 
 #### Fixes
 
+- The web UI's font dialog applies the chosen face, size, and style again. The
+  OK button ran its handler instead of registering it, so the dialog never
+  closed and the guest never saw the selection.
+- Enter in any web UI dialog now runs that dialog's action button, as it does
+  on Windows. Typing a name in the Open or Save dialog and pressing Enter opens
+  it, and the Print, Page Setup, Font, color, and Find dialogs submit the same
+  way as clicking their button.
+- An empty file name in the web UI's Open and Save dialog is reported in the
+  dialog instead of leaving the button with nothing to do.
+- The web UI's Open and Save dialog shows a pending state while a folder is
+  being listed, instead of leaving the folder just left on screen under the new
+  name, where opening an entry would have read it from the wrong directory.
+- A new web UI session clears the window and taskbar icons. The reset looked for
+  an element that does not exist, so the previous guest's icon stayed in the
+  titlebar and the taskbar.
+- A web UI status message that goes away on a timer no longer takes down a
+  newer message with it. A disconnect or a failed asset load now stays on
+  screen instead of disappearing a few seconds later.
 - A module already loaded from one file is no longer served for a request that
   resolves to a different file with the same name. Loading a second `foo.dll`
   from another directory now fails with `ModuleAlreadyLoaded` instead of

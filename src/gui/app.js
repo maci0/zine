@@ -11,6 +11,29 @@ const menuBar = document.getElementById('menu-bar');
 const dialogOverlay = document.getElementById('dialog-overlay');
 const mainWindow = document.getElementById('main-window');
 
+// The host status line has no window of its own, so a message that only
+// matters for a moment goes away on a timer. That timer must not outlive its
+// own text: a disconnect or a load failure replaces the message, and a
+// pending timer would take the newer message down with the old one.
+let statusHideTimer = null;
+function setStatus(text, isError, autoHideMs) {
+    if (statusHideTimer !== null) { clearTimeout(statusHideTimer); statusHideTimer = null; }
+    statusEl.textContent = text;
+    statusEl.style.display = 'block';
+    statusEl.classList.toggle('error', !!isError);
+    if (autoHideMs) {
+        statusHideTimer = setTimeout(() => {
+            statusHideTimer = null;
+            if (statusEl.textContent === text) statusEl.style.display = 'none';
+        }, autoHideMs);
+    }
+}
+function clearStatus() {
+    if (statusHideTimer !== null) { clearTimeout(statusHideTimer); statusHideTimer = null; }
+    statusEl.style.display = 'none';
+    statusEl.classList.remove('error');
+}
+
 // --- Reactive State ---
 let ws;
 let currentRenderWidth = 1;
@@ -252,30 +275,41 @@ function showDialog(title, content) {
 
     document.getElementById('main-titlebar').classList.add('inactive');
 
+    // Trap focus, and let Enter in a text field run the dialog's action
+    // button, the way a Win32 dialog does. The button marks itself with
+    // data-dialog-default; a dialog without one ignores Enter.
+    dialogOverlay.onkeydown = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey &&
+            !e.target.closest('textarea')) {
+            const def = dialogOverlay.querySelector('[data-dialog-default]');
+            if (def && !def.contains(e.target)) {
+                e.preventDefault();
+                def.click();
+                return;
+            }
+        }
+        if (e.key === 'Tab') {
+            const els = dialogOverlay.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+            if (els.length === 0) {
+                e.preventDefault();
+                return;
+            }
+            const first = els[0];
+            const last = els[els.length - 1];
+            if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+            }
+        }
+    };
+
     // Move focus into the dialog for accessibility
     requestAnimationFrame(() => {
         const focusables = dialogOverlay.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
         if (focusables.length > 0) focusables[0].focus();
-        
-        // Trap focus
-        dialogOverlay.onkeydown = (e) => {
-            if (e.key === 'Tab') {
-                const els = dialogOverlay.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
-                if (els.length === 0) {
-                    e.preventDefault();
-                    return;
-                }
-                const first = els[0];
-                const last = els[els.length - 1];
-                if (e.shiftKey && document.activeElement === first) {
-                    e.preventDefault();
-                    last.focus();
-                } else if (!e.shiftKey && document.activeElement === last) {
-                    e.preventDefault();
-                    first.focus();
-                }
-            }
-        };
     });
 }
 
@@ -825,8 +859,7 @@ function connect() {
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
-        statusEl.style.display = 'none';
-        statusEl.classList.remove('error');
+        clearStatus();
 
         // --- Full UI reset for clean session ---
         closeDialog(true);
@@ -871,8 +904,10 @@ function connect() {
         }
 
         // Reset icon
-        const iconEl = document.getElementById('window-icon');
-        if (iconEl) iconEl.style.display = 'none';
+        ['titlebar-icon', 'taskbar-icon'].forEach(id => {
+            const iconEl = document.getElementById(id);
+            if (iconEl) iconEl.style.display = 'none';
+        });
 
         if (isMaximized) {
             const container = document.getElementById('game-container');
@@ -885,9 +920,7 @@ function connect() {
     };
 
     ws.onclose = () => {
-        statusEl.style.display = 'block';
-        statusEl.textContent = "Disconnected. Reconnecting...";
-        statusEl.classList.add('error');
+        setStatus("Disconnected. Reconnecting...", true);
         setTimeout(connect, 1000);
     };
 
@@ -909,10 +942,7 @@ function connect() {
 
                 if (msg.type === "error") {
                     console.error("Zine API Error:", msg.message);
-                    statusEl.textContent = "API Error: " + msg.message;
-                    statusEl.style.display = 'block';
-                    statusEl.classList.add('error');
-                    setTimeout(() => statusEl.style.display = 'none', 4000);
+                    setStatus("API Error: " + msg.message, true, 4000);
                 } else if (msg.type === "set_resolution") {
                     currentRenderWidth = msg.width;
                     currentRenderHeight = msg.height;
@@ -1044,7 +1074,7 @@ function connect() {
                             div({style: 'font-size:11px;'}, 'Color:'),
                             colorInput,
                             div({style: 'display:flex; justify-content:flex-end; gap:6px;'},
-                                button({class: 'win2k-button', onclick: sendColor}, 'OK'),
+                                button({class: 'win2k-button', 'data-dialog-default': '', onclick: sendColor}, 'OK'),
                                 button({class: 'win2k-button', onclick: () => {
                                     if (ws && ws.readyState === WebSocket.OPEN) {
                                         ws.send(JSON.stringify({type: 'color_selected', color: -1}));
@@ -1179,6 +1209,15 @@ function connect() {
 
                     // --- File selection logic ---
                     const filenameInput = input({type: 'text', id: 'dialog_filename', class: 'win2k-edit'});
+                    const nameErrorEl = div({class: 'dlg-error', style: 'display:none;'});
+                    filenameInput.addEventListener('input', hideNameError);
+                    function showNameError(text) {
+                        nameErrorEl.textContent = text;
+                        nameErrorEl.style.display = 'block';
+                    }
+                    function hideNameError() {
+                        nameErrorEl.style.display = 'none';
+                    }
                     const fileListEl = div({class: 'win2k-edit comdlg-file-list'});
                     const lookInLabel = div({class: 'win2k-edit comdlg-lookin'});
 
@@ -1190,6 +1229,10 @@ function connect() {
                     const ftSel = select({id: 'dialog_filetype', class: 'win2k-edit'}, ...filterOptions);
                     let listFolders = msg.folders || [];
                     let listFiles = msg.files || [];
+                    // A browse request is in flight: the list must not keep
+                    // showing the previous folder's entries under the new name,
+                    // or the user opens a file from the wrong directory.
+                    let listingPending = false;
 
                     // --- Toolbar buttons (created early so we can reference them) ---
                     const backBtn = div({class: 'comdlg-toolbar-btn', title: 'Go To Last Folder Visited',
@@ -1214,14 +1257,21 @@ function connect() {
 
                     function selectFile(f) {
                         filenameInput.value = f;
+                        hideNameError();
                         fileListEl.querySelectorAll('.file-item').forEach(el => {
                             el.classList.toggle('selected', el.dataset.name === f);
                         });
                     }
 
                     function openSelectedFile() {
-                        const f = filenameInput.value;
-                        if (f && ws && ws.readyState === WebSocket.OPEN) {
+                        const f = filenameInput.value.trim();
+                        // An empty name has nothing to open and nothing to
+                        // explain itself, so say why instead of doing nothing.
+                        if (!f) { showNameError(isSave
+                            ? 'Type a file name to save.'
+                            : 'Type a file name to open.'); return; }
+                        hideNameError();
+                        if (ws && ws.readyState === WebSocket.OPEN) {
                             ws.send(JSON.stringify({ type: 'open_file', filename: f, dir: currentPath }));
                         }
                     }
@@ -1233,6 +1283,12 @@ function connect() {
                         updateToolbarState();
                         updatePlaceState();
                         filenameInput.value = '';
+                        hideNameError();
+                        // Show the browse in progress instead of the folder just left.
+                        listingPending = true;
+                        listFolders = [];
+                        listFiles = [];
+                        renderFileList();
                         // Request directory listing from server
                         if (ws && ws.readyState === WebSocket.OPEN) {
                             ws.send(JSON.stringify({ type: 'browse_directory', path: newPath }));
@@ -1246,6 +1302,11 @@ function connect() {
                         updateToolbarState();
                         updatePlaceState();
                         filenameInput.value = '';
+                        hideNameError();
+                        listingPending = true;
+                        listFolders = [];
+                        listFiles = [];
+                        renderFileList();
                         if (ws && ws.readyState === WebSocket.OPEN) {
                             ws.send(JSON.stringify({ type: 'browse_directory', path: currentPath }));
                         }
@@ -1279,6 +1340,10 @@ function connect() {
 
                     function renderFileList() {
                         fileListEl.innerHTML = '';
+                        if (listingPending) {
+                            van.add(fileListEl, div({class: 'comdlg-empty'}, 'Loading...'));
+                            return;
+                        }
                         const files = listFiles.filter(filterMatches);
                         if (listFolders.length === 0 && files.length === 0) {
                             // An empty folder and a filter that matches nothing are
@@ -1315,6 +1380,7 @@ function connect() {
                     // Store handler on the dialog so directory_listing messages can find it
                     window._fileDialogUpdate = function(folders, files, path) {
                         if (path !== undefined) currentPath = path;
+                        listingPending = false;
                         listFolders = folders || [];
                         listFiles = files || [];
                         renderFileList();
@@ -1364,9 +1430,9 @@ function connect() {
                             div({class: 'comdlg-bottom-row'},
                                 label('File ', u('n'), 'ame:'),
                                 filenameInput,
-                                button({class: 'win2k-button', onclick: () => {
+                                button({class: 'win2k-button', 'data-dialog-default': '', onclick: () => {
                                     // If a folder name is typed, navigate into it
-                                    const val = filenameInput.value;
+                                    const val = filenameInput.value.trim();
                                     const folderItem = Array.from(fileListEl.querySelectorAll('.file-item[data-type="folder"]')).find(el => el.dataset.name === val);
                                     if (folderItem) {
                                         navigateTo(currentPath + '/' + val);
@@ -1374,6 +1440,7 @@ function connect() {
                                     }
                                     openSelectedFile();
                                 }}, dlgAction)),
+                            nameErrorEl,
                             div({class: 'comdlg-bottom-row'},
                                 label(isSave ? ['Save as ', u('t'), 'ype:'] : ['Files of ', u('t'), 'ype:']),
                                 ftSel,
@@ -1512,7 +1579,7 @@ function connect() {
                                     legend({style: 'font-size:11px; padding:0 4px;'}, 'Sample'),
                                     previewEl),
                                 div({style: 'display:flex; flex-direction:column; gap:4px;'},
-                                    button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => onOK()}, 'OK'),
+                                    button({class: 'win2k-button', style: 'min-width:73px;', 'data-dialog-default': '', onclick: onOK}, 'OK'),
                                     button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => closeDialog()}, 'Cancel'))))
                     );
                     setDialogWidth(440);
@@ -1559,7 +1626,7 @@ function connect() {
                                 div({class: 'fontdlg-col'}, label('Copies:'), copiesInput)),
                             rangeError,
                             div({style: 'display:flex; justify-content:flex-end; gap:8px; margin-top:10px;'},
-                                button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => {
+                                button({class: 'win2k-button', style: 'min-width:73px;', 'data-dialog-default': '', onclick: () => {
                                     if (refreshRangeError()) return;
                                     if (ws && ws.readyState === WebSocket.OPEN) {
                                         ws.send(JSON.stringify({ type: 'print_chosen', from: fromPage, to: toPage, copies: copies }));
@@ -1604,7 +1671,7 @@ function connect() {
                             div({style: 'display:flex; align-items:center; gap:6px; margin-bottom:10px;'},
                                 landscapeChk, label('Landscape')),
                             div({style: 'display:flex; justify-content:flex-end; gap:8px;'},
-                                button({class: 'win2k-button', style: 'min-width:73px;', onclick: () => {
+                                button({class: 'win2k-button', style: 'min-width:73px;', 'data-dialog-default': '', onclick: () => {
                                     if (ws && ws.readyState === WebSocket.OPEN) {
                                         ws.send(JSON.stringify({ type: 'page_setup_chosen',
                                             left: left, top: top, right: right, bottom: bottom,
@@ -1666,7 +1733,7 @@ function connect() {
                                                 onchange: () => { searchDown = true; }}), label({for: 'find-down'}, 'Down'))
                                         )) : '')),
                             div({style: 'display:flex; flex-direction:column; gap:4px;'},
-                                button({class: 'win2k-button', style: 'min-width:80px;', onclick: () => sendFindAction('find_next')}, 'Find Next'),
+                                button({class: 'win2k-button', style: 'min-width:80px;', 'data-dialog-default': '', onclick: () => sendFindAction('find_next')}, 'Find Next'),
                                 ...replaceButtons,
                                 button({class: 'win2k-button', style: 'min-width:80px;', onclick: () => {
                                     sendFindAction('close');
