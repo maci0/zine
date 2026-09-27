@@ -792,6 +792,17 @@ pub fn calcFrameAdjustments(dwStyle: u32, bMenu: bool, dwExStyle: u32) struct { 
 
 // --- Public API for web_ui ---
 
+/// The MSG.time stamp for a message entering the queue: a GetTickCount
+/// reading, on the same monotonic clock and with the same 32-bit wrap
+/// (GetMessageTime and GetTickCount read the same value), so a guest that
+/// computes an age as `GetTickCount() - msg.time` gets a duration and not an
+/// underflow. A zero here says "posted at boot": the age comes out as the
+/// whole session uptime, and a guest that times a loop with
+/// `msg.time - start` wraps the other way and gives up instantly.
+pub fn msgTime() u32 {
+    return @truncate(@as(u64, @bitCast(@import("../runtime.zig").monoMilliTimestamp())));
+}
+
 pub fn postCommand(id: u32) void {
     pending_command_mutex.lock();
     defer pending_command_mutex.unlock();
@@ -809,7 +820,7 @@ pub fn postGenericMessage(msg_id: u32, wParam: usize, lParam: isize) void {
             .message = msg_id,
             .wParam = @intCast(wParam),
             .lParam = @truncate(@as(u64, @bitCast(@as(i64, @intCast(lParam))))),
-            .time = 0,
+            .time = msgTime(),
             .pt_x = 0,
             .pt_y = 0,
         };

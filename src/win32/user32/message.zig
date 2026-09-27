@@ -5,6 +5,7 @@ const ansi = @import("../ansi.zig");
 const text_utils = @import("../../text_utils.zig");
 const user32 = @import("../user32.zig");
 const w32 = @import("../constants.zig");
+const civil_time = @import("../civil_time.zig");
 const w32cc = @import("../calling_convention.zig");
 const kernel32_time = @import("../kernel32/time.zig");
 
@@ -25,7 +26,7 @@ pub fn PeekMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFil
                 msg.message = w32.WM_ACTIVATE;
                 msg.wParam = w32.WA_ACTIVE;
                 msg.lParam = 0;
-                msg.time = 0;
+                msg.time = user32.msgTime();
                 msg.pt_x = 0;
                 msg.pt_y = 0;
             }
@@ -49,7 +50,7 @@ pub fn PeekMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFil
                 msg.message = w32.WM_ACTIVATEAPP;
                 msg.wParam = 1; // TRUE = app is being activated
                 msg.lParam = 0;
-                msg.time = 0;
+                msg.time = user32.msgTime();
                 msg.pt_x = 0;
                 msg.pt_y = 0;
             }
@@ -67,7 +68,7 @@ pub fn PeekMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFil
                 msg.message = w32.WM_COMMAND;
                 msg.wParam = cmd_id;
                 msg.lParam = 0;
-                msg.time = 0;
+                msg.time = user32.msgTime();
                 msg.pt_x = 0;
                 msg.pt_y = 0;
             }
@@ -117,7 +118,7 @@ pub fn PeekMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFil
                 msg.message = w32.WM_PAINT;
                 msg.wParam = 0;
                 msg.lParam = 0;
-                msg.time = 0;
+                msg.time = user32.msgTime();
                 msg.pt_x = 0;
                 msg.pt_y = 0;
             }
@@ -141,7 +142,7 @@ pub fn PeekMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFil
                     msg.message = w32.WM_TIMER;
                     msg.wParam = @intCast(t.id);
                     msg.lParam = 0;
-                    msg.time = 0;
+                    msg.time = user32.msgTime();
                     msg.pt_x = 0;
                     msg.pt_y = 0;
                 }
@@ -182,7 +183,7 @@ pub fn postMessageTo(hwnd: usize, msg_id: u32, wParam: usize, lParam: isize) voi
             .message = msg_id,
             .wParam = @intCast(wParam),
             .lParam = @intCast(lParam),
-            .time = 0,
+            .time = user32.msgTime(),
             .pt_x = 0,
             .pt_y = 0,
         };
@@ -343,7 +344,7 @@ pub fn GetMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFilt
                 msg.message = w32.WM_PAINT;
                 msg.wParam = 0;
                 msg.lParam = 0;
-                msg.time = 0;
+                msg.time = user32.msgTime();
                 msg.pt_x = 0;
                 msg.pt_y = 0;
             }
@@ -371,7 +372,7 @@ pub fn PostMessageA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) callcon
             .message = Msg,
             .wParam = @intCast(wParam),
             .lParam = @truncate(@as(u64, @bitCast(@as(i64, @intCast(lParam))))),
-            .time = 0,
+            .time = user32.msgTime(),
             .pt_x = 0,
             .pt_y = 0,
         };
@@ -392,7 +393,7 @@ pub fn PostQuitMessage(nExitCode: i32) callconv(w32cc.WINAPI) void {
             .message = w32.WM_QUIT,
             .wParam = @intCast(@as(u32, @bitCast(nExitCode))),
             .lParam = 0,
-            .time = 0,
+            .time = user32.msgTime(),
             .pt_x = 0,
             .pt_y = 0,
         };
@@ -1455,7 +1456,7 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
                 if (lParam != 0 and wParam == 0) {
                     const src: [*]const u8 = @ptrFromInt(trace.addr(@as(usize, @bitCast(lParam))));
                     const st = dtpStateOf(hWnd);
-                    @memcpy(@as(*[16]u8, @ptrCast(st)), src[0..16]);
+                    if (!dtpSetSystemTime(st, src[0..16])) return 0;
                     // render a date string for the widget
                     var buf: [64]u8 = undefined;
                     const formatted = std.fmt.bufPrint(&buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ st.year, st.month, st.day }) catch &[_]u8{};
@@ -1483,7 +1484,7 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
                 if (lParam != 0) {
                     const src: [*]const u8 = @ptrFromInt(trace.addr(@as(usize, @bitCast(lParam))));
                     const st = dtpStateOf(hWnd);
-                    @memcpy(@as(*[16]u8, @ptrCast(st)), src[0..16]);
+                    if (!dtpSetSystemTime(st, src[0..16])) return 0;
                 }
                 return 1;
             },
@@ -1491,7 +1492,7 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
                 if (lParam != 0) {
                     const src: [*]const u8 = @ptrFromInt(trace.addr(@as(usize, @bitCast(lParam))));
                     const st = dtpStateOf(hWnd);
-                    @memcpy(@as(*[16]u8, @ptrCast(st)), src[0..16]);
+                    if (!dtpSetSystemTime(st, src[0..16])) return 0;
                 }
                 return 1;
             },
@@ -1687,6 +1688,33 @@ const DtpState = extern struct {
 var dtp_states: [16]DtpState = [_]DtpState{.{}} ** 16;
 var dtp_state_count: usize = 0;
 
+/// Weekday (0 = Sunday) that the calendar gives a date. Exact for every date
+/// the FILETIME epoch covers, so 2000-02-29 is a Tuesday and not a Sunday.
+fn civilDayOfWeek(year: u16, month: u16, day: u16) u16 {
+    // 1970-01-01, day 0, was a Thursday, hence the +4.
+    return @intCast(@mod(civil_time.daysFromCivil(year, month, day) + 4, 7));
+}
+
+/// Store the guest's 16 SYSTEMTIME bytes in a date control's state.
+///
+/// The weekday is derived from the date, never copied: a guest that zeroes the
+/// struct before the call (the usual Delphi idiom) would otherwise store a date
+/// whose wDayOfWeek is always Sunday, and the control's own day arithmetic
+/// would then be wrong for every date the program shows. An impossible date
+/// (2001-02-29, month 13, day 0) is rejected and leaves the state untouched, so
+/// a control never displays a day its calendar does not have. Returns false
+/// for a rejected date.
+fn dtpSetSystemTime(st: *DtpState, src: []const u8) bool {
+    var in: DtpState = undefined;
+    @memcpy(std.mem.asBytes(&in), src[0..@sizeOf(DtpState)]);
+    if (in.year < 1601 or in.year > 30827) return false;
+    if (in.month < 1 or in.month > 12) return false;
+    if (in.day < 1 or in.day > std.time.epoch.getDaysInMonth(in.year, @enumFromInt(in.month))) return false;
+    st.* = in;
+    st.day_of_week = civilDayOfWeek(in.year, in.month, in.day);
+    return true;
+}
+
 fn dtpStateOf(hwnd: usize) *DtpState {
     for (0..dtp_state_count) |i| {
         if (dtp_hwnds[i] == hwnd) return &dtp_states[i];
@@ -1764,9 +1792,10 @@ pub fn WaitMessage() callconv(w32cc.WINAPI) i32 {
 // -------------------------------------------------------------------------
 
 pub fn GetMessageTime() callconv(w32cc.WINAPI) i32 {
-    // Windows defines the message time as a GetTickCount-style value; use the
-    // same monotonic clock so it is comparable with guest tick deltas.
-    return @truncate(runtime.monoMilliTimestamp());
+    // Windows defines the message time as a GetTickCount-style value. It is
+    // the same helper that stamps MSG.time, so a guest mixing the two never
+    // compares a real reading against a zero.
+    return @bitCast(user32.msgTime());
 }
 
 pub fn stub_MsgWaitForMultipleObjects(nCount: u32, pHandles: usize, fWaitAll: i32, dwMilliseconds: u32, dwWakeMask: u32) callconv(w32cc.WINAPI) u32 {
@@ -1826,4 +1855,76 @@ test "fresh DateTimePicker state shows today's date, not a fixed epoch" {
     // A different hwnd gets its own state.
     const other = dtpStateOf(0xd002);
     try testing.expect(other != first);
+}
+
+test "every dispatched MSG carries the tick count GetMessageTime reports" {
+    // A zero time field makes the guest's age arithmetic read as "posted at
+    // boot". The stamps come from one helper, so a message delivered now and
+    // GetMessageTime() now differ by a sampling gap, not by the whole uptime.
+    var msg: user32.MSG = .{};
+    msg.hwnd = 1;
+    msg.message = w32.WM_NULL;
+    msg.time = user32.msgTime();
+    const before = @as(u32, @bitCast(GetMessageTime()));
+    try testing.expect(msg.time != 0);
+    // The host clock is monotonic, so a later reading is never behind the
+    // stamp, and both stay inside one 32-bit wrap window.
+    const after = @as(u32, @bitCast(GetMessageTime()));
+    try testing.expect(after - msg.time < 1000);
+    try testing.expect(after - before < 1000);
+}
+
+test "a stored date keeps the weekday its calendar gives, not the caller's" {
+    var st: DtpState = .{};
+    // A zeroed wDayOfWeek (0 = Sunday) is what a Delphi caller sends with a
+    // real date; 2000-02-29 was a Tuesday, and 2024-12-31 a Tuesday too.
+    const zeroed: [16]u8 = blk: {
+        var b = [_]u8{0} ** 16;
+        std.mem.writeInt(u16, b[0..2], 2000, .little);
+        std.mem.writeInt(u16, b[2..4], 2, .little);
+        std.mem.writeInt(u16, b[6..8], 29, .little);
+        break :blk b;
+    };
+    try testing.expect(dtpSetSystemTime(&st, &zeroed));
+    try testing.expectEqual(@as(u16, 29), st.day);
+    try testing.expectEqual(@as(u16, 2), st.day_of_week); // Tuesday
+
+    const year_end: [16]u8 = blk: {
+        var b = [_]u8{0} ** 16;
+        std.mem.writeInt(u16, b[0..2], 2024, .little);
+        std.mem.writeInt(u16, b[2..4], 12, .little);
+        std.mem.writeInt(u16, b[6..8], 31, .little);
+        break :blk b;
+    };
+    try testing.expect(dtpSetSystemTime(&st, &year_end));
+    try testing.expectEqual(@as(u16, 2), st.day_of_week); // Tuesday
+    // 2025-01-01 is a Wednesday: the weekday follows the year boundary.
+    const new_year: [16]u8 = blk: {
+        var b = [_]u8{0} ** 16;
+        std.mem.writeInt(u16, b[0..2], 2025, .little);
+        std.mem.writeInt(u16, b[2..4], 1, .little);
+        std.mem.writeInt(u16, b[6..8], 1, .little);
+        break :blk b;
+    };
+    try testing.expect(dtpSetSystemTime(&st, &new_year));
+    try testing.expectEqual(@as(u16, 3), st.day_of_week); // Wednesday
+}
+
+test "a date the calendar does not have is rejected and leaves the state alone" {
+    var st: DtpState = .{ .year = 1999, .month = 12, .day = 31, .day_of_week = 5 };
+    const impossible = [_][3]u16{
+        .{ 2001, 2, 29 }, // not a leap year
+        .{ 1900, 2, 29 }, // century, not a leap year
+        .{ 2024, 13, 1 }, // no month 13
+        .{ 2024, 4, 31 }, // April has 30 days
+        .{ 2024, 1, 0 },
+    };
+    for (impossible) |ymd| {
+        var b = [_]u8{0} ** 16;
+        std.mem.writeInt(u16, b[0..2], ymd[0], .little);
+        std.mem.writeInt(u16, b[2..4], ymd[1], .little);
+        std.mem.writeInt(u16, b[6..8], ymd[2], .little);
+        try testing.expect(!dtpSetSystemTime(&st, &b));
+    }
+    try testing.expectEqual(DtpState{ .year = 1999, .month = 12, .day = 31, .day_of_week = 5 }, st);
 }

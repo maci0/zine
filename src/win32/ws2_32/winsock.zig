@@ -482,11 +482,12 @@ const ms_per_second: i64 = 1000;
 
 /// Convert a guest timeval to whole milliseconds for poll(2).
 /// poll() takes milliseconds, so a sub-millisecond wait rounds up: truncating
-/// would turn a 999us timeout into a non-blocking poll. A negative timeval
-/// means "no wait" rather than a wait of negative length. Returns null for a
-/// negative tv_sec, the only case that cannot be expressed as a duration.
+/// would turn a 999us timeout into a non-blocking poll. Winsock defines a
+/// negative value in either member as INFINITE, which poll(2) spells as -1, so
+/// that case returns null and the caller passes -1 through. Reading it as zero
+/// instead would return from a blocking select the instant it was called.
 fn timevalToPollMs(tv_sec: i32, tv_usec: i32) ?i32 {
-    if (tv_sec < 0) return 0;
+    if (tv_sec < 0 or tv_usec < 0) return null;
     const usec = @as(i64, tv_usec);
     const ms = @as(i64, tv_sec) * ms_per_second + @divTrunc(usec + std.time.us_per_ms - 1, std.time.us_per_ms);
     if (ms > std.math.maxInt(i32)) return std.math.maxInt(i32);
@@ -523,7 +524,10 @@ pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, time
         if (exceptfds != 0) total += clampFdCount(exceptfds);
 
         if (total == 0) {
-            // No fds — just sleep for timeout duration if given
+            // No fds — just sleep for timeout duration if given. An INFINITE
+            // timeval has no duration to sleep for, and with no descriptor
+            // nothing can ever become ready, so the call returns instead of
+            // blocking the emulator forever.
             if (timeout != 0) {
                 const tv = @as(*const TimeVal, @ptrFromInt(timeout));
                 const ns = timevalToNs(tv.tv_sec, tv.tv_usec);
@@ -1028,9 +1032,12 @@ test "select timeout rounds microseconds up to whole milliseconds" {
     try testing.expectEqual(@as(?i32, 60_000), timevalToPollMs(60, 0));
     // A zeroed timeval is a poll, not an infinite wait.
     try testing.expectEqual(@as(?i32, 0), timevalToPollMs(0, 0));
-    // Garbage negative fields must not panic or invert the wait.
-    try testing.expectEqual(@as(?i32, 0), timevalToPollMs(-1, 0));
-    try testing.expectEqual(@as(?i32, 0), timevalToPollMs(0, -5));
+    // Winsock's INFINITE sentinel and any other negative member wait forever,
+    // which poll(2) spells as -1. Reading it as a zero timeout would make a
+    // blocking select return immediately.
+    try testing.expectEqual(@as(?i32, null), timevalToPollMs(0, -1));
+    try testing.expectEqual(@as(?i32, null), timevalToPollMs(-1, 0));
+    try testing.expectEqual(@as(?i32, null), timevalToPollMs(0, -5));
     // An out-of-range microsecond field carries into the milliseconds.
     try testing.expectEqual(@as(?i32, 1500), timevalToPollMs(0, 1_500_000));
 }
@@ -1045,7 +1052,9 @@ test "timeval to nanoseconds conversion matches the millisecond rounding" {
     try testing.expectEqual(@as(u64, 1500 * std.time.ns_per_ms), timevalToNs(1, 500_000));
     // Sub-millisecond waits keep at least one millisecond instead of vanishing.
     try testing.expectEqual(@as(u64, std.time.ns_per_ms), timevalToNs(0, 1));
+    // An INFINITE timeval has no finite duration to sleep for.
     try testing.expectEqual(@as(u64, 0), timevalToNs(-1, 0));
+    try testing.expectEqual(@as(u64, 0), timevalToNs(0, -1));
 }
 
 test "a failing socket call records a code WSAGetLastError reports" {
