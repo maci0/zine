@@ -165,8 +165,15 @@ case "$MODE" in
         ;;
 esac
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MSVC_ROOT="$(realpath "$SCRIPT_DIR/../tools/MSVC600")"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+MSVC_ROOT="$ROOT/tools/MSVC600"
+# The fixtures are proprietary and not in a clone, so fail here with the path
+# README.md's Testing section names rather than inside the first test.
+if [ ! -d "$MSVC_ROOT" ]; then
+    echo "FATAL: MSVC 6.0 fixtures missing at $MSVC_ROOT" >&2
+    echo "see README.md (Testing) for the directories to place there" >&2
+    exit 1
+fi
 VC_BIN="$MSVC_ROOT/VC98/Bin"
 VC_INCLUDE="$MSVC_ROOT/VC98/Include"
 VC_LIB="$MSVC_ROOT/VC98/Lib"
@@ -181,20 +188,20 @@ FAILURES=""
 if [ "${SKIP_BUILD:-}" != "1" ]; then
     if $IS_WASM; then
         echo "Building zine for wasm32..."
-        (cd "$SCRIPT_DIR/.." && zig build -Darch=wasm32) || { echo "FATAL: zig build -Darch=wasm32 failed"; exit 1; }
+        (cd "$ROOT" && zig build -Darch=wasm32) || { echo "FATAL: zig build -Darch=wasm32 failed"; exit 1; }
     elif $IS_EXTERNAL; then
         echo "Building DLLs + zine with external stubs..."
         EXTERNAL_ARCH=x86
         if $IS_NATIVE64; then
             EXTERNAL_ARCH=x86_64
         fi
-        (cd "$SCRIPT_DIR/.." && zig build -Ddll=true && zig build -Dexternal-stubs=true -Darch="$EXTERNAL_ARCH") || { echo "FATAL: zig build -Dexternal-stubs failed"; exit 1; }
+        (cd "$ROOT" && zig build -Ddll=true && zig build -Dexternal-stubs=true -Darch="$EXTERNAL_ARCH") || { echo "FATAL: zig build -Dexternal-stubs failed"; exit 1; }
     elif $IS_NATIVE64; then
         echo "Building zine for x86_64 (compat mode)..."
-        (cd "$SCRIPT_DIR/.." && zig build -Darch=x86_64) || { echo "FATAL: zig build -Darch=x86_64 failed"; exit 1; }
+        (cd "$ROOT" && zig build -Darch=x86_64) || { echo "FATAL: zig build -Darch=x86_64 failed"; exit 1; }
     else
         echo "Building zine..."
-        (cd "$SCRIPT_DIR/.." && zig build) || { echo "FATAL: zig build failed"; exit 1; }
+        (cd "$ROOT" && zig build) || { echo "FATAL: zig build failed"; exit 1; }
     fi
     echo ""
 else
@@ -203,10 +210,10 @@ else
 fi
 
 if $IS_WASM; then
-    WASM_BIN="$(realpath "$SCRIPT_DIR/../zig-out/bin/zine.wasm32.wasm")"
+    WASM_BIN="$(realpath "$ROOT/zig-out/bin/zine.wasm32.wasm")"
     # Fall back to old name if new name doesn't exist
     if [ ! -f "$WASM_BIN" ]; then
-        WASM_BIN="$(realpath "$SCRIPT_DIR/../zig-out/bin/zine.wasm" 2>/dev/null || echo "")"
+        WASM_BIN="$(realpath "$ROOT/zig-out/bin/zine.wasm" 2>/dev/null || echo "")"
     fi
     if [ ! -f "$WASM_BIN" ]; then
         echo "FATAL: zine.wasm32.wasm not found"
@@ -215,7 +222,7 @@ if $IS_WASM; then
     if ! command -v "$WASM_RUNTIME" &>/dev/null; then
         # zine-host is built into zig-out/bin (not installed on PATH) — accept
         # the project binary as the runtime.
-        if [ "$WASM_RUNTIME" = "zine-host" ] && [ -x "$(realpath "$SCRIPT_DIR/../zig-out/bin/zine-host" 2>/dev/null || echo /nonexistent)" ]; then
+        if [ "$WASM_RUNTIME" = "zine-host" ] && [ -x "$(realpath "$ROOT/zig-out/bin/zine-host" 2>/dev/null || echo /nonexistent)" ]; then
             :
         else
             echo "FATAL: $WASM_RUNTIME not found in PATH"
@@ -224,9 +231,9 @@ if $IS_WASM; then
     fi
 else
     if $IS_NATIVE64; then
-        WINLOADER="$(realpath "$SCRIPT_DIR/../zig-out/bin/zine.x86_64")"
+        WINLOADER="$(realpath "$ROOT/zig-out/bin/zine.x86_64")"
     else
-        WINLOADER="$(realpath "$SCRIPT_DIR/../zig-out/bin/zine.x86")"
+        WINLOADER="$(realpath "$ROOT/zig-out/bin/zine.x86")"
     fi
     if [ ! -x "$WINLOADER" ]; then
         echo "FATAL: $WINLOADER not found"
@@ -249,9 +256,8 @@ if $IS_WASM; then
     if [ "$WASM_RUNTIME" = "wasmer" ]; then
         # wasmer needs --volume for filesystem access and absolute paths for PEs.
         # Map both the project root and workdir so DLLs and temp files are accessible.
-        PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
         WINLOADER_CMD=(wasmer run
-            --volume "$PROJECT_DIR:$PROJECT_DIR"
+            --volume "$ROOT:$ROOT"
             --volume "$WORKDIR:$WORKDIR"
             --env "INCLUDE=$INCLUDE" --env "LIB=$LIB" --env "PATH=$PATH"
             --env "ZINE_CWD=$WORKDIR"
@@ -264,7 +270,7 @@ if $IS_WASM; then
         # zine-host: native wasmer wrapper; inherits the host env (PATH must
         # include the MSVC bin dir so CL's _spawnvp finds C1.DLL) and preopens
         # the cwd + "/" (relative creates resolve through the preopen walk).
-        ZINE_HOST="$(command -v zine-host || echo "$SCRIPT_DIR/../zig-out/bin/zine-host")"
+        ZINE_HOST="$(command -v zine-host || echo "$ROOT/zig-out/bin/zine-host")"
         WINLOADER_CMD=("$ZINE_HOST" "$WASM_BIN" --)
     else
         # wasmtime: --dir to preopen filesystem, --env to pass-through host env vars

@@ -38,12 +38,15 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
       # The local cache and the pinned package fetch: both are content
       # addressed, so a restored entry is reused only when it still matches.
+      # The key therefore covers the toolchain and dependency set only
+      # (build.zig.zon); adding src/ to it would save a fresh multi-hundred-MB
+      # entry per commit and evict the cache without making any run faster.
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             .zig-cache
             zig-pkg
-          key: zig-${{ runner.os }}-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**') }}
+          key: zig-${{ runner.os }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
             zig-${{ runner.os }}-
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
@@ -57,24 +60,17 @@ jobs:
           fi
       # Canonical formatter check (mirrors the in-build gate; kept explicit so
       # a formatting failure is reported before any compile work).
-      - run: zig fmt --check src build.zig build.zig.zon
+      - name: Formatting
+        run: bash tests/check.sh fmt
       # Shell helpers: every tracked script must stay shellcheck-clean.
-      - run: git ls-files '*.sh' | xargs -r shellcheck -x
+      - name: Shell scripts shellcheck-clean
+        run: bash tests/check.sh check_shell
       # The tracked C sources are invisible to the Zig build, so nothing else
-      # analyzes them. Compile each one with the pinned `zig cc` and turn its
-      # warnings into errors; compilation only, so the objects stay in the
-      # workspace. src/gui/fltk_bridge.cpp is excluded: it needs the FLTK
-      # headers from libfltk1.3-dev, which this job does not install.
+      # analyzes them. The three helper steps above and here run out of
+      # tests/check.sh, so each command and each file list has one home and a
+      # step added there reaches CI without a second copy.
       - name: C sources compile warning-free
-        run: |
-          set -euo pipefail
-          mkdir -p .scratch/c-check
-          while IFS= read -r src; do
-            zig cc -c -o ".scratch/c-check/$(basename "$src").o" -std=c99 \
-              -Wall -Wextra -Wpedantic -Werror "$src"
-          done < <(git ls-files 'tests/*.c' ':!tests/cpubench_win32.c')
-          zig cc -c -o .scratch/c-check/cpubench_win32.o -target x86-windows-gnu \
-            -std=c99 -Wall -Wextra -Wpedantic -Werror tests/cpubench_win32.c
+        run: bash tests/check.sh check_c
       # Compile every shipped target, not just the default: the compiler is
       # this repo's analyzer, so an error on x86_64/wasm32/wasm64 must block
       # merges exactly like one on x86. Separate steps keep peak memory at a

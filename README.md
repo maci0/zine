@@ -378,25 +378,22 @@ bash tests/check.sh
 One command runs the whole gate: it names any missing tool or wrong Zig
 version before starting, then runs the CI checks in order and stops at the
 first failure. Build targets run sequentially to limit peak memory rather than
-via `-Dall`, matching CI. The individual steps, if you need them on their own:
+via `-Dall`, matching CI. The individual steps, if you need them on their own,
+run by name:
 
 ```sh
-zig fmt --check src build.zig build.zig.zon
-git ls-files '*.sh' | xargs -r shellcheck -x   # every tracked script, not just tests/
-zig build --summary all
-zig build -Darch=x86_64 --summary all
-zig build -Darch=wasm32 --summary all
-zig build -Darch=wasm64 --summary all
-zig build -Ddll=all --summary all          # Windows stub DLLs
-zig build -Dexternal-stubs --summary all
-zig build test --summary all
-zig build test-cli --summary all
-zig build test-cli -Darch=x86_64 --summary all
-zig build fuzz -Dfuzz-seconds=10 --summary all
+bash tests/check.sh fmt
+bash tests/check.sh check_shell    # every tracked script, not just tests/
+bash tests/check.sh check_c        # warning-free compile of every tracked C source
+bash tests/check.sh build build-x86_64 build-wasm32 build-wasm64
+bash tests/check.sh dll external-stubs
+bash tests/check.sh test
+bash tests/check.sh test-cli test-cli-x86_64
 ```
 
-The same list is the `static-analysis` job in `.github/workflows/ci.yml`; a
-command added to one belongs in the other.
+The named steps are the `static-analysis` job in `.github/workflows/ci.yml`, and
+the script is where each one's command lives; a step added there reaches CI
+without a second copy.
 
 For the edit-test loop, use `zig build test -Dtest-filter=<substring>` above;
 `-Darch` does not change the host target of unit tests. Run

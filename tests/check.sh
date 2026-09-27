@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 # Full pre-pull-request gate: the checks CI runs on .github/workflows/ci.yml
 # (static-analysis job), in the same order, stopping at the first failure.
-# Keep both in step; a command added to one belongs in the other.
+#
+# Usage:
+#   bash tests/check.sh                 # the whole gate, in order
+#   bash tests/check.sh <step> [step..] # only the named steps, still in order
+#
+# The named steps are the ones in the step_names list below; `bash
+# tests/check.sh` with no argument runs all of them. CI calls this script for
+# the two helper steps (check_shell, check_c) so the commands and the file
+# lists live here once. A command added to one belongs in the other.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -30,8 +38,28 @@ if [[ "$have_zig" != "$minimum_zig"* ]]; then
 fi
 
 # Build targets run sequentially rather than via -Dall: the CI gate does the
-# same to keep peak memory at one wasm compile.
-steps=(
+# same to keep peak memory at one wasm compile. Each name is the handle a
+# caller passes to run that step alone; the order below is the gate's order.
+step_names=(
+    fmt
+    check_shell
+    check_c
+    build
+    build-x86_64
+    build-wasm32
+    build-wasm64
+    # The external-stub DLLs are a shipped target with its own root sources
+    # (src/dll/, src/win32_dll_api.zig); without this they are never compiled
+    # and a break in them merges unnoticed.
+    dll
+    # Embedding stubs is the default; external-stubs is the other half of
+    # that switch and compiles src/dll/ through a different path.
+    external-stubs
+    test
+    test-cli
+    test-cli-x86_64
+)
+step_commands=(
     'zig fmt --check src build.zig build.zig.zon'
     'check_shell'
     'check_c'
@@ -39,12 +67,7 @@ steps=(
     'zig build -Darch=x86_64 --summary all'
     'zig build -Darch=wasm32 --summary all'
     'zig build -Darch=wasm64 --summary all'
-    # The external-stub DLLs are a shipped target with their own root sources
-    # (src/dll/, src/win32_dll_api.zig); without this they are never compiled
-    # and a break in them merges unnoticed.
     'zig build -Ddll=all --summary all'
-    # Embedding stubs is the default; -Dexternal-stubs is the other half of
-    # that switch and compiles src/dll/ through a different path.
     'zig build -Dexternal-stubs --summary all'
     'zig build test --summary all'
     'zig build test-cli --summary all'
@@ -80,14 +103,39 @@ check_c() {
         -Wall -Wextra -Wpedantic -Werror tests/cpubench_win32.c
 }
 
-for step in "${steps[@]}"; do
-    printf '\n== %s\n' "$step"
+# No argument means the whole gate. Named steps always run in gate order, so
+# `check.sh test build` runs the same two steps as `check.sh build test`.
+selected=("$@")
+if (($# == 0)); then
+    selected=("${step_names[@]}")
+fi
+
+run_indices=()
+for i in "${!step_names[@]}"; do
+    for name in "${selected[@]}"; do
+        if [[ "${step_names[$i]}" == "$name" ]]; then
+            run_indices+=("$i")
+            break
+        fi
+    done
+done
+if ((${#run_indices[@]} != ${#selected[@]})); then
+    printf 'unknown step; known steps: %s\n' "${step_names[*]}" >&2
+    exit 2
+fi
+
+for i in "${run_indices[@]}"; do
+    printf '\n== %s: %s\n' "${step_names[$i]}" "${step_commands[$i]}"
     # Word splitting is what runs each step; the list is a literal, not input.
     # shellcheck disable=SC2086
-    if ! $step; then
-        printf 'FAILED: %s\n' "$step" >&2
+    if ! ${step_commands[$i]}; then
+        printf 'FAILED: %s: %s\n' "${step_names[$i]}" "${step_commands[$i]}" >&2
         exit 1
     fi
 done
 
-printf '\nall checks passed\n'
+if (($# == 0)); then
+    printf '\nall checks passed\n'
+else
+    printf '\nall selected steps passed: %s\n' "${selected[*]}"
+fi

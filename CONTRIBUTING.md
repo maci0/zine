@@ -20,8 +20,9 @@ root.
 | One test or module | `zig build test -Dtest-filter=<substring> --summary all` |
 | CLI output and exit status | `zig build test-cli` (add `-Darch=x86_64` or `-Darch=wasm32`) |
 | Fix formatting | `zig fmt src build.zig build.zig.zon` |
-| Lint shell scripts | `git ls-files '*.sh' \| xargs -r shellcheck -x` |
-| Check C sources | `bash tests/check.sh` (the `check_c` step) |
+| Lint shell scripts | `bash tests/check.sh check_shell` |
+| Check C sources | `bash tests/check.sh check_c` |
+| One gate step by name | `bash tests/check.sh <step>` (see below) |
 | Full gate, same as CI | `bash tests/check.sh` |
 | List build steps and options | `zig build --help` |
 
@@ -41,10 +42,19 @@ in the same order, as the `static-analysis` job in `.github/workflows/ci.yml`:
 unit tests, and both native `test-cli` runs. If you add a check,
 add it in both places or local runs stop predicting CI.
 
+Each check is a named step, and `bash tests/check.sh <step> [step...]` runs
+just those, still in gate order: `fmt`, `check_shell`, `check_c`, `build`,
+`build-x86_64`, `build-wasm32`, `build-wasm64`, `dll`, `external-stubs`,
+`test`, `test-cli`, `test-cli-x86_64`. The two helper steps (shellcheck and
+the C compile) are the ones CI calls this script for, so the commands and the
+`git ls-files` lists live in one place. An unknown name fails with the list of
+known steps.
+
 The job takes its Zig version from `build.zig.zon` and restores `.zig-cache/`
-and `zig-pkg/` from a cache keyed on `build.zig`, `build.zig.zon`, and `src/`.
-Both paths are content addressed, so a restored entry that no longer matches is
-recompiled rather than reused; a run that misses the cache pays the full build.
+and `zig-pkg/` from a cache keyed on `build.zig.zon`, which pins the toolchain
+and the dependency set. Both paths are content addressed, so a restored entry
+that no longer matches is recompiled rather than reused; a run that misses the
+cache pays the full build.
 
 Tests that need more than Zig are opt-in and say so in the README: the MSVC
 integration suite (`tests/test_msvc_cli.sh`, needs MSVC 6.0 fixtures under

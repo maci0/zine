@@ -14,7 +14,16 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(realpath "$SCRIPT_DIR/..")"
-MSVC_ROOT="$(realpath "$ROOT/tools/MSVC600")"
+MSVC_ROOT="$ROOT/tools/MSVC600"
+# Same fixtures test_msvc_cli.sh needs: proprietary, absent from a clone.
+# Checked before the build so a missing prerequisite is not reported as a
+# build error.
+if [ ! -d "$MSVC_ROOT" ]; then
+    echo "FATAL: MSVC 6.0 fixtures missing at $MSVC_ROOT" >&2
+    echo "see README.md (Testing) for the directories to place there" >&2
+    exit 1
+fi
+MSVC_ROOT="$(realpath "$MSVC_ROOT")"
 VC_BIN="$MSVC_ROOT/VC98/Bin"
 VC_INCLUDE="$MSVC_ROOT/VC98/Include"
 VC_LIB="$MSVC_ROOT/VC98/Lib"
