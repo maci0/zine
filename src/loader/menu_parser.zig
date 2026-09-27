@@ -34,7 +34,7 @@ pub fn parseMenuResource(allocator: std.mem.Allocator, data: []const u8) ![]cons
     }
 
     while (offset < data.len) {
-        var item = try parseItem(allocator, data, &offset);
+        var item = try parseItem(allocator, data, &offset, 0);
         errdefer freeMenuItem(allocator, &item);
         try root_items.append(allocator, item);
         if ((item.flags & 0x0080) != 0) { // MF_END
@@ -57,7 +57,13 @@ pub fn parseMenuResource(allocator: std.mem.Allocator, data: []const u8) ![]cons
     return list.toOwnedSlice(allocator);
 }
 
-fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize) !MenuItem {
+/// Maximum popup nesting accepted. Each level costs one stack frame, and a
+/// crafted resource adds a level every four bytes (flags, empty name), so an
+/// unbounded walk overflows the stack well before the input is exhausted.
+pub const max_popup_depth = 32;
+
+fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize, depth: u32) !MenuItem {
+    if (depth > max_popup_depth) return error.MenuNestingTooDeep;
     if (offset.* + 2 > data.len) return error.InvalidMenuResource;
     const flags = std.mem.readInt(u16, data[offset.*..][0..2], .little);
     offset.* += 2;
@@ -102,7 +108,7 @@ fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize) !Me
         }
 
         while (offset.* < data.len) {
-            var child = try parseItem(allocator, data, offset);
+            var child = try parseItem(allocator, data, offset, depth + 1);
             errdefer freeMenuItem(allocator, &child);
             try children.append(allocator, child);
             if ((child.flags & 0x0080) != 0) { // MF_END
@@ -295,6 +301,19 @@ test "parseMenuResource: truncated input is rejected" {
         try data.appendSlice(testing.allocator, name);
         try testing.expectError(error.InvalidMenuResource, parseMenuResource(testing.allocator, data.items));
     }
+}
+
+test "parseMenuResource: popup nesting past max_popup_depth is rejected" {
+    // A crafted resource nests one popup every four bytes (flags 0x0010, an
+    // empty name). Left unbounded this recurses until the stack is gone.
+    var data: std.ArrayListUnmanaged(u8) = .empty;
+    defer data.deinit(testing.allocator);
+    try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
+    const levels = max_popup_depth + 8;
+    for (0..levels) |_| {
+        try data.appendSlice(testing.allocator, &.{ 0x10, 0x00, 0x00, 0x00 });
+    }
+    try testing.expectError(error.MenuNestingTooDeep, parseMenuResource(testing.allocator, data.items));
 }
 
 test "parseMenuResource: control characters are escaped as \\uXXXX" {

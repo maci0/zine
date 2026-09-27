@@ -32,5 +32,6 @@ See `README.md` for optional FLTK/Wasmer builds, run commands, and integration s
 - Trace stub calls with `trace.print(fmt, args)`; it honors `trace.enable_tracing`.
 - Document implementation status (`Fully implemented`, `Partially implemented`, `Stub`) in function doc comments; explain ABI constraints and magic numbers rather than restating code.
 - Native `--jit` validates compilation while the interpreter executes. Executing compiled WASM blocks requires `-Djit_host=true` and a runtime providing `jit_compile`/`jit_call`; do not treat native validation as JIT execution coverage.
+- Untrusted-input parsers (PE headers, menu, dialog, icon resources) have fuzz harnesses under `src/fuzz/`. Run them with `zig build fuzz`; failing inputs land in `zig-out/fuzz/` and belong in the seed corpus once minimized. New parsers get a harness asserting their output contract, and `zig build test` replays the seeds.
 
 For subsystem layout, see `docs/ARCHITECTURE.md`; build options and dependencies live in `build.zig` and `build.zig.zon`.

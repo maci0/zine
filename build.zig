@@ -419,4 +419,31 @@ pub fn build(b: *std.Build) void {
     t.root_module.addOptions("web_assets", web_assets);
     test_step.dependOn(&fmt_check.step);
     test_step.dependOn(&b.addRunArtifact(t).step);
+
+    // -----------------------------------------------------------------------
+    // Fuzz step: mutating fuzzer for the untrusted-input parsers
+    // -----------------------------------------------------------------------
+    // Each target takes the raw bytes a PE file supplies to the parser. The
+    // step is separate from `test` so a normal gate stays fast; CI runs it
+    // with a short budget, and the seed corpora are replayed under
+    // `zig build test` (src/fuzz/replay.zig), which is where leaks and
+    // assertion failures become hard failures.
+    // -----------------------------------------------------------------------
+    const fuzz_step = b.step("fuzz", "Fuzz the PE menu and header parsers");
+    const fuzz_seconds = b.option(u32, "fuzz-seconds", "Seconds each fuzz target runs") orelse 10;
+    const fuzz_exe = b.addExecutable(.{
+        .name = "zine-fuzz",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/fuzz_main.zig"),
+            .target = b.graph.host,
+            // Debug keeps the safety checks (integer overflow, bounds) that a
+            // Release fuzzer would drop.
+            .optimize = .Debug,
+        }),
+    });
+    const fuzz_build_options = b.addOptions();
+    fuzz_build_options.addOption(u32, "fuzz_seconds", fuzz_seconds);
+    fuzz_exe.root_module.addOptions("fuzz_options", fuzz_build_options);
+    fuzz_step.dependOn(&fmt_check.step);
+    fuzz_step.dependOn(&b.addRunArtifact(fuzz_exe).step);
 }

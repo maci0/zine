@@ -26,6 +26,9 @@ comptime {
     // Profiler tests
     _ = @import("profiler.zig");
 
+    // Fuzz harness regression tests (seed corpus + mutation replay)
+    _ = @import("fuzz/replay.zig");
+
     // Core utility tests
     _ = @import("config.zig");
     _ = @import("log.zig");

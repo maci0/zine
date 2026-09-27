@@ -222,6 +222,26 @@ zig build test-cli -Dhost       # also checks zine-host; requires Wasmer headers
 ./tests/fltk_smoke.sh
 ```
 
+### Fuzzing the PE parsers
+
+`zig build fuzz` mutates a seed corpus of menu resources and PE images and
+feeds every input to the parser under Zig's safety checks. A failing input is
+written to `zig-out/fuzz/<target>-<n>.bin`; minimize it, fix the cause, and
+add the minimized input to the seed corpus in `src/fuzz/`.
+
+```sh
+zig build fuzz -Dfuzz-seconds=30            # per target
+zig build fuzz -Dfuzz-seconds=30 -- menu.bin pe.exe   # also replay captured files
+```
+
+The harnesses assert the parser's output contract, not just absence of
+crashes: a menu that parses must render as a valid JSON menu object, and a
+successful `PEParser.parse` must place its headers inside the file.
+`zig build test` replays the same seeds plus a fixed mutation sweep under
+`std.testing.allocator`, so a leak or a broken contract fails the normal gate.
+libFuzzer or AFL++ can drive the same harnesses by calling `harness` in
+`src/fuzz/menu.zig` and `src/fuzz/pe.zig`.
+
 The CLI gate checks the built executable's version against `build.zig.zon`,
 stdout/stderr separation, help aliases, and invalid-option status. Every build
 also rejects disagreement between the manifest and `src/version.zig`.
