@@ -3,6 +3,7 @@ const x86_memory = @import("../x86/memory.zig");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
 const ansi = @import("ansi.zig");
+const unicase = @import("unicase.zig");
 const text_utils = @import("../text_utils.zig");
 
 // Sub-modules
@@ -1278,36 +1279,83 @@ test "calcFrameAdjustments returns correct bounds" {
 }
 
 // IsCharAlphaA/W, IsCharAlphaNumericA/W, IsCharLowerA/W, IsCharUpperA/W.
-// The A variants take a CHAR, the W variants a WCHAR, so each test reads the
-// argument at the width the guest passed it with.
-fn isCharTest(comptime wide: bool, comptime pred: fn (u8) bool, c: usize) i32 {
-    const ch: u8 = if (wide) @truncate(@as(u16, @truncate(c))) else @truncate(c);
-    return if (pred(ch)) 1 else 0;
+// The A variants take a CHAR in the ANSI code page, the W variants a WCHAR,
+// so each test classifies the argument at the width and encoding the guest
+// passed it with. Truncating a WCHAR to a byte to reuse the ASCII test would
+// read the wrong character: U+0179 (Z acute, upper case) has 0x79 ('y') as
+// its low byte.
+fn isCharTestAnsi(comptime pred: fn (u16) bool, c: usize) i32 {
+    return if (pred(@intCast(ansi.byteToCodepoint(@truncate(c))))) 1 else 0;
+}
+
+fn isCharTestWide(comptime pred: fn (u16) bool, c: usize) i32 {
+    return if (pred(@truncate(c))) 1 else 0;
+}
+
+/// A letter or a decimal digit. The digits are the ASCII range; the non-ASCII
+/// decimal digit blocks (Arabic-Indic, Devanagari) are not classified.
+fn isAlphaNumeric(c: u16) bool {
+    return unicase.isAlphabetic(c) or (c >= '0' and c <= '9');
 }
 
 fn stub_IsCharAlphaNumericA(c: usize) callconv(w32cc.WINAPI) i32 {
-    return isCharTest(false, std.ascii.isAlphanumeric, c);
+    return isCharTestAnsi(isAlphaNumeric, c);
 }
 fn stub_IsCharAlphaNumericW(c: usize) callconv(w32cc.WINAPI) i32 {
-    return isCharTest(true, std.ascii.isAlphanumeric, c);
+    return isCharTestWide(isAlphaNumeric, c);
 }
 fn stub_IsCharAlphaA(c: usize) callconv(w32cc.WINAPI) i32 {
-    return isCharTest(false, std.ascii.isAlphabetic, c);
+    return isCharTestAnsi(unicase.isAlphabetic, c);
 }
 fn stub_IsCharAlphaW(c: usize) callconv(w32cc.WINAPI) i32 {
-    return isCharTest(true, std.ascii.isAlphabetic, c);
+    return isCharTestWide(unicase.isAlphabetic, c);
 }
 fn stub_IsCharLowerA(c: usize) callconv(w32cc.WINAPI) i32 {
-    return isCharTest(false, std.ascii.isLower, c);
+    return isCharTestAnsi(unicase.isLower, c);
 }
 fn stub_IsCharLowerW(c: usize) callconv(w32cc.WINAPI) i32 {
-    return isCharTest(true, std.ascii.isLower, c);
+    return isCharTestWide(unicase.isLower, c);
 }
 fn stub_IsCharUpperA(c: usize) callconv(w32cc.WINAPI) i32 {
-    return isCharTest(false, std.ascii.isUpper, c);
+    return isCharTestAnsi(unicase.isUpper, c);
 }
 fn stub_IsCharUpperW(c: usize) callconv(w32cc.WINAPI) i32 {
-    return isCharTest(true, std.ascii.isUpper, c);
+    return isCharTestWide(unicase.isUpper, c);
+}
+
+test "IsCharAlpha/Lower/Upper classify the whole WCHAR, not its low byte" {
+    // U+0179 is an upper-case Z with an acute; its low byte is 'y'.
+    try std.testing.expectEqual(@as(i32, 1), stub_IsCharUpperW(0x0179));
+    try std.testing.expectEqual(@as(i32, 0), stub_IsCharLowerW(0x0179));
+    // U+00DF (sharp s) and U+0178 (Y diaeresis) are the reverse trap: the
+    // mappings report them as the other case.
+    try std.testing.expectEqual(@as(i32, 0), stub_IsCharUpperW(0x00DF));
+    try std.testing.expectEqual(@as(i32, 1), stub_IsCharLowerW(0x00DF));
+    try std.testing.expectEqual(@as(i32, 1), stub_IsCharUpperW(0x0178));
+    try std.testing.expectEqual(@as(i32, 1), stub_IsCharAlphaW(0x00DF));
+    // Cyrillic and Greek, above the Latin-1 range.
+    try std.testing.expectEqual(@as(i32, 1), stub_IsCharUpperW(0x0416));
+    try std.testing.expectEqual(@as(i32, 1), stub_IsCharLowerW(0x0436));
+    try std.testing.expectEqual(@as(i32, 1), stub_IsCharLowerW(0x03B1));
+    // ASCII keeps its answers, and a non-letter stays a non-letter.
+    try std.testing.expectEqual(@as(i32, 1), stub_IsCharUpperW('A'));
+    try std.testing.expectEqual(@as(i32, 1), stub_IsCharLowerW('a'));
+    try std.testing.expectEqual(@as(i32, 1), stub_IsCharAlphaNumericW('7'));
+    try std.testing.expectEqual(@as(i32, 0), stub_IsCharAlphaW('7'));
+    try std.testing.expectEqual(@as(i32, 0), stub_IsCharAlphaW(' '));
+    try std.testing.expectEqual(@as(i32, 0), stub_IsCharUpperW(0x4F60));
+}
+
+test "IsCharAlphaA classifies the ANSI code page" {
+    // CP1252 0xE9 is e acute: a lower-case letter even though the byte is
+    // outside ASCII, and 0x80 is the euro sign, which is not a letter.
+    try std.testing.expectEqual(@as(i32, 1), stub_IsCharLowerA(0xE9));
+    try std.testing.expectEqual(@as(i32, 1), stub_IsCharUpperA(0xC9));
+    try std.testing.expectEqual(@as(i32, 0), stub_IsCharUpperA(0xE9));
+    try std.testing.expectEqual(@as(i32, 0), stub_IsCharAlphaA(0x80));
+    try std.testing.expectEqual(@as(i32, 1), stub_IsCharAlphaA(0xDF));
+    try std.testing.expectEqual(@as(i32, 1), stub_IsCharUpperA('Z'));
+    try std.testing.expectEqual(@as(i32, 0), stub_IsCharLowerA('Z'));
 }
 
 // CallWindowProcA: call a window procedure directly (used by subclassing)

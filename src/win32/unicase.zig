@@ -130,6 +130,69 @@ pub fn foldKey(c: u16) u16 {
     return toLower(c);
 }
 
+// --- Letter and case classification ---
+//
+// The IsCharAlpha/Lower/Upper family. A code point in one of the pair blocks
+// gets its case from the block, since a partner alone says nothing about
+// which case the code point itself is in: 0x0179 (Z with acute, upper) and
+// 0x017A (lower) are partners, and reading the low byte of 0x0179 would land
+// on 'y' instead. Elsewhere a code point with a case partner is a letter, so
+// the classification follows from the two mappings; the letters below have no
+// partner, and Unicode gives them a category the mappings do not reproduce.
+
+/// Letters that are upper case and map only to themselves.
+const upper_case_only = [_]u16{ 0x0130, 0x0178 };
+
+/// Letters that are lower case and map only to themselves.
+const lower_case_only = [_]u16{ 0x00DF, 0x0131, 0x0138, 0x0149, 0x017F, 0x0180 };
+
+/// Letters with no case at all, neither upper nor lower.
+const case_less_letters = [_]u16{ 0x00AA, 0x00B5, 0x00BA };
+
+/// Whether `c` is the upper-case member of its pair block, and null when it
+/// is in none. A block alternates upper and lower from `start`, so the parity
+/// of the offset names the case, and `upper_first` says which parity is upper.
+fn pairIsUpper(c: u16) ?bool {
+    for (unpaired) |u| {
+        if (c == u) return null;
+    }
+    for (pair_blocks) |b| {
+        if (c < b.start or c > b.end) continue;
+        return ((c - b.start) % 2 == 0) == b.upper_first;
+    }
+    return null;
+}
+
+/// Whether `c` is an upper-case letter. German sharp s and the other letters
+/// with no upper-case form are not one.
+pub fn isUpper(c: u16) bool {
+    if (pairIsUpper(c)) |in_block| return in_block;
+    for (upper_case_only) |u| {
+        if (c == u) return true;
+    }
+    return toUpper(c) == c and toLower(c) != c;
+}
+
+/// Whether `c` is a lower-case letter. Dotted capital I, y diaeresis and the
+/// other letters with no lower-case form are not one.
+pub fn isLower(c: u16) bool {
+    if (pairIsUpper(c)) |in_block| return !in_block;
+    for (lower_case_only) |l| {
+        if (c == l) return true;
+    }
+    return toLower(c) == c and toUpper(c) != c;
+}
+
+/// Whether `c` is a letter: one with a case partner, one of the fixed-case
+/// letters, or one of the letters that has no case at all.
+pub fn isAlphabetic(c: u16) bool {
+    if (isUpper(c) or isLower(c)) return true;
+    for (case_less_letters) |l| {
+        if (c == l) return true;
+    }
+    return false;
+}
+
 // --- Locale-sensitive case mapping ---
 //
 // The mappings above are the Unicode default ones, which Turkish and Azerbaijani

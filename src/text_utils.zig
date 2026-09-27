@@ -134,6 +134,41 @@ pub fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
     }
 }
 
+/// Case-insensitive comparison for a name the host filesystem holds as
+/// arbitrary bytes (filenames, module names). Folds per code point when both
+/// sides are valid UTF-8, and falls back to folding ASCII bytes otherwise, so
+/// a name that is not valid UTF-8 still matches the same bytes in another
+/// case. A case that matters only above ASCII ("CAFÉ.TXT" against
+/// "café.txt") resolves through the first branch.
+pub fn eqlIgnoreCaseName(a: []const u8, b: []const u8) bool {
+    return eqlIgnoreCase(a, b) or std.ascii.eqlIgnoreCase(a, b);
+}
+
+/// Fold a name into the key two spellings of one identity share, writing the
+/// lowercase form into `out` and returning the written prefix. Used for
+/// module-registry keys, where ASCII folding alone gives one module two
+/// entries and loads it twice. Folding preserves the UTF-8 length, so `out`
+/// needs `name.len` bytes; a name that is not valid UTF-8 folds its ASCII
+/// bytes instead, matching what the rest of the comparison falls back to.
+pub fn foldKeyUtf8(name: []const u8, out: []u8) []const u8 {
+    const view = std.unicode.Utf8View.init(name) catch {
+        const n = @min(name.len, out.len);
+        for (0..n) |i| out[i] = std.ascii.toLower(name[i]);
+        return out[0..n];
+    };
+    var n: usize = 0;
+    var it = view.iterator();
+    while (it.nextCodepoint()) |cp| {
+        // unicase maps UTF-16 code units; nothing above the BMP has a simple
+        // case mapping in its tables, so a code point there folds to itself.
+        const folded: u21 = if (cp < 0x10000) unicase.toLower(@intCast(cp)) else cp;
+        const width = std.unicode.utf8CodepointSequenceLength(folded) catch continue;
+        if (n + width > out.len) break;
+        n += std.unicode.utf8Encode(folded, out[n..]) catch continue;
+    }
+    return out[0..n];
+}
+
 /// The Win32 upper/lower APIs fold UTF-16 code units, so a code point outside
 /// the BMP folds per its leading surrogate, which is enough for a case
 /// decision.
@@ -226,4 +261,31 @@ test "eqlIgnoreCase folds non-ASCII letters" {
 test "eqlIgnoreCase rejects invalid UTF-8 rather than matching" {
     try testing.expect(!eqlIgnoreCase("\xC3", "\xC3"));
     try testing.expect(eqlIgnoreCase("\xC3\xA9", "\xC3\xA9"));
+}
+
+test "eqlIgnoreCaseName folds non-UTF-8 bytes by their ASCII case" {
+    // A host name that is not valid UTF-8 still resolves to itself in another
+    // case, which is what the filesystem accepts.
+    try testing.expect(eqlIgnoreCaseName("CAF\xE9.TXT", "caf\xE9.txt"));
+    try testing.expect(!eqlIgnoreCaseName("caf\xE9.txt", "cafe.txt"));
+    try testing.expect(eqlIgnoreCaseName("café.txt", "CAFÉ.TXT"));
+}
+
+test "foldKeyUtf8 puts both spellings of one name on one key" {
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("café.txt", foldKeyUtf8("CAFÉ.TXT", &buf));
+    try testing.expectEqualStrings("москва.dll", foldKeyUtf8("Москва.DLL", &buf));
+    // Astral characters have no simple case mapping and pass through whole.
+    try testing.expectEqualStrings("\u{1F600}.dll", foldKeyUtf8("\u{1F600}.DLL", &buf));
+    // Invalid UTF-8 folds the ASCII bytes and leaves the rest alone.
+    try testing.expectEqualStrings("caf\xE9.txt", foldKeyUtf8("CAF\xE9.TXT", &buf));
+}
+
+test "foldKeyUtf8 never writes past the destination" {
+    var buf: [4]u8 = undefined;
+    // Six bytes of name, four of room: each character that fits is written
+    // whole, so a short destination loses the tail, never half a character.
+    const key = foldKeyUtf8("héllo", &buf);
+    try testing.expectEqualStrings("hél", key);
+    _ = try std.unicode.Utf8View.init(key);
 }

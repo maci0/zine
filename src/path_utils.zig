@@ -837,9 +837,7 @@ test "tryCaseInsensitiveResolve matches on-disk filename casing" {
 /// code point, so "CAFÉ.TXT" finds "café.txt"; a name that is not valid UTF-8
 /// falls back to the byte comparison, since the filesystem accepts arbitrary
 /// bytes and a mangled name still has to resolve.
-fn filenameEqlIgnoreCase(a: []const u8, b: []const u8) bool {
-    return text_utils.eqlIgnoreCase(a, b) or std.ascii.eqlIgnoreCase(a, b);
-}
+const filenameEqlIgnoreCase = text_utils.eqlIgnoreCaseName;
 
 test "tryCaseInsensitiveResolve matches non-ASCII filename casing" {
     var tmp_dir = testing.tmpDir(.{});

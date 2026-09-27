@@ -11,6 +11,7 @@ const builtin = @import("builtin");
 const log = @import("../log.zig");
 const trace = @import("../trace.zig");
 const path_utils = @import("../path_utils.zig");
+const text_utils = @import("../text_utils.zig");
 const is_wasi = builtin.os.tag == .wasi;
 
 /// Check if a file exists by trying to open it. Works on WASI (unlike Dir.access).
@@ -96,20 +97,21 @@ fn sameFile(a: []const u8, b: []const u8) bool {
 }
 
 /// Path text comparison after separator normalization, case-insensitive to
-/// match the guest's case-insensitive view of the file system.
+/// match the guest's case-insensitive view of the file system. Case folding
+/// is per code point, so a path differing only in the case of a non-ASCII
+/// letter names the same file.
 fn pathsEqualCi(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |ca, cb| {
-        const na = if (ca == '\\') '/' else ca;
-        const nb = if (cb == '\\') '/' else cb;
-        if (std.ascii.toLower(na) != std.ascii.toLower(nb)) return false;
-    }
-    return true;
+    if (a.len != b.len or a.len > std.fs.max_path_bytes) return false;
+    var norm_a: [std.fs.max_path_bytes]u8 = undefined;
+    var norm_b: [std.fs.max_path_bytes]u8 = undefined;
+    for (a, 0..) |c, i| norm_a[i] = if (c == '\\') '/' else c;
+    for (b, 0..) |c, i| norm_b[i] = if (c == '\\') '/' else c;
+    return text_utils.eqlIgnoreCaseName(norm_a[0..a.len], norm_b[0..a.len]);
 }
 
 /// Case-insensitive exact filename match.
 fn nameEqualsCi(name: []const u8, base: []const u8) bool {
-    return name.len == base.len and std.ascii.eqlIgnoreCase(name, base);
+    return name.len == base.len and text_utils.eqlIgnoreCaseName(name, base);
 }
 
 /// Case-insensitive filename match against `base`, `base.exe`, or `base.dll`
@@ -118,8 +120,8 @@ fn nameMatchesModuleCi(name: []const u8, base: []const u8) bool {
     const suffixes = [_][]const u8{ "", ".exe", ".dll" };
     for (suffixes) |sfx| {
         if (name.len != base.len + sfx.len) continue;
-        if (!std.ascii.eqlIgnoreCase(name[0..base.len], base)) continue;
-        if (std.ascii.eqlIgnoreCase(name[base.len..], sfx)) return true;
+        if (!text_utils.eqlIgnoreCaseName(name[0..base.len], base)) continue;
+        if (text_utils.eqlIgnoreCaseName(name[base.len..], sfx)) return true;
     }
     return false;
 }
@@ -261,11 +263,11 @@ pub const Registry = struct {
     /// Loads a PE module by name (or path), searching through registered search paths.
     /// Returns the loaded Module or an error if not found.
     pub fn loadModule(self: *Registry, name: []const u8) !*Module {
-        const lower_name = try self.allocator.alloc(u8, name.len);
-        defer self.allocator.free(lower_name);
-        _ = std.ascii.lowerString(lower_name, name);
+        const key_buf = try self.allocator.alloc(u8, name.len);
+        defer self.allocator.free(key_buf);
+        const key = text_utils.foldKeyUtf8(name, key_buf);
 
-        if (self.modules.get(lower_name)) |mod| {
+        if (self.modules.get(key)) |mod| {
             return mod;
         }
 
@@ -292,7 +294,7 @@ pub const Registry = struct {
                         defer d.close(runtime.io());
                         var it = d.iterate();
                         while (it.next(runtime.io()) catch null) |entry| {
-                            if (std.ascii.eqlIgnoreCase(entry.name, base)) {
+                            if (text_utils.eqlIgnoreCaseName(entry.name, base)) {
                                 file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ dir, entry.name });
                                 break;
                             }
@@ -348,7 +350,7 @@ pub const Registry = struct {
                         var found_real_base: ?[]const u8 = null;
                         var p_it = parent_dir.iterate();
                         while (p_it.next(runtime.io()) catch null) |entry| {
-                            if (entry.kind == .directory and std.ascii.eqlIgnoreCase(entry.name, base)) {
+                            if (entry.kind == .directory and text_utils.eqlIgnoreCaseName(entry.name, base)) {
                                 found_real_base = try self.allocator.dupe(u8, entry.name);
                                 break;
                             }
@@ -366,15 +368,15 @@ pub const Registry = struct {
                             const real_name_dll = try std.fmt.allocPrint(self.allocator, "{s}.dll", .{name});
                             defer self.allocator.free(real_name_dll);
                             while (it.next(runtime.io()) catch null) |entry| {
-                                if (std.ascii.eqlIgnoreCase(entry.name, name)) {
+                                if (text_utils.eqlIgnoreCaseName(entry.name, name)) {
                                     file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
                                     break;
                                 }
-                                if (std.ascii.eqlIgnoreCase(entry.name, real_name_exe)) {
+                                if (text_utils.eqlIgnoreCaseName(entry.name, real_name_exe)) {
                                     file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
                                     break;
                                 }
-                                if (std.ascii.eqlIgnoreCase(entry.name, real_name_dll)) {
+                                if (text_utils.eqlIgnoreCaseName(entry.name, real_name_dll)) {
                                     file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
                                     break;
                                 }
@@ -395,17 +397,17 @@ pub const Registry = struct {
                     const name_dll = try std.fmt.allocPrint(self.allocator, "{s}.dll", .{name});
                     defer self.allocator.free(name_dll);
                     while (it.next(runtime.io()) catch null) |entry| {
-                        if (std.ascii.eqlIgnoreCase(entry.name, name)) {
+                        if (text_utils.eqlIgnoreCaseName(entry.name, name)) {
                             file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
                             break;
                         }
 
-                        if (std.ascii.eqlIgnoreCase(entry.name, name_exe)) {
+                        if (text_utils.eqlIgnoreCaseName(entry.name, name_exe)) {
                             file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
                             break;
                         }
 
-                        if (std.ascii.eqlIgnoreCase(entry.name, name_dll)) {
+                        if (text_utils.eqlIgnoreCaseName(entry.name, name_dll)) {
                             file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
                             log.info("Found match for {s} -> {s}", .{ name, file_path.? });
                             break;
@@ -432,15 +434,15 @@ pub const Registry = struct {
             const mod = try Module.load(self.allocator, path);
             errdefer mod.deinit();
 
-            const mod_lower_name = try self.allocator.alloc(u8, mod.name.len);
-            errdefer self.allocator.free(mod_lower_name);
-            _ = std.ascii.lowerString(mod_lower_name, mod.name);
+            const mod_key_buf = try self.allocator.alloc(u8, mod.name.len);
+            errdefer self.allocator.free(mod_key_buf);
+            const mod_key = text_utils.foldKeyUtf8(mod.name, mod_key_buf);
 
             // A different file already owns this basename. Windows keeps one
             // module per name, so refusing keeps the guest from seeing two
             // images under one name; overwriting the entry would strand the
             // first mapping with nothing left to free it.
-            if (self.modules.get(mod_lower_name)) |existing| {
+            if (self.modules.get(mod_key)) |existing| {
                 if (!sameFile(existing.path, mod.path)) {
                     log.err("Module {s} is already loaded from {s}, refusing {s}", .{ mod.name, existing.path, mod.path });
                     return error.ModuleAlreadyLoaded;
@@ -449,8 +451,8 @@ pub const Registry = struct {
                 return existing;
             }
 
-            try self.modules.put(mod_lower_name, mod);
-            errdefer _ = self.modules.remove(mod_lower_name);
+            try self.modules.put(mod_key, mod);
+            errdefer _ = self.modules.remove(mod_key);
             try self.load_order.append(self.allocator, mod);
 
             return mod;
@@ -466,9 +468,9 @@ pub const Registry = struct {
     fn cachedFile(self: *Registry, path: []const u8) ?*Module {
         const base = std.fs.path.basename(path);
         if (base.len == 0) return null;
-        const key = self.allocator.alloc(u8, base.len) catch return null;
-        defer self.allocator.free(key);
-        _ = std.ascii.lowerString(key, base);
+        const key_buf = self.allocator.alloc(u8, base.len) catch return null;
+        defer self.allocator.free(key_buf);
+        const key = text_utils.foldKeyUtf8(base, key_buf);
         const mod = self.modules.get(key) orelse return null;
         if (!sameFile(mod.path, path)) return null;
         return mod;
@@ -491,7 +493,7 @@ pub const Registry = struct {
             if (c == '\\' or c == '/') basename = name[i + 1 ..];
         }
         for (self.load_order.items) |m| {
-            if (std.ascii.eqlIgnoreCase(m.name, basename)) return m;
+            if (text_utils.eqlIgnoreCaseName(m.name, basename)) return m;
         }
         return null;
     }
@@ -509,11 +511,11 @@ pub const Registry = struct {
 
     /// Resolves an export from a loaded PE module.
     pub fn getExport(self: *Registry, dll_name: []const u8, func_name: []const u8) ?usize {
-        const lower_name = self.allocator.alloc(u8, dll_name.len) catch return null;
-        defer self.allocator.free(lower_name);
-        _ = std.ascii.lowerString(lower_name, dll_name);
+        const key_buf = self.allocator.alloc(u8, dll_name.len) catch return null;
+        defer self.allocator.free(key_buf);
+        const key = text_utils.foldKeyUtf8(dll_name, key_buf);
 
-        if (self.modules.get(lower_name)) |mod| {
+        if (self.modules.get(key)) |mod| {
             return mod.getExport(func_name);
         }
         return null;
@@ -569,6 +571,44 @@ test "registry: cachedFile reuses a mapping only for the same file" {
     try testing.expect(reg.cachedFile("other/game.dll") == null);
     try testing.expect(reg.cachedFile("bin/other.dll") == null);
     try testing.expect(reg.cachedFile("") == null);
+}
+
+test "registry: a module name differing only in non-ASCII case is one module" {
+    var reg = Registry.init(testing.allocator);
+    defer reg.deinit();
+
+    // Stand-in for a mapped module, dropped from the table before deinit.
+    var stand_in: Module = undefined;
+    stand_in.name = "café.dll";
+    stand_in.path = "bin/café.dll";
+    const key_buf = try testing.allocator.dupe(u8, "café.dll");
+    try reg.modules.put(key_buf, &stand_in);
+    try reg.load_order.append(testing.allocator, &stand_in);
+    defer {
+        _ = reg.modules.remove(key_buf);
+        testing.allocator.free(key_buf);
+    }
+
+    // Both spellings name the same image: the registry key and the lookup
+    // fold the accent, so the guest does not see two modules for one file.
+    try testing.expect(reg.findModuleByName("CAFÉ.DLL") == &stand_in);
+    try testing.expect(reg.findModuleByName("bin\\Café.dll") == &stand_in);
+    try testing.expect(reg.cachedFile("bin/CAFÉ.DLL") == &stand_in);
+    try testing.expect(reg.findModuleByName("cafe.dll") == null);
+}
+
+test "registry: module search matches a non-ASCII name in any case" {
+    try testing.expect(nameMatchesModuleCi("CAFÉ.DLL", "café"));
+    try testing.expect(nameMatchesModuleCi("café.exe", "CAFÉ"));
+    try testing.expect(!nameMatchesModuleCi("café.txt", "café"));
+    try testing.expect(nameEqualsCi("Café.Dll", "café.dll"));
+    try testing.expect(!nameEqualsCi("cafe.dll", "café.dll"));
+}
+
+test "registry: path equality folds non-ASCII case and separators" {
+    try testing.expect(pathsEqualCi("C:\\Games\\Café.dll", "c:/games/café.DLL"));
+    try testing.expect(!pathsEqualCi("C:\\Games\\Café.dll", "C:/Games/Cafe.dll"));
+    try testing.expect(!pathsEqualCi("C:/Games/Cafe.dll", "C:/Games/Cafe.txt"));
 }
 
 test "registry: sameFile separates two real files sharing a basename" {
