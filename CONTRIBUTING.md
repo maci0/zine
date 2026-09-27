@@ -11,8 +11,13 @@ what moves the project to a newer Zig.
 Zig fetches the one TOML dependency on the first build, so that first build
 needs network access and later ones do not.
 
-No global installs, no services, no Windows fixtures are needed for the unit
-suite or the pre-pull-request gate. The gate enumerates sources with
+No services and no Windows fixtures are needed for the unit suite or the
+pre-pull-request gate, but the gate does need one system package: the FLTK 1.3
+development headers, `libfltk1.3-dev` on Debian/Ubuntu, because its `check_cxx`
+step compiles `src/gui/fltk_bridge.cpp`. The headers are enough: that step
+links nothing, so no FLTK library and no X11 runtime is needed, and the FLTK
+GUI build itself is still optional. The gate names the package and stops if the
+headers are absent. The gate enumerates sources with
 `git ls-files`, so it needs a real work tree; a source archive has none and the
 tracked-file steps stop there. Everything below runs from the repository root.
 
@@ -27,7 +32,7 @@ tracked-file steps stop there. Everything below runs from the repository root.
 | Fix formatting | `zig fmt src build.zig build.zig.zon` |
 | Lint shell scripts | `bash tests/check.sh check_shell` |
 | Check C sources | `bash tests/check.sh check_c` |
-| Check the C++ FLTK bridge | `bash tests/check.sh check_cxx` |
+| Check the C++ FLTK bridge | `bash tests/check.sh check_cxx` (needs the FLTK headers named above) |
 | One gate step by name | `bash tests/check.sh <step>` (see below) |
 | Full gate, same as CI | `bash tests/check.sh` |
 | List gate step names | `bash tests/check.sh --list` |

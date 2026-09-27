@@ -166,7 +166,8 @@ check_cxx() {
     local include_dir=/usr/include/fltk1.3
     if [[ ! -d "$include_dir/FL" ]]; then
         printf 'the FLTK headers are missing from %s, which src/gui/fltk_bridge.cpp includes\n' "$include_dir" >&2
-        printf 'install them, then re-run: bash tests/check.sh check_cxx\n' >&2
+        printf 'install the FLTK 1.3 development headers (Debian/Ubuntu: libfltk1.3-dev),\n' >&2
+        printf 'then re-run: bash tests/check.sh check_cxx\n' >&2
         exit 1
     fi
     zig build check-cxx --summary all
