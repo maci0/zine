@@ -482,11 +482,72 @@ pub fn tryCreateWbemLocator(rclsid: usize, ppv: usize) bool {
     // WbemContext — used for query parameters. Return a dummy COM object.
     if (std.mem.eql(u8, clsid, &CLSID_WbemContext1) or std.mem.eql(u8, clsid, &CLSID_WbemContext2)) {
         initAll();
-        const com = @import("com.zig");
-        com.ensureDummyVtable();
-        if (ppv != 0) @as(*usize, @ptrFromInt(ppv)).* = @intFromPtr(&com.dummy_com_object);
+        ensureDummyVtable();
+        if (ppv != 0) @as(*usize, @ptrFromInt(ppv)).* = @intFromPtr(&dummy_com_object);
         if (trace.enable_tracing) trace.print("WMI: Created IWbemContext (dummy)\n", .{});
         return true;
     }
     return false;
+}
+
+// --- Dummy COM object for interfaces with no real backing store ---
+
+// 64-slot vtable: QueryInterface, AddRef, Release, then methods that zero any
+// output pointer handed to them and report S_OK. Callers get a non-NULL
+// interface so they can check the HRESULT instead of dereferencing NULL.
+var dummy_vtable: [64]usize = undefined;
+var dummy_vtable_initialized: bool = false;
+var dummy_com_object: [1]usize = undefined;
+
+fn ensureDummyVtable() void {
+    if (dummy_vtable_initialized) return;
+    dummy_vtable[0] = @intFromPtr(&dummyQueryInterface);
+    dummy_vtable[1] = @intFromPtr(&dummyAddRef);
+    dummy_vtable[2] = @intFromPtr(&dummyRelease);
+    for (3..64) |i| {
+        dummy_vtable[i] = switch (i % 3) {
+            0 => @intFromPtr(&dummyComMethod1),
+            1 => @intFromPtr(&dummyComMethod2),
+            2 => @intFromPtr(&dummyComMethod3),
+            else => unreachable,
+        };
+    }
+    dummy_com_object[0] = @intFromPtr(&dummy_vtable);
+    dummy_vtable_initialized = true;
+}
+
+fn zeroIfPointer(p: usize) void {
+    if (p > 0x10000 and p < 0xF0000000) @as(*align(1) u32, @ptrFromInt(p)).* = 0;
+}
+
+fn dummyComMethod1(this: usize, a: usize) callconv(w32cc.WINAPI) i32 {
+    _ = this;
+    zeroIfPointer(a);
+    return 0; // S_OK
+}
+fn dummyComMethod2(this: usize, a: usize, b: usize) callconv(w32cc.WINAPI) i32 {
+    _ = this;
+    zeroIfPointer(a);
+    zeroIfPointer(b);
+    return 0; // S_OK
+}
+fn dummyComMethod3(this: usize, a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) i32 {
+    _ = this;
+    zeroIfPointer(a);
+    zeroIfPointer(b);
+    zeroIfPointer(c);
+    return 0; // S_OK
+}
+fn dummyQueryInterface(this: usize, riid: usize, ppv: usize) callconv(w32cc.WINAPI) i32 {
+    _ = .{ this, riid };
+    if (ppv != 0) @as(*usize, @ptrFromInt(ppv)).* = @intFromPtr(&dummy_com_object);
+    return 0; // S_OK - return self for any interface query
+}
+fn dummyAddRef(this: usize) callconv(w32cc.WINAPI) u32 {
+    _ = this;
+    return 1;
+}
+fn dummyRelease(this: usize) callconv(w32cc.WINAPI) u32 {
+    _ = this;
+    return 1;
 }

@@ -8,7 +8,11 @@ const dsound_stubs = @import("../dsound/dsound.zig");
 const platform = @import("../../platform.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
-const winmm = @import("../winmm.zig");
+
+/// waveOut volume: low word = left (0-0xFFFF), high word = right (0-0xFFFF).
+/// Owned here rather than in the winmm.zig registration barrel so the volume
+/// stubs below do not have to import their own registrar.
+pub var waveout_volume: u32 = 0xFFFFFFFF; // max volume
 
 /// timeGetTime
 /// Implementation status: Partially implemented
@@ -25,7 +29,7 @@ pub fn timeGetTime() callconv(w32cc.WINAPI) u32 {
 /// Implementation status: Partially implemented
 pub fn waveOutSetVolume(hwo: u32, dwVolume: u32) callconv(w32cc.WINAPI) u32 {
     _ = hwo;
-    winmm.waveout_volume = dwVolume;
+    waveout_volume = dwVolume;
 
     // Average left and right channels, convert 0-0xFFFF to 0.0-1.0
     const left: u32 = dwVolume & 0xFFFF;
@@ -51,9 +55,9 @@ pub fn waveOutSetVolume(hwo: u32, dwVolume: u32) callconv(w32cc.WINAPI) u32 {
 pub fn waveOutGetVolume(hwo: u32, pdwVolume: usize) callconv(w32cc.WINAPI) u32 {
     _ = hwo;
     if (pdwVolume != 0) {
-        @as(*align(1) u32, @ptrFromInt(pdwVolume)).* = winmm.waveout_volume;
+        @as(*align(1) u32, @ptrFromInt(pdwVolume)).* = waveout_volume;
     }
-    if (trace.enable_tracing) trace.print("WINMM: waveOutGetVolume() -> 0x{x:0>8}\n", .{winmm.waveout_volume});
+    if (trace.enable_tracing) trace.print("WINMM: waveOutGetVolume() -> 0x{x:0>8}\n", .{waveout_volume});
     return 0; // MMSYSERR_NOERROR
 }
 

@@ -6,9 +6,6 @@ const renderer = @import("../gui/renderer.zig");
 const dsound_stubs = @import("dsound/dsound.zig");
 const stubs = @import("winmm/multimedia.zig");
 
-/// waveOut volume: low word = left (0-0xFFFF), high word = right (0-0xFFFF).
-pub var waveout_volume: u32 = 0xFFFFFFFF; // max volume
-
 /// Registers WINMM.dll functions with the environment.
 /// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
@@ -98,7 +95,7 @@ pub fn register(environment: *env.Environment) !void {
 fn handleVolumeFromUI(linear: f32) void {
     // UI slider changed — sync waveOut and DirectSound volume state
     const vol16: u32 = @intFromFloat(std.math.clamp(linear, 0.0, 1.0) * 65535.0);
-    waveout_volume = vol16 | (vol16 << 16);
+    stubs.waveout_volume = vol16 | (vol16 << 16);
 
     if (linear <= 0.0001) {
         dsound_stubs.dsound_volume = -10000;
@@ -106,5 +103,5 @@ fn handleVolumeFromUI(linear: f32) void {
         const db100: i32 = @intFromFloat(@round(@log10(@as(f64, linear)) * 2000.0));
         dsound_stubs.dsound_volume = std.math.clamp(db100, -10000, 0);
     }
-    if (trace.enable_tracing) trace.print("WINMM: UI volume -> linear={d:.3}, waveOut=0x{x:0>8}, dsound={d}\n", .{ linear, waveout_volume, dsound_stubs.dsound_volume });
+    if (trace.enable_tracing) trace.print("WINMM: UI volume -> linear={d:.3}, waveOut=0x{x:0>8}, dsound={d}\n", .{ linear, stubs.waveout_volume, dsound_stubs.dsound_volume });
 }
