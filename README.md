@@ -94,11 +94,19 @@ release, not a 0.2.1 patch.
   the new value.
 - `_spawnvp` and `_spawnl` no longer leak the argv and environment strings they
   build for the child; they are released once the child has been reaped.
-- `ZINE_WEB_HOST` and `ZINE_WEB_PORT` (native) and `ZINE_CWD` (WASI) are read
-  and validated at startup. An empty or malformed value exits with status 2
-  before the guest loads, matching how `ZINE_LOG_LEVEL` already behaved. Unset
-  the variable, or give it a valid value, in launch scripts and runtime
-  environment configuration. The resolved web address is printed at startup.
+- `ZINE_WEB_HOST`, `ZINE_WEB_PORT`, and `ZINE_CWD` are validated at startup
+  on every build. An empty or malformed address, port, or working directory
+  exits with status 2 before the guest loads, matching how `ZINE_LOG_LEVEL`
+  already behaved. Unset the variable, or give it a valid value, in launch
+  scripts and runtime environment configuration. The resolved web address is
+  printed at startup. Only the WASI build uses an accepted `ZINE_CWD`.
+  `ZINE_TRACE`, `ZINE_TRACE_INSN`, and `ZINE_PROFILE` are read the same way
+  on every build: any value, including empty, enables the toggle.
+- A `ZINE_*` environment variable that names no setting now logs a warning and
+  is otherwise ignored. A misspelled knob is the one misconfiguration a run
+  cannot detect on its own: the value is never read, so the default holds and
+  nothing else misbehaves. The valid names are the table under
+  [Runtime diagnostics](#runtime-diagnostics).
 - A non-loopback `ZINE_WEB_HOST` exposes the emulator screen and accepts
   synthetic input from the network. It logs a warning and restricts accepted
   WebSocket origins to that address, so a browser reaching the UI through
@@ -687,7 +695,7 @@ the runtime's environment options, for example
 | `ZINE_WEB_PORT` | Native web UI port, 1-65535; default `1995` |
 | `ZINE_VIRTUAL_CLOCK_NS` | Nanoseconds since the Unix epoch that the first guest clock read returns; unset uses the host clock |
 | `ZINE_CLOCK_STEP_NS` | Nanoseconds the virtual clock advances per read, default `1000000`; requires `ZINE_VIRTUAL_CLOCK_NS` |
-| `ZINE_CWD` | WASI builds only: absolute POSIX path used as the guest working directory; unset uses `.` |
+| `ZINE_CWD` | Absolute POSIX path used as the guest working directory by the WASI builds, at most 1021 bytes; unset uses `.` |
 | `NO_COLOR` | Any value disables native diagnostic colors; WASI never emits colors |
 
 `ZINE_LOG_LEVEL` filters structured diagnostics on stderr. The default does not
@@ -754,6 +762,8 @@ them.
 `ZINE_CWD` is how a WASI runtime tells the build where the guest should run,
 since WASI has no `realpath`. It must be an absolute POSIX path; a relative or
 empty value exits with status 2 instead of silently running the guest in `.`.
+Both builds validate it at startup, so a rejected value is reported by the
+native binary too, and only the WASI build reads the accepted one.
 
 ## Build options
 

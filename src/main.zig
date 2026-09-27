@@ -99,13 +99,13 @@ pub fn main(init: std.process.Init) !void {
     var use_jit = false;
     var no_gui = false;
 
-    if (init.minimal.environ.containsConstant("ZINE_TRACE")) {
+    if (config.diagnostics.trace) {
         trace.enable_tracing = true;
     }
-    if (init.minimal.environ.containsConstant("ZINE_TRACE_INSN")) {
+    if (config.diagnostics.trace_insn) {
         trace.enable_instructions = true;
     }
-    if (init.minimal.environ.containsConstant("ZINE_PROFILE")) {
+    if (config.diagnostics.profile) {
         profiler.enabled = true;
     }
 

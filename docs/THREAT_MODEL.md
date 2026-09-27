@@ -115,16 +115,18 @@ to set the variable, and item 10 needs tracing on.
   (`src/main.zig:180`), `--version`/`-v` (`src/main.zig:225`), and `--`
   (`src/main.zig:133`), which ends option processing.
 - Environment: `ZINE_LOG_LEVEL` (`src/log.zig:285`), `ZINE_WEB_HOST`,
-  `ZINE_WEB_PORT`, `ZINE_VIRTUAL_CLOCK_NS`, `ZINE_CLOCK_STEP_NS`
-  (`src/config.zig:145`, `src/config.zig:150`, `src/config.zig:169`,
-  `src/config.zig:175`), `ZINE_TRACE`, `ZINE_TRACE_INSN`, `ZINE_PROFILE`
-  (`src/main.zig:121`, `src/main.zig:124`, `src/main.zig:127`), `NO_COLOR`
-  (`src/log.zig:41`), `ZINE_CWD` on WASI (`src/wasm_main.zig:98`), and
+  `ZINE_WEB_PORT` (`src/config.zig:186`, `src/config.zig:191`),
+  `ZINE_VIRTUAL_CLOCK_NS`, `ZINE_CLOCK_STEP_NS` (`src/config.zig:326`,
+  `src/config.zig:332`), `ZINE_TRACE`, `ZINE_TRACE_INSN`, `ZINE_PROFILE`
+  (`src/config.zig:296`, `src/config.zig:297`, `src/config.zig:298`),
+  `ZINE_CWD` (`src/config.zig:253`, read by the WASI build at
+  `src/wasm_main.zig:513`), `NO_COLOR` (`src/log.zig:41`), and
   `ZINE_FUZZ_SEED` for the fuzz harnesses only (`src/fuzz/seed.zig:20`). Every
-  runtime one is validated at startup and a bad value exits 2
-  (`src/main.zig:73`, `src/main.zig:87`, `src/main.zig:91`). `initFromEnv`
+  runtime one is read at startup and a bad value exits 2
+  (`src/main.zig:73`, `src/wasm_main.zig:93`). A `ZINE_*` name that matches
+  none of them is warned and ignored (`src/config.zig:242`). `initFromEnv`
   leaves the previous configuration untouched on a rejected value, so a failed
-  startup does not run on a half-applied configuration (`src/config.zig:142`).
+  startup does not run on a half-applied configuration (`src/config.zig:183`).
 - The host environment map is handed to the guest as `envp`
   (`src/main.zig:517`), and the spawner copies it into every child guest. The
   argv and envp block the guest receives is bounded to 128 and 4096 entries
@@ -397,7 +399,7 @@ fix and the same standard applies to every remaining name read, including
 | Control | Implementation | Threats it covers | What it does not cover |
 |---|---|---|---|
 | Loopback bind by default | `src/config.zig:14`, `src/gui/web_ui.zig:185` | remote network attackers under default configuration | an operator who sets `ZINE_WEB_HOST`; no credential exists behind the bind |
-| Startup env validation | `src/main.zig:73`, `src/main.zig:87`, `src/config.zig:142`, `src/config.zig:188` | misconfigured host, port, clock, and log level reaching a subsystem | anything after startup; validation is shape, not authorization |
+| Startup env validation | `src/main.zig:73`, `src/wasm_main.zig:93`, `src/config.zig:183`, `src/config.zig:344` | misconfigured host, port, clock, working directory, and log level reaching a subsystem | anything after startup; validation is shape, not authorization |
 | `Origin` allowlist on `/ws` | `src/gui/web_ui.zig:430`, `src/gui/web_ui.zig:471`, `src/config.zig:86` | cross-site WebSocket hijacking from a browser | non-browser clients, requests with no `Origin` |
 | `virtualPathToDriveC` | `src/path_utils.zig:282` | Web UI path traversal for `open_file`, `browse_directory`, `launch`, and listing | the HTTP static branch, which does not use it |
 | Client-controlled paths escaped before broadcast | `src/gui/renderer.zig:940` | a client-supplied path corrupting the JSON broadcast to every client | nothing else; this is a serialization control |
