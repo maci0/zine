@@ -35,19 +35,7 @@ pub fn call(block_id: host.BlockId) void {
     jit_call(@intCast(block_id));
 }
 
-fn resetAll(_: *anyopaque) void {
+/// Releases every block the host compiled, making its ids reusable.
+pub fn resetAll() void {
     jit_reset_blocks();
-}
-
-// Singleton context (stateless — all state lives on the host side).
-var ctx: u8 = 0;
-
-/// Returns a JitHost backed by WASM extern imports.
-pub fn wasmJitHost() host.JitHost {
-    return .{
-        .compile_fn = &compile,
-        .call_fn = &call,
-        .reset_all_fn = &resetAll,
-        .ctx = @ptrCast(&ctx),
-    };
 }

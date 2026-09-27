@@ -147,7 +147,7 @@ The final phase lifts the JIT from compiling one-off instruction structures into
 ### JIT Host Interface (`host.zig` / `host_wasm.zig`)
 Manages CPU state transfer between the interpreter and JIT-compiled blocks:
 - **`JitCpuState`**: A 64-byte struct in linear memory containing all 8 GPRs, EIP, packed EFLAGS, an execution status code, `mem_base` (guest VA → linear memory offset adjustment), and the FS segment base — used to pass state between the host and compiled WASM modules.
-- **`host.zig`**: Defines the `JitCpuState` struct, its field offsets, the status codes, the `BlockId` alias, and the `JitHost` compile/call/reset interface. State transfer is written inline by the callers (`wasm_main.zig` for the host runtime, `runner.zig` for the compile-only loop), not by shared helpers.
+- **`host.zig`**: Defines the `JitCpuState` struct, its field offsets, the status codes, and the `BlockId` alias. The compile/call/reset entry points are the `jit_compile`/`jit_call`/`jit_reset_blocks` extern imports wrapped by `host_wasm.zig`. State transfer is written inline by the callers (`wasm_main.zig` for the host runtime, `runner.zig` for the compile-only loop), not by shared helpers.
 - **`host_wasm.zig`**: WASM-side imports for `jit_compile`, `jit_call`, and `jit_reset_blocks` that communicate with the host runtime (wasmer/wasmtime) to compile and execute JIT blocks. `jit_reset_blocks` releases every compiled block and makes the ids reusable; the guest calls it from the SMC flush path so a host that hands out ids from a fixed table does not run it out. Any host providing the `jit` namespace must supply all three imports.
 
 ## Usage
