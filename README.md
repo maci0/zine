@@ -138,6 +138,13 @@ release, not a 0.2.1 patch.
 - `SetClipboardData` traces the size of a CF_TEXT transfer, not the text. The
   clipboard carries whatever the user last copied, which is rarely what a bug
   report needs.
+- A response file (`@file`) is traced by name and size, not by content. The
+  arguments it expands are traced individually, and the file itself holds
+  whatever the caller's toolchain put in it, absolute paths naming the local
+  account among them.
+- `GetPrivateProfileStringA` traces the size of the value it returns, not the
+  value. An INI file holds the user's own settings, and `GetPrivateProfileSectionA`
+  already recorded only a byte count.
 - Web UI file uploads resolve strictly inside `drive_c/` rather than through
   prefix matching, so a crafted directory or file name cannot retarget the
   write.

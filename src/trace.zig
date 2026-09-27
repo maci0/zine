@@ -23,6 +23,14 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
     log.emit(.trace, "{s}", .{trimmed});
 }
 
+/// Records that a response file was read, and how much of it was read, without
+/// recording what it holds. A response file carries whatever the caller's
+/// toolchain put in it, usually absolute paths naming the local account, and
+/// the arguments it expands are traced on their own.
+pub fn responseFile(path: []const u8, bytes: usize) void {
+    print("RESPONSE FILE: '{s}' ({d} bytes)\n", .{ path, bytes });
+}
+
 /// Returns a slice of the guest memory containing a null-terminated C string.
 /// Scans up to 64KB for the null terminator — sufficient for any Win32 string
 /// (MAX_PATH=260, longest realistic strings are well under 64KB).

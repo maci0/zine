@@ -548,7 +548,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
                         const rr = std.os.linux.read(@intCast(ofd), &buf, buf.len);
                         const rrs: isize = @bitCast(rr);
                         if (rrs > 0) {
-                            if (trace.enable_tracing) trace.print("RESPONSE FILE DUMP:\n{s}\n---END DUMP---\n", .{buf[0..@intCast(rrs)]});
+                            if (trace.enable_tracing) trace.responseFile(rsp_file, @intCast(rrs));
                         }
                         _ = std.os.linux.close(@intCast(ofd));
                     }
@@ -556,7 +556,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
             } else if (std.Io.Dir.cwd().openFile(runtime.io(), rsp_file, .{})) |file| {
                 var buf: [4096]u8 = undefined;
                 const rb = file.readPositionalAll(runtime.io(), &buf, 0) catch 0;
-                if (trace.enable_tracing) trace.print("RESPONSE FILE DUMP:\n{s}\n---END DUMP---\n", .{buf[0..rb]});
+                if (trace.enable_tracing) trace.responseFile(rsp_file, rb);
                 file.close(runtime.io());
             } else |_| {}
         }

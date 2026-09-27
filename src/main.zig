@@ -494,7 +494,7 @@ pub fn main(init: std.process.Init) !void {
                     if (std.Io.Dir.cwd().openFile(io, span[1..], .{})) |f| {
                         var buf: [4096]u8 = undefined;
                         const rb = f.readPositionalAll(io, &buf, 0) catch 0;
-                        trace.print("  [RSP FILE CONTENT]:\n{s}\n", .{buf[0..rb]});
+                        trace.responseFile(span[1..], rb);
                         f.close(io);
                     } else |_| {}
                 }

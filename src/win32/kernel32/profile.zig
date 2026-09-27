@@ -71,7 +71,7 @@ pub fn GetPrivateProfileStringA(lpAppName: usize, lpKeyName: usize, lpDefault: u
         const copy_len = @min(value.len, @as(usize, nSize) - 1);
         @memcpy(buf[0..copy_len], value[0..copy_len]);
         buf[copy_len] = 0;
-        if (trace.enable_tracing) trace.print("  -> '{s}'\n", .{buf[0..copy_len]});
+        if (trace.enable_tracing) trace.print("  -> {d} bytes\n", .{copy_len});
         return @intCast(copy_len);
     }
 
