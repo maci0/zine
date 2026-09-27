@@ -15,15 +15,15 @@ Owner: unset. Review cadence: unset.
 | # | Threat | Boundary | Control today |
 |---|---|---|---|
 | 1 | Guest PE reads and writes any host file | guest → host filesystem | none; `Z:` maps to the host root and absolute POSIX paths pass through (`src/path_utils.zig:391`, `src/path_utils.zig:412`) |
-| 2 | Any local process drives the guest through the Web UI | local process → Web UI | `Origin` check that non-browser clients bypass, and no credential of any kind (`src/gui/web_ui.zig:437`, `src/gui/web_ui.zig:471`, `src/config.zig:86`) |
-| 3 | Guest code faults the host process with host signals | guest → host process | in-process signal dispatch, no containment (`src/main.zig:302`, `src/platform/native.zig:648`, `src/x86/compat_thunks.zig:123`) |
+| 2 | Any local process drives the guest through the Web UI | local process → Web UI | `Origin` check that non-browser clients bypass, and no credential of any kind (`src/gui/web_ui.zig:437`, `src/gui/web_ui.zig:471`, `src/config.zig:91`) |
+| 3 | Guest code faults the host process with host signals | guest → host process | in-process signal dispatch, no containment (`src/main.zig:288`, `src/platform/native.zig:648`, `src/x86/compat_thunks.zig:123`) |
 | 4 | Guest opens arbitrary network connections | guest → host network | host `socket`/`connect` syscalls are exposed to the guest (`src/win32/ws2_32/winsock.zig:37`, `src/win32/ws2_32/winsock.zig:52`) |
 | 5 | Guest loads further PE images from disk, and `-Dexternal-stubs` loads stub DLLs from the binary's own directory | guest → host loader; build → runtime | `LoadLibraryA` anchors through `toHostPath`, so `..` is clamped inside `drive_c/`; external stubs are read from `<exe dir>/dll` with no integrity check (`src/win32/kernel32/process.zig:128`, `src/runner.zig:73`, `src/runner.zig:79`) |
 | 6 | Guest spawns host processes | guest → host process tree | child path anchored in `drive_c/`; table capped at 16 (`src/win32/kernel32/process.zig:880`, `src/win32/kernel32/process.zig:718`) |
-| 7 | A non-loopback `ZINE_WEB_HOST` publishes an unauthenticated UI to the network | operator config → network | warning only; the UI is still credential-free (`src/main.zig:101`, `src/config.zig:145`) |
+| 7 | A non-loopback `ZINE_WEB_HOST` publishes an unauthenticated UI to the network | operator config → network | warning only; the UI is still credential-free (`src/main.zig:87`, `src/config.zig:198`) |
 | 8 | An unauthenticated Web UI client writes into the guest's clipboard and edit-control buffers | local process → guest state | length cap of 64 KiB, no origin or identity check (`src/gui/web_ui.zig:336`, `src/gui/web_ui.zig:808`, `src/gui/web_ui.zig:819`) |
 | 9 | Static assets are served out of the working directory, behind a substring denylist | client → host filesystem | `..`, `%2e`, `%2E`, `%00`, and NUL rejected as substrings; the leading-`/` requirement and the fixed `src/gui` prefix are what actually contain it (`src/gui/web_ui.zig:553`, `src/gui/web_ui.zig:564`, `src/gui/web_ui.zig:569`) |
-| 10 | A hostile guest names a host path that then lands in the trace log, and can probe which names exist | guest → logs | `--trace`/`ZINE_TRACE` must be on; home paths are redacted; file contents no longer reach the trace (`src/main.zig:493`, `src/trace.zig:30`, `src/log.zig:243`) |
+| 10 | A hostile guest names a host path that then lands in the trace log, and can probe which names exist | guest → logs | `--trace`/`ZINE_TRACE` must be on; home paths are redacted; file contents no longer reach the trace (`src/main.zig:479`, `src/trace.zig:30`, `src/log.zig:243`) |
 
 Rank reflects exploitability times impact for a user who opens a hostile
 executable or visits a hostile page. Items 1, 2, 4, 5, 6, and 8 need only a
@@ -35,8 +35,8 @@ to set the variable, and item 10 needs tracing on.
 ### Network
 
 - HTTP + WebSocket server bound to `ZINE_WEB_HOST` (default `127.0.0.1`,
-  `src/config.zig:14`) on `ZINE_WEB_PORT` (default 1995, `src/config.zig:15`).
-  Both are operator-configurable (`src/config.zig:145`, `src/config.zig:150`).
+  `src/config.zig:18`) on `ZINE_WEB_PORT` (default 1995, `src/config.zig:19`).
+  Both are operator-configurable (`src/config.zig:198`, `src/config.zig:203`).
   The listen call is `src/gui/web_ui.zig:185`, inside the server loop
   (`src/gui/web_ui.zig:178`).
 - One WebSocket route, `/ws`, behind the `Origin` check
@@ -45,8 +45,8 @@ to set the variable, and item 10 needs tracing on.
   other asset path is read from `src/gui/` relative to the working directory
   (`src/gui/web_ui.zig:569`).
 - A non-loopback bind logs one warning and keeps serving
-  (`src/main.zig:101`); nothing else changes, though the origin allowlist
-  narrows to the configured address (`src/config.zig:93`).
+  (`src/main.zig:87`); nothing else changes, though the origin allowlist
+  narrows to the configured address (`src/config.zig:98`).
 - Guest sockets through `ws2_32`/`wsock32`, which reach host `socket`, `connect`,
   `send`, `recv`, `bind`, `listen`, and `accept` through raw Linux syscalls
   (`src/win32/ws2_32/winsock.zig:37`, `src/win32/ws2_32/winsock.zig:52`). The
@@ -102,31 +102,32 @@ to set the variable, and item 10 needs tracing on.
   (`src/win32/kernel32/file.zig:683`).
 - A batch script named on the command line, interpreted from the filesystem
   with a 10 MiB read cap (`src/bat.zig:147`, `src/bat.zig:158`), reached at
-  `src/main.zig:321`.
+  `src/main.zig:307`.
 
 ### CLI, environment, IPC
 
-- CLI options parsed in the loop at `src/main.zig:132`: `--trace`/`-t`
-  (`src/main.zig:137`), `--trace-api` (`src/main.zig:142`), `--trace-insn`
-  (`src/main.zig:146`), `--interpret`/`-i` (`src/main.zig:150`), `--jit`
-  (`src/main.zig:154`), `--profile` (`src/main.zig:158`), `--quiet`/`-q`
-  (`src/main.zig:162`), `--fltk` (`src/main.zig:168`), `--no-gui`
-  (`src/main.zig:176`), `--argv0` (`src/main.zig:229`), `--help`/`-h`
-  (`src/main.zig:180`), `--version`/`-v` (`src/main.zig:225`), and `--`
-  (`src/main.zig:133`), which ends option processing.
+- CLI options parsed in the loop at `src/main.zig:118`: `--trace`/`-t`
+  (`src/main.zig:123`), `--trace-api` (`src/main.zig:128`), `--trace-insn`
+  (`src/main.zig:132`), `--interpret`/`-i` (`src/main.zig:136`), `--jit`
+  (`src/main.zig:140`), `--profile` (`src/main.zig:144`), `--quiet`/`-q`
+  (`src/main.zig:148`), `--fltk` (`src/main.zig:154`), `--no-gui`
+  (`src/main.zig:162`), `--argv0` (`src/main.zig:215`), `--help`/`-h`
+  (`src/main.zig:166`), `--version`/`-v` (`src/main.zig:211`), and `--`
+  (`src/main.zig:119`), which ends option processing.
 - Environment: `ZINE_LOG_LEVEL` (`src/log.zig:285`), `ZINE_WEB_HOST`,
-  `ZINE_WEB_PORT`, `ZINE_VIRTUAL_CLOCK_NS`, `ZINE_CLOCK_STEP_NS`
-  (`src/config.zig:145`, `src/config.zig:150`, `src/config.zig:169`,
-  `src/config.zig:175`), `ZINE_TRACE`, `ZINE_TRACE_INSN`, `ZINE_PROFILE`
-  (`src/main.zig:121`, `src/main.zig:124`, `src/main.zig:127`), `NO_COLOR`
-  (`src/log.zig:41`), `ZINE_CWD` on WASI (`src/wasm_main.zig:98`), and
-  `ZINE_FUZZ_SEED` for the fuzz harnesses only (`src/fuzz/seed.zig:20`). Every
-  runtime one is validated at startup and a bad value exits 2
-  (`src/main.zig:73`, `src/main.zig:87`, `src/main.zig:91`). `initFromEnv`
-  leaves the previous configuration untouched on a rejected value, so a failed
-  startup does not run on a half-applied configuration (`src/config.zig:142`).
+  `ZINE_WEB_PORT`, `ZINE_VIRTUAL_CLOCK_NS`, `ZINE_CLOCK_STEP_NS`, `ZINE_CWD`
+  (`src/config.zig:198`, `src/config.zig:203`, `src/config.zig:292`,
+  `src/config.zig:298`, `src/config.zig:275`), `ZINE_TRACE`, `ZINE_TRACE_INSN`,
+  `ZINE_PROFILE` (`src/main.zig:107`, `src/main.zig:110`, `src/main.zig:113`),
+  `NO_COLOR` (`src/log.zig:41`), and `ZINE_FUZZ_SEED` for the fuzz harnesses
+  only (`src/fuzz/seed.zig:20`). Every runtime one is read at startup, a bad
+  value exits 2 (`src/main.zig:73`, `src/main.zig:87`, `src/main.zig:91`), and a
+  `ZINE_*` name that matches none of them is reported rather than ignored
+  (`src/config.zig:243`). `initFromEnv` leaves the previous configuration
+  untouched on a rejected value, so a failed startup does not run on a
+  half-applied configuration (`src/config.zig:195`).
 - The host environment map is handed to the guest as `envp`
-  (`src/main.zig:517`), and the spawner copies it into every child guest. The
+  (`src/main.zig:503`), and the spawner copies it into every child guest. The
   argv and envp block the guest receives is bounded to 128 and 4096 entries
   (`src/win32/msvcrt/process.zig:249`).
 - No Unix sockets, no named pipes, and no scheduled jobs anywhere in the tree.
@@ -142,9 +143,9 @@ to set the variable, and item 10 needs tracing on.
 
 | Boundary | Data crossing | Named validation or authentication point |
 |---|---|---|
-| User → CLI | target path, options, environment | option parsing only (`src/main.zig:132`); the target path is not restricted |
-| Operator environment → runtime | `ZINE_WEB_HOST` and the rest | IP-literal and length checks (`src/config.zig:188`, `src/config.zig:47`, `src/main.zig:87`) |
-| Browser page → Web UI | WebSocket frames, `Origin` header | `originAllowed` (`src/gui/web_ui.zig:430`, `src/config.zig:86`), applied to `/ws` only (`src/gui/web_ui.zig:471`) |
+| User → CLI | target path, options, environment | option parsing only (`src/main.zig:118`); the target path is not restricted |
+| Operator environment → runtime | `ZINE_WEB_HOST` and the rest | IP-literal and length checks (`src/config.zig:311`, `src/config.zig:52`, `src/main.zig:87`) |
+| Browser page → Web UI | WebSocket frames, `Origin` header | `originAllowed` (`src/gui/web_ui.zig:430`, `src/config.zig:91`), applied to `/ws` only (`src/gui/web_ui.zig:471`) |
 | Local process → Web UI | same protocol, no `Origin` | none; absence of the header is treated as allowed (`src/gui/web_ui.zig:437`) |
 | Host filesystem → guest loader | PE bytes | PE parser plus bounds checks at every mapped-slice walk (`src/pe.zig:315`, `src/loader/module.zig:220`, `src/loader/module.zig:276`) |
 | Guest → host filesystem | path strings from Win32 stubs | `toHostPath` anchoring for `C:` and relative paths (`src/path_utils.zig:408`, `src/path_utils.zig:428`) |
@@ -154,7 +155,7 @@ to set the variable, and item 10 needs tracing on.
 | Client → host filesystem (HTTP) | static asset paths | substring denylist plus the `src/gui` prefix (`src/gui/web_ui.zig:553`, `src/gui/web_ui.zig:569`) |
 | Guest → host network | socket calls | none |
 | Guest → host process tree | `CreateProcessA` command line | path through `toHostPath`; the rest of the guest command line is passed through (`src/win32/kernel32/process.zig:880`) |
-| Host environment → guest | `envp` | none; every host variable is visible to the guest (`src/main.zig:517`) |
+| Host environment → guest | `envp` | none; every host variable is visible to the guest (`src/main.zig:503`) |
 | Guest handle → module | image handle used to index a mapping | `Registry.moduleForHandle` returns null for a handle that names no mapping (`src/loader/registry.zig:502`) |
 | Build → runtime | stub DLLs read from `<exe dir>/dll` in external-stub builds | directory chosen by the builder; contents read at runtime with no signature or hash check (`src/runner.zig:79`) |
 
@@ -175,7 +176,7 @@ the working directory's `src/gui` tree contains.
 
 Secrets: the project stores none. Credentials enter only through the host
 environment or files under `drive_c/`, are readable by the guest, and are
-forwarded to child guests through `envp` (`src/main.zig:517`). No rotation point
+forwarded to child guests through `envp` (`src/main.zig:503`). No rotation point
 exists because nothing is persisted.
 
 ## 3. Assets and impact
@@ -186,7 +187,7 @@ exists because nothing is persisted.
   file is the worst case here.
 - Host process integrity. Guest code runs in the host address space and faults
   are serviced by a host SIGSEGV handler installed at startup
-  (`src/main.zig:302`, `src/platform/native.zig:1247`), so a guest defect can end
+  (`src/main.zig:288`, `src/platform/native.zig:1247`), so a guest defect can end
   as a host crash with a partial file write behind it.
 - Host code-loading surface. `LoadLibraryA` maps whatever the guest names inside
   `drive_c/` (`src/win32/kernel32/process.zig:116`), and in external-stub builds
@@ -247,7 +248,7 @@ exists because nothing is persisted.
 
 - Denial of service: any invalid guest access reaches the host signal
   dispatcher, which is installed process-wide at startup
-  (`src/main.zig:302`, `src/platform/native.zig:648`,
+  (`src/main.zig:288`, `src/platform/native.zig:648`,
   `src/x86/compat_thunks.zig:123`). The x86 target deliberately disables SIMD to
   keep 4-byte stack alignment, so stack-sensitive host paths remain reachable.
 - Elevation of privilege: the guest does not need an exploit to reach host
@@ -318,7 +319,7 @@ exists because nothing is persisted.
   name is still printed, and the spawner's success or failure is an existence
   and size oracle for any path the guest can name, on both the guest path
   (`src/win32/msvcrt/process.zig:588`) and the host CLI's own
-  (`src/main.zig:493`).
+  (`src/main.zig:479`).
 - Denial of service: 16 concurrent children, then refusals
   (`src/win32/kernel32/process.zig:718`, `src/win32/kernel32/process.zig:959`);
   each child is another full guest with its own allocator and stack. The argv and
@@ -350,7 +351,7 @@ exists because nothing is persisted.
 ### Browser page → Web UI
 
 - Spoofing: cross-site WebSocket hijacking. The `Origin` allowlist blocks a
-  foreign browser origin (`src/config.zig:86`), but a non-browser client omits
+  foreign browser origin (`src/config.zig:91`), but a non-browser client omits
   the header entirely and is allowed (`src/gui/web_ui.zig:437`).
 - The check is not authentication; the README states this correctly
   (README.md:424, 0.2.0 security notes).
@@ -359,8 +360,8 @@ exists because nothing is persisted.
 
 - Information disclosure and spoofing: a non-loopback `ZINE_WEB_HOST` makes the
   screen, injected input, and `drive_c/` browsing reachable from the network
-  with no credential (`src/main.zig:101`). The `Origin` allowlist narrows to the
-  configured host (`src/config.zig:93`) but does not authenticate, and a
+  with no credential (`src/main.zig:87`). The `Origin` allowlist narrows to the
+  configured host (`src/config.zig:98`) but does not authenticate, and a
   non-browser client still needs to send no `Origin` at all.
 - Tampering: `-Dexternal-stubs` moves stub loading to a runtime directory read
   beside the binary (`src/runner.zig:79`). Whoever writes `<exe dir>/dll`
@@ -396,9 +397,9 @@ fix and the same standard applies to every remaining name read, including
 
 | Control | Implementation | Threats it covers | What it does not cover |
 |---|---|---|---|
-| Loopback bind by default | `src/config.zig:14`, `src/gui/web_ui.zig:185` | remote network attackers under default configuration | an operator who sets `ZINE_WEB_HOST`; no credential exists behind the bind |
-| Startup env validation | `src/main.zig:73`, `src/main.zig:87`, `src/config.zig:142`, `src/config.zig:188` | misconfigured host, port, clock, and log level reaching a subsystem | anything after startup; validation is shape, not authorization |
-| `Origin` allowlist on `/ws` | `src/gui/web_ui.zig:430`, `src/gui/web_ui.zig:471`, `src/config.zig:86` | cross-site WebSocket hijacking from a browser | non-browser clients, requests with no `Origin` |
+| Loopback bind by default | `src/config.zig:18`, `src/gui/web_ui.zig:185` | remote network attackers under default configuration | an operator who sets `ZINE_WEB_HOST`; no credential exists behind the bind |
+| Startup env validation | `src/main.zig:73`, `src/main.zig:87`, `src/config.zig:195`, `src/config.zig:311` | misconfigured host, port, clock, and log level reaching a subsystem | anything after startup; validation is shape, not authorization |
+| `Origin` allowlist on `/ws` | `src/gui/web_ui.zig:430`, `src/gui/web_ui.zig:471`, `src/config.zig:91` | cross-site WebSocket hijacking from a browser | non-browser clients, requests with no `Origin` |
 | `virtualPathToDriveC` | `src/path_utils.zig:282` | Web UI path traversal for `open_file`, `browse_directory`, `launch`, and listing | the HTTP static branch, which does not use it |
 | Client-controlled paths escaped before broadcast | `src/gui/renderer.zig:940` | a client-supplied path corrupting the JSON broadcast to every client | nothing else; this is a serialization control |
 | `find_action` allowlist | `src/gui/web_ui.zig:344` | an unrecognized dialog action reaching the guest as find-next | the other dialog answers, which take range-checked integers |
@@ -435,7 +436,7 @@ README claims checked and left in place: the non-loopback `ZINE_WEB_HOST`
 warning, the HTTP 403 for foreign `Origin` headers, the statement that the
 `Origin` check is not authentication, the honest note that path normalization
 is not a guest sandbox, and the home and identity redaction all match the code
-(`src/main.zig:101`, `src/gui/web_ui.zig:471`, `src/gui/web_ui.zig:437`,
+(`src/main.zig:87`, `src/gui/web_ui.zig:471`, `src/gui/web_ui.zig:437`,
 `src/log.zig:137`, `src/log.zig:208`; README.md:424, README.md:417,
 README.md:585). One README claim was corrected in this pass: the `304` repeats
 `X-Content-Type-Options`, `X-Frame-Options`, and `Referrer-Policy` but not
@@ -453,7 +454,7 @@ exposes every path and identity the host ever logs.
 
 - Drive-by guest control: a page the user visits opens
   `ws://127.0.0.1:1995/ws`. The `Origin` check stops that browser case
-  (`src/config.zig:86`), but any local script, a browser extension, or a `curl`
+  (`src/config.zig:91`), but any local script, a browser extension, or a `curl`
   client is accepted, and then `browse_directory` plus `launch` are enough to
   enumerate and start anything under `drive_c/`
   (`src/gui/web_ui.zig:680`, `src/gui/web_ui.zig:689`).
@@ -473,7 +474,7 @@ exposes every path and identity the host ever logs.
 - Response-file name disclosure: a guest calls `CreateProcessA` with `@secret.txt`.
   The contents no longer reach the trace, but the name does, alongside the byte
   count, and the read still happens (`src/trace.zig:30`). The host CLI does the
-  same for its own arguments (`src/main.zig:493`). Both need tracing on, and
+  same for its own arguments (`src/main.zig:479`). Both need tracing on, and
   home-relative names are redacted, but a name outside the home directory is
   printed as given.
 - Persistent code loading: a guest calls `LoadLibraryA` on a `.dll` it wrote into
@@ -537,9 +538,9 @@ Note only; no infrastructure is proposed here.
 
 - Diagnostics available for an investigation: `log.warn`/`log.err` to stderr
   (`src/log.zig:264`), API and instruction tracing via `ZINE_TRACE` and
-  `ZINE_TRACE_INSN` (`src/main.zig:121`, `src/main.zig:124`), per-process
-  profiling via `ZINE_PROFILE` and `--profile` (`src/main.zig:127`,
-  `src/main.zig:158`). There is no audit log of Web UI clients: peer address,
+  `ZINE_TRACE_INSN` (`src/main.zig:107`, `src/main.zig:110`), per-process
+  profiling via `ZINE_PROFILE` and `--profile` (`src/main.zig:113`,
+  `src/main.zig:144`). There is no audit log of Web UI clients: peer address,
   connection count, and duration are never logged, and a `403` refusal is
   silent (`src/gui/web_ui.zig:471`). There is no per-command attribution for a
   WebSocket command. The always-on record of a spawned child is one line with a

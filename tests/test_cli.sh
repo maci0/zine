@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-unset ZINE_LOG_LEVEL ZINE_WEB_HOST ZINE_WEB_PORT ZINE_VIRTUAL_CLOCK_NS ZINE_CLOCK_STEP_NS
+# Every ZINE_* setting is startup configuration, so an inherited one would
+# decide what these runs see: a log level from the developer's shell fills
+# stderr, and a ZINE_CWD left over from a WASI run fails --version. A run
+# starts from an environment the operator configured on purpose, and the
+# cases below set the variable they are about.
+while read -r name; do
+    unset "$name"
+done < <(compgen -A variable | command grep '^ZINE_')
 
 expected_version=$1
 shift
@@ -106,6 +113,17 @@ if [[ "$expected_version" == zine\ * ]]; then
 
     # The web UI bind address is native-only: WASI builds have no web server.
     if [[ "$1" != wasmtime ]]; then
+        # A misspelled setting is the one misconfiguration the run cannot
+        # detect by misbehaving, so it is named on stderr.
+        status=0
+        timeout 60 env 'ZINE_WEB_PRT=3000' "$@" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+        if [[ "$status" != 0 || ! -s "$workdir/stdout" ]]; then
+            printf 'ZINE_WEB_PRT must not change the run (got %s)\n' "$status" >&2
+            cat "$workdir/stderr" >&2
+            exit 1
+        fi
+        grep -q 'ignoring ZINE_WEB_PRT' "$workdir/stderr"
+
         for host in '' localhost 999.1.1.1 127.0.0.1:1995; do
             status=0
             timeout 60 env "ZINE_WEB_HOST=$host" "$@" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?

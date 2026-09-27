@@ -22,6 +22,7 @@ const x86_memory = @import("x86/memory.zig");
 const x86_thunks = @import("x86/thunks.zig");
 const trace = @import("trace.zig");
 const log = @import("log.zig");
+const config = @import("config.zig");
 const profiler = @import("profiler.zig");
 const version = @import("version.zig");
 const stub_common = @import("win32/shared.zig");
@@ -50,10 +51,6 @@ fn not_implemented() callconv(.c) void {
 }
 
 const runtime = @import("runtime.zig");
-
-/// Upper bound on the guest working directory, excluding the "Z:\" prefix and
-/// the terminating NUL that `path_utils` appends.
-const max_guest_cwd_len = 1021;
 
 /// Parses a `--jit-max-eip` value. A rejected value is a usage error, so the
 /// diagnostic names the option and the offending text, and the process ends
@@ -92,32 +89,22 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(2);
     };
 
-    // ZINE_CWD is validated with the other startup settings, before any output
-    // and before the guest loads, so `--version` reports a rejected value
-    // instead of exiting 0 over it.
-    const zine_cwd: ?[]const u8 = init.environ_map.get("ZINE_CWD");
-    if (zine_cwd) |cwd| {
-        if (cwd.len == 0 or cwd[0] != '/') {
-            std.debug.print("Error: ZINE_CWD must be an absolute POSIX path, got '{s}'.\n", .{cwd});
-            std.process.exit(2);
-        }
-        if (cwd.len > max_guest_cwd_len) {
-            std.debug.print("Error: ZINE_CWD must be at most {d} bytes, got {d}.\n", .{ max_guest_cwd_len, cwd.len });
-            std.process.exit(2);
-        }
-    }
+    // The remaining ZINE_* settings, including ZINE_CWD, are validated with
+    // the log level, before any output and before the guest loads, so
+    // `--version` reports a rejected value instead of exiting 0 over it.
+    config.initFromEnv(init.environ_map) catch |err| {
+        std.debug.print("Error: {s}\n", .{config.errorMessage(err)});
+        std.process.exit(2);
+    };
 
-    {
-        const env_map = init.environ_map;
-        if (env_map.get("ZINE_TRACE") != null) {
-            trace.enable_tracing = true;
-        }
-        if (env_map.get("ZINE_TRACE_INSN") != null) {
-            trace.enable_instructions = true;
-        }
-        if (env_map.get("ZINE_PROFILE") != null) {
-            profiler.enabled = true;
-        }
+    if (config.diagnostics.trace) {
+        trace.enable_tracing = true;
+    }
+    if (config.diagnostics.trace_insn) {
+        trace.enable_instructions = true;
+    }
+    if (config.diagnostics.profile) {
+        profiler.enabled = true;
     }
 
     var arg_count: usize = 0;
@@ -526,9 +513,9 @@ pub fn main(init: std.process.Init) !void {
     // (e.g. wasmer), where cwd()-relative file creation fails with
     // PermissionDenied but absolute-path creation via the \"/\" preopen works.
     {
-        var cwd_buf: [max_guest_cwd_len + 3]u8 = undefined;
+        var cwd_buf: [config.max_guest_cwd_len + 3]u8 = undefined;
         var cwd_str: []const u8 = ".";
-        if (zine_cwd) |cwd| {
+        if (config.guest.cwd()) |cwd| {
             @memcpy(cwd_buf[0..3], "Z:\\");
             var j: usize = 3;
             for (cwd[1..]) |c| {

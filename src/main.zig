@@ -74,23 +74,9 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("{s}", .{"Error: ZINE_LOG_LEVEL must be one of: fatal, error, err, warn, info, trace.\n"});
         std.process.exit(2);
     };
-    config.initFromEnv(init.environ_map) catch |err| switch (err) {
-        error.InvalidWebHost => {
-            std.debug.print("{s}", .{"Error: ZINE_WEB_HOST must be an IPv4 or IPv6 literal, e.g. 127.0.0.1.\n"});
-            std.process.exit(2);
-        },
-        error.InvalidWebPort => {
-            std.debug.print("{s}", .{"Error: ZINE_WEB_PORT must be a number from 1 to 65535.\n"});
-            std.process.exit(2);
-        },
-        error.InvalidVirtualClock => {
-            std.debug.print("{s}", .{"Error: ZINE_VIRTUAL_CLOCK_NS must be a non-negative nanosecond count since the Unix epoch.\n"});
-            std.process.exit(2);
-        },
-        error.InvalidClockStep => {
-            std.debug.print("{s}", .{"Error: ZINE_CLOCK_STEP_NS must be a non-negative nanosecond count and requires ZINE_VIRTUAL_CLOCK_NS.\n"});
-            std.process.exit(2);
-        },
+    config.initFromEnv(init.environ_map) catch |err| {
+        std.debug.print("Error: {s}\n", .{config.errorMessage(err)});
+        std.process.exit(2);
     };
     if (config.clock.start_ns) |start_ns| {
         virtual_clock = .{ .now_ns = start_ns, .step_ns = config.clock.step_ns };
@@ -118,13 +104,13 @@ pub fn main(init: std.process.Init) !void {
     var use_jit = false;
     var no_gui = false;
 
-    if (init.minimal.environ.containsConstant("ZINE_TRACE")) {
+    if (config.diagnostics.trace) {
         trace.enable_tracing = true;
     }
-    if (init.minimal.environ.containsConstant("ZINE_TRACE_INSN")) {
+    if (config.diagnostics.trace_insn) {
         trace.enable_instructions = true;
     }
-    if (init.minimal.environ.containsConstant("ZINE_PROFILE")) {
+    if (config.diagnostics.profile) {
         profiler.enabled = true;
     }
 

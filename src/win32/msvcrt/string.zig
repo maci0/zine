@@ -1062,7 +1062,7 @@ test "wcsupr and wcslwr fold the same characters towupper and towlower do" {
 test "strlwr and strupr fold CP1252 the way tolower and toupper do" {
     // "É" is 0xC9 in CP1252. ASCII-only folding left it uppercase, so a
     // string normalized with _strlwr did not match under _stricmp.
-    var buf: [4]u8 = "CAF\xC9".*;
+    var buf: [5]u8 = "CAF\xC9\x00".*;
     const p: [*:0]u8 = @ptrCast(&buf);
     try std.testing.expectEqual(@intFromPtr(p), @intFromPtr(strlwr(p).?));
     try std.testing.expectEqualSlices(u8, &.{ 'c', 'a', 'f', 0xE9 }, buf[0..4]);
@@ -1268,7 +1268,7 @@ test "mbsinc, mbccpy, mbclen, and mbsdec step one byte at a time" {
 }
 
 test "strtok splits on delimiters and continues from saved state" {
-    var buf: [5]u8 = "a,,bc".*;
+    var buf: [6]u8 = "a,,bc\x00".*;
     const s: [*:0]u8 = @ptrCast(&buf);
     const d = ",";
 
@@ -1277,7 +1277,7 @@ test "strtok splits on delimiters and continues from saved state" {
     try std.testing.expect(strtok(null, d) == null);
 
     // Leading and trailing delimiters produce no empty tokens.
-    var buf2: [5]u8 = ",,x,,".*;
+    var buf2: [6]u8 = ",,x,,\x00".*;
     const s2: [*:0]u8 = @ptrCast(&buf2);
     try std.testing.expectEqualStrings("x", std.mem.span(strtok(s2, ",").?));
     try std.testing.expect(strtok(null, ",") == null);
