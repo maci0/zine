@@ -108,6 +108,39 @@ if [[ "$expected_version" == zine\ * ]]; then
                 exit 1
             fi
         done
+    else
+        # ZINE_CWD is the WASI-only guest working directory. It is validated at
+        # startup like the other ZINE_* settings, so --version reports it.
+        for cwd in '' relative/path 'dir/'; do
+            status=0
+            timeout 60 "$1" "$2" --env "ZINE_CWD=$cwd" "${@:3}" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+            if [[ "$status" != 2 || -s "$workdir/stdout" ]]; then
+                printf 'ZINE_CWD=<%s> must exit with status 2 and no stdout (got %s)\n' "$cwd" "$status" >&2
+                cat "$workdir/stderr" >&2
+                exit 1
+            fi
+            grep -q 'Error: ZINE_CWD must be an absolute POSIX path' "$workdir/stderr"
+        done
+        for cwd in / /tmp '/tmp/zine cwd'; do
+            status=0
+            timeout 60 "$1" "$2" --env "ZINE_CWD=$cwd" "${@:3}" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+            if [[ "$status" != 0 || -s "$workdir/stderr" ]]; then
+                printf 'ZINE_CWD=<%s> must be accepted (got %s)\n' "$cwd" "$status" >&2
+                cat "$workdir/stderr" >&2
+                exit 1
+            fi
+        done
+        # The runtime's own `--` separator reaches the guest as the first
+        # argument; options behind it must still parse.
+        for flag in --version --help; do
+            status=0
+            timeout 60 "$1" "$2" "${@:3}" -- "$flag" >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+            if [[ "$status" != 0 || ! -s "$workdir/stdout" || -s "$workdir/stderr" ]]; then
+                printf '%s after a -- separator must write to stdout and exit 0 (got %s)\n' "$flag" "$status" >&2
+                cat "$workdir/stderr" >&2
+                exit 1
+            fi
+        done
     fi
 fi
 

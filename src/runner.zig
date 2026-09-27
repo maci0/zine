@@ -133,6 +133,31 @@ pub fn registerAllStubs(environment: *Environment, not_implemented_addr: usize) 
 var dll_path_buf: [std.fs.max_path_bytes]u8 = undefined;
 
 // -----------------------------------------------------------------------
+// Target Load Failure Reporting
+// -----------------------------------------------------------------------
+
+/// Exit status for a target image that could not be loaded: the invocation was
+/// well-formed, the file it names was not usable.
+pub const target_load_failure_status: u8 = 1;
+
+/// Reports a target image that failed to load and exits. A mistyped path or a
+/// file that is not a PE is a user error, so the message names the argument the
+/// user typed instead of letting the Zig error trace escape.
+pub fn failTargetLoad(target: []const u8, err: anyerror) noreturn {
+    switch (err) {
+        error.ModuleNotFound => std.debug.print(
+            "Error: cannot find '{s}'.\nPass a path to the executable, or add its directory to PATH.\n",
+            .{target},
+        ),
+        else => std.debug.print(
+            "Error: cannot load '{s}' as a Win32 PE executable ({s}).\n",
+            .{ target, @errorName(err) },
+        ),
+    }
+    std.process.exit(target_load_failure_status);
+}
+
+// -----------------------------------------------------------------------
 // Search Path Setup
 // -----------------------------------------------------------------------
 

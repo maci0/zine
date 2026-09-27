@@ -158,9 +158,9 @@ pub fn main(init: std.process.Init) !void {
     var past_separator = false;
 
     while (sys_args.next()) |arg| {
-        if (!past_separator and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
-            try std.Io.File.stdout().writeStreamingAll(init.io,
-                \\Usage: zine-host [options] <zine.wasm> [-- args...]
+        if (!past_separator and wasm_path == null and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
+            runtime.writeCliOut(
+                \\Usage: zine-host [options] <zine.wasm> [args...]
                 \\
                 \\Run zine.wasm with a native WASM runtime and JIT support.
                 \\
@@ -169,18 +169,22 @@ pub fn main(init: std.process.Init) !void {
                 \\  -v, --version       Show version information
                 \\  --                  Stop processing options; remaining args are passed to the guest
                 \\
+                \\Arguments:
+                \\  zine.wasm           Module to run; every later argument is passed to it
+                \\
                 \\Examples:
                 \\  zine-host zine.wasm -- myapp.exe
                 \\  zine-host zine.wasm -- --trace myapp.exe
+                \\  zine-host zine.wasm --help
                 \\
             );
             std.process.exit(0);
         }
-        if (!past_separator and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
-            try std.Io.File.stdout().writeStreamingAll(init.io, "zine-host " ++ version.string ++ "\n");
+        if (!past_separator and wasm_path == null and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
+            runtime.writeCliOut("zine-host " ++ version.string ++ "\n");
             std.process.exit(0);
         }
-        if (!past_separator and std.mem.eql(u8, arg, "--")) {
+        if (!past_separator and wasm_path == null and std.mem.eql(u8, arg, "--")) {
             past_separator = true;
             continue;
         }

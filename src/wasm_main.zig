@@ -50,6 +50,10 @@ fn not_implemented() callconv(.c) void {
 
 const runtime = @import("runtime.zig");
 
+/// Upper bound on the guest working directory, excluding the "Z:\" prefix and
+/// the terminating NUL that `path_utils` appends.
+const max_guest_cwd_len = 1021;
+
 /// The entry point for the WASM build of Zine.
 /// It sets up guest memory, loads the PE, and starts the x86 interpreter.
 pub fn main(init: std.process.Init) !void {
@@ -71,6 +75,21 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(2);
     };
 
+    // ZINE_CWD is validated with the other startup settings, before any output
+    // and before the guest loads, so `--version` reports a rejected value
+    // instead of exiting 0 over it.
+    const zine_cwd: ?[]const u8 = init.environ_map.get("ZINE_CWD");
+    if (zine_cwd) |cwd| {
+        if (cwd.len == 0 or cwd[0] != '/') {
+            std.debug.print("Error: ZINE_CWD must be an absolute POSIX path, got '{s}'.\n", .{cwd});
+            std.process.exit(2);
+        }
+        if (cwd.len > max_guest_cwd_len) {
+            std.debug.print("Error: ZINE_CWD must be at most {d} bytes, got {d}.\n", .{ max_guest_cwd_len, cwd.len });
+            std.process.exit(2);
+        }
+    }
+
     {
         const env_map = init.environ_map;
         if (env_map.get("ZINE_TRACE") != null) {
@@ -84,9 +103,15 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    var arg_count: usize = 0;
     while (args.next()) |arg| {
-        if (!end_of_options and std.mem.eql(u8, arg, "--")) {
-            end_of_options = true;
+        const is_first_arg = arg_count == 0;
+        arg_count += 1;
+        // wasmtime forwards its own `--` separator as the first guest
+        // argument. Consuming it here keeps the options behind it parseable; a
+        // second `--` still ends option parsing as usual.
+        if (std.mem.eql(u8, arg, "--")) {
+            if (!is_first_arg) end_of_options = true;
             continue;
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--trace") or std.mem.eql(u8, arg, "-t"))) {
@@ -132,8 +157,14 @@ pub fn main(init: std.process.Init) !void {
             profiler.enabled = true;
             continue;
         }
+        if (!end_of_options and (std.mem.eql(u8, arg, "--quiet") or std.mem.eql(u8, arg, "-q"))) {
+            // A flag wins over ZINE_LOG_LEVEL, so this overrides whatever the
+            // environment selected at startup.
+            log.min_level = .warn;
+            continue;
+        }
         if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
-            try std.Io.File.stdout().writeStreamingAll(init.io,
+            runtime.writeCliOut(
                 \\Usage: zine [options] [--] <target.exe> [args...]
                 \\
                 \\Run a Win32 PE executable in a WebAssembly environment.
@@ -148,6 +179,7 @@ pub fn main(init: std.process.Init) !void {
                 \\      --trace-api     Enable API tracing only
                 \\      --trace-insn    Enable x86 instruction tracing only
                 \\      --profile       Enable profiling (hot code, opcodes, stubs)
+                \\  -q, --quiet         Only report warnings and errors on stderr
                 \\
                 \\  -h, --help          Show this help message
                 \\  -v, --version       Show version information
@@ -170,7 +202,7 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
-            try std.Io.File.stdout().writeStreamingAll(init.io, "zine " ++ version.string ++ "\n");
+            runtime.writeCliOut("zine " ++ version.string ++ "\n");
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--argv0") or std.mem.startsWith(u8, arg, "--argv0="))) {
@@ -284,7 +316,9 @@ pub fn main(init: std.process.Init) !void {
     try runner.setupSearchPaths(&environment, allocator, target_exe, host_dirs.items);
 
     const exe_name = std.fs.path.basename(target_exe);
-    const main_module = try environment.registry.loadModule(exe_name);
+    const main_module = environment.registry.loadModule(exe_name) catch |err| {
+        runner.failTargetLoad(target_exe, err);
+    };
     // Per-application registry overrides (app:<MODULE>: sections).
     @import("win32/advapi32/registry.zig").setAppModule(exe_name);
     // On WASM, the module handle must be the GUEST base VA (not a host pointer)
@@ -473,17 +507,9 @@ pub fn main(init: std.process.Init) !void {
     // (e.g. wasmer), where cwd()-relative file creation fails with
     // PermissionDenied but absolute-path creation via the \"/\" preopen works.
     {
-        var cwd_buf: [1024]u8 = undefined;
+        var cwd_buf: [max_guest_cwd_len + 3]u8 = undefined;
         var cwd_str: []const u8 = ".";
-        if (init.environ_map.get("ZINE_CWD")) |cwd| {
-            if (cwd.len == 0 or cwd[0] != '/') {
-                log.fatal("ZINE_CWD must be an absolute POSIX path, got '{s}'", .{cwd});
-                std.process.exit(2);
-            }
-            if (cwd.len + 3 > cwd_buf.len) {
-                log.fatal("ZINE_CWD must be at most {d} bytes, got {d}", .{ cwd_buf.len - 3, cwd.len });
-                std.process.exit(2);
-            }
+        if (zine_cwd) |cwd| {
             @memcpy(cwd_buf[0..3], "Z:\\");
             var j: usize = 3;
             for (cwd[1..]) |c| {

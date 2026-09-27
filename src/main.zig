@@ -37,13 +37,6 @@ const build_options = @import("build_options");
 const pe = @import("pe.zig");
 const runtime = @import("runtime.zig");
 
-fn writeStdout(bytes: []const u8) void {
-    std.Io.File.stdout().writeStreamingAll(runtime.io(), bytes) catch {
-        std.debug.print("{s}", .{"Error: failed to write to stdout.\n"});
-        std.process.exit(1);
-    };
-}
-
 fn buildCmdLineString(allocator: std.mem.Allocator, app_args_items: []const ?[*:0]u8) !usize {
     var cmdline_buf = try allocator.alloc(u8, 4096);
     @memset(cmdline_buf, 0);
@@ -147,6 +140,12 @@ pub fn main(init: std.process.Init) !void {
             profiler.enabled = true;
             continue;
         }
+        if (!end_of_options and (std.mem.eql(u8, arg, "--quiet") or std.mem.eql(u8, arg, "-q"))) {
+            // A flag wins over ZINE_LOG_LEVEL, so this overrides whatever the
+            // environment selected at startup.
+            log.min_level = .warn;
+            continue;
+        }
         if (!end_of_options and std.mem.eql(u8, arg, "--fltk")) {
             if (!build_options.use_fltk) {
                 std.debug.print("{s}", .{"Error: --fltk is not available in this build.\nRebuild with: zig build -Dfltk\nTry 'zine --help' for more information.\n"});
@@ -160,7 +159,7 @@ pub fn main(init: std.process.Init) !void {
             continue;
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h"))) {
-            writeStdout(
+            runtime.writeCliOut(
                 \\Usage: zine [options] [--] <target.exe> [args...]
                 \\
                 \\Run a Win32 PE executable on Linux.
@@ -174,6 +173,7 @@ pub fn main(init: std.process.Init) !void {
                 \\      --trace-api     Enable API tracing only
                 \\      --trace-insn    Enable x86 instruction tracing only
                 \\      --profile       Enable profiling (hot code, opcodes, stubs)
+                \\  -q, --quiet         Only report warnings and errors on stderr
                 \\
                 \\      --fltk          Use native FLTK GUI instead of web UI
                 \\      --no-gui        Disable GUI (no web server), even for GUI apps
@@ -200,7 +200,7 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
-            writeStdout("zine " ++ version.string ++ "\n");
+            runtime.writeCliOut("zine " ++ version.string ++ "\n");
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--argv0") or std.mem.startsWith(u8, arg, "--argv0="))) {
@@ -295,7 +295,13 @@ pub fn main(init: std.process.Init) !void {
             if (arg) |a| try bat_args.append(allocator, std.mem.span(a));
         }
 
-        if (try bat_env.parseFile(target_exe, bat_args.items)) |parsed_args| {
+        const bat_command = bat_env.parseFile(target_exe, bat_args.items) catch |err| {
+            var err_buf: [512]u8 = undefined;
+            const msg = std.fmt.bufPrint(&err_buf, "Error: cannot open batch file '{s}' ({s}).\n", .{ target_exe, @errorName(err) }) catch "Error: cannot open batch file.\n";
+            std.debug.print("{s}", .{msg});
+            std.process.exit(1);
+        };
+        if (bat_command) |parsed_args| {
             target_exe = parsed_args[0];
             app_args.clearRetainingCapacity();
             for (parsed_args) |arg| {
@@ -304,9 +310,7 @@ pub fn main(init: std.process.Init) !void {
             }
             final_envp = try bat_env.buildEnvp();
         } else {
-            var err_buf: [512]u8 = undefined;
-            const msg = std.fmt.bufPrint(&err_buf, "Error: failed to parse '{s}' or no final command found.\n", .{target_exe}) catch "Error: failed to parse bat file or no final command found.\n";
-            std.debug.print("{s}", .{msg});
+            std.debug.print("Error: '{s}' defines no command to run.\n", .{target_exe});
             std.process.exit(1);
         }
     }
@@ -350,7 +354,9 @@ pub fn main(init: std.process.Init) !void {
     try runner.setupSearchPaths(&environment, allocator, target_exe, extra_paths.items);
 
     const exe_name = std.fs.path.basename(target_exe);
-    const main_module = try environment.registry.loadModule(exe_name);
+    const main_module = environment.registry.loadModule(exe_name) catch |err| {
+        runner.failTargetLoad(target_exe, err);
+    };
     // Per-application registry overrides (app:<MODULE>: sections).
     @import("win32/advapi32/registry.zig").setAppModule(exe_name);
     stubs_kernel32.main_module_handle = @intFromPtr(main_module.mapped_memory.ptr);

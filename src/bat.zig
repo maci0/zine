@@ -134,18 +134,17 @@ pub const BatEnv = struct {
         return try out.toOwnedSlice(self.allocator);
     }
 
-    /// Parses a Windows batch file and returns the final command to execute.
-    /// This is a simplified interpreter that handles SET and CALL.
+    /// Parses a Windows batch file and returns the final command to execute,
+    /// or null when the file defines no runnable command. This is a simplified
+    /// interpreter that handles SET and CALL. Reporting a bad path is the
+    /// caller's job, so an unreadable file is returned as an error.
     pub fn parseFile(self: *BatEnv, bat_path: []const u8, args: [][]const u8) !?[][]const u8 {
         var open_path = bat_path;
         if (open_path.len >= 2 and open_path[1] == ':' and std.ascii.isAlphabetic(open_path[0])) {
             open_path = open_path[2..];
         }
         const io = runtime.io();
-        var file = std.Io.Dir.cwd().openFile(io, open_path, .{}) catch {
-            std.debug.print("Error: failed to open batch file '{s}'.\n", .{open_path});
-            return null;
-        };
+        var file = try std.Io.Dir.cwd().openFile(io, open_path, .{});
         defer file.close(io);
 
         // Read the entire file into a string

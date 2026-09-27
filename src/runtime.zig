@@ -56,6 +56,21 @@ pub fn environ() std.process.Environ {
     return environ_instance;
 }
 
+/// Exit status for a CLI that could not write its own output to stdout (a
+/// closed pipe, a full device). Separate from the usage-error status 2.
+pub const cli_write_failure_status: u8 = 1;
+
+/// Writes emulator-owned output (help, version) to stdout. A failed write is
+/// reported on stderr and ends the process: help and version text are the
+/// entire result of a successful run, so a partial write is a failure the
+/// caller cannot recover from. Guest output is not routed through here.
+pub fn writeCliOut(bytes: []const u8) void {
+    std.Io.File.stdout().writeStreamingAll(io(), bytes) catch {
+        std.debug.print("Error: failed to write to stdout.\n", .{});
+        std.process.exit(cli_write_failure_status);
+    };
+}
+
 /// Plain spinlock. Deliberately NOT `std.Io.Mutex`:
 /// std.Io.Mutex goes through the Io cancel-protection machinery when contended
 /// (futexWait via the io instance), which reads per-thread TLS

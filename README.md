@@ -227,7 +227,9 @@ the runtime's environment options, for example
 itself enable API or instruction tracing. Values are case-sensitive; empty or
 unknown log levels exit with status 2 and list the accepted values before guest
 loading. `ZINE_LOG_LEVEL=warn ./zig-out/bin/zine.x86 --version` checks startup
-validation without running a guest.
+validation without running a guest. `zine --quiet` (also `-q`) raises the level
+to `warn` for the rest of the run and wins over `ZINE_LOG_LEVEL`, so a script can
+quiet a noisy environment without rewriting it.
 
 The host home directory is redacted from every diagnostic before it reaches
 stderr, so a trace pasted into a bug report does not carry the local account
