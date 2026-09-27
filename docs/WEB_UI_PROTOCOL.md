@@ -86,7 +86,7 @@ sides may then send text messages at any time.
 | `directory_listing` | answer to `browse_directory` |
 | `desktop_icons` | desktop listing: `name`, `is_dir`, `ext`, optional `icon` |
 | `set_icon` | `base64` (the window icon image, for titlebar, taskbar, and favicon) |
-| `open_file_dialog`, `open_find_dialog`, `open_font_dialog`, `open_print_dialog`, `show_page_setup_dialog`, `show_print_dialog`, `show_color_dialog`, `show_context_menu`, `message_box` | dialog requests |
+| `open_file_dialog`, `open_find_dialog`, `open_font_dialog`, `show_page_setup_dialog`, `show_print_dialog`, `show_color_dialog`, `show_context_menu`, `message_box` | dialog requests |
 | `show_controls`, `add_control`, `set_control_checked`, `set_control_color`, `set_listbox_items`, `update_control_range`, `update_control_text`, `update_control_value` | guest control state |
 | `show_edit_control`, `set_edit_text`, `set_edit_font`, `resize_edit_control`, `edit_setsel`, `edit_replacesel`, `edit_scrollcaret`, `edit_undo` | guest edit control state |
 | `close_dialog`, `custom_dialog` | dialog lifecycle |
@@ -100,24 +100,29 @@ JSON, a body that is not an object, a missing or non-string `type`, an unknown
 `type`, a missing required field, and a field of the wrong JSON type. The
 connection stays open either way.
 
+An optional field takes its documented default only when the key is absent. A
+key that is present with the wrong JSON type, or with a value outside the
+range the field accepts, is answered with an `error` frame naming the field
+rather than silently replaced by the default.
+
 | `type` | Fields |
 | --- | --- |
 | `command` | `id` (integer, required) |
 | `keydown`, `keyup` | `key` (string, required; a `KeyboardEvent.code` with no Win32 equivalent is ignored, not an error) |
-| `mousedown`, `mouseup`, `mousemove` | `x`, `y` (integers, required), `button` (integer, default 0) |
-| `wheel` | `delta` (integer, required) |
+| `mousedown`, `mouseup`, `mousemove` | `x`, `y` (integers, required), `button` (integer, default 0; only 0 and 2 reach the guest, and a button with no Win32 equivalent is dropped rather than delivered as the primary button) |
+| `wheel` | `delta` (integer, required), `x`, `y` (integers, default 0; the pointer position the guest's `WM_MOUSEWHEEL` needs) |
 | `resize` | `clientW`, `clientH` (integers, required, both positive), `sizeType` (integer, default 0, negatives clamped to 0, refused with an `error` frame when it does not fit the host's `usize`) |
 | `close` | none |
 | `open_file` | `filename` (string, required), `dir` (string, default `Desktop`) |
 | `browse_directory` | `path` (string, required) |
 | `launch` | `path` (string, required) |
 | `find_action` | `action` (string, required: `find_next`, `replace`, `replace_all`, or `close`), `findText` (string, required), `replaceText` (string, default `""`), `matchCase` (bool, default false), `searchDown` (bool, default true) |
-| `font_chosen` | `face` (string, required), `size` (integer, required), `bold`, `italic` (bools, default false) |
-| `print_chosen` | `from`, `to` (integers, required), `copies` (integer, default 1) |
-| `page_setup_chosen` | `left`, `top` (integers, required), `right`, `bottom`, `paperW`, `paperH`, `orientation` (integers, default 0/0/8500/11000/0) |
+| `font_chosen` | `face` (string, required), `size` (integer, required, positive), `bold`, `italic` (bools, default false) |
+| `print_chosen` | `from`, `to` (integers, required, both positive), `copies` (integer, default 1, at least 1) |
+| `page_setup_chosen` | `left`, `top` (integers, required), `right`, `bottom`, `paperW`, `paperH`, `orientation` (integers, default 0/0/8500/11000/0; `paperW` and `paperH` must be positive and `orientation` must be 0 or 1) |
 | `color_selected` | `color` (integer, required; `0x000000` to `0xFFFFFF`, a negative value means cancel) |
 | `listbox_select` | `id` (integer, required, u32 range), `index` (integer, required, i32 range; a value outside either range is refused with an `error` frame) |
-| `context_menu_select` | `id` (integer, required; 0 dismisses the menu) |
+| `context_menu_select` | `id` (integer, required, u32 range; 0 dismisses the menu) |
 | `cancel_dialog` | none |
 | `text_sync` | `text` (string, required, at most 65536 bytes) |
 | `clipboard_sync` | `text` (string, required, at most 65536 bytes) |

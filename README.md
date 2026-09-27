@@ -75,6 +75,21 @@ release, not a 0.2.1 patch.
   `text/plain; charset=utf-8` carrying the reason; the JSON `error` frame stays
   on the WebSocket side. Routes and message types are specified in
   [`docs/WEB_UI_PROTOCOL.md`](docs/WEB_UI_PROTOCOL.md).
+- A web UI mouse message with `button` 1 (middle click) is dropped instead of
+  being delivered as a primary-button press, which used to click wherever the
+  user scrolled. Only `button` 0 and 2 reach the guest. A frontend that needs
+  the middle button has to keep it to itself until the guest window uses one.
+- An optional Web UI integer field now takes its documented default only when
+  the key is absent. A key that is present with the wrong JSON type, or with a
+  value outside i32, answers `{"type":"error"}` naming the field instead of
+  being silently replaced by the default, which is how `copies`, the page
+  setup margins, and the paper size behaved. `font_chosen` `size`,
+  `print_chosen` `from` / `to` / `copies`, `page_setup_chosen` `paperW` /
+  `paperH` / `orientation`, and `context_menu_select` `id` are refused when
+  they fall outside the range the guest can use.
+- A web UI `wheel` message may carry `x` and `y`; both default to 0, so an
+  older frontend keeps working, and a `WM_MOUSEWHEEL` now lands under the
+  pointer the user scrolled at instead of at the window origin.
 
 #### Security fixes
 

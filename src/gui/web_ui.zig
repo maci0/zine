@@ -361,6 +361,48 @@ fn jsonIntOr(object: std.json.ObjectMap, key: []const u8, default: i32) i32 {
     return std.math.cast(i32, jsonInt(object, key) orelse return default) orelse default;
 }
 
+/// Outcome of reading an optional integer field: absent takes the default, a
+/// field that is present but unusable is reported rather than defaulted.
+const OptionalInt = union(enum) {
+    value: i32,
+    wrong_type,
+    out_of_range,
+};
+
+fn optionalInt(object: std.json.ObjectMap, key: []const u8, default: i32) OptionalInt {
+    const raw = object.get(key) orelse return .{ .value = default };
+    if (raw != .integer) return .wrong_type;
+    return .{ .value = std.math.cast(i32, raw.integer) orelse return .out_of_range };
+}
+
+/// One optional integer field of a message: the JSON key and the value the
+/// server uses when the key is absent.
+const OptionalField = struct { name: []const u8, default: i32 };
+
+/// Reads a message's optional integer fields into `out`, one entry per field.
+/// A key that is absent takes its default; a key that is present with the
+/// wrong JSON type, or with a value no i32 can hold, is a client mistake and
+/// is refused, so a bad value never reaches the guest as a silent fallback.
+/// Returns the message naming the first offending field, or null when every
+/// field is usable.
+fn optionalInts(
+    object: std.json.ObjectMap,
+    type_name: []const u8,
+    fields: []const OptionalField,
+    out: []i32,
+    msg_buf: []u8,
+) ?[]const u8 {
+    std.debug.assert(out.len == fields.len);
+    for (fields, out) |field, *dest| {
+        switch (optionalInt(object, field.name, field.default)) {
+            .value => |value| dest.* = value,
+            .wrong_type => return std.fmt.bufPrint(msg_buf, "{s} field \"{s}\" must be an integer", .{ type_name, field.name }) catch "field is not an integer",
+            .out_of_range => return std.fmt.bufPrint(msg_buf, "{s} field \"{s}\" is out of range", .{ type_name, field.name }) catch "field is out of range",
+        }
+    }
+    return null;
+}
+
 fn jsonStr(object: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     const value = object.get(key) orelse return null;
     if (value != .string) return null;
@@ -584,6 +626,13 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                         };
                         const is_bold = jsonBool(root.object, "bold", false);
                         const is_italic = jsonBool(root.object, "italic", false);
+                        // A point size of zero or less cannot be turned into a
+                        // font, the same refusal `resize` makes for a window
+                        // dimension the guest cannot use.
+                        if (pt_size <= 0) {
+                            sendError(&ws, "font_chosen field \"size\" must be positive");
+                            continue;
+                        }
                         if (renderer.on_font_chosen) |cb| cb(face, pt_size, is_bold, is_italic);
                     } else if (std.mem.eql(u8, type_val.string, "print_chosen")) {
                         // Parse print confirmation: { from, to, copies }
@@ -601,7 +650,27 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                             sendError(&ws, "print_chosen field \"to\" is out of range");
                             continue;
                         };
-                        const copies = jsonIntOr(root.object, "copies", 1);
+                        const optional_fields = [_]OptionalField{
+                            .{ .name = "copies", .default = 1 },
+                        };
+                        var values: [optional_fields.len]i32 = undefined;
+                        var msg_buf: [max_error_message_len]u8 = undefined;
+                        if (optionalInts(root.object, "print_chosen", &optional_fields, &values, &msg_buf)) |message| {
+                            sendError(&ws, message);
+                            continue;
+                        }
+                        const copies = values[0];
+                        // A page number below 1 or a copy count below 1 has no
+                        // meaning to the guest's print job, which would clamp
+                        // it silently; the client already refuses them.
+                        if (from_page <= 0 or to_page <= 0) {
+                            sendError(&ws, "print_chosen fields \"from\" and \"to\" must be positive");
+                            continue;
+                        }
+                        if (copies < 1) {
+                            sendError(&ws, "print_chosen field \"copies\" must be at least 1");
+                            continue;
+                        }
                         if (renderer.on_print_chosen) |cb| cb(from_page, to_page, copies);
                     } else if (std.mem.eql(u8, type_val.string, "page_setup_chosen")) {
                         // Parse page-setup confirmation:
@@ -610,16 +679,34 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                             sendError(&ws, "page_setup_chosen requires integer fields \"left\" and \"top\"");
                             continue;
                         }
+                        const optional_fields = [_]OptionalField{
+                            .{ .name = "left", .default = 0 },
+                            .{ .name = "top", .default = 0 },
+                            .{ .name = "right", .default = 0 },
+                            .{ .name = "bottom", .default = 0 },
+                            .{ .name = "paperW", .default = 8500 },
+                            .{ .name = "paperH", .default = 11000 },
+                            .{ .name = "orientation", .default = 0 },
+                        };
+                        var values: [optional_fields.len]i32 = undefined;
+                        var msg_buf: [max_error_message_len]u8 = undefined;
+                        if (optionalInts(root.object, "page_setup_chosen", &optional_fields, &values, &msg_buf)) |message| {
+                            sendError(&ws, message);
+                            continue;
+                        }
+                        // paperW and paperH are indices 4 and 5, orientation 6.
+                        // A paper size of zero or less has no page behind it,
+                        // so it is refused here rather than divided by.
+                        if (values[4] <= 0 or values[5] <= 0) {
+                            sendError(&ws, "page_setup_chosen fields \"paperW\" and \"paperH\" must be positive");
+                            continue;
+                        }
+                        if (values[6] != 0 and values[6] != 1) {
+                            sendError(&ws, "page_setup_chosen field \"orientation\" must be 0 or 1");
+                            continue;
+                        }
                         if (renderer.on_page_setup_chosen) |cb| {
-                            cb(
-                                jsonIntOr(root.object, "left", 0),
-                                jsonIntOr(root.object, "top", 0),
-                                jsonIntOr(root.object, "right", 0),
-                                jsonIntOr(root.object, "bottom", 0),
-                                jsonIntOr(root.object, "paperW", 8500),
-                                jsonIntOr(root.object, "paperH", 11000),
-                                jsonIntOr(root.object, "orientation", 0),
-                            );
+                            cb(values[0], values[1], values[2], values[3], values[4], values[5], values[6]);
                         }
                     } else if (std.mem.eql(u8, type_val.string, "cancel_dialog")) {
                         if (renderer.on_cancel_dialog) |cb| cb();
@@ -703,11 +790,19 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                             cb(cb_id, cb_index);
                         }
                     } else if (std.mem.eql(u8, type_val.string, "context_menu_select")) {
-                        // Context menu item selected
-                        if (jsonInt(root.object, "id")) |id| {
+                        // Context menu item selected. The id narrows to the
+                        // u32 the guest reads; a value outside that range is
+                        // refused rather than wrapped into a command id that
+                        // belongs to something else, the same rule
+                        // `listbox_select` follows.
+                        if (jsonInt(root.object, "id")) |raw_id| {
+                            const menu_id = std.math.cast(u32, raw_id) orelse {
+                                sendError(&ws, "context_menu_select field \"id\" is out of range");
+                                continue;
+                            };
                             // Result first so a guest that observes
                             // chosen==true also observes the result.
-                            renderer.context_menu_result.store(@intCast(@as(u32, @truncate(@as(u64, @bitCast(id))))), .release);
+                            renderer.context_menu_result.store(menu_id, .release);
                             renderer.context_menu_chosen.store(true, .release);
                         } else {
                             sendError(&ws, "context_menu_select requires an integer field \"id\"");
@@ -738,7 +833,22 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                                 sendError(&ws, "wheel field \"delta\" is out of range");
                                 continue;
                             };
-                            if (renderer.on_wheel_event) |cb| cb(delta, 0, 0);
+                            // WM_MOUSEWHEEL carries the pointer position, so a
+                            // client that sends x and y has its wheel land under
+                            // the cursor. A client that omits them wheels at the
+                            // window origin, which is where a wheel arrives when
+                            // the host UI has no pointer to report.
+                            const optional_fields = [_]OptionalField{
+                                .{ .name = "x", .default = 0 },
+                                .{ .name = "y", .default = 0 },
+                            };
+                            var position: [optional_fields.len]i32 = undefined;
+                            var msg_buf: [max_error_message_len]u8 = undefined;
+                            if (optionalInts(root.object, "wheel", &optional_fields, &position, &msg_buf)) |message| {
+                                sendError(&ws, message);
+                                continue;
+                            }
+                            if (renderer.on_wheel_event) |cb| cb(delta, position[0], position[1]);
                         } else {
                             sendError(&ws, "wheel requires an integer field \"delta\"");
                         }
@@ -762,11 +872,20 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                         };
                         const button = jsonIntOr(root.object, "button", 0);
                         const w32 = @import("../win32/constants.zig");
+                        const is_move = std.mem.eql(u8, type_val.string, "mousemove");
+                        // A browser reports the middle button as 1 and the guest
+                        // window has no use for it. Delivering it as the primary
+                        // button would click wherever the user scrolled, so a
+                        // button with no Win32 equivalent is dropped, the same
+                        // way a key with no Win32 equivalent is.
+                        if (!is_move and button != 0 and button != 2) continue;
                         var msg_id: u32 = w32.WM_MOUSEMOVE;
-                        if (std.mem.eql(u8, type_val.string, "mousedown")) {
-                            msg_id = if (button == 2) w32.WM_RBUTTONDOWN else w32.WM_LBUTTONDOWN;
-                        } else if (std.mem.eql(u8, type_val.string, "mouseup")) {
-                            msg_id = if (button == 2) w32.WM_RBUTTONUP else w32.WM_LBUTTONUP;
+                        if (!is_move) {
+                            if (std.mem.eql(u8, type_val.string, "mousedown")) {
+                                msg_id = if (button == 2) w32.WM_RBUTTONDOWN else w32.WM_LBUTTONDOWN;
+                            } else {
+                                msg_id = if (button == 2) w32.WM_RBUTTONUP else w32.WM_LBUTTONUP;
+                            }
                         }
                         if (renderer.on_mouse_event) |cb| cb(msg_id, x, y);
                     } else {
@@ -978,6 +1097,57 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
         .{ .name = "content-encoding", .value = "gzip" },
     };
     try req.respond(body, .{ .keep_alive = true, .extra_headers = response_headers[0 .. response_headers.len - @intFromBool(compressed == null)] });
+}
+
+test "an optional integer field defaults only when the key is absent" {
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator,
+        \\{"copies":3,"paperW":"8500","paperH":9999999999999,"absent":null}
+    , .{});
+    defer parsed.deinit();
+    const object = parsed.value.object;
+    const fields = [_]OptionalField{
+        .{ .name = "copies", .default = 1 },
+        .{ .name = "paperW", .default = 8500 },
+        .{ .name = "paperH", .default = 11000 },
+        .{ .name = "orientation", .default = 0 },
+    };
+    var out: [fields.len]i32 = undefined;
+    var msg_buf: [max_error_message_len]u8 = undefined;
+
+    // A wrong-typed field is refused rather than defaulted.
+    try std.testing.expectEqualStrings("m field \"paperW\" must be an integer", optionalInts(object, "m", &fields, &out, &msg_buf).?);
+
+    // A field outside i32 is a different refusal, and names the same field.
+    const narrow = [_]OptionalField{
+        .{ .name = "paperH", .default = 11000 },
+    };
+    var narrow_out: [narrow.len]i32 = undefined;
+    try std.testing.expectEqualStrings("m field \"paperH\" is out of range", optionalInts(object, "m", &narrow, &narrow_out, &msg_buf).?);
+
+    // A null value is a value of the wrong JSON type, not an absent key.
+    const nulled = [_]OptionalField{
+        .{ .name = "absent", .default = 7 },
+    };
+    var nulled_out: [nulled.len]i32 = undefined;
+    try std.testing.expectEqualStrings("m field \"absent\" must be an integer", optionalInts(object, "m", &nulled, &nulled_out, &msg_buf).?);
+
+    // Every field absent: each takes its own default.
+    const defaults = [_]OptionalField{
+        .{ .name = "orientation", .default = 0 },
+        .{ .name = "unmentioned", .default = 5 },
+    };
+    var defaults_out: [defaults.len]i32 = undefined;
+    try std.testing.expect(optionalInts(object, "m", &defaults, &defaults_out, &msg_buf) == null);
+    try std.testing.expectEqual(@as(i32, 0), defaults_out[0]);
+    try std.testing.expectEqual(@as(i32, 5), defaults_out[1]);
+
+    // A field that is present and usable keeps its own value.
+    const present = [_]OptionalField{
+        .{ .name = "copies", .default = 1 },
+    };
+    var present_out: [present.len]i32 = undefined;
+    try std.testing.expect(optionalInts(object, "m", &present, &present_out, &msg_buf) == null);
+    try std.testing.expectEqual(@as(i32, 3), present_out[0]);
 }
 
 test "the error envelope stays parseable when the message names a field" {
