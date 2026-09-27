@@ -47,12 +47,22 @@ pub const MAX_THUNKS = runtime.MAX_THUNKS;
 var thunk_entries: [MAX_THUNKS]?ThunkEntry = .{null} ** MAX_THUNKS;
 var thunk_count: u32 = 0;
 
+/// Capacity of the _initterm callback queue. The queue holds whatever the
+/// guest's .CRT init section lists, so its size scales with the number of
+/// translation units in the PE, not with anything the emulator controls. The
+/// old 64 entries were dropped silently enough to look like a run that just
+/// behaved oddly: a dropped entry is a static constructor that never runs. A
+/// MSVC 6 CRT section runs to a few hundred entries, so this leaves several
+/// times that headroom; the trampoline that consumes the queue emits five
+/// bytes per entry, which the guest heap absorbs.
+const max_initterm_callbacks = 4096;
+
 /// Shared _initterm callback queue (WASM only).
 ///
 /// On WASM, _initterm collects guest x86 function addresses here.
 /// After the stub returns, x86/execute.zig reads them to build a
 /// trampoline.
-pub var pending_initterm_callbacks: [64]u32 = [_]u32{0} ** 64;
+pub var pending_initterm_callbacks: [max_initterm_callbacks]u32 = [_]u32{0} ** max_initterm_callbacks;
 pub var pending_initterm_count: usize = 0;
 
 pub fn queueInittermCallback(addr: u32) void {
@@ -720,4 +730,22 @@ test "thunks: import address filter never hides a registered address" {
     // one whose bits happen to be set still resolves to nothing.
     try testing.expect(!isNativeImport(0x7000_0000));
     try testing.expectEqual(@as(u32, 0), getImportInfo(0).param_bytes);
+}
+
+test "thunks: _initterm queue holds a full CRT init section" {
+    // 512 entries: an MSVC 6 .CRT section of a few hundred static
+    // initializers, well past the 64 the queue used to hold. Dropping one
+    // would skip a static constructor, which the guest sees as an unrelated
+    // misbehaviour much later.
+    const queued = 512;
+    pending_initterm_count = 0;
+    defer pending_initterm_count = 0;
+
+    for (0..queued) |i| {
+        const addr: u32 = 0x0040_0000 + @as(u32, @intCast(i));
+        queueInittermCallback(addr);
+        try testing.expectEqual(addr, pending_initterm_callbacks[i]);
+    }
+
+    try testing.expectEqual(@as(usize, queued), pending_initterm_count);
 }

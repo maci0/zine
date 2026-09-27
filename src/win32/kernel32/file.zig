@@ -452,10 +452,16 @@ pub fn CloseHandle(hObject: usize) callconv(w32cc.WINAPI) i32 {
 
     // File mapping handles carry the 0x40000000 marker (see alloc_mapping).
     // Closing one frees its slot; the fd itself stays owned by the file handle
-    // the mapping was created from.
+    // the mapping was created from. A marked handle whose slot was never
+    // allocated names no object, so the close fails instead of reporting
+    // success over a slot it did not own.
     if ((hObject & 0xFFFF0000) == 0x40000000) {
         const idx = hObject & 0xFFFF;
-        if (idx < MAX_MAPPINGS) mapping_fds[idx] = -1;
+        if (idx >= MAX_MAPPINGS or mapping_fds[idx] == -1) {
+            kernel32_error.SetLastError(ERROR_INVALID_HANDLE);
+            return 0;
+        }
+        mapping_fds[idx] = -1;
         return 1;
     }
 
@@ -1793,4 +1799,21 @@ test "SetEndOfFile reports a last error when the position is unavailable" {
     kernel32_error.SetLastError(0);
     try std.testing.expectEqual(@as(i32, 0), SetEndOfFile(w32.INVALID_HANDLE_VALUE));
     try std.testing.expect(kernel32_error.GetLastError() != 0);
+}
+
+test "CloseHandle releases a mapping slot and rejects one that was never allocated" {
+    // Slots other tests may have taken, isolated so the assertions do not
+    // depend on the order the suite happens to run in.
+    const saved = mapping_fds;
+    defer mapping_fds = saved;
+
+    @memset(&mapping_fds, -1);
+    const handle = alloc_mapping(7) orelse return error.NoSlots;
+    try std.testing.expectEqual(@as(i32, 1), CloseHandle(handle));
+    try std.testing.expectEqual(@as(i32, -1), mapping_fds[handle & 0xFFFF]);
+
+    // The same handle again, and a marked index past the table: neither names
+    // a live mapping, so neither may report success.
+    try std.testing.expectEqual(@as(i32, 0), CloseHandle(handle));
+    try std.testing.expectEqual(@as(i32, 0), CloseHandle(0x40000000 | MAX_MAPPINGS));
 }

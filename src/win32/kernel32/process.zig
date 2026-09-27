@@ -1182,7 +1182,7 @@ fn currentGuestThreadId() u32 {
 
 // --- Thread Handle Registry ---
 // Tracks guest threads for lifecycle management (WaitForSingleObject, ExitThread).
-const MAX_GUEST_THREADS = 32;
+pub const MAX_GUEST_THREADS = 32;
 
 const ThreadInfo = struct {
     handle: usize = 0,
@@ -1395,6 +1395,10 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
         // Clear running only after FS is back on host TLS: claimThreadInfo
         // recycles any slot whose thread is !running, and the recycled TEB
         // must not be repopulated while this thread can still reach it.
+        // The TLS entry is keyed by host thread id, which the next thread
+        // spawned on this slot can be given; releasing it here keeps that
+        // thread from starting with this one's values.
+        @import("sync.zig").releaseTlsEntryForCurrentThread();
         thread_info.setRunning(false);
     }
 

@@ -3,6 +3,8 @@ const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
 const platform = @import("../../platform.zig");
+const log = @import("../../log.zig");
+const builtin = @import("builtin");
 
 /// Gap between polls of an object that may be signaled by another thread.
 /// Charged to the virtual clock when one is installed, so a simulated run
@@ -554,7 +556,12 @@ pub fn WaitForMultipleObjects(nCount: u32, lpHandles: usize, bWaitAll: i32, dwMi
 var tls_mutex: runtime.Mutex = .{};
 var tls_next: u32 = 0;
 const MAX_TLS_SLOTS = 64;
-const MAX_TLS_THREADS = 16;
+/// One entry per host thread that runs guest code: every slot in
+/// process.zig's guest thread registry, plus the main thread the guest
+/// starts on. The two tables describe the same population, so sizing this
+/// one lower let a guest with more live threads than the registry bound hand
+/// two threads the same storage.
+const MAX_TLS_THREADS = @import("process.zig").MAX_GUEST_THREADS + 1;
 
 const TlsThreadEntry = struct {
     thread_id: u64,
@@ -570,6 +577,15 @@ var tls_threads: [MAX_TLS_THREADS]TlsThreadEntry = init: {
     break :init entries;
 };
 
+/// The entry handed to a thread the table has no room for. Reads see zero
+/// and writes are dropped, which is what a thread without TLS storage looks
+/// like; the alternative, another thread's entry, would hand one guest thread
+/// the values of another.
+var tls_overflow_entry: TlsThreadEntry = .{
+    .thread_id = 0,
+    .slots = [_]usize{0} ** MAX_TLS_SLOTS,
+};
+
 fn getOrCreateTlsEntry() *TlsThreadEntry {
     const tid = std.Thread.getCurrentId();
     // Find existing entry for this thread
@@ -583,8 +599,24 @@ fn getOrCreateTlsEntry() *TlsThreadEntry {
             return entry;
         }
     }
-    // Fallback: reuse first slot (shouldn't happen with MAX_TLS_THREADS=16)
-    return &tls_threads[0];
+    log.err("KERNEL32: TLS table full ({d} threads), this thread's values are dropped", .{MAX_TLS_THREADS});
+    return &tls_overflow_entry;
+}
+
+/// Releases the calling host thread's TLS entry, so the next thread to be
+/// given this id starts with zeroed slots instead of inheriting them. Host
+/// thread ids are reused once a thread exits, and the entries are keyed by
+/// exactly that id.
+pub fn releaseTlsEntryForCurrentThread() void {
+    const tid = std.Thread.getCurrentId();
+    tls_mutex.lock();
+    defer tls_mutex.unlock();
+    for (&tls_threads) |*entry| {
+        if (entry.thread_id == tid) {
+            entry.* = .{ .thread_id = 0, .slots = [_]usize{0} ** MAX_TLS_SLOTS };
+            return;
+        }
+    }
 }
 
 /// Implementation status: Partially implemented
@@ -1114,4 +1146,43 @@ test "WaitForSingleObject times out on a mutex held by another thread" {
     const poll_started = runtime.monoMilliTimestamp();
     try std.testing.expectEqual(@as(u32, 258), WaitForSingleObject(ko.handle, 0));
     try std.testing.expect(runtime.monoMilliTimestamp() - poll_started < 1000);
+}
+
+test "TLS values belong to the thread that set them and end with the thread" {
+    if (comptime builtin.os.tag == .wasi) return error.SkipZigTest;
+
+    const idx = TlsAlloc();
+    try std.testing.expect(idx < MAX_TLS_SLOTS);
+
+    // Every live guest thread gets its own entry, so a value set on one host
+    // thread never reads back on another. Before the table was sized to the
+    // thread registry, the 17th thread was handed entry 0 and clobbered it.
+    const Ctx = struct {
+        idx: u32,
+        marker: usize,
+        read_back: usize = 0,
+        fn run(ctx: *@This()) void {
+            _ = TlsSetValue(ctx.idx, ctx.marker);
+            ctx.read_back = TlsGetValue(ctx.idx);
+            releaseTlsEntryForCurrentThread();
+        }
+    };
+
+    var ctxs: [MAX_TLS_THREADS]Ctx = undefined;
+    var threads: [MAX_TLS_THREADS]std.Thread = undefined;
+    for (&ctxs, 0..) |*ctx, i| {
+        ctx.* = .{ .idx = idx, .marker = @as(usize, i) + 1 };
+    }
+    for (&ctxs, &threads) |*ctx, *t| t.* = try std.Thread.spawn(.{}, Ctx.run, .{ctx});
+    for (&threads) |*t| t.join();
+    for (ctxs, 0..) |ctx, i| {
+        try std.testing.expectEqual(@as(usize, i) + 1, ctx.read_back);
+    }
+
+    // A finished thread's entry is released, so the thread that inherits its
+    // host id starts from zero rather than reading the dead thread's value.
+    _ = TlsSetValue(idx, 0xBEEF);
+    releaseTlsEntryForCurrentThread();
+    try std.testing.expectEqual(@as(usize, 0), TlsGetValue(idx));
+    _ = TlsFree(idx);
 }
