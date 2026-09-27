@@ -403,7 +403,7 @@ The build system includes a `test` step that runs embedded unit tests in the x86
 zig build test
 ```
 
-Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `decode_cache.zig`, `execute.zig`, `sse.zig`, `thunks.zig`, `jit/compiler.zig`, `loader/menu_parser.zig`, `loader/module.zig`, `loader/loader.zig`, `profiler.zig`, `path_utils.zig`, `bat.zig`, `pe.zig`, `runner.zig`, `win32/user32.zig`, `win32/civil_time.zig`, `win32/kernel32/{time,file,sync,process}.zig`, `win32/msvcrt/{io,time}.zig`, `win32/ntdll/ntapi.zig`, `win32/advapi32/{services,security}.zig`, `win32/gdi32/{drawing,object,dc}.zig`.
+Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `decode_cache.zig`, `execute.zig`, `sse.zig`, `thunks.zig`, `jit/compiler.zig`, `loader/menu_parser.zig`, `loader/module.zig`, `loader/loader.zig`, `profiler.zig`, `path_utils.zig`, `bat.zig`, `pe.zig`, `runner.zig`, `win32/ansi.zig`, `win32/user32.zig`, `win32/civil_time.zig`, `win32/kernel32/{time,file,sync,process}.zig`, `win32/msvcrt/{io,time}.zig`, `win32/ntdll/ntapi.zig`, `win32/advapi32/{services,security}.zig`, `win32/gdi32/{drawing,object,dc}.zig`.
 
 ---
 
@@ -481,6 +481,7 @@ zine/
 │   │   ├── constants.zig    # Shared Win32 constant definitions
 │   │   ├── calling_convention.zig # WINAPI calling convention abstraction
 │   │   ├── host_io.zig      # I/O abstraction layer (native/WASM)
+│   │   ├── ansi.zig         # CP1252 (ANSI code page) conversion and UTF-8 truncation
 │   │   ├── ordinals.zig     # Ordinal-to-name mapping
 │   │   ├── kernel32.zig, kernel32/   # Process, memory, file I/O, sync, time
 │   │   ├── msvcrt.zig, msvcrt/       # C runtime (io, math, mem, string, process)

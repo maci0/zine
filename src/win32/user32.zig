@@ -2,6 +2,7 @@ const std = @import("std");
 const x86_memory = @import("../x86/memory.zig");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
+const ansi = @import("ansi.zig");
 
 // Sub-modules
 const window = @import("user32/window.zig");
@@ -560,12 +561,34 @@ pub var focused_hwnd: usize = 0;
 pub var main_window_title: [256]u8 = undefined;
 pub var main_window_title_len: usize = 0;
 
-/// Store the main window title (copied into the fixed buffer).
+/// Copies a UTF-8 host string into a guest buffer as CP1252 ANSI bytes, the
+/// form the `*A` getters return. Returns the byte count written, excluding
+/// the terminator.
+pub fn copyAnsiToGuest(text: []const u8, lpString: usize, nMaxCount: i32) i32 {
+    if (lpString == 0 or nMaxCount <= 0) return 0;
+    var buf: [1024]u8 = undefined;
+    const converted = ansi.fromUtf8(text, &buf);
+    const dst: [*]u8 = @ptrFromInt(trace.addr(lpString));
+    const n = @min(converted.len, @as(usize, @intCast(nMaxCount)) - 1);
+    @memcpy(dst[0..n], converted[0..n]);
+    dst[n] = 0;
+    return @intCast(n);
+}
+
+/// Byte length a UTF-8 host string occupies once encoded as CP1252, the unit
+/// the `*A` length getters report.
+pub fn ansiLen(text: []const u8) i32 {
+    var buf: [1024]u8 = undefined;
+    return @intCast(ansi.fromUtf8(text, &buf).len);
+}
+
+/// Store the main window title (copied into the fixed buffer, cut on a
+/// UTF-8 code point boundary so the stored text stays decodable).
 pub fn setMainWindowTitle(title: []const u8) void {
-    const n = @min(title.len, main_window_title.len - 1);
-    @memcpy(main_window_title[0..n], title[0..n]);
-    main_window_title[n] = 0;
-    main_window_title_len = n;
+    const n = ansi.truncateUtf8(title, main_window_title.len - 1);
+    @memcpy(main_window_title[0..n.len], n);
+    main_window_title[n.len] = 0;
+    main_window_title_len = n.len;
 }
 
 // Per-hwnd WndProc lookup table (for dialogs, subclassed windows, etc.)
@@ -642,9 +665,9 @@ pub fn setHwndText(hwnd: usize, text: []const u8) void {
     if (hwnd == 0) return;
     for (hwnd_texts[0..hwnd_text_count]) |*e| {
         if (e.hwnd == hwnd) {
-            const n = @min(text.len, e.text.len);
-            @memcpy(e.text[0..n], text[0..n]);
-            e.len = @intCast(n);
+            const n = ansi.truncateUtf8(text, e.text.len);
+            @memcpy(e.text[0..n.len], n);
+            e.len = @intCast(n.len);
             return;
         }
     }
@@ -652,9 +675,9 @@ pub fn setHwndText(hwnd: usize, text: []const u8) void {
         const e = &hwnd_texts[hwnd_text_count];
         hwnd_text_count += 1;
         e.hwnd = hwnd;
-        const n = @min(text.len, e.text.len);
-        @memcpy(e.text[0..n], text[0..n]);
-        e.len = @intCast(n);
+        const n = ansi.truncateUtf8(text, e.text.len);
+        @memcpy(e.text[0..n.len], n);
+        e.len = @intCast(n.len);
     }
 }
 

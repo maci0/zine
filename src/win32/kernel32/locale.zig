@@ -14,9 +14,9 @@ pub fn GetCPInfo(CodePage: u32, lpCPInfo: *anyopaque) callconv(w32cc.WINAPI) i32
 }
 
 /// Retrieves the current Windows ANSI code page identifier for the operating system.
-/// Implementation status: Partially implemented
+/// Implementation status: Fully implemented
 pub fn GetACP() callconv(w32cc.WINAPI) u32 {
-    return 1252;
+    return ansi.code_page;
 }
 
 /// Determines whether a specified code page is valid.
@@ -43,10 +43,19 @@ pub fn IsDBCSLeadByte(testChar: u8) callconv(w32cc.WINAPI) i32 {
 }
 
 /// --- Conversion functions ---
-/// Implementation status: Partially implemented
+/// Both directions convert the ANSI code page reported by GetACP (CP1252):
+/// a single byte maps to one code point, so a surrogate pair in the wide
+/// string has no representation and encodes to the default character.
+/// Implementation status: Fully implemented
 pub fn MultiByteToWideChar(CodePage: u32, dwFlags: u32, lpMultiByteStr_ptr: usize, cbMultiByte: i32, lpWideCharStr_ptr: usize, cchWideChar: i32) callconv(w32cc.WINAPI) i32 {
-    _ = CodePage;
     _ = dwFlags;
+    if (CodePage != 0 and CodePage != ansi.code_page) {
+        // Only the ACP and the OEM code page are supported; the OEM page is
+        // 437, which differs from 1252, so report the failure rather than
+        // returning a string decoded with the wrong table.
+        kernel32_error.SetLastError(1); // ERROR_INVALID_FUNCTION
+        return 0;
+    }
 
     if (lpMultiByteStr_ptr == 0) return 0;
     // Both pointers are guest VAs (usize params — not auto-translated).
@@ -72,22 +81,26 @@ pub fn MultiByteToWideChar(CodePage: u32, dwFlags: u32, lpMultiByteStr_ptr: usiz
     const wc_str = @as([*]u16, @ptrFromInt(trace.addr(lpWideCharStr_ptr)));
     if (cchWideChar < len) {
         if (trace.enable_tracing and len > 0 and len < 1024) trace.print("  -> ERROR_INSUFFICIENT_BUFFER\n", .{});
+        kernel32_error.SetLastError(122); // ERROR_INSUFFICIENT_BUFFER
         return 0;
     }
 
-    // Byte-widening is correct for the ANSI/ASCII subset.
-    for (0..len) |i| wc_str[i] = mb_str[i];
+    // CP1252 is single-byte: one code point per byte, so the wide count
+    // matches the byte count exactly.
+    for (0..len) |i| wc_str[i] = @intCast(ansi.byteToCodepoint(mb_str[i]));
     if (trace.enable_tracing and len > 0 and len < 1024) trace.print("  -> success, returning {d}\n", .{len});
     return @intCast(len);
 }
 
 /// Maps a UTF-16 (wide character) string to a character string.
-/// Implementation status: Partially implemented
+/// Implementation status: Fully implemented
 pub fn WideCharToMultiByte(CodePage: u32, dwFlags: u32, lpWideCharStr_ptr: usize, cchWideChar: i32, lpMultiByteStr_ptr: usize, cbMultiByte: i32, lpDefaultChar: ?*const u8, lpUsedDefaultChar: ?*i32) callconv(w32cc.WINAPI) i32 {
-    _ = CodePage;
     _ = dwFlags;
     _ = lpDefaultChar;
-    _ = lpUsedDefaultChar;
+    if (CodePage != 0 and CodePage != ansi.code_page) {
+        kernel32_error.SetLastError(1); // ERROR_INVALID_FUNCTION
+        return 0;
+    }
 
     if (lpWideCharStr_ptr == 0) return 0;
     // Both pointers are guest VAs (usize params — not auto-translated).
@@ -99,12 +112,23 @@ pub fn WideCharToMultiByte(CodePage: u32, dwFlags: u32, lpWideCharStr_ptr: usize
         @intCast(cchWideChar);
 
     if (cbMultiByte == 0 or lpMultiByteStr_ptr == 0) return @intCast(len);
+    if (lpMultiByteStr_ptr < 0x10000) return @intCast(len);
 
     const mb_str = @as([*]u8, @ptrFromInt(trace.addr(lpMultiByteStr_ptr)));
-    const copy_len = @min(len, @as(usize, @intCast(cbMultiByte)));
-    for (0..copy_len) |i| mb_str[i] = @intCast(wc_str[i] & 0xFF);
-    return @intCast(copy_len);
+    const limit = @min(len, @as(usize, @intCast(cbMultiByte)));
+    var used_default = false;
+    for (0..limit) |i| {
+        mb_str[i] = ansi.codepointToByte(wc_str[i]) orelse blk: {
+            used_default = true;
+            break :blk ansi.default_char;
+        };
+    }
+    if (lpUsedDefaultChar) |used| used.* = @intFromBool(used_default);
+    return @intCast(limit);
 }
+
+const ansi = @import("../ansi.zig");
+const kernel32_error = @import("error.zig");
 
 const kernel32_mem = @import("mem.zig");
 const w32cc = @import("../calling_convention.zig");

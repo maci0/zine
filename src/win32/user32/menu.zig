@@ -1,5 +1,6 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
+const ansi = @import("../ansi.zig");
 const user32 = @import("../user32.zig");
 const w32cc = @import("../calling_convention.zig");
 
@@ -93,7 +94,8 @@ pub fn stub_AppendMenuA(hMenu: usize, uFlags: u32, uIDNewItem: usize, lpNewItem:
     if ((uFlags & MF_SEPARATOR) != 0) {
         addPopupItem(hMenu, -1, "", uFlags);
     } else if (lpNewItem != 0) {
-        addPopupItem(hMenu, @intCast(uIDNewItem & 0xFFFF), trace.c_span(lpNewItem), uFlags);
+        var text_buf: [256]u8 = undefined;
+        addPopupItem(hMenu, @intCast(uIDNewItem & 0xFFFF), ansi.toUtf8(trace.c_span(lpNewItem), &text_buf), uFlags);
         // Mirror CHECKED/GRAYED/DISABLED into the item-state table so
         // GetMenuState reports them (like real Win32 menu construction).
         const key = menuItemKey(hMenu, @as(u32, @intCast(uIDNewItem & 0xFFFF)));

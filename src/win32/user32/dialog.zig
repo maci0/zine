@@ -1,5 +1,6 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
+const ansi = @import("../ansi.zig");
 const user32 = @import("../user32.zig");
 const renderer = @import("../../gui/renderer.zig");
 const w32 = @import("../constants.zig");
@@ -16,8 +17,11 @@ var modal_dlgproc: usize = 0;
 pub fn MessageBoxA(hWnd: usize, lpText: usize, lpCaption: usize, uType: u32) callconv(w32cc.WINAPI) i32 {
     _ = hWnd;
     _ = uType;
-    const text = if (lpText != 0) trace.c_span(lpText) else "(null)";
-    const caption = if (lpCaption != 0) trace.c_span(lpCaption) else "(null)";
+    // The guest hands over CP1252 bytes; the renderer and the web UI take UTF-8.
+    var caption_buf: [256]u8 = undefined;
+    var text_buf: [2048]u8 = undefined;
+    const caption = if (lpCaption != 0) ansi.toUtf8(trace.c_span(lpCaption), &caption_buf) else "(null)";
+    const text = if (lpText != 0) ansi.toUtf8(trace.c_span(lpText), &text_buf) else "(null)";
 
     if (trace.enable_tracing) trace.print("USER32: MessageBoxA(caption='{s}', text='{s}')\n", .{ caption, text });
 
@@ -227,9 +231,9 @@ var ctrl_text_count: usize = 0;
 fn setCtrlText(id: i32, text: []const u8) void {
     for (ctrl_texts[0..ctrl_text_count]) |*e| {
         if (e.id == id) {
-            const n = @min(text.len, e.text.len);
-            @memcpy(e.text[0..n], text[0..n]);
-            e.len = @intCast(n);
+            const n = ansi.truncateUtf8(text, e.text.len);
+            @memcpy(e.text[0..n.len], n);
+            e.len = @intCast(n.len);
             return;
         }
     }
@@ -237,9 +241,9 @@ fn setCtrlText(id: i32, text: []const u8) void {
         const e = &ctrl_texts[ctrl_text_count];
         ctrl_text_count += 1;
         e.id = id;
-        const n = @min(text.len, e.text.len);
-        @memcpy(e.text[0..n], text[0..n]);
-        e.len = @intCast(n);
+        const n = ansi.truncateUtf8(text, e.text.len);
+        @memcpy(e.text[0..n.len], n);
+        e.len = @intCast(n.len);
     }
 }
 
@@ -255,7 +259,8 @@ pub fn getCtrlText(id: i32) []const u8 {
 
 pub fn SetDlgItemTextA(hDlg: usize, nIDDlgItem: i32, lpString: usize) callconv(w32cc.WINAPI) i32 {
     _ = hDlg;
-    const text = if (lpString != 0) trace.c_span(lpString) else "";
+    var buf: [512]u8 = undefined;
+    const text = if (lpString != 0) ansi.toUtf8(trace.c_span(lpString), &buf) else "";
     if (trace.enable_tracing) {
         trace.print("USER32: SetDlgItemTextA(id={d}, text='{s}')\n", .{ nIDDlgItem, text });
     }
@@ -279,11 +284,15 @@ pub fn SetDlgItemTextW(hDlg: usize, nIDDlgItem: i32, lpString: usize) callconv(w
 
 pub fn GetDlgItemTextA(hDlg: usize, nIDDlgItem: i32, lpString: usize, cchMax: i32) callconv(w32cc.WINAPI) i32 {
     _ = hDlg;
+    // The store holds UTF-8 (either the CP1252 text SetDlgItemTextA decoded, or
+    // the UTF-16 of SetDlgItemTextW); the caller asked for ANSI bytes.
     const text = getCtrlText(nIDDlgItem);
+    var buf: [512]u8 = undefined;
+    const converted = ansi.fromUtf8(text, &buf);
     if (lpString != 0 and cchMax > 0) {
         const dst: [*]u8 = @ptrFromInt(trace.addr(lpString));
-        const n = @min(@as(usize, @intCast(cchMax)) - 1, text.len);
-        @memcpy(dst[0..n], text[0..n]);
+        const n = @min(converted.len, @as(usize, @intCast(cchMax)) - 1);
+        @memcpy(dst[0..n], converted[0..n]);
         dst[n] = 0;
         return @intCast(n);
     }

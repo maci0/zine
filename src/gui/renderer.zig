@@ -230,10 +230,10 @@ pub fn setEditTextFromSlice(text: []const u8) void {
 /// edit buffer (or deletes the last code point on backspace) and pushes the
 /// new text to the frontend so the native textarea stays in sync with
 /// guest-driven input (SendMessage/PostMessage WM_CHAR).
-pub fn editInsertChar(ch: u8) void {
+pub fn editInsertChar(cp: u21) void {
     const text = editTextSlice();
 
-    if (ch == 0x08) {
+    if (cp == 0x08) {
         // Backspace: drop the last UTF-8 code point. Shrink in place —
         // setEditTextFromSlice(trimmed) would alias the same buffer.
         var end = text.len;
@@ -245,10 +245,9 @@ pub fn editInsertChar(ch: u8) void {
         return;
     }
 
-    if (ch < 0x20 and ch != '\t') return; // other control chars are ignored
+    if (cp < 0x20 and cp != '\t') return; // other control chars are ignored
 
-    var buf: [4]u8 = undefined;
-    const n = std.unicode.utf8Encode(ch, &buf) catch return;
+    const n = std.unicode.utf8CodepointSequenceLength(cp) catch return;
 
     const old_len = edit_text_data.len;
     const needed = old_len + n + 1; // +1 null terminator
@@ -263,7 +262,7 @@ pub fn editInsertChar(ch: u8) void {
         edit_text_data.ptr = new_buf.ptr;
         edit_text_data_cap = new_cap;
     }
-    @memcpy(edit_text_data.ptr[old_len .. old_len + n], buf[0..n]);
+    _ = std.unicode.utf8Encode(cp, edit_text_data.ptr[old_len .. old_len + n]) catch return;
     edit_text_data.ptr[old_len + n] = 0;
     edit_text_data.len = old_len + n;
     setEditText(edit_text_data[0..edit_text_data.len]);

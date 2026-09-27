@@ -45,6 +45,43 @@ pub const DialogData = struct {
     items: []DialogItem,
 };
 
+/// Reads a NUL-terminated UTF-16 string from a PE resource and returns it as
+/// UTF-8. Surrogate pairs are combined, so characters outside the BMP survive
+/// the trip into the JSON the frontend parses; an unpaired half has no UTF-8
+/// form and becomes U+FFFD. `first` is the leading code unit when the caller
+/// has already read it.
+fn readUtf16String(allocator: std.mem.Allocator, reader: *std.Io.Reader, first: ?u16) ![]u8 {
+    var list: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer list.deinit(allocator);
+
+    var unit = first orelse try reader.takeInt(u16, .little);
+    while (unit != 0) {
+        var cp: u21 = unit;
+        if (unit >= 0xD800 and unit < 0xDC00) {
+            cp = 0xFFFD;
+            if (reader.buffered().len >= 2) {
+                const next = try reader.takeInt(u16, .little);
+                if (next >= 0xDC00 and next < 0xE000) {
+                    cp = @as(u21, 0x10000) + ((@as(u21, unit) - 0xD800) << 10) + (@as(u21, next) - 0xDC00);
+                } else {
+                    try appendCodepoint(allocator, &list, 0xFFFD);
+                }
+            }
+        } else if (unit >= 0xDC00 and unit < 0xE000) {
+            cp = 0xFFFD;
+        }
+        try appendCodepoint(allocator, &list, cp);
+        unit = try reader.takeInt(u16, .little);
+    }
+    return list.toOwnedSlice(allocator);
+}
+
+fn appendCodepoint(allocator: std.mem.Allocator, list: *std.ArrayListUnmanaged(u8), cp: u21) !void {
+    var buf: [4]u8 = undefined;
+    const n = std.unicode.utf8Encode(cp, &buf) catch return;
+    try list.appendSlice(allocator, buf[0..n]);
+}
+
 /// Parses a binary dialog resource from a PE module and returns its JSON representation.
 pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog_id: u32) !?[]const u8 {
     const data = module.getResource(5, dialog_id) orelse return null; // RT_DIALOG = 5
@@ -110,10 +147,10 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
 
     var title_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer title_buf.deinit(allocator);
-    while (true) {
-        c = try reader.takeInt(u16, .little);
-        if (c == 0) break;
-        try title_buf.append(allocator, @intCast(c & 0xFF));
+    {
+        const title = try readUtf16String(allocator, &reader, null);
+        defer allocator.free(title);
+        try title_buf.appendSlice(allocator, title);
     }
 
     // DS_SETFONT = 0x40
@@ -193,21 +230,12 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
             };
         } else {
             // String class name — capture it (e.g. SysTabControl32, SysListView32)
-            var class_buf: std.ArrayListUnmanaged(u8) = .empty;
-            if (c != 0) {
-                class_buf.append(allocator, if (c < 128) @intCast(c) else '?') catch {};
-            }
-            while (c != 0) {
-                c = try reader.takeInt(u16, .little);
-                if (c != 0) {
-                    class_buf.append(allocator, if (c < 128) @intCast(c) else '?') catch {};
-                }
-            }
-            if (class_buf.items.len > 0) {
-                class_name_owned = class_buf.toOwnedSlice(allocator) catch null;
-                if (class_name_owned) |owned| class_name = owned;
+            const class_buf = try readUtf16String(allocator, &reader, null);
+            if (class_buf.len > 0) {
+                class_name = class_buf;
+                class_name_owned = class_buf;
             } else {
-                class_buf.deinit(allocator);
+                allocator.free(class_buf);
             }
         }
 
@@ -218,15 +246,12 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
         if (c == 0xFFFF) {
             _ = try reader.takeInt(u16, .little);
         } else {
-            while (c != 0) {
-                if (c == '\r') {
-                    // ignore
-                } else if (c == '\n') {
-                    try text_buf.append(allocator, '\n');
-                } else {
-                    try text_buf.append(allocator, @intCast(c & 0xFF));
-                }
-                c = try reader.takeInt(u16, .little);
+            // The first unit was already consumed; CR/LF pairs become a single
+            // LF, as the resource compiler stores multi-line text that way.
+            const text = try readUtf16String(allocator, &reader, c);
+            defer allocator.free(text);
+            for (text) |unit| {
+                if (unit != '\r') try text_buf.append(allocator, unit);
             }
         }
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
+const ansi = @import("../ansi.zig");
 const user32 = @import("../user32.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
@@ -254,7 +255,7 @@ pub fn DispatchMessageA(lpMsg: *user32.MSG) callconv(w32cc.WINAPI) isize {
         // WndProc dispatch, mirroring the real edit class wndproc.
         if ((@as(usize, msg.hwnd) == user32.edit_hwnd or @as(usize, msg.hwnd) == user32.rich_edit_hwnd) and msg.message == 0x0102) {
             const renderer = @import("../../gui/renderer.zig");
-            renderer.editInsertChar(@intCast(msg.wParam & 0xFF));
+            renderer.editInsertChar(ansi.byteToCodepoint(@intCast(msg.wParam & 0xFF)));
             return 1;
         }
 
@@ -400,7 +401,10 @@ pub fn SendMessageA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) callcon
         if (hWnd == user32.edit_hwnd or hWnd == user32.rich_edit_hwnd) {
             if (handleEditMsg(Msg, wParam, lParam)) |r| return r;
         }
-        const text = trace.c_span(@as(usize, @bitCast(lParam)));
+        // WM_SETTEXT hands over CP1252 ANSI bytes; the stores and the renderer
+        // take UTF-8.
+        var text_buf: [1024]u8 = undefined;
+        const text = ansi.toUtf8(trace.c_span(@as(usize, @bitCast(lParam))), &text_buf);
         // Try to extract control ID from the synthetic child hwnd
         // GetDlgItem returns (hDlg << 8) ^ nIDDlgItem, so reverse it
         const DIALOG_HWND: usize = 0x00000456;
@@ -425,11 +429,7 @@ pub fn SendMessageA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) callcon
         if (hWnd != user32.edit_hwnd and hWnd != user32.rich_edit_hwnd) {
             const text = getControlText(hWnd);
             if (text.len > 0) {
-                const n = @min(text.len, wParam - 1);
-                const dst: [*]u8 = @ptrFromInt(trace.addr(@as(usize, @bitCast(lParam))));
-                @memcpy(dst[0..n], text[0..n]);
-                dst[n] = 0;
-                return @intCast(n);
+                return user32.copyAnsiToGuest(text, @as(usize, @bitCast(lParam)), @intCast(wParam));
             }
             return 0;
         }
@@ -506,30 +506,23 @@ fn handleEditMsg(Msg: u32, wParam: usize, lParam: isize) ?isize {
 
     switch (Msg) {
         0x0102 => { // WM_CHAR: insert character at the caret
-            renderer.editInsertChar(@intCast(wParam & 0xFF));
+            renderer.editInsertChar(ansi.byteToCodepoint(@intCast(wParam & 0xFF)));
             const new_len: i32 = @intCast(renderer.editTextLen());
             user32.edit_sel_start = new_len;
             user32.edit_sel_end = new_len;
             return 1;
         },
         0x000C => { // WM_SETTEXT
-            const str = if (lParam != 0) trace.c_span(@as(usize, @bitCast(lParam))) else "";
+            var buf: [1024]u8 = undefined;
+            const str = if (lParam != 0) ansi.toUtf8(trace.c_span(@as(usize, @bitCast(lParam))), &buf) else "";
             renderer.setEditTextFromSlice(str);
             renderer.setEditText(str);
             return 1;
         },
         0x000D => { // WM_GETTEXT
-            if (lParam != 0 and wParam > 0) {
-                const text = renderer.editTextSlice();
-                const n = @min(text.len, wParam - 1);
-                const dst: [*]u8 = @ptrFromInt(trace.addr(@as(usize, @bitCast(lParam))));
-                @memcpy(dst[0..n], text[0..n]);
-                dst[n] = 0;
-                return @intCast(n);
-            }
-            return 0;
+            return user32.copyAnsiToGuest(renderer.editTextSlice(), @as(usize, @bitCast(lParam)), @intCast(wParam));
         },
-        0x000E => return @intCast(renderer.editTextLen() + 1), // WM_GETTEXTLENGTH (incl. NUL)
+        0x000E => return user32.ansiLen(renderer.editTextSlice()), // WM_GETTEXTLENGTH
         0x00B0 => { // EM_GETSEL: write (start, end) — wParam=start*, lParam=end*
             if (wParam != 0) {
                 @as(*align(1) u32, @ptrFromInt(trace.addr(wParam))).* =
@@ -1320,7 +1313,10 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
         // renderer so the web/FLTK status bar actually shows the new string.
         return switch (Msg) {
             0x0401 => { // SB_SETTEXTA: lParam = LPCSTR text
-                if (lParam != 0) renderer.updateControlText(@intCast(hWnd), trace.c_span(@as(usize, @bitCast(lParam))));
+                if (lParam != 0) {
+                    var buf: [512]u8 = undefined;
+                    renderer.updateControlText(@intCast(hWnd), ansi.toUtf8(trace.c_span(@as(usize, @bitCast(lParam))), &buf));
+                }
                 return 1;
             },
             0x040B => { // SB_SETTEXTW: lParam = LPCWSTR text

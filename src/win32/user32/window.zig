@@ -1,5 +1,6 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
+const ansi = @import("../ansi.zig");
 const user32 = @import("../user32.zig");
 const kernel32 = @import("../kernel32.zig");
 const gdi32 = @import("../gdi32.zig");
@@ -140,17 +141,36 @@ pub fn RegisterClassA(wc_ptr: ?*const w32.WNDCLASSA) callconv(w32cc.WINAPI) u16 
     return 0x1234; // Dummy ATOM
 }
 
-// Convert a null-terminated UTF-16 (wide) string pointer to a UTF-8 slice in a static buffer.
+/// Converts a null-terminated UTF-16 string to a UTF-8 slice in a static
+/// buffer, decoding surrogate pairs. The buffer holds bytes, so a string
+/// longer than its capacity is cut on a code point boundary rather than
+/// mid-sequence. The returned slice is valid until the next call.
 var wide_conv_buf: [1024]u8 = undefined;
 
 pub fn wideToUtf8(ptr: usize) []const u8 {
     if (ptr == 0) return "";
-    const wide = @as([*]const u16, @ptrFromInt(ptr));
+    const wide = trace.c_span_w(ptr);
+    var n: usize = 0;
     var i: usize = 0;
-    while (i < wide_conv_buf.len - 1 and wide[i] != 0) : (i += 1) {
-        wide_conv_buf[i] = if (wide[i] < 128) @intCast(wide[i]) else '?';
+    while (i < wide.len) : (i += 1) {
+        // Combine a high surrogate with its low surrogate; an unpaired
+        // surrogate has no UTF-8 form and becomes U+FFFD.
+        var cp: u21 = wide[i];
+        if (wide[i] >= 0xD800 and wide[i] < 0xDC00) {
+            if (i + 1 < wide.len and wide[i + 1] >= 0xDC00 and wide[i + 1] < 0xE000) {
+                cp = @as(u21, 0x10000) + ((@as(u21, wide[i]) - 0xD800) << 10) + (@as(u21, wide[i + 1]) - 0xDC00);
+                i += 1;
+            } else {
+                cp = 0xFFFD;
+            }
+        } else if (wide[i] >= 0xDC00 and wide[i] < 0xE000) {
+            cp = 0xFFFD;
+        }
+        const width = std.unicode.utf8CodepointSequenceLength(cp) catch break;
+        if (n + width > wide_conv_buf.len) break;
+        n += std.unicode.utf8Encode(cp, wide_conv_buf[n..]) catch break;
     }
-    return wide_conv_buf[0..i];
+    return wide_conv_buf[0..n];
 }
 
 fn applyWindowSize(dwStyle: u32, dwExStyle: u32, nWidth: i32, nHeight: i32) void {
@@ -443,7 +463,9 @@ fn fillFramebufWhite() void {
 
 pub fn stub_SetWindowTextA(hWnd: usize, lpString: usize) callconv(w32cc.WINAPI) i32 {
     if (lpString != 0) {
-        const title = trace.c_span(lpString);
+        // CP1252 in, UTF-8 in the stores and the renderer.
+        var buf: [1024]u8 = undefined;
+        const title = ansi.toUtf8(trace.c_span(lpString), &buf);
         // EDIT/RichEdit control: WM_SETTEXT semantics — replace the text buffer.
         if (hWnd == user32.edit_hwnd or hWnd == user32.rich_edit_hwnd) {
             renderer.setEditTextFromSlice(title);
@@ -1406,39 +1428,19 @@ pub fn stub_GetWindowTextA(hWnd: usize, lpString: usize, nMaxCount: i32) callcon
     // EDIT/RichEdit control: return the shared edit buffer content (synced from
     // the frontend textarea and WM_CHAR inserts).
     if (hWnd == user32.edit_hwnd or hWnd == user32.rich_edit_hwnd) {
-        const text = renderer.editTextSlice();
-        if (lpString != 0 and nMaxCount > 0) {
-            const dst: [*]u8 = @ptrFromInt(trace.addr(lpString));
-            const n = @min(text.len, @as(usize, @intCast(nMaxCount)) - 1);
-            @memcpy(dst[0..n], text[0..n]);
-            dst[n] = 0;
-            return @intCast(n);
-        }
-        return 0;
+        return user32.copyAnsiToGuest(renderer.editTextSlice(), lpString, nMaxCount);
     }
     // Main window: return the cached title (set via CreateWindowEx/SetWindowText).
     if (hWnd == user32.global_hwnd or hWnd == 0) {
-        if (lpString != 0 and nMaxCount > 0) {
-            const dst: [*]u8 = @ptrFromInt(trace.addr(lpString));
-            const n = @min(user32.main_window_title_len, @as(usize, @intCast(nMaxCount)) - 1);
-            @memcpy(dst[0..n], user32.main_window_title[0..n]);
-            dst[n] = 0;
-            return @intCast(n);
-        }
-        return @intCast(user32.main_window_title_len);
+        if (lpString == 0 or nMaxCount <= 0) return user32.ansiLen(user32.main_window_title[0..user32.main_window_title_len]);
+        return user32.copyAnsiToGuest(user32.main_window_title[0..user32.main_window_title_len], lpString, nMaxCount);
     }
     // Other controls (control-ization): dialog children, ListBox/ComboBox
     // selection text, and per-hwnd texts set via SetWindowTextA.
     {
         const msg_mod = @import("message.zig");
         const text = msg_mod.getControlText(hWnd);
-        if (text.len > 0 and lpString != 0 and nMaxCount > 0) {
-            const dst: [*]u8 = @ptrFromInt(trace.addr(lpString));
-            const n = @min(text.len, @as(usize, @intCast(nMaxCount)) - 1);
-            @memcpy(dst[0..n], text[0..n]);
-            dst[n] = 0;
-            return @intCast(n);
-        }
+        if (text.len > 0) return user32.copyAnsiToGuest(text, lpString, nMaxCount);
     }
     if (lpString != 0 and nMaxCount > 0) {
         @as([*]u8, @ptrFromInt(lpString))[0] = 0;
@@ -1448,10 +1450,10 @@ pub fn stub_GetWindowTextA(hWnd: usize, lpString: usize, nMaxCount: i32) callcon
 
 pub fn stub_GetWindowTextLengthA(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     if (hWnd == user32.edit_hwnd) {
-        return @intCast(renderer.editTextLen());
+        return user32.ansiLen(renderer.editTextSlice());
     }
     if (hWnd == user32.global_hwnd or hWnd == 0) {
-        return @intCast(user32.main_window_title_len);
+        return user32.ansiLen(user32.main_window_title[0..user32.main_window_title_len]);
     }
     return 0;
 }
