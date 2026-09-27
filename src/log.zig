@@ -280,6 +280,13 @@ pub fn info(comptime fmt: []const u8, args: anytype) void {
     emit(.info, fmt, args);
 }
 
+/// Diagnostic for a rejected `ZINE_LOG_LEVEL`. Shared by the native and WASI
+/// entry points, so the value is reported the same way from either build.
+pub fn levelErrorMessage() []const u8 {
+    return "Error: ZINE_LOG_LEVEL must be one of: fatal, error, err, warn, info, trace.\n" ++
+        "Try 'zine --help' for more information.\n";
+}
+
 /// Initialize the log level from `ZINE_LOG_LEVEL` and home path redaction
 /// from `HOME`. Call during startup, after env vars are available.
 pub fn initFromEnv(env: *const std.process.Environ.Map) error{InvalidLogLevel}!void {

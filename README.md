@@ -257,6 +257,13 @@ release, not a 0.2.1 patch.
 
 #### Fixed
 
+- `ZINE_VIRTUAL_CLOCK_NS` and `ZINE_CLOCK_STEP_NS` are read by the WASI build
+  as well as the native one. The WASI `--help` listed both, and the README
+  listed both without a build qualifier, but only the native entry point parsed
+  them, so a WASI run on a simulated clock silently used the host clocks. A
+  rejected value on either build now names the setting, the values it accepts,
+  and `zine --help`, like every other usage error; before, the startup
+  diagnostics were the only ones without that hint.
 - The `check_c` step of that gate reported success on a C source that does not
   compile. It runs inside `if ! ...`, which suspends `errexit`, so a failing
   compile in the loop over the sources did not stop it and the step exited on

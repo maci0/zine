@@ -25,6 +25,7 @@ const trace = @import("trace.zig");
 const log = @import("log.zig");
 const profiler = @import("profiler.zig");
 const version = @import("version.zig");
+const config = @import("config.zig");
 const stub_common = @import("win32/shared.zig");
 
 const runner = @import("runner.zig");
@@ -89,9 +90,17 @@ pub fn main(init: std.process.Init) !void {
     var end_of_options = false;
 
     log.initFromEnv(init.environ_map) catch {
-        std.debug.print("{s}", .{"Error: ZINE_LOG_LEVEL must be one of: fatal, error, err, warn, info, trace.\n"});
+        std.debug.print("{s}", .{log.levelErrorMessage()});
         std.process.exit(2);
     };
+    config.initClockFromEnv(init.environ_map) catch |err| {
+        std.debug.print("{s}", .{config.initErrorMessage(err)});
+        std.process.exit(2);
+    };
+    if (config.clock.start_ns) |start_ns| {
+        runtime.installConfiguredClock(start_ns, config.clock.step_ns);
+        log.info("virtual clock: first read {d} ns, {d} ns per read", .{ start_ns, config.clock.step_ns });
+    }
 
     // ZINE_CWD is validated with the other startup settings, before any output
     // and before the guest loads, so `--version` reports a rejected value
@@ -99,11 +108,11 @@ pub fn main(init: std.process.Init) !void {
     const zine_cwd: ?[]const u8 = init.environ_map.get("ZINE_CWD");
     if (zine_cwd) |cwd| {
         if (cwd.len == 0 or cwd[0] != '/') {
-            std.debug.print("Error: ZINE_CWD must be an absolute POSIX path, got '{s}'.\n", .{cwd});
+            std.debug.print("Error: ZINE_CWD must be an absolute POSIX path, got '{s}'.\nTry 'zine --help' for more information.\n", .{cwd});
             std.process.exit(2);
         }
         if (cwd.len > max_guest_cwd_len) {
-            std.debug.print("Error: ZINE_CWD must be at most {d} bytes, got {d}.\n", .{ max_guest_cwd_len, cwd.len });
+            std.debug.print("Error: ZINE_CWD must be at most {d} bytes, got {d}.\nTry 'zine --help' for more information.\n", .{ max_guest_cwd_len, cwd.len });
             std.process.exit(2);
         }
     }

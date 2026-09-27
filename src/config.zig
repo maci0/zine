@@ -160,6 +160,29 @@ pub fn initFromEnv(env: *const std.process.Environ.Map) InitError!void {
     clock = parsed_clock;
 }
 
+/// The diagnostic for a rejected startup value: the setting, what it accepts,
+/// and where to read more. Both entry points print this text, so one setting is
+/// reported the same way from the native and the WASI build.
+pub fn initErrorMessage(err: InitError) []const u8 {
+    return switch (err) {
+        error.InvalidWebHost => "Error: ZINE_WEB_HOST must be an IPv4 or IPv6 literal, e.g. 127.0.0.1.\n" ++
+            "Try 'zine --help' for more information.\n",
+        error.InvalidWebPort => "Error: ZINE_WEB_PORT must be a number from 1 to 65535.\n" ++
+            "Try 'zine --help' for more information.\n",
+        error.InvalidVirtualClock => "Error: ZINE_VIRTUAL_CLOCK_NS must be a non-negative nanosecond count since the Unix epoch.\n" ++
+            "Try 'zine --help' for more information.\n",
+        error.InvalidClockStep => "Error: ZINE_CLOCK_STEP_NS must be a non-negative nanosecond count and requires ZINE_VIRTUAL_CLOCK_NS.\n" ++
+            "Try 'zine --help' for more information.\n",
+    };
+}
+
+/// Parses only the guest clock settings, for the builds that have no web
+/// server and so no `ZINE_WEB_HOST`/`ZINE_WEB_PORT` to read. Leaves `clock`
+/// untouched when a value is rejected.
+pub fn initClockFromEnv(env: *const std.process.Environ.Map) InitError!void {
+    clock = try parseClock(env);
+}
+
 /// Parses `ZINE_VIRTUAL_CLOCK_NS` and `ZINE_CLOCK_STEP_NS`. A step without a
 /// start is rejected: the operator set a clock no reading would ever consult.
 fn parseClock(env: *const std.process.Environ.Map) InitError!Clock {
@@ -189,6 +212,49 @@ fn isValidHost(host: []const u8) bool {
     if (std.mem.indexOfScalar(u8, host, ' ') != null) return false;
     _ = std.Io.net.IpAddress.parse(host, 0) catch return false;
     return true;
+}
+
+test "the clock settings parse without the web settings" {
+    const saved_server = web_server;
+    const saved_clock = clock;
+    defer {
+        web_server = saved_server;
+        clock = saved_clock;
+    }
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+
+    // A build with no web server still reads the clock, so the two entry
+    // points cannot drift apart on what the clock accepts.
+    try env.put("ZINE_VIRTUAL_CLOCK_NS", "1700000000000000000");
+    try env.put("ZINE_CLOCK_STEP_NS", "1000");
+    // Ignored here, and the WASI --help does not list it.
+    try env.put("ZINE_WEB_HOST", "not-an-address");
+
+    try initClockFromEnv(&env);
+    try std.testing.expectEqual(@as(?i64, 1700000000000000000), clock.start_ns);
+    try std.testing.expectEqual(@as(i64, 1000), clock.step_ns);
+    try std.testing.expectEqualStrings(default_host, web_server.host());
+}
+
+test "a rejected clock value leaves the active clock untouched" {
+    const saved = clock;
+    defer clock = saved;
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("ZINE_VIRTUAL_CLOCK_NS", "5");
+
+    try env.put("ZINE_CLOCK_STEP_NS", "-1");
+    try std.testing.expectError(error.InvalidClockStep, initClockFromEnv(&env));
+    try std.testing.expectEqual(@as(?i64, null), clock.start_ns);
+}
+
+test "every startup diagnostic names the setting and points at --help" {
+    for ([_]InitError{ error.InvalidWebHost, error.InvalidWebPort, error.InvalidVirtualClock, error.InvalidClockStep }) |err| {
+        const message = initErrorMessage(err);
+        try std.testing.expect(std.mem.startsWith(u8, message, "Error: ZINE_"));
+        try std.testing.expect(std.mem.indexOf(u8, message, "Try 'zine --help' for more information.\n") != null);
+    }
 }
 
 test "defaults bind loopback only" {

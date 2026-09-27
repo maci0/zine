@@ -188,6 +188,12 @@ pub fn main(init: std.process.Init) !void {
                 \\Arguments:
                 \\  zine.wasm           Module to run; every later argument is passed to it
                 \\
+                \\Environment:
+                \\  The host environment is handed to the module, so the ZINE_*
+                \\  settings zine itself reads (ZINE_LOG_LEVEL, ZINE_CWD,
+                \\  ZINE_VIRTUAL_CLOCK_NS, ZINE_CLOCK_STEP_NS) are validated by
+                \\  the module's own --help. This wrapper reads none of them.
+                \\
                 \\Examples:
                 \\  zine-host zine.wasm -- myapp.exe
                 \\  zine-host zine.wasm -- --trace myapp.exe

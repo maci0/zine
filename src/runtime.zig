@@ -115,6 +115,18 @@ var virtual_clock: ?*VirtualClock = null;
 /// threads, and the cursor is a plain field. The section is a few adds.
 var virtual_clock_mutex: Mutex = .{};
 
+/// Process-lifetime storage for the clock `installVirtualClock` points at.
+/// Lives here rather than in an entry point so every build shares one.
+var configured_clock: VirtualClock = undefined;
+
+/// Installs the guest clock the startup settings selected. The pointer must
+/// outlive every guest clock read, so the storage is a module-level variable
+/// rather than a local the caller owns.
+pub fn installConfiguredClock(start_ns: i64, step_ns: i64) void {
+    configured_clock = .{ .now_ns = start_ns, .step_ns = step_ns };
+    installVirtualClock(&configured_clock);
+}
+
 pub fn installVirtualClock(clock: *VirtualClock) void {
     virtual_clock_mutex.lock();
     defer virtual_clock_mutex.unlock();

@@ -39,11 +39,6 @@ const build_options = @import("build_options");
 const pe = @import("pe.zig");
 const runtime = @import("runtime.zig");
 
-/// Storage for the virtual clock `runtime` points at when
-/// `ZINE_VIRTUAL_CLOCK_NS` is set. Lives for the whole process, like the
-/// runtime singletons it feeds.
-var virtual_clock: runtime.VirtualClock = undefined;
-
 fn buildCmdLineString(allocator: std.mem.Allocator, app_args_items: []const ?[*:0]u8) !usize {
     var cmdline_buf = try allocator.alloc(u8, 4096);
     @memset(cmdline_buf, 0);
@@ -72,30 +67,15 @@ pub fn main(init: std.process.Init) !void {
     // Without this the first clock_gettime after setupFS() faults.
     _ = platform.timestamp();
     log.initFromEnv(init.environ_map) catch {
-        std.debug.print("{s}", .{"Error: ZINE_LOG_LEVEL must be one of: fatal, error, err, warn, info, trace.\n"});
+        std.debug.print("{s}", .{log.levelErrorMessage()});
         std.process.exit(2);
     };
-    config.initFromEnv(init.environ_map) catch |err| switch (err) {
-        error.InvalidWebHost => {
-            std.debug.print("{s}", .{"Error: ZINE_WEB_HOST must be an IPv4 or IPv6 literal, e.g. 127.0.0.1.\n"});
-            std.process.exit(2);
-        },
-        error.InvalidWebPort => {
-            std.debug.print("{s}", .{"Error: ZINE_WEB_PORT must be a number from 1 to 65535.\n"});
-            std.process.exit(2);
-        },
-        error.InvalidVirtualClock => {
-            std.debug.print("{s}", .{"Error: ZINE_VIRTUAL_CLOCK_NS must be a non-negative nanosecond count since the Unix epoch.\n"});
-            std.process.exit(2);
-        },
-        error.InvalidClockStep => {
-            std.debug.print("{s}", .{"Error: ZINE_CLOCK_STEP_NS must be a non-negative nanosecond count and requires ZINE_VIRTUAL_CLOCK_NS.\n"});
-            std.process.exit(2);
-        },
+    config.initFromEnv(init.environ_map) catch |err| {
+        std.debug.print("{s}", .{config.initErrorMessage(err)});
+        std.process.exit(2);
     };
     if (config.clock.start_ns) |start_ns| {
-        virtual_clock = .{ .now_ns = start_ns, .step_ns = config.clock.step_ns };
-        runtime.installVirtualClock(&virtual_clock);
+        runtime.installConfiguredClock(start_ns, config.clock.step_ns);
         log.info("virtual clock: first read {d} ns, {d} ns per read", .{ start_ns, config.clock.step_ns });
     }
     if (!config.web_server.isLoopback()) {
