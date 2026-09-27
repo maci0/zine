@@ -204,21 +204,26 @@ pub const GuestMemory = struct {
     }
 
     /// Get a read-only slice of guest memory.
+    ///
+    /// All-or-nothing: returns null unless the whole `[addr, addr+len)` range
+    /// is in bounds, so a caller that indexes `len` bytes can never read past
+    /// the returned slice. A short read would be silently mistaken for guest
+    /// data. Use readRangeInBounds for the cheaper predicate.
     pub fn readSlice(self: *const GuestMemory, addr: u32, len: u32) ?[]const u8 {
         if (self.native_linear) return @as([*]const u8, @ptrFromInt(addr))[0..len];
+        if (!self.readRangeInBounds(addr, len)) return null;
         const a = self.translate(addr);
-        if (a >= self.base.len) return null;
-        const end = @min(a + len, self.base.len);
-        return self.base[a..end];
+        return self.base[a..][0..len];
     }
 
-    /// Get a mutable slice of guest memory.
+    /// Get a mutable slice of guest memory. All-or-nothing, as readSlice, and
+    /// additionally refused when any byte of the range falls in a
+    /// write-protected PE section, matching the write8/write16/write32 paths.
     pub fn writeSlice(self: *GuestMemory, addr: u32, len: u32) ?[]u8 {
         if (self.native_linear) return @as([*]u8, @ptrFromInt(addr))[0..len];
+        if (!self.writeRangeAllowed(addr, len)) return null;
         const a = self.translate(addr);
-        if (a >= self.base.len) return null;
-        const end = @min(a + len, self.base.len);
-        return self.base[a..end];
+        return self.base[a..][0..len];
     }
 
     /// Register a writable address range (PE section with IMAGE_SCN_MEM_WRITE).
@@ -397,6 +402,33 @@ test "guest memory: read64/write64" {
     // Low 32 bits at offset 0, high 32 bits at offset 4
     try testing.expectEqual(@as(u32, 0xCAFEBABE), mem.read32(0));
     try testing.expectEqual(@as(u32, 0xDEADBEEF), mem.read32(4));
+}
+
+test "guest memory: readSlice refuses a range that straddles the end" {
+    var buf: [8]u8 = .{0} ** 8;
+    var mem = GuestMemory{ .base = &buf };
+    // A short read would hand the caller fewer bytes than it asked for and
+    // every index into it would be a host out-of-bounds access.
+    try testing.expect(mem.readSlice(6, 4) == null);
+    try testing.expect(mem.readSlice(8, 1) == null);
+    try testing.expect(mem.readSlice(4, 4) != null);
+    try testing.expectEqual(@as(usize, 4), mem.readSlice(4, 4).?.len);
+}
+
+test "guest memory: writeSlice honours PE section write protection" {
+    var buf: [128]u8 = .{0} ** 128;
+    var mem = GuestMemory{ .base = &buf, .pe_image_end = 64 };
+    try testing.expect(mem.addWritableSection(16, 48));
+
+    const ok = mem.writeSlice(16, 32).?;
+    ok[0] = 0xAB;
+    try testing.expectEqual(@as(u8, 0xAB), buf[16]);
+
+    // Same ranges the element-wise writers refuse.
+    try testing.expect(mem.writeSlice(0, 16) == null);
+    try testing.expect(mem.writeSlice(48, 16) == null);
+    try testing.expect(mem.writeSlice(60, 8) == null);
+    try testing.expect(mem.writeSlice(64, 8) != null);
 }
 
 test "guest memory: readSlice returns correct view" {

@@ -1408,38 +1408,66 @@ pub fn stub_FindWindowA(lpClassName: usize, lpWindowName: usize) callconv(w32cc.
     return 0;
 }
 
-pub fn stub_GetWindowTextA(hWnd: usize, lpString: usize, nMaxCount: i32) callconv(w32cc.WINAPI) i32 {
-    // EDIT/RichEdit control: return the shared edit buffer content (synced from
-    // the frontend textarea and WM_CHAR inserts).
+/// The text the window-text APIs report for `hWnd`, or null when the window
+/// has none. GetWindowTextA and GetWindowTextLengthA both read it, so sizing a
+/// buffer with the length API and filling it with the text API cannot disagree.
+fn windowText(hWnd: usize) ?[]const u8 {
+    // EDIT/RichEdit control: the shared edit buffer (synced from the frontend
+    // textarea and WM_CHAR inserts).
     if (hWnd == user32.edit_hwnd or hWnd == user32.rich_edit_hwnd) {
-        return user32.copyAnsiToGuest(renderer.editTextSlice(), lpString, nMaxCount);
+        const text = renderer.editTextSlice();
+        return if (text.len > 0) text else null;
     }
-    // Main window: return the cached title (set via CreateWindowEx/SetWindowText).
+    // Main window: the cached title (set via CreateWindowEx/SetWindowText).
     if (hWnd == user32.global_hwnd or hWnd == 0) {
-        if (lpString == 0 or nMaxCount <= 0) return user32.ansiLen(user32.main_window_title[0..user32.main_window_title_len]);
-        return user32.copyAnsiToGuest(user32.main_window_title[0..user32.main_window_title_len], lpString, nMaxCount);
+        if (user32.main_window_title_len > 0) {
+            return user32.main_window_title[0..user32.main_window_title_len];
+        }
+        return null;
     }
     // Other controls (control-ization): dialog children, ListBox/ComboBox
     // selection text, and per-hwnd texts set via SetWindowTextA.
-    {
-        const msg_mod = @import("message.zig");
-        const text = msg_mod.getControlText(hWnd);
-        if (text.len > 0) return user32.copyAnsiToGuest(text, lpString, nMaxCount);
-    }
-    if (lpString != 0 and nMaxCount > 0) {
-        @as([*]u8, @ptrFromInt(lpString))[0] = 0;
-    }
-    return 0;
+    const msg_mod = @import("message.zig");
+    const text = msg_mod.getControlText(hWnd);
+    return if (text.len > 0) text else null;
+}
+
+pub fn stub_GetWindowTextA(hWnd: usize, lpString: usize, nMaxCount: i32) callconv(w32cc.WINAPI) i32 {
+    const text = windowText(hWnd) orelse {
+        if (lpString != 0 and nMaxCount > 0) {
+            @as([*]u8, @ptrFromInt(lpString))[0] = 0;
+        }
+        return 0;
+    };
+    if (lpString == 0 or nMaxCount <= 0) return user32.ansiLen(text);
+    return user32.copyAnsiToGuest(text, lpString, nMaxCount);
 }
 
 pub fn stub_GetWindowTextLengthA(hWnd: usize) callconv(w32cc.WINAPI) i32 {
-    if (hWnd == user32.edit_hwnd) {
-        return user32.ansiLen(renderer.editTextSlice());
-    }
-    if (hWnd == user32.global_hwnd or hWnd == 0) {
-        return user32.ansiLen(user32.main_window_title[0..user32.main_window_title_len]);
-    }
-    return 0;
+    const text = windowText(hWnd) orelse return 0;
+    return user32.ansiLen(text);
+}
+
+const testing = std.testing;
+
+test "window text: length and text APIs agree for a control with text" {
+    const hWnd: usize = 0x7788;
+    user32.setHwndText(hWnd, "Hello");
+    defer user32.removeHwndText(hWnd);
+
+    var buf: [64]u8 = @splat(0xFF);
+    const copied = stub_GetWindowTextA(hWnd, @intFromPtr(&buf), @intCast(buf.len));
+    try testing.expectEqualStrings("Hello", buf[0..@intCast(copied)]);
+    try testing.expectEqual(@as(i32, copied), stub_GetWindowTextLengthA(hWnd));
+}
+
+test "window text: length and text APIs agree when there is no text" {
+    const hWnd: usize = 0x7799;
+    var buf: [8]u8 = @splat(0xFF);
+    const copied = stub_GetWindowTextA(hWnd, @intFromPtr(&buf), @intCast(buf.len));
+    try testing.expectEqual(@as(i32, 0), copied);
+    try testing.expectEqual(@as(u8, 0), buf[0]);
+    try testing.expectEqual(@as(i32, 0), stub_GetWindowTextLengthA(hWnd));
 }
 
 pub fn stub_IsZoomed(hWnd: usize) callconv(w32cc.WINAPI) i32 {

@@ -145,12 +145,19 @@ pub fn SetTimer(hWnd: usize, nIDEvent: usize, uElapse: u32, lpTimerFunc: usize) 
     _ = lpTimerFunc; // We don't call lpTimerFunc; we post WM_TIMER instead
     if (trace.enable_tracing) trace.print("USER32: SetTimer(hwnd={x}, id={d}, elapse={d}ms)\n", .{ hWnd, nIDEvent, uElapse });
     ensureTimerThread();
+    return armTimer(hWnd, nIDEvent, uElapse);
+}
 
-    // The slot scan and the store are one critical section. timerThread walks
-    // the same array under timers_mutex every 10ms and rewrites last_fire, so
-    // scanning unlocked both raced on the entries and let the thread observe a
-    // half-written TimerEntry (new id paired with the old hwnd) and post a
-    // WM_TIMER carrying a mix of two timers' identity.
+/// Arm or re-arm one timer slot. Returns the timer id, or 0 when every slot is
+/// taken: Win32 reports failure with 0, and an id for a timer that was never
+/// stored leaves the guest waiting for WM_TIMER messages that cannot arrive.
+///
+/// The slot scan and the store are one critical section. timerThread walks the
+/// same array under timers_mutex every 10ms and rewrites last_fire, so scanning
+/// unlocked both raced on the entries and let the thread observe a half-written
+/// TimerEntry (new id paired with the old hwnd) and post a WM_TIMER carrying a
+/// mix of two timers' identity.
+fn armTimer(hWnd: usize, nIDEvent: usize, uElapse: u32) usize {
     timers_mutex.lock();
     defer timers_mutex.unlock();
 
@@ -171,16 +178,20 @@ pub fn SetTimer(hWnd: usize, nIDEvent: usize, uElapse: u32, lpTimerFunc: usize) 
         }
     }
 
-    if (slot) |s| {
-        timers[s] = .{
-            .hwnd = hWnd,
-            .id = nIDEvent,
-            .elapse_ms = if (uElapse < 10) 10 else uElapse, // Win32 minimum is 10ms
-            .callback = 0,
-            .last_fire = safeMilliTs(),
-            .active = true,
-        };
-    }
+    const s = slot orelse {
+        if (trace.enable_tracing) {
+            trace.print("USER32: SetTimer(hwnd={x}, id={d}) failed: all {d} timer slots in use\n", .{ hWnd, nIDEvent, timers.len });
+        }
+        return 0;
+    };
+    timers[s] = .{
+        .hwnd = hWnd,
+        .id = nIDEvent,
+        .elapse_ms = if (uElapse < 10) 10 else uElapse, // Win32 minimum is 10ms
+        .callback = 0,
+        .last_fire = safeMilliTs(),
+        .active = true,
+    };
     return nIDEvent;
 }
 
@@ -258,4 +269,26 @@ pub fn stub_SetCursorPos(x: i32, y: i32) callconv(w32cc.WINAPI) i32 {
     _ = x;
     _ = y;
     return 1;
+}
+
+const testing = std.testing;
+
+test "SetTimer reports failure once every slot is taken" {
+    timers_mutex.lock();
+    const saved = timers;
+    timers_mutex.unlock();
+    defer {
+        timers_mutex.lock();
+        timers = saved;
+        timers_mutex.unlock();
+    }
+
+    for (0..timers.len) |i| {
+        try testing.expectEqual(@as(usize, i + 1), armTimer(0x1000 + i, i + 1, 50));
+    }
+    // No free slot: Win32's failure value, not an id for a timer that will
+    // never fire.
+    try testing.expectEqual(@as(usize, 0), armTimer(0x2000, 99, 50));
+    // An id already in use is re-armed in place even when the table is full.
+    try testing.expectEqual(@as(usize, 3), armTimer(0x1002, 3, 50));
 }
