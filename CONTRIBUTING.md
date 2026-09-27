@@ -82,10 +82,15 @@ prints PASS or FAIL into the page. Run it headless and read the result:
 
 ## Adding a test
 
-Unit tests are Zig `test` blocks in the same file as the code they cover.
-`src/test_root.zig` imports every file that holds tests, so a new file with
-tests needs a `_ = @import("...")` line there, or its tests are silently not
-run. Write the failing test first and watch it fail for the reason you expect.
+Unit tests are Zig `test` blocks in the same file as the code they cover, and
+they only run when `zig build test` can reach them from `src/test_root.zig`.
+A new file therefore needs a `_ = @import("...")` line in that `comptime`
+block, or its tests are silently not run. The list is not exhaustive of every
+file holding tests: a file already imported by one that the root imports gets
+its tests through that import (`src/win32/user32/message.zig` through
+`src/win32/user32.zig`, for instance), so a new file is the case that needs the
+line. Write the failing test first and watch it fail for the reason you expect,
+which is also how you know the root can reach it.
 
 ## Pull requests
 
