@@ -96,7 +96,8 @@ policy. Pin a commit when reproducing a build.
 - `FlushFileBuffers` reports host sync failures instead of returning success.
 
 See [implementation status](docs/STATUS.md) for subsystem coverage and remaining
-limitations.
+limitations, and [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor setup,
+command table, and pull-request expectations.
 
 ## Build
 
@@ -208,21 +209,29 @@ Besides Zig 0.16.0, the CI checks require Bash, ShellCheck, GNU coreutils
 on the first build; no Windows fixtures, GUI libraries, or WASM runtime are
 needed for these checks.
 
-The following sequence reproduces the CI checks, stopping at the first failure.
-Build targets sequentially to limit peak memory rather than using `-Dall` for
-this gate.
+```sh
+bash tests/check.sh
+```
+
+One command runs the whole gate: it names any missing tool or wrong Zig
+version before starting, then runs the CI checks in order and stops at the
+first failure. Build targets run sequentially to limit peak memory rather than
+via `-Dall`, matching CI. The individual steps, if you need them on their own:
 
 ```sh
-zig fmt --check src build.zig build.zig.zon &&
-shellcheck -x tests/*.sh &&
-zig build --summary all &&
-zig build -Darch=x86_64 --summary all &&
-zig build -Darch=wasm32 --summary all &&
-zig build -Darch=wasm64 --summary all &&
-zig build test --summary all &&
-zig build test-cli --summary all &&
+zig fmt --check src build.zig build.zig.zon
+git ls-files '*.sh' | xargs -r shellcheck -x   # every tracked script, not just tests/
+zig build --summary all
+zig build -Darch=x86_64 --summary all
+zig build -Darch=wasm32 --summary all
+zig build -Darch=wasm64 --summary all
+zig build test --summary all
+zig build test-cli --summary all
 zig build test-cli -Darch=x86_64 --summary all
 ```
+
+The same list is the `static-analysis` job in `.github/workflows/ci.yml`; a
+command added to one belongs in the other.
 
 For the edit-test loop, use `zig build test -Dtest-filter=<substring>` above;
 `-Darch` does not change the host target of unit tests. Run
