@@ -191,6 +191,27 @@ fn neutralizeControlChars(src: []const u8, dst: []u8) []const u8 {
     return dst[0..write];
 }
 
+// ── Identity value redaction ────────────────────────────────────────
+
+/// Environment variables whose value is the operator's identity. Home
+/// redaction hides the account name inside a path; these carry it bare, so
+/// a trace that records a guest reading `USER` would otherwise paste the
+/// local account name into a bug report.
+const identity_env_names = [_][]const u8{ "USER", "USERNAME", "LOGNAME", "EMAIL" };
+
+/// What a redacted value is replaced with. Fixed text, so the record keeps
+/// its shape and the reader can see that a value was withheld.
+pub const redacted_value = "<redacted>";
+
+/// Returns the value to record for an environment lookup. Names are matched
+/// case-insensitively, as the Win32 environment is.
+pub fn redactEnvValue(name: []const u8, value: []const u8) []const u8 {
+    for (identity_env_names) |identity| {
+        if (std.ascii.eqlIgnoreCase(name, identity)) return redacted_value;
+    }
+    return value;
+}
+
 // ── Core emit function ──────────────────────────────────────────────
 
 /// Formats and emits a log message at the specified level.
@@ -363,4 +384,22 @@ test "home redaction stays off without a usable HOME" {
     const body = "/home/jane/file";
     @memcpy(buf[0..body.len], body);
     try std.testing.expectEqualStrings(body, redactHome(buf[0..body.len]));
+}
+
+test "identity environment values are withheld from diagnostics" {
+    const cases = .{
+        .{ "USER", "jane", redacted_value },
+        .{ "user", "jane", redacted_value },
+        .{ "USERNAME", "jane", redacted_value },
+        .{ "LOGNAME", "jane", redacted_value },
+        .{ "EMAIL", "jane@example.com", redacted_value },
+        .{ "HOME", "/home/jane", "/home/jane" },
+        .{ "PATH", "/usr/bin:/bin", "/usr/bin:/bin" },
+        .{ "INCLUDE", "C:\\MSVC600\\INCLUDE", "C:\\MSVC600\\INCLUDE" },
+        .{ "USERNAME_EXTRA", "jane", "jane" },
+        .{ "", "jane", "jane" },
+    };
+    inline for (cases) |case| {
+        try std.testing.expectEqualStrings(case[2], redactEnvValue(case[0], case[1]));
+    }
 }

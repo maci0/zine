@@ -102,6 +102,13 @@ release, not a 0.2.1 patch.
   stderr, so a trace pasted into a bug report no longer carries the local
   account name. A run whose environment has neither `HOME` nor `USERPROFILE`
   records paths unchanged.
+- An environment variable whose value is the operator's identity (`USER`,
+  `USERNAME`, `LOGNAME`, `EMAIL`) is traced as `<redacted>`, so a guest that
+  reads `USER` does not write the account name into the trace. Every other
+  variable, including `HOME` and the path variables, is recorded unchanged.
+- `SetClipboardData` traces the size of a CF_TEXT transfer, not the text. The
+  clipboard carries whatever the user last copied, which is rarely what a bug
+  report needs.
 - Web UI file uploads resolve strictly inside `drive_c/` rather than through
   prefix matching, so a crafted directory or file name cannot retarget the
   write.
@@ -380,6 +387,12 @@ name. Only that prefix changes: `CreateFileA('/home/jane/notes.txt')` is
 recorded as `CreateFileA('/~/notes.txt')`, and the `Z:\home\jane\...` form the
 guest sees is redacted the same way. A run whose environment has neither `HOME`
 nor `USERPROFILE` records paths unchanged.
+
+Environment lookups add a second rule: `USER`, `USERNAME`, `LOGNAME`, and
+`EMAIL` record `<redacted>` in place of the value, because those carry the
+account name bare rather than inside a path. `getenv('PATH')` and every other
+variable still record their value, so the trace stays useful for module
+resolution.
 
 `ZINE_WEB_HOST` and `ZINE_WEB_PORT` are read and validated at startup, before
 the guest loads, and the startup log line and banner print the resolved URL.

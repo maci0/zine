@@ -1193,7 +1193,10 @@ pub fn stub_SetClipboardData(uFormat: u32, hMem: usize) callconv(w32cc.WINAPI) u
         // renderer so the web UI / FLTK clipboard actually receives it.
         const text = trace.c_span(hMem);
         renderer.setClipboard(text);
-        if (trace.enable_tracing) trace.print("USER32: SetClipboardData(CF_TEXT, '{s}')\n", .{text});
+        // The clipboard routinely carries text the user did not intend to
+        // leave the machine (a copied password, an address, a token), so the
+        // trace records the size of the transfer, never its content.
+        if (trace.enable_tracing) trace.print("USER32: SetClipboardData(CF_TEXT, {d} bytes)\n", .{text.len});
     }
     return hMem;
 }

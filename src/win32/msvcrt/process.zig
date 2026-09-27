@@ -2,6 +2,7 @@ const std = @import("std");
 const x86_memory = @import("../../x86/memory.zig");
 const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
+const log = @import("../../log.zig");
 const msvcrt = @import("../msvcrt.zig");
 const builtin = @import("builtin");
 
@@ -648,7 +649,7 @@ pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
             deleted_shadow = true;
             break;
         }
-        if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> '{s}'\n", .{ name, v.val });
+        if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> '{s}'\n", .{ name, log.redactEnvValue(name, v.val) });
         const stub_common = @import("../shared.zig");
         const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(v.val.len + 1) orelse return null));
         @memcpy(ptr[0..v.val.len], v.val);
@@ -668,7 +669,7 @@ pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
             const env_str = trace.c_span(@intFromPtr(env_ptr));
             if (std.ascii.startsWithIgnoreCase(env_str, name) and env_str.len > name.len and env_str[name.len] == '=') {
                 const val = env_str[name.len + 1 ..];
-                if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> '{s}' (inherited)\n", .{ name, val });
+                if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> '{s}' (inherited)\n", .{ name, log.redactEnvValue(name, val) });
                 const stub_common = @import("../shared.zig");
                 const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(val.len + 1) orelse return null));
                 @memcpy(ptr[0..val.len], val);
@@ -698,7 +699,6 @@ pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
 pub fn putenv(envstring_ptr: usize) callconv(.c) i32 {
     if (envstring_ptr == 0) return -1;
     const envstring = trace.c_span(envstring_ptr);
-    if (trace.enable_tracing) trace.print("MSVCRT: _putenv('{s}')\n", .{envstring});
 
     var split_idx: ?usize = null;
     for (0..envstring.len) |i| {
@@ -707,10 +707,14 @@ pub fn putenv(envstring_ptr: usize) callconv(.c) i32 {
             break;
         }
     }
-    if (split_idx == null) return -1;
+    if (split_idx == null) {
+        if (trace.enable_tracing) trace.print("MSVCRT: _putenv('{s}')\n", .{envstring});
+        return -1;
+    }
     const idx = split_idx.?;
     const key = envstring[0..idx];
     const val = envstring[idx + 1 ..];
+    if (trace.enable_tracing) trace.print("MSVCRT: _putenv('{s}={s}')\n", .{ key, log.redactEnvValue(key, val) });
 
     const msvcrt_mod = msvcrt;
 

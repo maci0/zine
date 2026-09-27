@@ -564,7 +564,7 @@ pub fn SetEnvironmentVariableA(lpName: usize, lpValue: usize) callconv(w32cc.WIN
     // Win32 contract: lpValue == NULL deletes the variable.
     if (lpValue != 0) {
         const value = trace.c_span(lpValue);
-        if (trace.enable_tracing) trace.print("KERNEL32: SetEnvironmentVariableA('{s}', '{s}')\n", .{ name, value });
+        if (trace.enable_tracing) trace.print("KERNEL32: SetEnvironmentVariableA('{s}', '{s}')\n", .{ name, log.redactEnvValue(name, value) });
 
         const msvcrt = @import("../msvcrt.zig");
 
