@@ -7,7 +7,8 @@ No Windows installation, no Wine.
 ## What works
 
 - Full MSVC 6.0 toolchain: CL.EXE, LINK.EXE, RC.EXE, NMAKE.EXE, and 8 more utilities run to completion
-- 158 tests passing on native x86 and x86_64, 128 on WASM (wasmtime), 20 FLTK smoke tests
+- 288 unit tests pass (2 skipped) on the host with `zig build test`; the gate in
+  `tests/check.sh` adds the CLI suites on native x86 and x86_64
 - x86 interpreter with SSE/SSE2, x87 FPU, SEH, TLS
 - PE loader with import resolution, relocations, resource parsing (dialogs, menus, icons, string tables)
 - 35+ Win32 DLL stubs: kernel32, user32, gdi32, advapi32, shell32, ws2_32, comctl32, ole32, msvcrt, and more
@@ -18,10 +19,69 @@ No Windows installation, no Wine.
 ## Releases and upgrades
 
 The `v1` tag (2026-03-22) names the **Win32 Compatibility Milestone**, not
-SemVer 1.0.0. Package version **0.2.0** (tag `v0.2.0`) is the first SemVer
-release after that milestone. `v1` stays a historical name; do not treat it as
-1.0.0. There is no documented deprecation, support-window, or security-backport
-policy. Pin a commit when reproducing a build.
+SemVer 1.0.0. Package version **0.2.0** is the first SemVer release after that
+milestone. `v1` stays a historical name; do not treat it as 1.0.0. No `v0.2.0`
+tag exists in this repository yet, so identify 0.2.0 by the version in
+`build.zig.zon` and the notes below. There is no documented deprecation,
+support-window, or security-backport policy. Pin a commit when reproducing a
+build.
+
+Changes after the last tag are listed under **Unreleased** below. The package
+version, `--version`, and `build.zig.zon` stay at the last released number until
+a release moves all three together; a released version is never edited
+retroactively.
+
+### Unreleased
+
+#### Breaking and migration
+
+- Guest ANSI strings are decoded as CP1252, the Windows default code page,
+  instead of being passed through as UTF-8. Window titles, dialog and menu text,
+  and PE string-table resources with non-ASCII bytes now render as on Win98,
+  which changes text that previously displayed as raw UTF-8 or mojibake.
+  Guests that store UTF-8 in an ANSI field still need to convert it themselves.
+- Web UI commands that name a guest file must send a relative path with no
+  drive letter, backslash, NUL, or `.`/`..` component. Anything else, and any
+  path with more than 128 components, is refused instead of being resolved:
+  upload and launch answer `Invalid path`, and a directory listing comes back
+  empty. Frontends that sent absolute or drive-qualified paths must send paths
+  relative to the virtual C: root.
+- `ZINE_WEB_HOST` and `ZINE_WEB_PORT` (native) and `ZINE_CWD` (WASI) are read
+  and validated at startup. An empty or malformed value exits with status 2
+  before the guest loads, matching how `ZINE_LOG_LEVEL` already behaved. Unset
+  the variable, or give it a valid value, in launch scripts and runtime
+  environment configuration. The resolved web address is printed at startup.
+- A non-loopback `ZINE_WEB_HOST` exposes the emulator screen and accepts
+  synthetic input from the network. It logs a warning and restricts accepted
+  WebSocket origins to that address, so a browser reaching the UI through
+  another hostname is refused with HTTP 403.
+
+#### Security fixes
+
+- The host home directory is redacted from every diagnostic before it reaches
+  stderr, so a trace pasted into a bug report no longer carries the local
+  account name. A run whose environment has neither `HOME` nor `USERPROFILE`
+  records paths unchanged.
+- Web UI file uploads resolve strictly inside `drive_c/` rather than through
+  prefix matching, so a crafted directory or file name cannot retarget the
+  write.
+
+#### Added
+
+- `ZINE_WEB_HOST` (default `127.0.0.1`) and `ZINE_WEB_PORT` (default `1995`)
+  for the native web UI, and `ZINE_CWD` for the WASI guest working directory.
+- `tests/check.sh` and `CONTRIBUTING.md` describing the single pre-PR gate.
+- `docs/THREAT_MODEL.md`, a risk ranking of the host process.
+
+#### Fixed
+
+- `localtime64` fills a real `struct tm` instead of returning zeroes, reads its
+  argument as a 64-bit `time_t`, and clamps negative input to the epoch.
+- `select` timeouts and `poll` convert a guest `timeval` to whole milliseconds
+  or nanoseconds by rounding up, so a sub-millisecond wait no longer becomes a
+  non-blocking wait.
+- Web desktop Start button, common dialogs, and modal dismissal behave
+  consistently across the desktop, the taskbar, and Escape.
 
 ### 0.2.0 (2026-09-18)
 
@@ -56,12 +116,10 @@ policy. Pin a commit when reproducing a build.
   available through other mappings.
 - The native web UI now rejects WebSocket requests with foreign `Origin`
   headers with HTTP 403. Previously, any browser origin could connect. Open
-  the UI at the address printed at startup (by default
-  `http://127.0.0.1:1995`, `http://localhost:1995`, or
-  `http://[::1]:1995`, or whatever `ZINE_WEB_HOST` and `ZINE_WEB_PORT` select);
-  browser frontends on another hostname, scheme, or port are no longer
-  accepted. Non-browser clients without an Origin header remain accepted; the
-  origin check is not authentication.
+  the UI at `http://127.0.0.1:1995`, `http://localhost:1995`, or
+  `http://[::1]:1995`; browser frontends on another hostname, scheme, or port
+  are no longer accepted. Non-browser clients without an Origin header remain
+  accepted; the origin check is not authentication.
 
 #### Added
 

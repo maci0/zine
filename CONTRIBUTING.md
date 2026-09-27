@@ -71,6 +71,27 @@ from the diff.
 Do not bump the version in `build.zig.zon` or `src/version.zig`. The build fails
 if those two disagree, and releases cut both together.
 
+## Releases
+
+A release is three things changed together: `.version` in `build.zig.zon`,
+`pub const string` in `src/version.zig` (which `--version` prints on native,
+WASI, and `zine-host`), and the release notes in the README's "Releases and
+upgrades" section. The `comptime` check in `build.zig` fails the build when the
+first two disagree, so a half-applied bump cannot ship.
+
+Until then, user-facing changes accumulate under the README's `### Unreleased`
+heading, grouped by impact: breaking changes with the migration step first,
+then security fixes, added, and fixed. A commit that changes behavior a guest or
+a host operator can observe belongs in one of those groups, however small.
+When the version is cut, rename that heading to `### <version> (<date>)` and
+start a fresh empty `### Unreleased` above it. Never edit the notes of a version
+that has already been published.
+
+`0.x` means no compatibility promise between versions: the guest ABI, the CLI
+flags, the environment variables, and the virtual filesystem behavior can all
+change in any release. A change that would break a consumer gets a minor bump
+and a migration line, not a patch.
+
 `AGENTS.md` holds the project rules that apply to any change: the 0.16.0
 toolchain, image base `0x70000000` for native executables, `w32cc.WINAPI` for
 Win32 stubs, guest pointers translated in the thunk layer rather than in stubs,
