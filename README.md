@@ -56,10 +56,12 @@ policy. Pin a commit when reproducing a build.
   available through other mappings.
 - The native web UI now rejects WebSocket requests with foreign `Origin`
   headers with HTTP 403. Previously, any browser origin could connect. Open
-  the UI at `http://127.0.0.1:1995`, `http://localhost:1995`, or
-  `http://[::1]:1995`; browser frontends on another hostname, scheme, or port
-  are no longer accepted. Non-browser clients without an Origin header remain
-  accepted; the origin check is not authentication.
+  the UI at the address printed at startup (by default
+  `http://127.0.0.1:1995`, `http://localhost:1995`, or
+  `http://[::1]:1995`, or whatever `ZINE_WEB_HOST` and `ZINE_WEB_PORT` select);
+  browser frontends on another hostname, scheme, or port are no longer
+  accepted. Non-browser clients without an Origin header remain accepted; the
+  origin check is not authentication.
 
 #### Added
 
@@ -143,6 +145,9 @@ the runtime's environment options, for example
 | `ZINE_TRACE` | Any value, including empty, enables API tracing; unset disables it |
 | `ZINE_TRACE_INSN` | Any value, including empty, enables instruction tracing; unset disables it |
 | `ZINE_PROFILE` | Any value, including empty, enables profiling; unset disables it |
+| `ZINE_WEB_HOST` | IPv4 or IPv6 literal the native web UI binds; default `127.0.0.1` |
+| `ZINE_WEB_PORT` | Native web UI port, 1-65535; default `1995` |
+| `ZINE_CWD` | WASI builds only: absolute POSIX path used as the guest working directory; unset uses `.` |
 | `NO_COLOR` | Any value disables native diagnostic colors; WASI never emits colors |
 
 `ZINE_LOG_LEVEL` filters structured diagnostics on stderr. The default does not
@@ -157,6 +162,23 @@ name. Only that prefix changes: `CreateFileA('/home/jane/notes.txt')` is
 recorded as `CreateFileA('/~/notes.txt')`, and the `Z:\home\jane\...` form the
 guest sees is redacted the same way. A run whose environment has neither `HOME`
 nor `USERPROFILE` records paths unchanged.
+
+`ZINE_WEB_HOST` and `ZINE_WEB_PORT` are read and validated at startup, before
+the guest loads, and the startup log line and banner print the resolved URL.
+An empty or malformed value exits with status 2 instead of falling back to the
+default; two concurrent runs therefore need distinct ports:
+
+```sh
+ZINE_WEB_PORT=3000 ./zig-out/bin/zine.x86_64 drive_c/myapp/app.exe
+```
+
+The default binds loopback only. A non-loopback `ZINE_WEB_HOST` exposes the
+emulator's screen and accepts synthetic input from the network, so it logs a
+warning and restricts the accepted WebSocket origins to that address.
+
+`ZINE_CWD` is how a WASI runtime tells the build where the guest should run,
+since WASI has no `realpath`. It must be an absolute POSIX path; a relative or
+empty value exits with status 2 instead of silently running the guest in `.`.
 
 ## Build options
 

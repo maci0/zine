@@ -1,6 +1,7 @@
 //! Web-based graphical user interface.
 
 const std = @import("std");
+const config = @import("../config.zig");
 const runtime = @import("../runtime.zig");
 const platform = @import("../platform.zig");
 const path_utils = @import("../path_utils.zig");
@@ -126,17 +127,20 @@ pub fn pushAudio(data: []const u8) void {
 
 fn serverLoop() void {
     const io = runtime.io();
-    const address: std.Io.net.IpAddress = std.Io.net.IpAddress.parseLiteral("127.0.0.1:1995") catch |err| {
+    const web = config.web_server;
+    const address: std.Io.net.IpAddress = std.Io.net.IpAddress.parse(web.host(), web.port) catch |err| {
         std.debug.print("WebUI: failed to parse address: {}\n", .{err});
         return;
     };
     var server = address.listen(io, .{ .reuse_address = true }) catch |err| {
-        std.debug.print("WebUI: failed to listen on port 1995: {}\n", .{err});
+        var url_buf: [config.max_url_len]u8 = undefined;
+        std.debug.print("WebUI: failed to listen on {s}: {}\n", .{ web.url(&url_buf), err });
         return;
     };
     defer server.deinit(io);
 
-    std.debug.print("\n>>> Zine Web UI running on http://127.0.0.1:1995 <<<\n\n", .{});
+    var url_buf: [config.max_url_len]u8 = undefined;
+    std.debug.print("\n>>> Zine Web UI running on {s} <<<\n\n", .{web.url(&url_buf)});
 
     while (true) {
         const stream = server.accept(io) catch continue;
@@ -166,23 +170,16 @@ fn sendError(ws: *std.http.Server.WebSocket, msg: []const u8) void {
 
 /// True if the request may talk to this UI. Browsers always send an Origin
 /// header on WebSocket handshakes and on cross-site fetches; without this
-/// check any webpage the user visits could open ws://127.0.0.1:1995/ws,
-/// receive the emulator's screen frames, and drive the guest with synthetic
-/// input (cross-site WebSocket hijacking / DNS rebinding). Non-browser
-/// clients (curl, tests) omit Origin and are allowed.
+/// check any webpage the user visits could open the UI's WebSocket, receive
+/// the emulator's screen frames, and drive the guest with synthetic input
+/// (cross-site WebSocket hijacking / DNS rebinding). Non-browser clients
+/// (curl, tests) omit Origin and are allowed. The accepted origins follow
+/// the configured bind address and port, not a hardcoded one.
 fn originAllowed(req: *const std.http.Server.Request) bool {
     var it = req.iterateHeaders();
     while (it.next()) |header| {
         if (std.ascii.eqlIgnoreCase(header.name, "origin")) {
-            const allowed = [_][]const u8{
-                "http://127.0.0.1:1995",
-                "http://localhost:1995",
-                "http://[::1]:1995",
-            };
-            for (allowed) |a| {
-                if (std.mem.eql(u8, header.value, a)) return true;
-            }
-            return false;
+            return config.web_server.originAllowed(header.value);
         }
     }
     return true;
@@ -677,13 +674,17 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
         return;
     }
 
+    var ws_buf: [config.max_url_len]u8 = undefined;
+    var csp_buf: [256]u8 = undefined;
+    const csp = std.fmt.bufPrint(&csp_buf, "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' {s}", .{config.web_server.wsUrl(&ws_buf)}) catch "default-src 'self'";
+
     const response_headers = [_]std.http.Header{
         .{ .name = "content-type", .value = content_type },
         .{ .name = "etag", .value = etag },
         .{ .name = "cache-control", .value = "private, no-cache" },
         .{ .name = "x-content-type-options", .value = "nosniff" },
         .{ .name = "x-frame-options", .value = "DENY" },
-        .{ .name = "content-security-policy", .value = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:1995" },
+        .{ .name = "content-security-policy", .value = csp },
         .{ .name = "vary", .value = "Accept-Encoding" },
         .{ .name = "content-encoding", .value = "gzip" },
     };

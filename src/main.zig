@@ -29,6 +29,7 @@ const compat_thunks = if (platform.is_x86_64) @import("x86/compat_thunks.zig") e
 
 const path_utils = @import("path_utils.zig");
 const trace = @import("trace.zig");
+const config = @import("config.zig");
 const log = @import("log.zig");
 const profiler = @import("profiler.zig");
 const version = @import("version.zig");
@@ -74,6 +75,19 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("{s}", .{"Error: ZINE_LOG_LEVEL must be one of: fatal, error, err, warn, info, trace.\n"});
         std.process.exit(2);
     };
+    config.initFromEnv(init.environ_map) catch |err| switch (err) {
+        error.InvalidWebHost => {
+            std.debug.print("{s}", .{"Error: ZINE_WEB_HOST must be an IPv4 or IPv6 literal, e.g. 127.0.0.1.\n"});
+            std.process.exit(2);
+        },
+        error.InvalidWebPort => {
+            std.debug.print("{s}", .{"Error: ZINE_WEB_PORT must be a number from 1 to 65535.\n"});
+            std.process.exit(2);
+        },
+    };
+    if (!config.web_server.isLoopback()) {
+        log.warn("Web UI is bound to {s}, reachable from other hosts", .{config.web_server.host()});
+    }
 
     // Windows processes essentially never cleanly free all memory before ExitProcess or exit()
     // Using GPA will always report thousands of leaks because the process terminates.
@@ -173,6 +187,8 @@ pub fn main(init: std.process.Init) !void {
                 \\  ZINE_TRACE_INSN     Set to any value to enable instruction tracing
                 \\  ZINE_PROFILE        Set to any value to enable profiling
                 \\  ZINE_LOG_LEVEL      fatal, error, err, warn, info, trace (default: trace)
+                \\  ZINE_WEB_HOST       Web UI bind address, IP literal (default: 127.0.0.1)
+                \\  ZINE_WEB_PORT       Web UI port, 1-65535 (default: 1995)
                 \\
                 \\Examples:
                 \\  zine myapp.exe
@@ -450,11 +466,14 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    log.info("zine {s} | exe={s} | mode={s} | gui={s} | trace={s} | profile={s}", .{
+    var web_url_buf: [config.max_url_len]u8 = undefined;
+    const web_url = config.web_server.url(&web_url_buf);
+    log.info("zine {s} | exe={s} | mode={s} | gui={s} | web={s} | trace={s} | profile={s}", .{
         version.string,
         exe_name,
         if (use_jit) "jit" else if (use_interpreter) "interpret" else if (platform.is_x86_64) "compat64" else "native",
         if (renderer.active_backend == .none) "off" else "web",
+        if (renderer.active_backend == .none) "off" else web_url,
         if (trace.enable_tracing and trace.enable_instructions) "all" else if (trace.enable_tracing) "api" else if (trace.enable_instructions) "insn" else "off",
         if (profiler.enabled) "on" else "off",
     });

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-unset ZINE_LOG_LEVEL
+unset ZINE_LOG_LEVEL ZINE_WEB_HOST ZINE_WEB_PORT
 
 expected_version=$1
 shift
@@ -78,6 +78,37 @@ if [[ "$expected_version" == zine\ * ]]; then
                 ;;
         esac
     done
+
+    # The web UI bind address is native-only: WASI builds have no web server.
+    if [[ "$1" != wasmtime ]]; then
+        for host in '' localhost 999.1.1.1 127.0.0.1:1995; do
+            status=0
+            timeout 60 env "ZINE_WEB_HOST=$host" "$@" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+            if [[ "$status" != 2 || -s "$workdir/stdout" ]]; then
+                printf 'ZINE_WEB_HOST=<%s> must exit with status 2 and no stdout (got %s)\n' "$host" "$status" >&2
+                exit 1
+            fi
+            grep -q 'Error: ZINE_WEB_HOST must be' "$workdir/stderr"
+        done
+        for port in '' 0 -1 http 65536 '1995 '; do
+            status=0
+            timeout 60 env "ZINE_WEB_PORT=$port" "$@" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+            if [[ "$status" != 2 || -s "$workdir/stdout" ]]; then
+                printf 'ZINE_WEB_PORT=<%s> must exit with status 2 and no stdout (got %s)\n' "$port" "$status" >&2
+                exit 1
+            fi
+            grep -q 'Error: ZINE_WEB_PORT must be' "$workdir/stderr"
+        done
+        for value in 'ZINE_WEB_HOST=127.0.0.1' 'ZINE_WEB_PORT=3000' 'ZINE_WEB_HOST=::1'; do
+            status=0
+            timeout 60 env "$value" "$@" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+            if [[ "$status" != 0 || -s "$workdir/stderr" ]]; then
+                printf '%s must be accepted (got %s)\n' "$value" "$status" >&2
+                cat "$workdir/stderr" >&2
+                exit 1
+            fi
+        done
+    fi
 fi
 
 if [[ "$expected_version" == zine-host\ * ]]; then

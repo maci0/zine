@@ -66,7 +66,7 @@ The native entry point handles:
   - `-h`, `--help` — show help
   - `-v`, `--version` — show version
   - `--` — end of zine options (allows target names starting with `-`)
-  - Environment variables: `ZINE_TRACE` (API tracing), `ZINE_TRACE_INSN` (instruction tracing), `ZINE_PROFILE` (profiling)
+  - Environment variables: `ZINE_TRACE` (API tracing), `ZINE_TRACE_INSN` (instruction tracing), `ZINE_PROFILE` (profiling), `ZINE_WEB_HOST` / `ZINE_WEB_PORT` (web UI bind address)
 - `.bat`/`.cmd` file preprocessing via `bat.zig`
 - SIGSEGV/SIGFPE (segmentation fault / floating-point exception) signal handler for SEH (Structured Exception Handling) dispatch and AppCompat (Application Compatibility) shims
 - Environment setup (combining BAT-defined PATH, argv, envp)
@@ -268,7 +268,7 @@ The GUI subsystem presents Win32 GUI applications in a web browser (web backend)
             ▼
 ┌─────────────────────────┐
 │    web_ui.zig            │   HTTP (Hypertext Transfer Protocol) server
-│    WebSocket transport   │   on port 1995
+│    WebSocket transport   │   on ZINE_WEB_HOST:ZINE_WEB_PORT
 │                          │   Serves static files from src/gui/
 │                          │   Pushes frames + JSON (JavaScript Object Notation)
 └───────────┬─────────────┘
@@ -311,6 +311,7 @@ On native targets, Zine installs a `SIGSEGV`/`SIGFPE` handler that implements:
 | **runtime.zig** | [`src/runtime.zig`](../src/runtime.zig) | Process-global singletons (`std.Io`, allocator, environment, main-exe dir) for code that cannot take parameters: Win32 stubs called from guest code, signal handlers, and thunks. |
 | **bat.zig** | [`src/bat.zig`](../src/bat.zig) | Parses `.bat`/`.cmd` launcher scripts, expands `%VARIABLE%` references, and extracts the final command to execute. |
 | **log.zig** | [`src/log.zig`](../src/log.zig) | Structured diagnostic logging with colored level prefixes (`[FATAL]`, `[ERROR]`, `[WARN]`, `[INFO]`, `[TRACE]`). Auto-detects TTY for color; respects `NO_COLOR` env var. Redacts the host home directory (`HOME`/`USERPROFILE`) from every record. |
+| **config.zig** | [`src/config.zig`](../src/config.zig) | Runtime configuration read from `ZINE_*` environment variables at startup. Validates each value before use and exits with status 2 on a rejected one. Owns the web UI bind address (`ZINE_WEB_HOST`, `ZINE_WEB_PORT`), the URL printed at startup, the CSP `connect-src` origin, and the WebSocket origin allowlist. |
 | **trace.zig** | [`src/trace.zig`](../src/trace.zig) | Conditional debug printing. Activated by `--trace`, `--trace-api`, `--trace-insn` flags or `ZINE_TRACE`/`ZINE_TRACE_INSN` environment variables. |
 | **profiler.zig** | [`src/profiler.zig`](../src/profiler.zig) | Lightweight profiling: EIP heat map (per-4KB page), opcode frequency table, and stub call counters. Activated by `--profile` flag or `ZINE_PROFILE` environment variable. |
 | **path_utils.zig** | [`src/path_utils.zig`](../src/path_utils.zig) | Converts between POSIX and Win32 paths (`drive_c/... ↔ C:\...`). |

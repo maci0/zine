@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const toml = @import("toml");
+const log = @import("../../log.zig");
 
 /// A registry value: either a string or a DWORD.
 pub const RegValue = union(enum) {
@@ -54,7 +55,13 @@ pub fn init(allocator: std.mem.Allocator) void {
 
     var parser = toml.Parser(toml.Table).init(allocator);
     defer parser.deinit();
-    const result = parser.parseString(embedded_toml) catch return;
+    // A malformed registry.toml would leave every guest registry lookup
+    // reporting "not found", which reads as a guest bug rather than a config
+    // error. The file is embedded at build time, so this stops the process.
+    const result = parser.parseString(embedded_toml) catch |err| {
+        log.fatal("registry.toml is not valid TOML: {}", .{err});
+        std.process.exit(1);
+    };
     const root_table = result.value;
 
     // Each TOML table header is a registry path, values are name→data pairs.

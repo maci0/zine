@@ -158,6 +158,8 @@ pub fn main(init: std.process.Init) !void {
                 \\  ZINE_TRACE_INSN     Set to any value to enable instruction tracing
                 \\  ZINE_PROFILE        Set to any value to enable profiling
                 \\  ZINE_LOG_LEVEL      fatal, error, err, warn, info, trace (default: trace)
+                \\  ZINE_CWD            Absolute POSIX path used as the guest working
+                \\                      directory (default: .)
                 \\
                 \\Examples:
                 \\  wasmtime --dir=. zine.wasm32.wasm -- myapp.exe
@@ -474,15 +476,21 @@ pub fn main(init: std.process.Init) !void {
         var cwd_buf: [1024]u8 = undefined;
         var cwd_str: []const u8 = ".";
         if (init.environ_map.get("ZINE_CWD")) |cwd| {
-            if (cwd.len > 0 and cwd[0] == '/' and cwd.len + 3 <= cwd_buf.len) {
-                @memcpy(cwd_buf[0..3], "Z:\\");
-                var j: usize = 3;
-                for (cwd[1..]) |c| {
-                    cwd_buf[j] = if (c == '/') '\\' else c;
-                    j += 1;
-                }
-                cwd_str = cwd_buf[0..j];
+            if (cwd.len == 0 or cwd[0] != '/') {
+                log.fatal("ZINE_CWD must be an absolute POSIX path, got '{s}'", .{cwd});
+                std.process.exit(2);
             }
+            if (cwd.len + 3 > cwd_buf.len) {
+                log.fatal("ZINE_CWD must be at most {d} bytes, got {d}", .{ cwd_buf.len - 3, cwd.len });
+                std.process.exit(2);
+            }
+            @memcpy(cwd_buf[0..3], "Z:\\");
+            var j: usize = 3;
+            for (cwd[1..]) |c| {
+                cwd_buf[j] = if (c == '/') '\\' else c;
+                j += 1;
+            }
+            cwd_str = cwd_buf[0..j];
         }
         @memcpy(path_utils.current_directory[0..cwd_str.len], cwd_str);
         path_utils.current_directory_len = cwd_str.len;
