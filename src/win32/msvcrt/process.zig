@@ -455,8 +455,8 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     }
 
     if (argv_ptr != 0) {
-        // On x86_64 compat mode, the guest argv array contains 32-bit pointers.
-        const ArgPtrType = if (comptime platform.is_x86_64) u32 else usize;
+        // A 64-bit host (x86_64 or wasm64) holds guest argv entries as u32.
+        const ArgPtrType = if (comptime platform.wide_host) u32 else usize;
         const argv = @as([*]const ArgPtrType, @ptrFromInt(argv_ptr));
         if (argv[0] != 0) {
             const arg0 = trace.c_span(@as(usize, argv[0]));
@@ -514,7 +514,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     }
 
     if (argv_ptr != 0) {
-        const ArgPtrType2 = if (comptime platform.is_x86_64) u32 else usize;
+        const ArgPtrType2 = if (comptime platform.wide_host) u32 else usize;
         const argv2 = @as([*]const ArgPtrType2, @ptrFromInt(argv_ptr));
         var i: usize = 0;
         while (argv2[i] != 0) : (i += 1) {

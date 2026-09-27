@@ -130,7 +130,7 @@ pub fn mmap(
 
     var flags: std.posix.MAP = if (shared) .{ .TYPE = .SHARED } else .{ .TYPE = .PRIVATE };
     if (comptime is_x86_64 and builtin.os.tag == .linux) {
-        // MAP_32BIT constrains anonymous allocations to the low 2GB.
+        // MAP_32BIT constrains anonymous allocations to the low 4GB.
         // Don't set it for fixed-address mappings (the address is already
         // known) — it can interfere with MAP_FIXED_NOREPLACE.
         if (!fixed) {
@@ -230,6 +230,88 @@ pub const StackBounds = struct {
     stack_limit: u32,
 };
 
+/// Guest stack size probed below the detected stack base. MSVC's _chkstk
+/// guard pages abort (C1063) once the guest touches this boundary.
+const guest_stack_bytes: usize = 8 * 1024 * 1024;
+
+/// A `/proc/self/maps` line is "start-end perms offset dev inode path"; the
+/// path may contain spaces, so only the first two fields are parsed.
+fn parseStackMapping(line: []const u8, result: *StackBounds) bool {
+    if (std.mem.indexOf(u8, line, "[stack]") == null) return false;
+    var fields = std.mem.tokenizeScalar(u8, line, ' ');
+    const range = fields.next() orelse return false;
+    var range_it = std.mem.splitScalar(u8, range, '-');
+    const start_str = range_it.next() orelse return false;
+    const end_str = range_it.next() orelse return false;
+
+    const stack_limit = std.fmt.parseInt(usize, start_str, 16) catch return false;
+    const stack_base = std.fmt.parseInt(usize, end_str, 16) catch return false;
+
+    result.stack_base = @truncate(stack_base);
+    result.stack_limit = if (stack_base > guest_stack_bytes)
+        @truncate(stack_base - guest_stack_bytes)
+    else
+        @truncate(stack_limit);
+
+    log.info("Detected stack: 0x{X} - 0x{X} (limit set to 0x{X})", .{ stack_limit, stack_base, result.stack_limit });
+    return true;
+}
+
+/// Chunk size for streaming `/proc/self/maps`. The file grows past any single
+/// read buffer on hosts with many mappings, and `[stack]` is one of the last
+/// entries, so a short read silently loses the whole stack mapping.
+const maps_chunk_size: usize = 4096;
+/// Longest line carried across a chunk boundary. Real mappings lines are
+/// well under this; a longer line is dropped rather than buffered.
+const maps_line_carry: usize = 512;
+
+/// Scan a chunked `/proc/self/maps` stream for the `[stack]` mapping.
+/// `reader.next(buf)` fills `buf` with the next chunk and returns its
+/// length, or 0 at end of input. `buf` must be at least
+/// `maps_line_carry + maps_chunk_size` bytes; a line split across a chunk
+/// boundary is rejoined from the carried tail.
+fn findStackMapping(reader: anytype, buf: []u8) ?StackBounds {
+    var carry: [maps_line_carry]u8 = undefined;
+    var carry_len: usize = 0;
+    const window: []u8 = buf[0 .. carry.len + maps_chunk_size];
+
+    while (true) {
+        const n = reader.next(window[carry_len..]);
+        if (n == 0) break;
+        const total = carry_len + n;
+
+        var lines = std.mem.splitScalar(u8, window[0..total], '\n');
+        while (lines.next()) |line| {
+            var bounds: StackBounds = undefined;
+            if (parseStackMapping(line, &bounds)) return bounds;
+        }
+
+        // Keep the trailing partial line for the next chunk.
+        const last_nl = std.mem.lastIndexOfScalar(u8, window[0..total], '\n') orelse {
+            carry_len = @min(total, carry.len);
+            @memcpy(carry[0..carry_len], window[0..carry_len]);
+            continue;
+        };
+        const rest = window[last_nl + 1 .. total];
+        carry_len = @min(rest.len, carry.len);
+        @memcpy(carry[0..carry_len], rest[0..carry_len]);
+    }
+    return null;
+}
+
+/// Feeds `findStackMapping` from a byte slice, one `maps_chunk_size` at a time.
+const SliceReader = struct {
+    content: []const u8,
+    offset: usize = 0,
+
+    fn next(self: *@This(), buf: []u8) usize {
+        const n = @min(buf.len, self.content.len - self.offset);
+        @memcpy(buf[0..n], self.content[self.offset..][0..n]);
+        self.offset += n;
+        return n;
+    }
+};
+
 /// Returns the bounds of the current thread's stack.
 pub fn getStackBounds(frame_addr: usize) StackBounds {
     // Defaults based on frame address
@@ -240,37 +322,95 @@ pub fn getStackBounds(frame_addr: usize) StackBounds {
 
     if (std.Io.Dir.openFileAbsolute(runtime.io(), "/proc/self/maps", .{})) |file| {
         defer file.close(runtime.io());
-        var maps_buf: [8192]u8 = undefined;
-        const bytes_read = file.readPositionalAll(runtime.io(), &maps_buf, 0) catch 0;
-        const content = maps_buf[0..bytes_read];
+        var offset: u64 = 0;
+        const FileReader = struct {
+            file: std.Io.File,
+            offset: *u64,
 
-        var lines = std.mem.splitScalar(u8, content, '\n');
-        while (lines.next()) |line| {
-            if (std.mem.indexOf(u8, line, "[stack]")) |_| {
-                var it = std.mem.splitScalar(u8, line, ' ');
-                const range = it.next() orelse break;
-                var range_it = std.mem.splitScalar(u8, range, '-');
-                const start_str = range_it.next() orelse break;
-                const end_str = range_it.next() orelse break;
-
-                const stack_limit = std.fmt.parseInt(usize, start_str, 16) catch break;
-                const stack_base = std.fmt.parseInt(usize, end_str, 16) catch break;
-
-                result.stack_base = @truncate(stack_base);
-                const eight_mb: usize = 8 * 1024 * 1024;
-                if (stack_base > eight_mb) {
-                    result.stack_limit = @truncate(stack_base - eight_mb);
-                } else {
-                    result.stack_limit = @truncate(stack_limit);
-                }
-
-                log.info("Detected stack: 0x{X} - 0x{X} (limit set to 0x{X})", .{ stack_limit, stack_base, result.stack_limit });
-                break;
+            fn next(self: *@This(), buf: []u8) usize {
+                const n = self.file.readPositionalAll(runtime.io(), buf, self.offset.*) catch 0;
+                self.offset.* += n;
+                return n;
             }
-        }
+        };
+        var reader = FileReader{ .file = file, .offset = &offset };
+        var buf: [maps_line_carry + maps_chunk_size]u8 = undefined;
+        if (findStackMapping(&reader, &buf)) |found| result = found;
     } else |_| {}
 
     return result;
+}
+
+test "parseStackMapping reads the [stack] range and clamps the guest limit" {
+    var bounds = StackBounds{ .stack_base = 0, .stack_limit = 0 };
+    const line = "7ffe0000-7ffff000 rw-p 00000000 00:00 0                          [stack]";
+    try std.testing.expect(parseStackMapping(line, &bounds));
+    try std.testing.expectEqual(@as(u32, 0x7ffff000), bounds.stack_base);
+    try std.testing.expectEqual(@as(u32, 0x7ffff000 - guest_stack_bytes), bounds.stack_limit);
+}
+
+test "parseStackMapping ignores unrelated and malformed lines" {
+    var bounds = StackBounds{ .stack_base = 0, .stack_limit = 0 };
+    try std.testing.expect(!parseStackMapping("55a1b2000-55a1b3000 rw-p 00000000 00:00 0    /usr/lib/libc.so.6", &bounds));
+    try std.testing.expect(!parseStackMapping("7ffc1b1fe000-7ffc1b3fe000 rw-p 00000000 00:00 0", &bounds));
+    try std.testing.expect(!parseStackMapping("not-a-range rw-p 00000000 00:00 0           [stack]", &bounds));
+    try std.testing.expectEqual(@as(u32, 0), bounds.stack_base);
+}
+
+test "parseStackMapping keeps the range when the base is below the probe size" {
+    var bounds = StackBounds{ .stack_base = 0, .stack_limit = 0 };
+    const line = "00100000-00300000 rw-p 00000000 00:00 0                          [stack]";
+    try std.testing.expect(parseStackMapping(line, &bounds));
+    try std.testing.expectEqual(@as(u32, 0x00300000), bounds.stack_base);
+    try std.testing.expectEqual(@as(u32, 0x00100000), bounds.stack_limit);
+}
+
+test "getStackBounds finds the host [stack] mapping" {
+    var probe: u8 = 0;
+    const bounds = getStackBounds(@intFromPtr(&probe));
+    try std.testing.expect(bounds.stack_base != 0);
+    try std.testing.expect(bounds.stack_limit < bounds.stack_base);
+}
+
+test "findStackMapping finds a [stack] line past the first chunk" {
+    // Real hosts list thousands of mappings before [stack]; a scan that reads
+    // one buffer and stops misses the stack entirely.
+    const filler = "7f0000000000-7f0000001000 rw-p 00000000 00:00 0 /usr/lib/libc.so.6\n";
+    var content: std.ArrayList(u8) = .empty;
+    defer content.deinit(std.testing.allocator);
+    while (content.items.len < maps_chunk_size * 2) {
+        try content.appendSlice(std.testing.allocator, filler);
+    }
+    try content.appendSlice(std.testing.allocator, "7ffe0000-7ffff000 rw-p 00000000 00:00 0 [stack]\n");
+
+    var buf: [maps_line_carry + maps_chunk_size]u8 = undefined;
+    var reader = SliceReader{ .content = content.items };
+    const bounds = findStackMapping(&reader, &buf) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 0x7ffff000), bounds.stack_base);
+}
+
+test "findStackMapping rejoins a [stack] line split across chunks" {
+    const filler = "7f0000000000-7f0000001000 rw-p 00000000 00:00 0 /usr/lib/libc.so.6\n";
+    var content: std.ArrayList(u8) = .empty;
+    defer content.deinit(std.testing.allocator);
+    while (content.items.len < maps_chunk_size - 10) {
+        try content.appendSlice(std.testing.allocator, filler);
+    }
+    // Ends mid-line, so the [stack] entry can only be parsed after the carry
+    // from the previous chunk is prepended.
+    try content.appendSlice(std.testing.allocator, "7ffe0000-7ff");
+    try content.appendSlice(std.testing.allocator, "e0000 rw-p 00000000 00:00 0 [stack]\n");
+
+    var buf: [maps_line_carry + maps_chunk_size]u8 = undefined;
+    var reader = SliceReader{ .content = content.items };
+    const bounds = findStackMapping(&reader, &buf) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 0x7ffe0000), bounds.stack_base);
+}
+
+test "findStackMapping returns null when no [stack] line exists" {
+    var buf: [maps_line_carry + maps_chunk_size]u8 = undefined;
+    var reader = SliceReader{ .content = "7f0000000000-7f0000001000 rw-p 00000000 00:00 0 [heap]\n" };
+    try std.testing.expect(findStackMapping(&reader, &buf) == null);
 }
 
 // -------------------------------------------------------------------------

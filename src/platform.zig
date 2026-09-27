@@ -23,6 +23,16 @@ pub const is_x86 = backend.is_x86;
 /// True if the current target is x86_64.
 pub const is_x86_64 = backend.is_x86_64;
 
+/// True when the host pointer is wider than the guest's fixed 32-bit address
+/// space: x86_64 and wasm64. Guest pointers read out of guest memory (an argv
+/// array, a callback table) are u32 on these targets and must not be read as
+/// host-sized `usize`, which on wasm64 would straddle array elements. A 32-bit
+/// host (x86, wasm32) stores them as `usize` directly.
+///
+/// This is deliberately not `is_x86_64`: wasm64 is a 64-bit host without an
+/// x86_64 compat backend.
+pub const wide_host = @sizeOf(usize) == 8;
+
 // -------------------------------------------------------------------------
 // Memory
 // -------------------------------------------------------------------------
