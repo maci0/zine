@@ -170,6 +170,10 @@ release, not a 0.2.1 patch.
 - Named gate steps in `tests/check.sh`: `bash tests/check.sh --list` prints
   them and `bash tests/check.sh <name>` runs one, so a single check no longer
   means running the whole gate.
+- A `check_web` step in that gate: every tracked JavaScript file is parsed
+  before a merge. `src/gui/app.js` is embedded into the wasm artifact and
+  served to a browser, and nothing else in the gate read it, so a syntax error
+  there shipped and surfaced only as a page that does not run.
 - `zine --quiet` (`-q`) raises the log level to `warn` for one run, on native and
   WASI, so a chatty environment can be quieted without rewriting
   `ZINE_LOG_LEVEL`.
@@ -179,6 +183,11 @@ release, not a 0.2.1 patch.
 
 #### Fixed
 
+- The `check_c` step of that gate reported success on a C source that does not
+  compile. It runs inside `if ! ...`, which suspends `errexit`, so a failing
+  compile in the loop over the sources did not stop it and the step exited on
+  the status of the last compile. It now returns the collected status, and the
+  same guard covers the new `check_web` step.
 - The web UI's content-addressed stylesheet and scripts are served again. The
   document names each asset by its digest (`/win2k-<digest>.css`), and those
   names exist only inside the build, so the server answered the document's own

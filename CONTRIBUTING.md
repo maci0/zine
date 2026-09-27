@@ -17,8 +17,9 @@ development headers, `libfltk1.3-dev` on Debian/Ubuntu, because its `check_cxx`
 step compiles `src/gui/fltk_bridge.cpp`. The headers are enough: that step
 links nothing, so no FLTK library and no X11 runtime is needed, and the FLTK
 GUI build itself is still optional. The gate names the package and stops if the
-headers are absent. The gate enumerates sources with
-`git ls-files`, so it needs a real work tree; a source archive has none and the
+headers are absent. The `check_web` step parses the tracked JavaScript with
+`node --check`, so the gate also needs Node.js on the path. The gate
+enumerates sources with `git ls-files`, so it needs a real work tree; a source archive has none and the
 tracked-file steps stop there. Everything below runs from the repository root.
 
 | Task | Command |
@@ -33,6 +34,7 @@ tracked-file steps stop there. Everything below runs from the repository root.
 | Lint shell scripts | `bash tests/check.sh check_shell` |
 | Check C sources | `bash tests/check.sh check_c` |
 | Check the C++ FLTK bridge | `bash tests/check.sh check_cxx` (needs the FLTK headers named above) |
+| Check the Web UI scripts parse | `bash tests/check.sh check_web` |
 | One gate step by name | `bash tests/check.sh <step>` (see below) |
 | Full gate, same as CI | `bash tests/check.sh` |
 | List gate step names | `bash tests/check.sh --list` |
@@ -51,7 +53,8 @@ embeds. Pass `-Doptimize=Debug` when stepping through code.
 in the same order, as the `static-analysis` job in `.github/workflows/ci.yml`:
 `zig fmt --check`, shellcheck over every tracked script, a warning-free
 `zig cc` compile of every tracked C source, a warning-free compile of the C++
-FLTK bridge, all four architecture builds, the linked-artifact hardening check,
+FLTK bridge, a parse of every tracked JavaScript file, all four architecture
+builds, the linked-artifact hardening check,
 the external-stub DLL and
 `-Dexternal-stubs` builds, the byte-identical rebuild, the unit tests, both
 native `test-cli` runs, and the fuzz budget. If you add a check,
@@ -59,7 +62,7 @@ add it in both places or local runs stop predicting CI.
 
 Each check is a named step, and `bash tests/check.sh <step> [step...]` runs
 just those, still in gate order: `fmt`, `check_shell`, `check_c`, `check_cxx`,
-`build`, `build-x86_64`, `hardening`, `build-wasm32`, `build-wasm64`, `dll`,
+`check_web`, `build`, `build-x86_64`, `hardening`, `build-wasm32`, `build-wasm64`, `dll`,
 `external-stubs`, `reproducible`, `test`, `test-cli`, `test-cli-x86_64`, `fuzz`.
 `bash tests/check.sh --list` prints the names, and
 `bash tests/check.sh test build` runs those two in gate

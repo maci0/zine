@@ -23,7 +23,7 @@ export LC_ALL=C TZ=UTC
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-required=(zig shellcheck git timeout cmp diff grep sed awk readelf mktemp find sort cp basename)
+required=(zig shellcheck node git timeout cmp diff grep sed awk readelf mktemp find sort cp basename)
 missing=()
 for cmd in "${required[@]}"; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
@@ -69,6 +69,7 @@ step_names=(
     check_shell
     check_c
     check_cxx
+    check_web
     build
     build-x86_64
     hardening
@@ -92,6 +93,7 @@ step_commands=(
     'check_shell'
     'check_c'
     'check_cxx'
+    'check_web'
     'zig build --summary all'
     'zig build -Darch=x86_64 --summary all'
     'hardening'
@@ -144,12 +146,18 @@ check_c() {
         -Wformat=2 -Wwrite-strings -Wvla -Wdouble-promotion
         -Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition
     )
-    local src
+    # The gate runs each step inside `if ! ...`, which suspends errexit for the
+    # whole body, so a compile that fails does not stop the loop. The status is
+    # collected and returned here: without it a warning in the first source is
+    # printed and then forgotten, and the step reports success on a C file that
+    # does not compile.
+    local src status=0
     while IFS= read -r src; do
-        zig cc -c -o "$objdir/$(basename "$src").o" "${flags[@]}" "$src"
+        zig cc -c -o "$objdir/$(basename "$src").o" "${flags[@]}" "$src" || status=1
     done < <(git ls-files 'tests/*.c' ':!tests/cpubench_win32.c')
     zig cc -c -o "$objdir/cpubench_win32.o" -target x86-windows-gnu \
-        "${flags[@]}" tests/cpubench_win32.c
+        "${flags[@]}" tests/cpubench_win32.c || status=1
+    return "$status"
 }
 
 # src/gui/fltk_bridge.cpp is the one tracked C++ source, and the Zig build
@@ -171,6 +179,27 @@ check_cxx() {
         exit 1
     fi
     zig build check-cxx --summary all
+}
+
+# src/gui/app.js is embedded into the wasm artifact and served to a browser,
+# so a syntax error in it ships and surfaces only as a page that does not run.
+# Nothing else in the gate reads it: the Zig build only carries the bytes, and
+# the CLI suites drive the emulator, not the Web UI. `node --check` parses the
+# file and stops, so a construct a browser would accept is not the gate's
+# business. node is preinstalled on the CI image, and the vendored VanJS
+# bundle is checked with the rest: it is a local repackaging, not an upstream
+# artifact, and a browser parses it the same way.
+check_web() {
+    # The gate runs each step inside `if ! ...`, which suspends errexit for the
+    # whole body, so a failing command in the loop below does not abort it.
+    # The status is collected and returned here instead, or the step would
+    # report success on a script that does not parse.
+    local script status=0
+    while IFS= read -r script; do
+        node --check "$script" || status=1
+    done < <(git ls-files '*.js')
+    ((status == 0)) || return 1
+    printf 'check_web: every tracked script parses\n'
 }
 
 # The link properties the shipped native executables are only able to carry,
