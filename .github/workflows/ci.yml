@@ -97,6 +97,11 @@ jobs:
         run: bash tests/check.sh build
       - name: Build x86_64
         run: bash tests/check.sh build-x86_64
+      # The linked artifacts' stack and loader properties, read back out of the
+      # binaries rather than taken from build.zig. Both native builds above are
+      # cache hits for it.
+      - name: Hardening of the linked executables
+        run: bash tests/check.sh hardening
       - name: Build wasm32
         run: bash tests/check.sh build-wasm32
       - name: Build wasm64

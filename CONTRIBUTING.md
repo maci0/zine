@@ -46,15 +46,16 @@ embeds. Pass `-Doptimize=Debug` when stepping through code.
 in the same order, as the `static-analysis` job in `.github/workflows/ci.yml`:
 `zig fmt --check`, shellcheck over every tracked script, a warning-free
 `zig cc` compile of every tracked C source, a warning-free compile of the C++
-FLTK bridge, all four architecture builds, the external-stub DLL and
+FLTK bridge, all four architecture builds, the linked-artifact hardening check,
+the external-stub DLL and
 `-Dexternal-stubs` builds, the byte-identical rebuild, the unit tests, both
 native `test-cli` runs, and the fuzz budget. If you add a check,
 add it in both places or local runs stop predicting CI.
 
 Each check is a named step, and `bash tests/check.sh <step> [step...]` runs
 just those, still in gate order: `fmt`, `check_shell`, `check_c`, `check_cxx`,
-`build`, `build-x86_64`, `build-wasm32`, `build-wasm64`, `dll`, `external-stubs`,
-`reproducible`, `test`, `test-cli`, `test-cli-x86_64`, `fuzz`.
+`build`, `build-x86_64`, `hardening`, `build-wasm32`, `build-wasm64`, `dll`,
+`external-stubs`, `reproducible`, `test`, `test-cli`, `test-cli-x86_64`, `fuzz`.
 `bash tests/check.sh --list` prints the names, and
 `bash tests/check.sh test build` runs those two in gate
 order. Every CI step calls this script by name, so the commands and the

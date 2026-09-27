@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const package_version = @import("build.zig.zon").version;
 
 // Debian/Ubuntu install FLTK 1.3 here; the bridge's C++ sources and the
@@ -264,6 +265,12 @@ const sbom_toml_version = "0.3.0";
 /// No timestamp and no serial number: the byte-identical rebuild gate compares
 /// two builds of one commit, and a generated identity would differ between
 /// them for no informational gain.
+///
+/// The Zig version is the compiler's own `zig_version_string`, so the
+/// inventory names the toolchain that actually produced the bytes rather than
+/// the one build.zig.zon asks for. tests/check.sh refuses to run the gate on
+/// any other version, so a rebuild only reproduces the artifact when the two
+/// agree, and the inventory is what tells a consumer whether it does.
 fn addSbom(b: *std.Build) void {
     const zon = b.build_root.handle.readFileAlloc(b.graph.io, "build.zig.zon", b.allocator, .unlimited) catch
         @panic("cannot read build.zig.zon");
@@ -292,7 +299,8 @@ fn addSbom(b: *std.Build) void {
         "  \"metadata\": {\n" ++
         "    \"tools\": {\n" ++
         "      \"components\": [\n" ++
-        "        { \"type\": \"application\", \"name\": \"zine build\", \"version\": \"" ++ package_version ++ "\" }\n" ++
+        "        { \"type\": \"application\", \"name\": \"zine build\", \"version\": \"" ++ package_version ++ "\" },\n" ++
+        "        { \"type\": \"application\", \"name\": \"zig\", \"version\": \"" ++ builtin.zig_version_string ++ "\", \"purl\": \"pkg:generic/zig@" ++ builtin.zig_version_string ++ "\" }\n" ++
         "      ]\n" ++
         "    },\n" ++
         "    \"component\": {\n" ++

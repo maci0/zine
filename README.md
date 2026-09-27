@@ -107,6 +107,13 @@ release, not a 0.2.1 patch.
 
 #### Security fixes
 
+- The linked native executables are checked for a static link and a
+  non-executable stack, in a `hardening` gate step and in CI. The other usual
+  controls are absent by design and stay absent: the images load at a fixed
+  `0x70000000` so the low addresses stay free for guest PEs, which rules out
+  PIE; a static binary has no dynamic relocations for RELRO or `BIND_NOW`; and
+  Zig's stack protector needs libc, whose dynamic loader would give up the
+  self-contained artifact. ReleaseSafe bounds checks carry the rest.
 - `LoadStringA`/`LoadStringW` read the PE string table only inside the mapped
   image and inside the block's declared size. A module whose resource
   directory or string lengths point past its own mapping returns an empty
@@ -155,7 +162,10 @@ release, not a 0.2.1 patch.
   artifact, installed to `share/zine/sbom/zine.cdx.json` by `zig build` and
   writable on its own with `zig build sbom`. It is generated from the pinned
   manifests, and the build fails if the inventory no longer matches the
-  `zig-toml` pin, so a dependency bump cannot ship a stale list.
+  `zig-toml` pin, so a dependency bump cannot ship a stale list. Its
+  `metadata.tools` also names the Zig version that compiled the artifact, read
+  from the compiler rather than from `build.zig.zon`, so the installed files
+  say whether the toolchain needed to reproduce them is the one in use.
 - Named gate steps in `tests/check.sh`: `bash tests/check.sh --list` prints
   them and `bash tests/check.sh <name>` runs one, so a single check no longer
   means running the whole gate.
@@ -638,6 +648,7 @@ bash tests/check.sh check_shell    # every tracked script, not just tests/
 bash tests/check.sh check_c        # warning-free compile of every tracked C source
 bash tests/check.sh check_cxx      # the FLTK bridge, compiled without linking it
 bash tests/check.sh build build-x86_64 build-wasm32 build-wasm64
+bash tests/check.sh hardening       # static link and non-executable stack, read from the binaries
 bash tests/check.sh dll external-stubs
 bash tests/check.sh reproducible  # two builds of one source tree, byte-identical
 bash tests/check.sh test

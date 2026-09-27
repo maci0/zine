@@ -23,7 +23,7 @@ export LC_ALL=C TZ=UTC
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-required=(zig shellcheck git timeout cmp diff grep sed mktemp find sort cp basename)
+required=(zig shellcheck git timeout cmp diff grep sed awk readelf mktemp find sort cp basename)
 missing=()
 for cmd in "${required[@]}"; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
@@ -71,6 +71,7 @@ step_names=(
     check_cxx
     build
     build-x86_64
+    hardening
     build-wasm32
     build-wasm64
     # The external-stub DLLs are a shipped target with its own root sources
@@ -93,6 +94,7 @@ step_commands=(
     'check_cxx'
     'zig build --summary all'
     'zig build -Darch=x86_64 --summary all'
+    'hardening'
     'zig build -Darch=wasm32 --summary all'
     'zig build -Darch=wasm64 --summary all'
     'zig build -Ddll=all --summary all'
@@ -159,6 +161,41 @@ check_cxx() {
     zig build check-cxx --summary all
 }
 
+# The link properties the shipped native executables are only able to carry,
+# read out of the linked artifact rather than assumed from build.zig. The rest of
+# the usual hardening set is unavailable here and each exclusion is deliberate:
+# the images load at a fixed 0x70000000 so the low addresses stay free for guest
+# PEs, which rules out PIE; a static binary has no dynamic relocations, so RELRO
+# and BIND_NOW have nothing to protect; and Zig's stack protector requires libc,
+# whose dynamic loader would give up the self-contained static artifact. What
+# survives is a non-executable stack, and a static link, so an INTERP segment
+# here means the link changed rather than that the check got stricter.
+#
+# Both native targets are built first so the step stands alone; in the gate the
+# two build steps above already produced them and this is a cache hit.
+hardening() {
+    zig build --summary all
+    zig build -Darch=x86_64 --summary all
+    local binary headers stack_flags
+    for binary in zig-out/bin/zine.x86 zig-out/bin/zine.x86_64; do
+        headers=$(readelf -lW "$binary")
+        if grep -q ' INTERP ' <<<"$headers"; then
+            printf '%s requests a dynamic loader; the shipped image must stay static\n' "$binary" >&2
+            return 1
+        fi
+        stack_flags=$(awk '$1 == "GNU_STACK" { print $7 }' <<<"$headers")
+        if [[ -z "$stack_flags" ]]; then
+            printf '%s has no GNU_STACK header, so its stack permissions are unstated\n' "$binary" >&2
+            return 1
+        fi
+        if [[ "$stack_flags" == *E* ]]; then
+            printf '%s has an executable stack (GNU_STACK %s)\n' "$binary" "$stack_flags" >&2
+            return 1
+        fi
+    done
+    printf 'hardening: both native executables are static with a non-executable stack\n'
+}
+
 # The untrusted-input parsers. A function rather than a literal command, so
 # the budget expands here: 10 seconds keeps the local gate short, and CI
 # raises it with ZINE_FUZZ_SECONDS.
@@ -172,10 +209,13 @@ fuzz() {
 # checkout directory or the toolchain's own lib path shows up as a byte
 # difference rather than as a report the maintainers have to take on trust.
 #
-# The second build reuses .zig-cache, so this costs one compile, not two. The
-# source copy is made into a temporary directory and removed on the way out;
-# nothing is written inside the work tree. The two installs are compared with
-# cmp, which stops at the first differing byte and names the file.
+# The second build is cold: the copy carries only what reaches the compiler, so
+# it has no .zig-cache of its own and recompiles from scratch. That is the point,
+# not the cost. A warm cache would prove only that Zig's cache is stable, not
+# that the artifacts are. The source copy is made into a temporary directory
+# and removed on the way out; nothing is written inside the work tree. The two
+# installs are compared with cmp, which stops at the first differing byte and
+# names the file.
 reproducible() {
     local scratch a b
     scratch=$(mktemp -d)

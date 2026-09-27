@@ -13,12 +13,13 @@ Run Win98/Win2K-era 32-bit Windows executables on Linux and in the browser witho
 
 ## Verification
 
-Run `bash tests/check.sh` from the repository root before a pull request. It first requires the listed tools and exactly the Zig version pinned in `build.zig.zon`, then runs the CI gate in the same order (formatting, shell lint, the warning-free C and C++ compiles, all four architecture builds, the external-stub DLL and `-Dexternal-stubs` builds, the byte-identical rebuild, unit tests, both native `test-cli` runs, and a 10-second fuzz run) and stops at the first failure. Each gate step has a name, so one of them runs on its own with `bash tests/check.sh <name>`; `--list` prints the names. Single steps, when bisecting:
+Run `bash tests/check.sh` from the repository root before a pull request. It first requires the listed tools and exactly the Zig version pinned in `build.zig.zon`, then runs the CI gate in the same order (formatting, shell lint, the warning-free C and C++ compiles, all four architecture builds, the linked-artifact hardening check, the external-stub DLL and `-Dexternal-stubs` builds, the byte-identical rebuild, unit tests, both native `test-cli` runs, and a 10-second fuzz run) and stops at the first failure. Each gate step has a name, so one of them runs on its own with `bash tests/check.sh <name>`; `--list` prints the names. Single steps, when bisecting:
 
 - Unit tests: `zig build test` (also checks formatting). Tests run on the host; `-Darch` does not change the test target.
 - Native CLI tests: `zig build test-cli`, then `zig build test-cli -Darch=x86_64`; no guest binaries required.
 - Formatting: `zig fmt --check src build.zig build.zig.zon`.
 - Compile/typecheck each target, sequentially to limit peak memory: `zig build`, `zig build -Darch=x86_64`, `zig build -Darch=wasm32`, `zig build -Darch=wasm64`. These build ReleaseSafe, the default of the `-Doptimize` option; pass `-Doptimize=Debug` for a debugging loop and expect that to change build time.
+- Linked-artifact hardening: `bash tests/check.sh hardening` reads the program headers of `zig-out/bin/zine.x86` and `zine.x86_64` and requires a static link and a non-executable stack. It rebuilds both targets first, so it stands alone. PIE, RELRO, BIND_NOW and Zig's stack protector are deliberately absent (fixed image base, static link, no libc); do not add one without removing its exclusion.
 - Stub DLLs: `zig build -Ddll=all` compiles `src/dll/` and `src/win32_dll_api.zig` for x86-windows. `zig build -Dexternal-stubs` covers the other half of the embed/external stub switch.
 - The FLTK bridge: `zig build check-cxx` compiles `src/gui/fltk_bridge.cpp` alone, with the flags and include paths `zig build -Darch=x86_64 -Dfltk` gives it, and links nothing. It needs the FLTK development headers (`libfltk1.3-dev`); the FLTK executable additionally needs the X11 runtime, which the gate does not install.
 
