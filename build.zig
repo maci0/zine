@@ -531,6 +531,35 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(t).step);
 
     // -----------------------------------------------------------------------
+    // C++ check step: src/gui/fltk_bridge.cpp without the FLTK link
+    // -----------------------------------------------------------------------
+    // The gate compiles the bridge on its own, with the flags and include
+    // paths the -Dfltk executable gives it and no link: the FLTK executable
+    // pulls in X11, Xft and fontconfig, and a warning in one C++ file must not
+    // require a display stack to find. The FLTK development headers are the
+    // only requirement, and tests/check.sh check_cxx runs this step both
+    // locally and in CI.
+    // -----------------------------------------------------------------------
+    const check_cxx_step = b.step("check-cxx", "Compile src/gui/fltk_bridge.cpp warning-free");
+    const cxx_check = b.addObject(.{
+        .name = "fltk_bridge_check",
+        .root_module = b.createModule(.{
+            .target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux }),
+            .optimize = optimize,
+        }),
+    });
+    cxx_check.root_module.addCSourceFile(.{
+        .file = b.path("src/gui/fltk_bridge.cpp"),
+        .flags = &.{ "-std=c++11", "-fno-exceptions", "-Wall", "-Wextra", "-Werror", "-I" ++ fltk_include_dir },
+    });
+    cxx_check.root_module.addIncludePath(b.path("src/gui"));
+    cxx_check.root_module.addSystemIncludePath(.{ .cwd_relative = fltk_include_dir });
+    cxx_check.root_module.link_libc = true;
+    cxx_check.root_module.link_libcpp = true;
+    check_cxx_step.dependOn(&fmt_check.step);
+    check_cxx_step.dependOn(&cxx_check.step);
+
+    // -----------------------------------------------------------------------
     // Fuzz step: mutating fuzzer for the untrusted-input parsers
     // -----------------------------------------------------------------------
     // Each target takes the raw bytes a PE file supplies to the parser. The

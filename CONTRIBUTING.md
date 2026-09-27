@@ -24,6 +24,7 @@ tracked-file steps stop there. Everything below runs from the repository root.
 | Fix formatting | `zig fmt src build.zig build.zig.zon` |
 | Lint shell scripts | `bash tests/check.sh check_shell` |
 | Check C sources | `bash tests/check.sh check_c` |
+| Check the C++ FLTK bridge | `bash tests/check.sh check_cxx` |
 | One gate step by name | `bash tests/check.sh <step>` (see below) |
 | Full gate, same as CI | `bash tests/check.sh` |
 | List gate step names | `bash tests/check.sh --list` |
@@ -38,20 +39,22 @@ always run on the host. Only `test-cli` varies by architecture.
 optimized ones and stay free of the absolute build path that a Debug binary
 embeds. Pass `-Doptimize=Debug` when stepping through code.
 
-`tests/check.sh` is the single pre-pull-request gate, and it is where each
-check's command lives: `zig fmt --check`, shellcheck over every tracked script,
-a warning-free `zig cc` compile of every tracked C source, all four
-architecture builds, the unit tests, and both native `test-cli` runs. The
-`static-analysis` job in `.github/workflows/ci.yml` runs every one of those
-steps through this script, so a check added here reaches CI without a second
-copy, and a local run cannot drift from CI.
+`tests/check.sh` is the single pre-pull-request gate. It runs the same checks,
+in the same order, as the `static-analysis` job in `.github/workflows/ci.yml`:
+`zig fmt --check`, shellcheck over every tracked script, a warning-free
+`zig cc` compile of every tracked C source, a warning-free compile of the C++
+FLTK bridge, all four architecture builds, the
+unit tests, and both native `test-cli` runs. If you add a check,
+add it in both places or local runs stop predicting CI.
 
 Each check is a named step, and `bash tests/check.sh <step> [step...]` runs
-just those, still in gate order: `fmt`, `check_shell`, `check_c`, `build`,
-`build-x86_64`, `build-wasm32`, `build-wasm64`, `dll`, `external-stubs`,
+just those, still in gate order: `fmt`, `check_shell`, `check_c`, `check_cxx`,
+`build`, `build-x86_64`, `build-wasm32`, `build-wasm64`, `dll`, `external-stubs`,
 `test`, `test-cli`, `test-cli-x86_64`, `fuzz`. `bash tests/check.sh --list`
 prints the names, and `bash tests/check.sh test build` runs those two in gate
-order. An unknown name fails with the list of known steps. The
+order. The three helper steps (shellcheck, the C compile and the C++ compile)
+are the ones CI calls this script for, so the commands and the `git ls-files`
+lists live in one place. An unknown name fails with the list of known steps. The
 pre-pull-request run is the bare `bash tests/check.sh`, which runs all of
 them.
 

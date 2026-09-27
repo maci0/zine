@@ -73,6 +73,16 @@ jobs:
       # analyzes them.
       - name: C sources compile warning-free
         run: bash tests/check.sh check_c
+      # src/gui/fltk_bridge.cpp is the only tracked C++ source and the Zig
+      # build only compiles it under -Dfltk, so without this step nothing in
+      # the workflow analyzes it. check-cxx compiles it alone, which needs the
+      # FLTK development headers and none of the X11 runtime they come with.
+      - name: Install the FLTK development headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libfltk1.3-dev
+      - name: C++ sources compile warning-free
+        run: bash tests/check.sh check_cxx
       # Compile every shipped target, not just the default: the compiler is
       # this repo's analyzer, so an error on x86_64/wasm32/wasm64 must block
       # merges exactly like one on x86. Separate steps keep peak memory at a

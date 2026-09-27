@@ -58,6 +58,7 @@ step_names=(
     fmt
     check_shell
     check_c
+    check_cxx
     build
     build-x86_64
     build-wasm32
@@ -78,6 +79,7 @@ step_commands=(
     'zig fmt --check src build.zig build.zig.zon'
     'check_shell'
     'check_c'
+    'check_cxx'
     'zig build --summary all'
     'zig build -Darch=x86_64 --summary all'
     'zig build -Darch=wasm32 --summary all'
@@ -112,9 +114,8 @@ check_shell() {
 # are errors here. Only compilation runs, so the objects land in the gitignored
 # .scratch/ instead of the repo root.
 #
-# src/gui/fltk_bridge.cpp is deliberately absent: it needs the FLTK headers
-# from libfltk1.3-dev, which the gate does not install. It is built by
-# `zig build -Darch=x86_64 -Dfltk` (see README.md).
+# src/gui/fltk_bridge.cpp is deliberately absent: it is C++ and needs the
+# FLTK headers from libfltk1.3-dev, so check_cxx below covers it instead.
 check_c() {
     local objdir=".scratch/c-check"
     mkdir -p "$objdir"
@@ -124,6 +125,26 @@ check_c() {
     done < <(git ls-files 'tests/*.c' ':!tests/cpubench_win32.c')
     zig cc -c -o "$objdir/cpubench_win32.o" -target x86-windows-gnu -std=c99 \
         -Wall -Wextra -Wpedantic -Werror tests/cpubench_win32.c
+}
+
+# src/gui/fltk_bridge.cpp is the one tracked C++ source, and the Zig build
+# only reaches it under `zig build -Darch=x86_64 -Dfltk`, so without a step
+# here nothing in the gate analyzes it: a warning, or a syntax error, merges
+# unseen and surfaces only in someone's FLTK build. `zig build check-cxx`
+# compiles the file alone with the flags build.zig gives the -Dfltk
+# executable, so the include paths and the warning set stay defined once, in
+# build.zig. It links nothing: the FLTK executable also needs X11, Xft and
+# fontconfig, and the gate has no business requiring a display stack to
+# check one file's warnings. The FLTK development headers are the only
+# requirement, and CI installs them.
+check_cxx() {
+    local include_dir=/usr/include/fltk1.3
+    if [[ ! -d "$include_dir/FL" ]]; then
+        printf 'the FLTK headers are missing from %s, which src/gui/fltk_bridge.cpp includes\n' "$include_dir" >&2
+        printf 'install them, then re-run: bash tests/check.sh check_cxx\n' >&2
+        exit 1
+    fi
+    zig build check-cxx --summary all
 }
 
 # The untrusted-input parsers. A function rather than a literal command, so

@@ -564,6 +564,7 @@ while working; `bash tests/check.sh --list` prints them:
 bash tests/check.sh fmt
 bash tests/check.sh check_shell    # every tracked script, not just tests/
 bash tests/check.sh check_c        # warning-free compile of every tracked C source
+bash tests/check.sh check_cxx      # the FLTK bridge, compiled without linking it
 bash tests/check.sh build build-x86_64 build-wasm32 build-wasm64
 bash tests/check.sh dll external-stubs
 bash tests/check.sh test
