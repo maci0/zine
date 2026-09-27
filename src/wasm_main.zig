@@ -977,6 +977,10 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: 
     // cached block ran. Mirrors the ring buffer layout.
     var block_counts = [_]u32{0} ** jit_compiler.BLOCK_CACHE_SLOTS;
 
+    // The host vtable the compiled blocks run through. It lives as long as
+    // this function, which is what the global pointer below assumes.
+    const jit_host: jit_host_mod.JitHost = host_wasm.wasmJitHost();
+
     // Register SMC invalidation hook globally
     global_jit_ptr = &jit;
     global_block_index_ptr = &block_index;

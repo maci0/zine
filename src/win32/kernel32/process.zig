@@ -1109,6 +1109,10 @@ const ThreadInfo = struct {
     /// thread calls WaitForSingleObject on this handle, so it is atomic.
     running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     exit_code: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// Host thread id of the guest thread running in this slot, published by
+    /// threadWrapper and by the synchronous WASM path. ExitThread matches on
+    /// it so one thread cannot stamp its exit code onto another's slot.
+    host_id: std.atomic.Value(std.Thread.Id) = std.atomic.Value(std.Thread.Id).init(0),
     /// TEB copy owned by this slot and reused by every guest thread created
     /// on it. Allocating a fresh one per CreateThread cycle and never freeing
     /// it leaked one page-allocator block per finished thread; slots are
@@ -1127,6 +1131,12 @@ const ThreadInfo = struct {
     pub fn setExitCode(self: *ThreadInfo, code: u32) void {
         self.exit_code.store(code, .release);
     }
+    pub fn hostThreadId(self: *const ThreadInfo) std.Thread.Id {
+        return self.host_id.load(.acquire);
+    }
+    pub fn setHostThreadId(self: *ThreadInfo, id: std.Thread.Id) void {
+        self.host_id.store(id, .release);
+    }
 };
 
 var thread_registry: [MAX_GUEST_THREADS]ThreadInfo = [_]ThreadInfo{.{}} ** MAX_GUEST_THREADS;
@@ -1135,11 +1145,15 @@ var thread_registry_mutex: if (platform.is_native) runtime.Mutex else struct {
     pub fn unlock(_: *@This()) void {}
 } = .{};
 
-fn allocThreadInfo() ?*ThreadInfo {
+/// Claims a registry slot for `handle` and publishes it in the same critical
+/// section. Claiming and publishing in separate steps let two guest threads
+/// calling CreateThread at once walk away with the same slot: both scan for
+/// `handle == 0` and both spawn a guest thread into it.
+fn claimThreadInfo(handle: usize) ?*ThreadInfo {
     thread_registry_mutex.lock();
     defer thread_registry_mutex.unlock();
     for (&thread_registry) |*ti| {
-        if (ti.handle == 0) return ti;
+        if (ti.handle == 0) return claim(ti, handle);
     }
     // Recycle a finished thread's slot so sequential CreateThread cycles
     // don't exhaust the registry with exited entries.
@@ -1149,11 +1163,48 @@ fn allocThreadInfo() ?*ThreadInfo {
                 if (ti.thread) |t| t.detach();
                 ti.thread = null;
             }
-            ti.handle = 0;
-            return ti;
+            return claim(ti, handle);
         }
     }
     return null;
+}
+
+/// Stamps a claimed slot. Runs under `thread_registry_mutex`.
+fn claim(ti: *ThreadInfo, handle: usize) *ThreadInfo {
+    ti.handle = handle;
+    ti.setExitCode(0);
+    ti.setRunning(true);
+    return ti;
+}
+
+/// Releases a claimed slot back to the pool. Runs under
+/// `thread_registry_mutex`.
+fn releaseThreadInfo(ti: *ThreadInfo) void {
+    ti.handle = 0;
+    ti.setRunning(false);
+    ti.setHostThreadId(0);
+}
+
+/// Publishes the spawned OS thread for a claimed slot, so the joiner in
+/// WaitForSingleObject and CloseHandle read it under the same lock.
+pub fn setThreadHandle(ti: *ThreadInfo, thread: std.Thread) void {
+    if (comptime !platform.is_native) return;
+    thread_registry_mutex.lock();
+    defer thread_registry_mutex.unlock();
+    ti.thread = thread;
+}
+
+/// Hands the OS thread behind a guest thread handle to the caller, which joins
+/// it outside the registry lock. Joining under the lock would block every
+/// other registry operation for the joined thread's whole life, and that
+/// thread's own exit path calls back into the registry.
+pub fn takeThreadForJoin(ti: *ThreadInfo) ?std.Thread {
+    if (comptime !platform.is_native) return null;
+    thread_registry_mutex.lock();
+    defer thread_registry_mutex.unlock();
+    const t = ti.thread orelse return null;
+    ti.thread = null;
+    return t;
 }
 
 /// Release a thread handle via CloseHandle.
@@ -1172,7 +1223,7 @@ pub fn closeThreadHandle(handle: usize) bool {
                 ti.thread = null;
                 if (ti.isRunning()) return true;
             }
-            ti.handle = 0;
+            releaseThreadInfo(ti);
             return true;
         }
     }
@@ -1217,6 +1268,11 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
     const parameter = ctx.parameter;
     const thread_info = ctx.thread_info;
 
+    // Publish this host thread's id before any guest code runs, so an
+    // ExitThread from the guest lands on this slot and not on another
+    // running thread's.
+    thread_info.setHostThreadId(std.Thread.getCurrentId());
+
     // Allocate a per-thread TEB so each thread has its own SEH chain and TLS.
     // Copy the main thread's TEB as a template. The allocation belongs to the
     // registry slot (thread_info.teb_mem) and is reused across CreateThread
@@ -1253,7 +1309,7 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
                 }
             }
         }
-        // Clear running only after FS is back on host TLS: allocThreadInfo
+        // Clear running only after FS is back on host TLS: claimThreadInfo
         // recycles any slot whose thread is !running, and the recycled TEB
         // must not be repopulated while this thread can still reach it.
         thread_info.setRunning(false);
@@ -1357,32 +1413,32 @@ pub fn CreateThread(lpThreadAttributes: usize, dwStackSize: usize, lpStartAddres
     _ = dwCreationFlags;
     if (trace.enable_tracing) trace.print("KERNEL32: CreateThread(start={x}, param={x})\n", .{ lpStartAddress, lpParameter });
 
-    const ti = allocThreadInfo() orelse {
+    const handle = @atomicRmw(usize, &next_thread_handle, .Add, 1, .monotonic);
+
+    // The slot is claimed and published under one lock, so a concurrent
+    // CreateThread cannot pick the same entry and spawn into it too.
+    const ti = claimThreadInfo(handle) orelse {
         if (trace.enable_tracing) trace.print("KERNEL32: CreateThread failed — thread registry full\n", .{});
         return 0;
     };
-
-    const handle = @atomicRmw(usize, &next_thread_handle, .Add, 1, .monotonic);
-
-    ti.handle = handle;
-    ti.setRunning(true);
-    ti.setExitCode(0);
 
     if (lpThreadId != 0) {
         @as(*u32, @ptrFromInt(lpThreadId)).* = @intCast(handle & 0xFFFF);
     }
 
     if (comptime platform.is_native) {
-        ti.thread = std.Thread.spawn(.{}, threadWrapper, .{ThreadWrapperCtx{
+        const thread = std.Thread.spawn(.{}, threadWrapper, .{ThreadWrapperCtx{
             .start_address = lpStartAddress,
             .parameter = lpParameter,
             .thread_info = ti,
         }}) catch {
             if (trace.enable_tracing) trace.print("KERNEL32: CreateThread spawn failed\n", .{});
-            ti.handle = 0;
-            ti.setRunning(false);
+            thread_registry_mutex.lock();
+            defer thread_registry_mutex.unlock();
+            if (ti.handle == handle) releaseThreadInfo(ti);
             return 0;
         };
+        setThreadHandle(ti, thread);
     } else {
         // WASM: run synchronously (no real threading)
         threadWrapper(ThreadWrapperCtx{
@@ -1399,19 +1455,15 @@ pub fn CreateThread(lpThreadAttributes: usize, dwStackSize: usize, lpStartAddres
 /// Implementation status: Partially implemented
 pub fn ExitThread(dwExitCode: u32) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: ExitThread({d})\n", .{dwExitCode});
-    // Store exit code for whichever thread we are
+    // Store the exit code on this thread's own slot. Matching on the host
+    // thread id, not on "some running thread", is what keeps one guest thread
+    // from overwriting another's exit code.
     if (comptime platform.is_native) {
         const tid = std.Thread.getCurrentId();
         for (&thread_registry) |*ti| {
-            if (ti.handle != 0 and ti.isRunning()) {
-                if (ti.thread) |t| {
-                    _ = t;
-                    // Match by host thread ID — the ThreadInfo.thread field
-                    // has the same thread ID as the currently executing thread
-                    _ = tid;
-                    ti.setExitCode(dwExitCode);
-                    break;
-                }
+            if (ti.handle != 0 and ti.isRunning() and ti.hostThreadId() == tid) {
+                ti.setExitCode(dwExitCode);
+                break;
             }
         }
     }
@@ -1778,7 +1830,7 @@ test "closeChildProcHandle frees reaped slots only" {
 }
 
 test "thread registry recycles finished slots" {
-    // No lock here: allocThreadInfo() takes thread_registry_mutex itself and
+    // No outer lock: claimThreadInfo() takes thread_registry_mutex itself and
     // the mutex is a non-reentrant spinlock — locking first would deadlock.
     const saved_registry = thread_registry;
     defer thread_registry = saved_registry;
@@ -1789,7 +1841,46 @@ test "thread registry recycles finished slots" {
     }
 
     // Every slot holds a finished thread — allocation must recycle, not fail.
-    try std.testing.expect(allocThreadInfo() != null);
+    try std.testing.expect(claimThreadInfo(0xA0010100) != null);
+}
+
+test "concurrent claims never hand the same slot to two threads" {
+    const saved_registry = thread_registry;
+    defer thread_registry = saved_registry;
+    for (&thread_registry) |*ti| ti.* = .{};
+
+    const workers = 8;
+    const Context = struct {
+        start: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        slots: [workers]?*ThreadInfo = [_]?*ThreadInfo{null} ** workers,
+
+        fn run(ctx: *@This(), worker: usize) void {
+            while (!ctx.start.load(.acquire)) std.atomic.spinLoopHint();
+            ctx.slots[worker] = claimThreadInfo(0xA0020000 + worker);
+        }
+    };
+    var ctx: Context = .{};
+    var threads: [workers]std.Thread = undefined;
+    var spawned: usize = 0;
+    {
+        defer {
+            ctx.start.store(true, .release);
+            for (threads[0..spawned]) |thread| thread.join();
+        }
+        for (&threads, 0..) |*thread, worker| {
+            thread.* = try std.Thread.spawn(.{}, Context.run, .{ &ctx, worker });
+            spawned += 1;
+        }
+    }
+
+    for (ctx.slots, 0..) |slot, worker| {
+        const ti = slot orelse return error.TestUnexpectedResult;
+        // Claiming and publishing in separate steps let two workers scan for
+        // handle == 0 and both walk away with the same entry.
+        try std.testing.expectEqual(@as(usize, 0xA0020000 + worker), ti.handle);
+        for (ctx.slots[0..worker]) |other| try std.testing.expect(other != slot);
+    }
+    for (ctx.slots) |slot| releaseThreadInfo(slot.?);
 }
 
 test "reapExitedChildren records exit codes of finished children" {
@@ -1836,18 +1927,15 @@ test "reapExitedChildren records exit codes of finished children" {
 }
 
 test "closeThreadHandle releases finished entries and reserves running ones" {
-    // No outer lock: closeThreadHandle()/allocThreadInfo() lock internally.
+    // No outer lock: closeThreadHandle()/claimThreadInfo() lock internally.
     const saved_registry = thread_registry;
     defer thread_registry = saved_registry;
     for (&thread_registry) |*ti| ti.* = .{};
 
-    const done = allocThreadInfo() orelse return error.TestUnexpectedResult;
-    done.handle = 0xA0010042;
+    const done = claimThreadInfo(0xA0010042) orelse return error.TestUnexpectedResult;
     done.setRunning(false);
 
-    const live = allocThreadInfo() orelse return error.TestUnexpectedResult;
-    live.handle = 0xA0010043;
-    live.setRunning(true);
+    const live = claimThreadInfo(0xA0010043) orelse return error.TestUnexpectedResult;
     live.thread = if (platform.is_native) null else {};
 
     try std.testing.expect(closeThreadHandle(0xA0010042));

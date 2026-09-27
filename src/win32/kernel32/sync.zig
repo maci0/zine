@@ -319,11 +319,11 @@ pub fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.W
     // Check if this is a thread handle
     if (process.getThreadInfo(hHandle)) |ti| {
         if (comptime platform.is_native) {
-            if (ti.thread) |thread| {
-                if (ti.isRunning()) {
-                    thread.join();
-                    ti.thread = null;
-                }
+            // The registry hands the thread over under its lock; the join
+            // itself runs outside it so the joined thread's exit path can
+            // still reach the registry.
+            if (ti.isRunning()) {
+                if (process.takeThreadForJoin(ti)) |thread| thread.join();
             }
         }
         // On WASM, thread already ran synchronously

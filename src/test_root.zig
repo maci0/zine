@@ -54,6 +54,7 @@ comptime {
     _ = @import("win32/kernel32/sync.zig");
     _ = @import("win32/kernel32/sysinfo.zig");
     _ = @import("win32/kernel32/process.zig");
+    _ = @import("win32/winmm/multimedia.zig");
     _ = @import("win32/rcdll.zig");
     _ = @import("win32/msvcrt/io.zig");
     _ = @import("win32/msvcrt/string.zig");

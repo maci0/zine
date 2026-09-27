@@ -104,25 +104,76 @@ pub const MmTimer = struct {
     callback: usize = 0,
     user_data: usize = 0,
     periodic: bool = false,
+    /// Bumped every time the slot is reissued. A timer thread that outlives
+    /// its slot (killed, then the slot handed to a new timer) compares this
+    /// against the generation it was spawned with and exits, so the stale
+    /// thread never fires the new timer's callback.
+    generation: u32 = 0,
     pending_fire: bool align(4) = false,
     thread: if (platform.is_native) ?std.Thread else void = if (platform.is_native) null else {},
 };
 
 pub var mm_timers: [MAX_MM_TIMERS]MmTimer = [_]MmTimer{.{}} ** MAX_MM_TIMERS;
 
-fn mmTimerThread(idx: usize) void {
+/// Serializes the slot scan, the entry store, and the thread handle in
+/// timeSetEvent/timeKillEvent against each other and against the snapshot the
+/// timer thread takes each round. Two guest threads calling timeSetEvent
+/// concurrently would otherwise both claim the same free slot (one entry store
+/// landing inside the other's) and spawn two threads for it, and a thread
+/// could read a callback paired with another timer's id and user data.
+var mm_timers_mutex: runtime.Mutex = .{};
+
+/// What one timer thread needs per round. Snapshotted under
+/// `mm_timers_mutex` so a concurrent reissue of the slot cannot tear the
+/// identity fields the callback is invoked with.
+const MmTimerRound = struct {
+    active: bool,
+    id: u32,
+    delay_ns: u64,
+    callback: usize,
+    user_data: usize,
+    periodic: bool,
+    generation_matches: bool,
+};
+
+/// Reads the entry for `generation` in one critical section. The timer thread
+/// runs the callback outside the lock; only this snapshot is held.
+fn mmTimerSnapshot(idx: usize, generation: u32) MmTimerRound {
+    mm_timers_mutex.lock();
+    defer mm_timers_mutex.unlock();
     const timer = &mm_timers[idx];
-    const delay_ns: u64 = @as(u64, timer.delay_ms) * 1_000_000;
+    return .{
+        .active = timer.active.load(.acquire),
+        .id = timer.id,
+        .delay_ns = @as(u64, timer.delay_ms) * 1_000_000,
+        .callback = timer.callback,
+        .user_data = timer.user_data,
+        .periodic = timer.periodic,
+        .generation_matches = timer.generation == generation,
+    };
+}
+
+const MmTimerCtx = struct { idx: usize, generation: u32 };
+
+fn mmTimerThread(ctx: MmTimerCtx) void {
+    const idx = ctx.idx;
+    const timer = &mm_timers[idx];
     const teb = @import("../teb.zig");
     const builtin = @import("builtin");
 
-    while (timer.active.load(.acquire)) {
+    while (true) {
         // A virtual clock advances simulated time instead of sleeping, which
         // fixes the number of callbacks a replay produces.
-        @import("../../runtime.zig").pauseOrAdvance(delay_ns);
-        if (!timer.active.load(.acquire)) break;
+        const first = mmTimerSnapshot(idx, ctx.generation);
+        if (!first.active or !first.generation_matches) break;
+        @import("../../runtime.zig").pauseOrAdvance(first.delay_ns);
 
-        if (timer.callback != 0) {
+        // Re-read after the sleep: the timer may have been killed, or the slot
+        // reissued to a new timer, while this thread waited.
+        const round = mmTimerSnapshot(idx, ctx.generation);
+        if (!round.active or !round.generation_matches) break;
+
+        if (round.callback != 0) {
             // Save current FS base and set TEB FS base for x86 context.
             // The game's timer callback accesses TEB via fs: segment,
             // so we must set FS to point to the TEB before calling it.
@@ -146,8 +197,8 @@ fn mmTimerThread(idx: usize) void {
                         : .{ .rax = true, .rcx = true, .r11 = true, .memory = true });
 
                     // Call the game's timer callback
-                    const cb = @as(*const fn (u32, u32, usize, usize, usize) callconv(w32cc.WINAPI) void, @ptrFromInt(timer.callback));
-                    cb(timer.id, 0, timer.user_data, 0, 0);
+                    const cb = @as(*const fn (u32, u32, usize, usize, usize) callconv(w32cc.WINAPI) void, @ptrFromInt(round.callback));
+                    cb(round.id, 0, round.user_data, 0, 0);
                     if (trace.enable_tracing) {
                         if (comptime builtin.target.cpu.arch == .x86) {
                             // Read re-entrancy flag via asm to avoid Zig optimizing away the read
@@ -176,9 +227,9 @@ fn mmTimerThread(idx: usize) void {
                             if (res_ptr != 0) {
                                 res_byte0 = @as(*const u8, @ptrFromInt(res_ptr)).*;
                             }
-                            trace.print("WINMM: TimeProc cb (timer {d}) flag={d} gui_gate={d} res_ptr=0x{x} res_byte0=0x{x} dat_6f22bc=0x{x}\n", .{ timer.id, flag_val, gui_gate, res_ptr, res_byte0, dat_6f22bc });
+                            trace.print("WINMM: TimeProc cb (timer {d}) flag={d} gui_gate={d} res_ptr=0x{x} res_byte0=0x{x} dat_6f22bc=0x{x}\n", .{ round.id, flag_val, gui_gate, res_ptr, res_byte0, dat_6f22bc });
                         } else {
-                            trace.print("WINMM: TimeProc cb (timer {d})\n", .{timer.id});
+                            trace.print("WINMM: TimeProc cb (timer {d})\n", .{round.id});
                         }
                     }
 
@@ -206,7 +257,7 @@ fn mmTimerThread(idx: usize) void {
                     );
 
                     if (trace.enable_tracing) {
-                        trace.print("WINMM: TimeProc (timer {d}) callback=0x{x}\n", .{ timer.id, timer.callback });
+                        trace.print("WINMM: TimeProc (timer {d}) callback=0x{x}\n", .{ round.id, round.callback });
                         // One-shot dump of game function table after 500 ticks
                         const FTDump = struct {
                             var tick: u32 = 0;
@@ -359,11 +410,11 @@ fn mmTimerThread(idx: usize) void {
                         }
                     }
 
-                    const cb = @as(*const fn (u32, u32, usize, usize, usize) callconv(w32cc.WINAPI) void, @ptrFromInt(timer.callback));
-                    cb(timer.id, 0, timer.user_data, 0, 0);
+                    const cb = @as(*const fn (u32, u32, usize, usize, usize) callconv(w32cc.WINAPI) void, @ptrFromInt(round.callback));
+                    cb(round.id, 0, round.user_data, 0, 0);
 
                     if (trace.enable_tracing) {
-                        trace.print("WINMM: TimeProc returned (timer {d})\n", .{timer.id});
+                        trace.print("WINMM: TimeProc returned (timer {d})\n", .{round.id});
                     }
 
                     // Restore Zig's FS selector
@@ -374,14 +425,14 @@ fn mmTimerThread(idx: usize) void {
                 }
             } else {
                 // Other architectures: just call without FS setup
-                if (trace.enable_tracing) trace.print("WINMM: firing TimeProc callback 0x{x} (timer {d})\n", .{ timer.callback, timer.id });
-                const cb = @as(*const fn (u32, u32, usize, usize, usize) callconv(w32cc.WINAPI) void, @ptrFromInt(timer.callback));
-                cb(timer.id, 0, timer.user_data, 0, 0);
-                if (trace.enable_tracing) trace.print("WINMM: TimeProc callback returned (timer {d})\n", .{timer.id});
+                if (trace.enable_tracing) trace.print("WINMM: firing TimeProc callback 0x{x} (timer {d})\n", .{ round.callback, round.id });
+                const cb = @as(*const fn (u32, u32, usize, usize, usize) callconv(w32cc.WINAPI) void, @ptrFromInt(round.callback));
+                cb(round.id, 0, round.user_data, 0, 0);
+                if (trace.enable_tracing) trace.print("WINMM: TimeProc callback returned (timer {d})\n", .{round.id});
             }
         }
 
-        if (!timer.periodic) {
+        if (!round.periodic) {
             timer.active.store(false, .release);
             break;
         }
@@ -394,6 +445,12 @@ pub fn timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usize, f
     if (trace.enable_tracing) trace.print("WINMM: timeSetEvent(delay={d}, callback=0x{x}, flags=0x{x})\n", .{ uDelay, fptc, fuEvent });
 
     const TIME_PERIODIC = 1;
+
+    // The slot scan, the entry store, and the spawn are one critical section:
+    // two guest threads arming timers at once would otherwise both pick the
+    // same free slot and each spawn a thread for it.
+    mm_timers_mutex.lock();
+    defer mm_timers_mutex.unlock();
 
     // Find a free timer slot
     var slot: ?usize = null;
@@ -408,6 +465,11 @@ pub fn timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usize, f
     const id = timer_id_counter;
     timer_id_counter += 1;
 
+    // A thread from a previous timer may still be winding down on this slot;
+    // the new generation tells it to stop instead of firing this timer's
+    // callback.
+    const generation = mm_timers[idx].generation +% 1;
+
     mm_timers[idx] = .{
         .active = std.atomic.Value(bool).init(true),
         .id = id,
@@ -415,12 +477,13 @@ pub fn timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usize, f
         .callback = fptc,
         .user_data = dwUser,
         .periodic = (fuEvent & TIME_PERIODIC) != 0,
+        .generation = generation,
         .thread = if (platform.is_native) null else {},
     };
 
     // Spawn timer thread (only on native — WASM is single-threaded)
     if (comptime platform.is_native) {
-        mm_timers[idx].thread = std.Thread.spawn(.{}, mmTimerThread, .{idx}) catch {
+        mm_timers[idx].thread = std.Thread.spawn(.{}, mmTimerThread, .{MmTimerCtx{ .idx = idx, .generation = generation }}) catch {
             mm_timers[idx].active.store(false, .release);
             return 0;
         };
@@ -434,6 +497,8 @@ pub fn timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usize, f
 
 /// Implementation status: Partially implemented
 pub fn timeKillEvent(uTimerID: u32) callconv(w32cc.WINAPI) u32 {
+    mm_timers_mutex.lock();
+    defer mm_timers_mutex.unlock();
     for (&mm_timers) |*t| {
         if (t.active.load(.acquire) and t.id == uTimerID) {
             t.active.store(false, .release);
@@ -566,4 +631,54 @@ pub fn midiOutOpen(phmo: usize, uDeviceID: u32, dwCallback: usize, dwInstance: u
         @as(*align(1) u32, @ptrFromInt(phmo)).* = 0xBEEF0050;
     }
     return 0;
+}
+
+test "concurrent timeSetEvent arms distinct timer slots" {
+    if (comptime !platform.is_native) return error.SkipZigTest;
+
+    const saved_timers = mm_timers;
+    const saved_counter = timer_id_counter;
+    defer {
+        for (&mm_timers) |*t| {
+            t.active.store(false, .release);
+            if (t.thread) |thread| thread.detach();
+            t.thread = null;
+        }
+        mm_timers = saved_timers;
+        timer_id_counter = saved_counter;
+    }
+    mm_timers = [_]MmTimer{.{}} ** MAX_MM_TIMERS;
+    timer_id_counter = 1;
+
+    const Context = struct {
+        start: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        ids: [4]u32 = [_]u32{0} ** 4,
+
+        fn run(ctx: *@This(), worker: usize) void {
+            while (!ctx.start.load(.acquire)) std.atomic.spinLoopHint();
+            // No callback: the thread only sleeps until the timer is killed.
+            ctx.ids[worker] = timeSetEvent(50, 0, 0, 0, 1);
+        }
+    };
+    var ctx: Context = .{};
+    var threads: [4]std.Thread = undefined;
+    var spawned: usize = 0;
+    {
+        defer {
+            ctx.start.store(true, .release);
+            for (threads[0..spawned]) |thread| thread.join();
+        }
+        for (&threads, 0..) |*thread, worker| {
+            thread.* = try std.Thread.spawn(.{}, Context.run, .{ &ctx, worker });
+            spawned += 1;
+        }
+    }
+
+    // Two threads claiming one free slot would hand out the same id twice and
+    // leave one timer with two dispatcher threads.
+    for (ctx.ids, 0..) |id, i| {
+        try std.testing.expect(id != 0);
+        for (ctx.ids[0..i]) |other| try std.testing.expect(other != id);
+        try std.testing.expectEqual(@as(u32, 0), timeKillEvent(id));
+    }
 }
