@@ -4,6 +4,7 @@
 #
 # Usage:
 #   bash tests/check.sh                 # the whole gate, in order
+#   bash tests/check.sh --list          # the step names
 #   bash tests/check.sh <step> [step..] # only the named steps, still in order
 #
 # The named steps are the ones in the step_names list below; `bash
@@ -22,6 +23,16 @@ done
 if ((${#missing[@]} > 0)); then
     printf 'missing required tool(s): %s\n' "${missing[*]}" >&2
     printf 'install them, then re-run: bash tests/check.sh\n' >&2
+    exit 1
+fi
+
+# check_shell and check_c enumerate sources with `git ls-files`, which needs a
+# work tree. A source archive (GitHub's "Download ZIP") has none, and without
+# this the first tracked-file step dies with git's own exit 128 and a name the
+# contributor has to decode.
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf 'this directory is not a git work tree; the tracked-file checks need one\n' >&2
+    printf 'clone with git (not a source archive), then re-run: bash tests/check.sh\n' >&2
     exit 1
 fi
 
@@ -58,6 +69,7 @@ step_names=(
     test
     test-cli
     test-cli-x86_64
+    fuzz
 )
 step_commands=(
     'zig fmt --check src build.zig build.zig.zon'
@@ -105,6 +117,12 @@ check_c() {
 
 # No argument means the whole gate. Named steps always run in gate order, so
 # `check.sh test build` runs the same two steps as `check.sh build test`.
+# `--list` prints the step names and runs nothing.
+if (($# == 1)) && [[ "$1" == --list ]]; then
+    printf '%s\n' "${step_names[@]}"
+    exit 0
+fi
+
 selected=("$@")
 if (($# == 0)); then
     selected=("${step_names[@]}")

@@ -7,7 +7,7 @@ No Windows installation, no Wine.
 ## What works
 
 - Full MSVC 6.0 toolchain: CL.EXE, LINK.EXE, RC.EXE, NMAKE.EXE, and 8 more utilities run to completion
-- 288 unit tests pass (2 skipped) on the host with `zig build test`; the gate in
+- 329 unit tests pass (2 skipped) on the host with `zig build test`; the gate in
   `tests/check.sh` adds the CLI suites on native x86 and x86_64
 - 158/128 integration checks on native/WASM, 20 FLTK smoke tests (these need guest
   binaries and are not part of `tests/check.sh`)
@@ -79,6 +79,9 @@ retroactively.
 - `docs/THREAT_MODEL.md`, a risk ranking of the host process.
 - A transfer budget for the four precompressed web UI assets, checked by
   `zig build test`, so the bytes a visitor downloads cannot grow unnoticed.
+- Named gate steps in `tests/check.sh`: `bash tests/check.sh --list` prints
+  them and `bash tests/check.sh <name>` runs one, so a single check no longer
+  means running the whole gate.
 
 #### Fixed
 
@@ -412,8 +415,8 @@ bash tests/check.sh
 One command runs the whole gate: it names any missing tool or wrong Zig
 version before starting, then runs the CI checks in order and stops at the
 first failure. Build targets run sequentially to limit peak memory rather than
-via `-Dall`, matching CI. The individual steps, if you need them on their own,
-run by name:
+via `-Dall`, matching CI. Each step has a name, so you can run one on its own
+while working; `bash tests/check.sh --list` prints them:
 
 ```sh
 bash tests/check.sh fmt
@@ -423,11 +426,12 @@ bash tests/check.sh build build-x86_64 build-wasm32 build-wasm64
 bash tests/check.sh dll external-stubs
 bash tests/check.sh test
 bash tests/check.sh test-cli test-cli-x86_64
+bash tests/check.sh fuzz
 ```
 
-The named steps are the `static-analysis` job in `.github/workflows/ci.yml`, and
-the script is where each one's command lives; a step added there reaches CI
-without a second copy.
+Named steps run in gate order, whatever order you pass them in. They are the
+`static-analysis` job in `.github/workflows/ci.yml`, and the script is where
+each one's command lives; a step added there reaches CI without a second copy.
 
 For the edit-test loop, use `zig build test -Dtest-filter=<substring>` above;
 `-Darch` does not change the host target of unit tests. Run

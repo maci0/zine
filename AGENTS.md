@@ -13,7 +13,7 @@ Run Win98/Win2K-era 32-bit Windows executables on Linux and in the browser witho
 
 ## Verification
 
-Run `bash tests/check.sh` from the repository root before a pull request. It first requires the listed tools and a Zig version matching `build.zig.zon`, then runs the CI gate in the same order (formatting, shell lint, the warning-free C compile, all four architecture builds, the external-stub DLL and `-Dexternal-stubs` builds, unit tests, both native `test-cli` runs, and a 10-second fuzz run) and stops at the first failure. Single steps, when bisecting:
+Run `bash tests/check.sh` from the repository root before a pull request. It first requires the listed tools and a Zig version matching `build.zig.zon`, then runs the CI gate in the same order (formatting, shell lint, the warning-free C compile, all four architecture builds, the external-stub DLL and `-Dexternal-stubs` builds, unit tests, both native `test-cli` runs, and a 10-second fuzz run) and stops at the first failure. Each gate step has a name, so one of them runs on its own with `bash tests/check.sh <name>`; `--list` prints the names. Single steps, when bisecting:
 
 - Unit tests: `zig build test` (also checks formatting). Tests run on the host; `-Darch` does not change the test target.
 - Native CLI tests: `zig build test-cli`, then `zig build test-cli -Darch=x86_64`; no guest binaries required.
@@ -21,7 +21,7 @@ Run `bash tests/check.sh` from the repository root before a pull request. It fir
 - Compile/typecheck each target, sequentially to limit peak memory: `zig build`, `zig build -Darch=x86_64`, `zig build -Darch=wasm32`, `zig build -Darch=wasm64`. These build ReleaseSafe, the default of the `-Doptimize` option; pass `-Doptimize=Debug` for a debugging loop and expect that to change build time.
 - Stub DLLs: `zig build -Ddll=all` compiles `src/dll/` and `src/win32_dll_api.zig` for x86-windows. `zig build -Dexternal-stubs` covers the other half of the embed/external stub switch.
 
-Formatting also gates the install and test steps inside `build.zig`. A new gate belongs in `tests/check.sh` and `.github/workflows/ci.yml` together; fix failing code rather than weakening checks or dropping targets. `bash tests/check.sh <step>` runs one named step of the gate (`fmt`, `check_shell`, `check_c`, `build`, `build-x86_64`, `build-wasm32`, `build-wasm64`, `dll`, `external-stubs`, `test`, `test-cli`, `test-cli-x86_64`); CI calls the script for the helper steps, so their commands and file lists are defined there alone.
+Formatting also gates the install and test steps inside `build.zig`. A new gate belongs in `tests/check.sh` and `.github/workflows/ci.yml` together; fix failing code rather than weakening checks or dropping targets. `bash tests/check.sh <step>` runs one named step of the gate (`fmt`, `check_shell`, `check_c`, `build`, `build-x86_64`, `build-wasm32`, `build-wasm64`, `dll`, `external-stubs`, `test`, `test-cli`, `test-cli-x86_64`, `fuzz`); CI calls the script for the helper steps, so their commands and file lists are defined there alone.
 
 See `README.md` for optional FLTK/Wasmer builds, run commands, and integration suites, and `CONTRIBUTING.md` for the gate and commit conventions. Integration tests require guest binaries and runtime dependencies beyond the unit-test setup.
 
