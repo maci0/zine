@@ -422,6 +422,7 @@ zine/
 │   ├── MEMORY_LAYOUT.md     # Memory layout details
 │   ├── phase0-audit-results.md # Phase 0 codebase audit findings
 │   ├── STATUS.md            # Current implementation & verification status
+│   ├── THREAT_MODEL.md      # Attack surface, trust boundaries, risks
 │   ├── TODO.md              # Remaining work / task tracking
 │   ├── WASM_PLAN.md         # WASM porting plan
 │   ├── WEBGPU_TRANSLATION.md # DirectDraw/D3D → WebGPU translation guide

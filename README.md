@@ -13,7 +13,7 @@ No Windows installation, no Wine.
 - 35+ Win32 DLL stubs: kernel32, user32, gdi32, advapi32, shell32, ws2_32, comctl32, ole32, msvcrt, and more
 - x86-to-WASM JIT compiler (basic block level, interleaves with interpreter)
 - Web GUI with Win2K-style desktop, or native FLTK window
-- Virtual filesystem rooted at `drive_c/`
+- Virtual filesystem rooted at `drive_c/` (guest `Z:\` and absolute POSIX paths still reach the host filesystem; see `docs/THREAT_MODEL.md`)
 
 ## Releases and upgrades
 
@@ -254,4 +254,4 @@ src/
 
 ~65K lines of Zig.
 
-See `docs/` for detailed design notes on memory layout, JIT strategy, native execution, and Win32 API coverage.
+See `docs/` for detailed design notes on memory layout, JIT strategy, native execution, and Win32 API coverage. `docs/THREAT_MODEL.md` records the attack surface, trust boundaries, and known gaps.
