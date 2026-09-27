@@ -167,8 +167,11 @@ canvas                      { cursor: none; }
 
     /* ===== Typography (NONCLIENTMETRICS lfMessageFont at 96 DPI) ===== */
 
-    --font-ui:   'MS Sans Serif', 'Microsoft Sans Serif', 'Tahoma', 'Segoe UI', sans-serif;
-    --font-mono: 'Lucida Console', 'Consolas', 'Courier New', monospace;
+    /* The Win2k faces carry no glyphs outside Latin-1, so the stacks end in
+     * families that cover Cyrillic, Greek, Arabic, Hebrew, CJK and Devanagari
+     * before the generic fallback picks a system face for the whole range. */
+    --font-ui:   'MS Sans Serif', 'Microsoft Sans Serif', 'Tahoma', 'Segoe UI', 'Noto Sans', 'DejaVu Sans', 'Liberation Sans', sans-serif;
+    --font-mono: 'Lucida Console', 'Consolas', 'Courier New', 'DejaVu Sans Mono', 'Noto Sans Mono', monospace;
 
     /* ===== Surfaces outside the GetSysColor set =====
      * Paint used by controls whose fill is not a system color:

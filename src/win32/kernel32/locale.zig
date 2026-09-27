@@ -128,6 +128,7 @@ pub fn WideCharToMultiByte(CodePage: u32, dwFlags: u32, lpWideCharStr_ptr: usize
 }
 
 const ansi = @import("../ansi.zig");
+const unicase = @import("../unicase.zig");
 const kernel32_error = @import("error.zig");
 
 const kernel32_mem = @import("mem.zig");
@@ -299,9 +300,9 @@ pub fn LCMapStringA(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, 
 
     for (0..copy_len) |i| {
         if ((dwMapFlags & LCMAP_UPPERCASE) != 0) {
-            dst[i] = std.ascii.toUpper(src[i]);
+            dst[i] = unicase.toUpperAnsiByte(src[i]);
         } else if ((dwMapFlags & LCMAP_LOWERCASE) != 0) {
-            dst[i] = std.ascii.toLower(src[i]);
+            dst[i] = unicase.toLowerAnsiByte(src[i]);
         } else {
             dst[i] = src[i];
         }
@@ -329,10 +330,10 @@ pub fn LCMapStringW(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, 
 
     for (0..copy_len) |i| {
         const ch = src[i];
-        if ((dwMapFlags & LCMAP_UPPERCASE) != 0 and ch >= 'a' and ch <= 'z') {
-            dst[i] = ch - 0x20;
-        } else if ((dwMapFlags & LCMAP_LOWERCASE) != 0 and ch >= 'A' and ch <= 'Z') {
-            dst[i] = ch + 0x20;
+        if ((dwMapFlags & LCMAP_UPPERCASE) != 0) {
+            dst[i] = unicase.toUpper(ch);
+        } else if ((dwMapFlags & LCMAP_LOWERCASE) != 0) {
+            dst[i] = unicase.toLower(ch);
         } else {
             dst[i] = ch;
         }
@@ -360,8 +361,8 @@ pub fn CompareStringA(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1:
         var c1 = sl1[i];
         var c2 = sl2[i];
         if (ignore_case) {
-            c1 = std.ascii.toLower(c1);
-            c2 = std.ascii.toLower(c2);
+            c1 = unicase.toLowerAnsiByte(c1);
+            c2 = unicase.toLowerAnsiByte(c2);
         }
         if (c1 < c2) return 1; // CSTR_LESS_THAN
         if (c1 > c2) return 3; // CSTR_GREATER_THAN
@@ -391,8 +392,8 @@ pub fn CompareStringW(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1:
         var c1 = s1[i];
         var c2 = s2[i];
         if (ignore_case) {
-            if (c1 >= 'A' and c1 <= 'Z') c1 += 0x20;
-            if (c2 >= 'A' and c2 <= 'Z') c2 += 0x20;
+            c1 = unicase.foldKey(c1);
+            c2 = unicase.foldKey(c2);
         }
         if (c1 < c2) return 1; // CSTR_LESS_THAN
         if (c1 > c2) return 3; // CSTR_GREATER_THAN
@@ -815,8 +816,8 @@ pub fn lstrcmpiA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 
     const s2 = trace.c_span(lpString2);
     const len = @min(s1.len, s2.len);
     for (0..len) |i| {
-        const c1 = std.ascii.toLower(s1[i]);
-        const c2 = std.ascii.toLower(s2[i]);
+        const c1 = unicase.toLowerAnsiByte(s1[i]);
+        const c2 = unicase.toLowerAnsiByte(s2[i]);
         if (c1 < c2) return -1;
         if (c1 > c2) return 1;
     }
@@ -915,8 +916,8 @@ pub fn lstrcmpiW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 
     const s2 = @as([*]const u16, @ptrFromInt(lpString2));
     var i: usize = 0;
     while (s1[i] != 0 and s2[i] != 0) : (i += 1) {
-        const c1: u16 = if (s1[i] < 128) std.ascii.toLower(@intCast(s1[i])) else s1[i];
-        const c2: u16 = if (s2[i] < 128) std.ascii.toLower(@intCast(s2[i])) else s2[i];
+        const c1 = unicase.foldKey(s1[i]);
+        const c2 = unicase.foldKey(s2[i]);
         if (c1 < c2) return -1;
         if (c1 > c2) return 1;
     }
@@ -961,6 +962,32 @@ test "lstrcmpiW preserves non-ASCII UTF-16 code units" {
     const lower = [_:0]u16{ 'a', 0x0101, 'z' };
     try testing.expectEqual(@as(i32, 0), lstrcmpiW(@intFromPtr(&upper), @intFromPtr(&lower)));
     try testing.expect(lstrcmpiW(@intFromPtr(&[_:0]u16{}), @intFromPtr(&lower)) < 0);
+}
+
+test "lstrcmpiW folds case beyond ASCII" {
+    const pairs = .{
+        .{ [_:0]u16{0x00C9}, [_:0]u16{0x00E9} }, // E acute
+        .{ [_:0]u16{0x0178}, [_:0]u16{0x00FF} }, // y diaeresis
+        .{ [_:0]u16{0x0410}, [_:0]u16{0x0430} }, // Cyrillic a
+        .{ [_:0]u16{0x0391}, [_:0]u16{0x03B1} }, // Greek alpha
+        .{ [_:0]u16{ 'S', 0x00E9 }, [_:0]u16{ 's', 0x00C9 } },
+    };
+    inline for (pairs) |pair| {
+        var first_text = pair[0];
+        var second_text = pair[1];
+        try testing.expectEqual(@as(i32, 0), lstrcmpiW(@intFromPtr(&first_text), @intFromPtr(&second_text)));
+    }
+
+    // Case folding must not make unrelated letters equal.
+    const cyrillic = [_:0]u16{0x0430};
+    const latin = [_:0]u16{'a'};
+    try testing.expect(lstrcmpiW(@intFromPtr(&cyrillic), @intFromPtr(&latin)) != 0);
+}
+
+test "lstrcmpiA folds accented CP1252 bytes" {
+    const upper = [_:0]u8{0xC9}; // E acute
+    const lower = [_:0]u8{0xE9}; // e acute
+    try testing.expectEqual(@as(i32, 0), lstrcmpiA(@intFromPtr(&upper), @intFromPtr(&lower)));
 }
 
 test "GetDateFormatA honors the caller's SYSTEMTIME" {

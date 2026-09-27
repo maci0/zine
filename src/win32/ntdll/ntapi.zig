@@ -4,6 +4,7 @@ const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
 const platform = @import("../../platform.zig");
 const mem_alloc = @import("../kernel32/mem.zig");
+const unicase = @import("../unicase.zig");
 
 /// NTDLL stub implementations — NT Native API and CRT intrinsics.
 /// Contains: NtQuerySystemInformation, RtlInitUnicodeString, SID functions,
@@ -417,8 +418,7 @@ pub fn wcsicmp(s1_ptr: usize, s2_ptr: usize) callconv(w32cc.WINAPI) i32 {
 }
 
 fn toLowerW(c: u16) u16 {
-    if (c >= 'A' and c <= 'Z') return c + 32;
-    return c;
+    return unicase.toLower(c);
 }
 
 /// Implementation status: Partially implemented

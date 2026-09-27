@@ -2,6 +2,7 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
 const io = @import("io.zig");
+const unicase = @import("../unicase.zig");
 
 /// Implementation status: Partially implemented
 pub fn strlen(str: [*:0]const u8) callconv(.c) usize {
@@ -69,8 +70,8 @@ pub fn stricmp(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) i32 {
     var i: usize = 0;
     var ret: i32 = 0;
     while (i < sp1.len and i < sp2.len) : (i += 1) {
-        const c1 = std.ascii.toLower(sp1[i]);
-        const c2 = std.ascii.toLower(sp2[i]);
+        const c1 = unicase.toLowerAnsiByte(sp1[i]);
+        const c2 = unicase.toLowerAnsiByte(sp2[i]);
         if (c1 != c2) {
             ret = @as(i32, c1) - @as(i32, c2);
             break;
@@ -88,8 +89,8 @@ pub fn mbsicmp(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) i32 {
     const sp2 = std.mem.span(s2);
     var i: usize = 0;
     while (i < sp1.len and i < sp2.len) : (i += 1) {
-        const c1 = std.ascii.toLower(sp1[i]);
-        const c2 = std.ascii.toLower(sp2[i]);
+        const c1 = unicase.toLowerAnsiByte(sp1[i]);
+        const c2 = unicase.toLowerAnsiByte(sp2[i]);
         if (c1 != c2) return @as(i32, c1) - @as(i32, c2);
     }
     const ret: i32 = if (sp1.len < sp2.len) -1 else if (sp1.len > sp2.len) @as(i32, 1) else 0;
@@ -103,8 +104,8 @@ pub fn strnicmp(s1: [*:0]const u8, s2: [*:0]const u8, count: usize) callconv(.c)
     const sp2 = std.mem.span(s2);
     var i: usize = 0;
     while (i < count and i < sp1.len and i < sp2.len) : (i += 1) {
-        const c1 = std.ascii.toLower(sp1[i]);
-        const c2 = std.ascii.toLower(sp2[i]);
+        const c1 = unicase.toLowerAnsiByte(sp1[i]);
+        const c2 = unicase.toLowerAnsiByte(sp2[i]);
         if (c1 != c2) return @as(i32, c1) - @as(i32, c2);
     }
     if (i == count) return 0;
@@ -296,8 +297,8 @@ pub fn wcsncmp(s1: [*]const u16, s2: [*]const u16, count: usize) callconv(.c) i3
 pub fn wcsicmp(s1: [*]const u16, s2: [*]const u16) callconv(.c) i32 {
     var i: usize = 0;
     while (s1[i] != 0 and s2[i] != 0) : (i += 1) {
-        const c1 = if (s1[i] <= 255) std.ascii.toLower(@intCast(s1[i])) else s1[i];
-        const c2 = if (s2[i] <= 255) std.ascii.toLower(@intCast(s2[i])) else s2[i];
+        const c1 = unicase.foldKey(s1[i]);
+        const c2 = unicase.foldKey(s2[i]);
         if (c1 != c2) return @as(i32, c1) - @as(i32, c2);
     }
     return @as(i32, s1[i]) - @as(i32, s2[i]);
@@ -307,8 +308,8 @@ pub fn wcsnicmp(s1: [*]const u16, s2: [*]const u16, count: usize) callconv(.c) i
     if (count == 0) return 0;
     var i: usize = 0;
     while (i < count and s1[i] != 0 and s2[i] != 0) : (i += 1) {
-        const c1 = if (s1[i] <= 255) std.ascii.toLower(@intCast(s1[i])) else s1[i];
-        const c2 = if (s2[i] <= 255) std.ascii.toLower(@intCast(s2[i])) else s2[i];
+        const c1 = unicase.foldKey(s1[i]);
+        const c2 = unicase.foldKey(s2[i]);
         if (c1 != c2) return @as(i32, c1) - @as(i32, c2);
     }
     if (i == count) return 0;
@@ -548,14 +549,14 @@ pub fn isctype(c: i32, mask: i32) callconv(.c) i32 {
 /// Implementation status: Partially implemented
 pub fn tolower(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
-    if (v <= 255) return std.ascii.toLower(@intCast(v));
+    if (v <= 255) return unicase.toLowerAnsiByte(@intCast(v));
     return v;
 }
 
 /// Implementation status: Partially implemented
 pub fn toupper(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
-    if (v <= 255) return std.ascii.toUpper(@intCast(v));
+    if (v <= 255) return unicase.toUpperAnsiByte(@intCast(v));
     return v;
 }
 
@@ -573,16 +574,12 @@ pub fn iswctype(c: i32, desc: i32) callconv(.c) i32 {
 
 /// Implementation status: Partially implemented
 pub fn towupper(c: i32) callconv(.c) i32 {
-    const v = c & 0xFFFF;
-    if (v <= 255) return std.ascii.toUpper(@intCast(v));
-    return v;
+    return unicase.toUpper(@as(u16, @intCast(c & 0xFFFF)));
 }
 
 /// Implementation status: Partially implemented
 pub fn towlower(c: i32) callconv(.c) i32 {
-    const v = c & 0xFFFF;
-    if (v <= 255) return std.ascii.toLower(@intCast(v));
-    return v;
+    return unicase.toLower(@as(u16, @intCast(c & 0xFFFF)));
 }
 
 /// Implementation status: Partially implemented
