@@ -123,7 +123,20 @@ pub const LazyFlags = struct {
             .inc => self.result == sb,
             .dec => (self.result & self.size.mask()) == (sb -% 1),
             .logic => false,
-            .shl, .shr, .sar => false, // simplified — only defined for shift count 1
+            // OF is only architecturally defined for a shift count of 1; the
+            // SDM leaves it undefined otherwise and we define it as 0, which
+            // is also what count 0 (no-op) produces on real hardware.
+            .shl => blk: {
+                // count 1: OF = MSB(result) XOR CF
+                if (@as(u6, @truncate(self.operand2)) != 1) break :blk false;
+                break :blk ((self.result & sb) != 0) != self.getCF();
+            },
+            .shr => blk: {
+                // count 1: OF = the original MSB, the bit that was shifted in
+                if (@as(u6, @truncate(self.operand2)) != 1) break :blk false;
+                break :blk (self.operand1 & sb) != 0;
+            },
+            .sar => false,
             .none => unreachable,
         };
     }
@@ -497,6 +510,62 @@ test "lazy flags: shr carry flag" {
     f.update(.shr, .dword, 0x00000000, 0x01, 1);
     try testing.expect(f.getCF());
     try testing.expect(f.getZF());
+}
+
+test "lazy flags: shl overflow flag equals MSB xor CF" {
+    var f = LazyFlags{};
+    // SHL 0x40000000, 1 → 0x80000000: MSB set, CF 0 → OF=1
+    f.update(.shl, .dword, 0x80000000, 0x40000000, 1);
+    try testing.expect(f.getOF());
+
+    // SHL 0x80000000, 1 → 0x00000000: MSB clear, CF 1 → OF=1
+    var g = LazyFlags{};
+    g.update(.shl, .dword, 0x00000000, 0x80000000, 1);
+    try testing.expect(g.getOF());
+
+    // SHL 0xC0000000, 1 → 0x80000000: MSB set, CF 1 → OF=0
+    var h = LazyFlags{};
+    h.update(.shl, .dword, 0x80000000, 0xC0000000, 1);
+    try testing.expect(!h.getOF());
+}
+
+test "lazy flags: shr overflow flag is the original sign bit" {
+    var f = LazyFlags{};
+    // SHR 0x80000000, 1 → 0x40000000: original MSB set → OF=1
+    f.update(.shr, .dword, 0x40000000, 0x80000000, 1);
+    try testing.expect(f.getOF());
+
+    // SHR 0x40000000, 1 → 0x20000000: original MSB clear → OF=0
+    var g = LazyFlags{};
+    g.update(.shr, .dword, 0x20000000, 0x40000000, 1);
+    try testing.expect(!g.getOF());
+}
+
+test "lazy flags: sar overflow flag is always clear" {
+    var f = LazyFlags{};
+    // SAR 0x80000000, 1 → 0xC0000000: sign preserved → OF=0
+    f.update(.sar, .dword, 0xC0000000, 0x80000000, 1);
+    try testing.expect(!f.getOF());
+}
+
+test "lazy flags: shift overflow is defined as 0 for counts above one" {
+    // The SDM leaves OF undefined for a count other than 1; we pin it to 0.
+    var f = LazyFlags{};
+    // SHR 0x80000000, 4 → 0x08000000: original MSB set, count 4 → OF=0
+    f.update(.shr, .dword, 0x08000000, 0x80000000, 4);
+    try testing.expect(!f.getOF());
+
+    var g = LazyFlags{};
+    // SHL 0x20000000, 2 → 0x80000000: count 2 → OF=0
+    g.update(.shl, .dword, 0x80000000, 0x20000000, 2);
+    try testing.expect(!g.getOF());
+}
+
+test "lazy flags: byte shift overflow uses the byte sign bit" {
+    var f = LazyFlags{};
+    // SHL 0x40 (byte), 1 → 0x80: MSB set, CF 0 → OF=1
+    f.update(.shl, .byte, 0x80, 0x40, 1);
+    try testing.expect(f.getOF());
 }
 
 test "lazy flags: toEflags includes DF" {

@@ -224,12 +224,19 @@ pub fn protectRsrc(
             const rsrc_start = preferred_base +% sec.VirtualAddress;
             const rsrc_end = rsrc_start +% sec.Misc.VirtualSize;
             if (rsrc_start > preferred_base)
-                memory.addWritableSection(preferred_base, rsrc_start);
+                protectFatal(memory.addWritableSection(preferred_base, rsrc_start));
             if (rsrc_end < preferred_base +% image_size)
-                memory.addWritableSection(rsrc_end, preferred_base +% image_size);
+                protectFatal(memory.addWritableSection(rsrc_end, preferred_base +% image_size));
             break;
         }
     }
+}
+
+/// Dropping a writable section leaves the guest's writes to it silently
+/// discarded, which reads as an unrelated misbehaviour much later. Two
+/// sections always fit, so running out means the table is undersized.
+fn protectFatal(ok: bool) void {
+    if (!ok) log.fatal("PE write-protection table overflow ({d} entries)", .{x86_memory.MAX_WRITABLE_SECTIONS});
 }
 
 /// Allocate a guest thunk for a builtin export resolved at runtime (e.g. via

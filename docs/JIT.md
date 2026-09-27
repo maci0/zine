@@ -54,10 +54,11 @@ WebAssembly executes on a stack machine, but standard blocks and functions decla
 | 13 | DF (Direction Flag) |
 | 14 | PF (Parity Flag) |
 | 15 | mem_base (memory base address for guest loads/stores) |
-| 16 | FS segment base (TEB) |
-| 17, 18 | Scratch (ALU operands for CF/OF computation) |
+| 16 | fs_base (FS segment base) |
+| 17 | Scratch 2 (ALU operand A for CF/OF computation) |
+| 18 | Scratch 3 (ALU operand B for CF/OF computation) |
 
-19 locals total (`LOCAL_COUNT` in `translate.zig`).
+19 locals total (`LOCAL_COUNT` in `src/jit/translate.zig`, where the indices are declared).
 
 ### Control Flow
 `JitCompiler.compile` stops before branches, calls, returns, loops, and interrupts. Its epilogue saves EIP at the first uncompiled instruction; `runWithJitHost` then lets the interpreter execute that instruction. Translation helpers for control flow exist, but the block compiler does not reach them (commit `33d57d5`, tested by `jit compiler stops at control flow` in `src/jit/compiler.zig`). `CMOVcc` remains inside compiled blocks and uses `if`/`end`. Cross-block trace linking remains planned.

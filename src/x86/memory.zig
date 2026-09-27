@@ -11,6 +11,11 @@
 /// can translate addresses without reaching up into the win32 layer.
 pub var guest_memory: ?*GuestMemory = null;
 
+/// Capacity of the PE section write-protection table. Two entries cover the
+/// only production shape (the `.rsrc` carve-out splits the image into
+/// before-rsrc and after-rsrc); the rest is headroom for tests.
+pub const MAX_WRITABLE_SECTIONS = 8;
+
 /// Translate a guest virtual address to a host pointer through the
 /// process-wide instance. Identity when no instance is registered or the
 /// address falls outside the mapping.
@@ -41,7 +46,7 @@ pub const GuestMemory = struct {
 
     /// PE section write protection (offsets 0 = start VA, 1 = end VA).
     pe_image_end: u32 = 0,
-    writable_sections: [8][2]u32 = .{.{ 0, 0 }} ** 8,
+    writable_sections: [MAX_WRITABLE_SECTIONS][2]u32 = .{.{ 0, 0 }} ** MAX_WRITABLE_SECTIONS,
     writable_section_count: u8 = 0,
 
     /// Guest heap bump allocator (used in WASM mode).
@@ -196,11 +201,14 @@ pub const GuestMemory = struct {
     }
 
     /// Register a writable address range (PE section with IMAGE_SCN_MEM_WRITE).
-    pub fn addWritableSection(self: *GuestMemory, start: u32, end: u32) void {
-        if (self.writable_section_count < self.writable_sections.len) {
-            self.writable_sections[self.writable_section_count] = .{ start, end };
-            self.writable_section_count += 1;
-        }
+    /// Returns false when the range was dropped for lack of capacity; the
+    /// caller must treat that as fatal, because a dropped section stays
+    /// write-protected and the guest's writes to it are silently discarded.
+    pub fn addWritableSection(self: *GuestMemory, start: u32, end: u32) bool {
+        if (self.writable_section_count >= self.writable_sections.len) return false;
+        self.writable_sections[self.writable_section_count] = .{ start, end };
+        self.writable_section_count += 1;
+        return true;
     }
 
     /// Check if a guest address is write-protected. Addresses outside the PE
@@ -398,7 +406,7 @@ test "guest memory: write protection blocks writes to PE image" {
 test "guest memory: writable section allows writes" {
     var buf: [256]u8 = .{0} ** 256;
     var mem = GuestMemory{ .base = &buf, .base_addr = 0, .pe_image_end = 128 };
-    mem.addWritableSection(32, 96); // allow writes to range [32, 96)
+    try testing.expect(mem.addWritableSection(32, 96)); // allow writes to range [32, 96)
 
     // Write inside writable section — should succeed
     mem.write8(64, 0xCD);
@@ -458,7 +466,7 @@ test "guest memory: writeRangeAllowed requires full writable-section cover in im
     var buf: [256]u8 = .{0} ** 256;
     var mem = GuestMemory{ .base = &buf, .base_addr = 0x0001_0000, .pe_image_end = 0x0001_0080 };
     // Image window is [0x10000, 0x10080); only [0x10020, 0x10060) is writable.
-    mem.addWritableSection(0x0001_0020, 0x0001_0060);
+    try testing.expect(mem.addWritableSection(0x0001_0020, 0x0001_0060));
 
     try testing.expect(mem.writeRangeAllowed(0x0001_0030, 8)); // inside section
     try testing.expect(mem.writeRangeAllowed(0x0001_0020, 64)); // exact section span
@@ -472,9 +480,21 @@ test "guest memory: writeRangeAllowed requires full writable-section cover in im
 test "guest memory: writeRangeAllowed chains adjacent writable sections" {
     var buf: [256]u8 = .{0} ** 256;
     var mem = GuestMemory{ .base = &buf, .base_addr = 0x0001_0000, .pe_image_end = 0x0001_0080 };
-    mem.addWritableSection(0x0001_0020, 0x0001_0040);
-    mem.addWritableSection(0x0001_0040, 0x0001_0060);
+    try testing.expect(mem.addWritableSection(0x0001_0020, 0x0001_0040));
+    try testing.expect(mem.addWritableSection(0x0001_0040, 0x0001_0060));
 
     try testing.expect(mem.writeRangeAllowed(0x0001_0020, 64)); // both sections chained
     try testing.expect(!mem.writeRangeAllowed(0x0001_0020, 65)); // one byte past the chain
+}
+
+test "guest memory: writable section table reports overflow instead of dropping" {
+    var buf: [256]u8 = .{0} ** 256;
+    var mem = GuestMemory{ .base = &buf, .base_addr = 0x0001_0000, .pe_image_end = 0x0001_0100 };
+    for (0..MAX_WRITABLE_SECTIONS) |i| {
+        const start: u32 = 0x0001_0000 + @as(u32, @intCast(i)) * 4;
+        try testing.expect(mem.addWritableSection(start, start + 4));
+    }
+    try testing.expectEqual(@as(u8, MAX_WRITABLE_SECTIONS), mem.writable_section_count);
+    try testing.expect(!mem.addWritableSection(0x0001_00F0, 0x0001_0100));
+    try testing.expectEqual(@as(u8, MAX_WRITABLE_SECTIONS), mem.writable_section_count);
 }
