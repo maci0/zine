@@ -194,11 +194,13 @@ pub fn strtoul(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) u32 {
         i += 1;
     } else if (str[i] == '+') i += 1;
 
-    var r = radix;
+    // A radix outside 2..36 has no digit set to convert with; C falls back to
+    // base 10, and a value too large for u8 to hold must not trap the cast.
+    var r: u8 = if (radix >= 2 and radix <= 36) @intCast(radix) else 10;
     // A "0x" prefix alone converts nothing; a leading "0" is a complete octal
     // digit, so "0" and "00" must count as parsed and advance end_ptr past it.
     var parsed = false;
-    if (r == 0) {
+    if (radix == 0) {
         if (str[i] == '0' and (str[i + 1] == 'x' or str[i + 1] == 'X')) {
             r = 16;
             i += 2;
@@ -211,8 +213,13 @@ pub fn strtoul(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) u32 {
 
     var val: u32 = 0;
     while (str[i] != 0) : (i += 1) {
-        const digit = std.fmt.charToDigit(str[i], @intCast(r)) catch break;
-        val = val * @as(u32, @intCast(r)) + @as(u32, digit);
+        const digit = std.fmt.charToDigit(str[i], r) catch break;
+        // Saturate instead of overflowing: a long digit run keeps consuming
+        // and pins the result at ULONG_MAX, which is what the C library
+        // reports. Wrapping arithmetic would fold "99999999999" to a small
+        // positive value.
+        const scaled = std.math.mul(u32, val, r) catch std.math.maxInt(u32);
+        val = std.math.add(u32, scaled, digit) catch std.math.maxInt(u32);
         parsed = true;
     }
     if (end_ptr != 0) {
@@ -919,6 +926,28 @@ test "strtol and atoi share strtoul's parsing with a signed result" {
     try std.testing.expectEqual(@as(i32, -7), atoi(@intFromPtr("-7")));
     try std.testing.expectEqual(@as(i32, 0), atoi(@intFromPtr("junk")));
     try std.testing.expectEqual(@as(i32, 0), atoi(0));
+}
+
+test "strtoul saturates a long digit run and rejects a bad radix" {
+    var end: u32 = 0xDEAD_BEEF;
+    // Ten digits of 9 overflows u32; the result pins at ULONG_MAX and every
+    // digit is still consumed.
+    try std.testing.expectEqual(
+        @as(u32, std.math.maxInt(u32)),
+        strtoul(@intFromPtr("99999999999"), @intFromPtr(&end), 10),
+    );
+    try std.testing.expectEqual(@as(u32, 11), end - @intFromPtr("99999999999"));
+    // Hexadecimal overflow takes the same path.
+    try std.testing.expectEqual(
+        @as(u32, std.math.maxInt(u32)),
+        strtoul(@intFromPtr("1FFFFFFFFF"), 0, 16),
+    );
+    // A radix with no digit set converts as base 10 instead of trapping.
+    try std.testing.expectEqual(@as(u32, 42), strtoul(@intFromPtr("42"), 0, 300));
+    try std.testing.expectEqual(@as(u32, 10), strtoul(@intFromPtr("10"), 0, 1));
+    // Negation still applies to the saturated value, so the result is the
+    // two's complement of ULONG_MAX rather than a clamp at LONG_MIN.
+    try std.testing.expectEqual(@as(i32, 1), strtol(@intFromPtr("-99999999999"), 0, 10));
 }
 
 test "atof parses a float and yields zero for junk" {

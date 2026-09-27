@@ -19,6 +19,14 @@ pub inline fn va_list_to_usize(ap: anytype) usize {
     }
 }
 
+/// Fold one printed digit into a width or precision, saturating instead of
+/// overflowing. A guest format string can spell out an arbitrarily long run
+/// ("%99999999999d"), and the padding loops stop at the output buffer anyway.
+fn appendDigit(val: usize, digit: u8) usize {
+    const scaled = std.math.mul(usize, val, 10) catch return std.math.maxInt(usize);
+    return std.math.add(usize, scaled, digit) catch std.math.maxInt(usize);
+}
+
 /// Internal helper for vsnprintf implementation.
 /// Implementation status: Partially implemented
 pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: usize) usize {
@@ -43,17 +51,23 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
                 pad_char = '0';
                 ii += 1;
             }
+            // A width or precision the guest spells out runs no bound; both
+            // grow as `x * 10 + digit`, so they saturate instead of trapping
+            // the formatter on "%99999999999d".
             var width: usize = 0;
             while (format[ii] >= '0' and format[ii] <= '9') {
-                width = width * 10 + (format[ii] - '0');
+                width = appendDigit(width, format[ii] - '0');
                 ii += 1;
             }
-            // Parse precision (.N)
+            // Parse precision (.N). A bare "." is precision 0, which C treats
+            // as a request for no fractional digits.
             var precision: usize = 0;
+            var precision_given = false;
             if (format[ii] == '.') {
+                precision_given = true;
                 ii += 1;
                 while (format[ii] >= '0' and format[ii] <= '9') {
-                    precision = precision * 10 + (format[ii] - '0');
+                    precision = appendDigit(precision, format[ii] - '0');
                     ii += 1;
                 }
             }
@@ -146,7 +160,10 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
                     const bits: u64 = (@as(u64, hi) << 32) | @as(u64, lo);
                     const val: f64 = @bitCast(bits);
                     var nb: [64]u8 = undefined;
-                    const prec_val: u8 = if (precision > 0) @intCast(@min(precision, 20)) else 6;
+                    // A float with no precision prints six fractional digits,
+                    // and an explicit one (including ".0") prints exactly
+                    // that many, so "$%.0f" of 3.5 reads "4" and not "3.5".
+                    const prec_val: u8 = if (precision_given) @intCast(@min(precision, 20)) else 6;
                     const ns = std.fmt.bufPrint(&nb, "{d:.[1]}", .{ val, prec_val }) catch "?";
                     const copy_len = @min(ns.len, max - 1 - oi);
                     @memcpy(buf[oi .. oi + copy_len], ns[0..copy_len]);
@@ -623,6 +640,29 @@ test "sscanf digit accumulation saturates instead of overflowing" {
     try testing.expectEqual(std.math.maxInt(i32), accumulateDigit(i32, 2147483647, 10, 9));
     try testing.expectEqual(std.math.maxInt(u32), accumulateDigit(u32, 0xFFFFFFFF, 16, 0xF));
     try testing.expectEqual(@as(u32, 0), accumulateDigit(u32, 0, 16, 0));
+}
+
+test "vsnprintf rounds to the requested precision and survives a huge width" {
+    // A double reaches the formatter as two 32-bit halves, low word first.
+    const doubleArg = struct {
+        fn of(v: f64) [2]u32 {
+            const bits: u64 = @bitCast(v);
+            return .{ @truncate(bits), @truncate(bits >> 32) };
+        }
+    }.of;
+
+    var buf: [64]u8 = undefined;
+    var args = doubleArg(3.5);
+    try testing.expectEqualStrings("4", buf[0..x86_vsnprintf(&buf, 64, "%.0f", @intFromPtr(&args))]);
+
+    args = doubleArg(3.14159);
+    try testing.expectEqualStrings("3.14", buf[0..x86_vsnprintf(&buf, 64, "%.2f", @intFromPtr(&args))]);
+    try testing.expectEqualStrings("3.141590", buf[0..x86_vsnprintf(&buf, 64, "%f", @intFromPtr(&args))]);
+
+    // A width longer than usize can hold saturates instead of trapping; the
+    // padding loop still stops at the buffer.
+    var int_args = [_]u32{std.math.maxInt(i32)};
+    try testing.expectEqual(@as(usize, 63), x86_vsnprintf(&buf, 64, "%99999999999d", @intFromPtr(&int_args)));
 }
 
 test "narrowWide truncates and always terminates" {

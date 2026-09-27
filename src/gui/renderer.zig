@@ -1138,7 +1138,9 @@ pub fn setVolume(linear: f32) void {
     const clamped = std.math.clamp(linear, 0.0, 1.0);
     switch (active_backend) {
         .web_ui => {
-            const vol_int: u32 = @intFromFloat(clamped * 100.0);
+            // Round rather than truncate: a linear gain of 0.9998 is a
+            // 100% volume setting, not 99%.
+            const vol_int: u32 = @intFromFloat(@round(clamped * 100.0));
             var buf: [64]u8 = undefined;
             const json = std.fmt.bufPrint(&buf, "{{\"type\":\"set_volume\",\"volume\":{d}}}", .{vol_int}) catch return;
             web_ui.pushMessage(json);

@@ -2090,8 +2090,16 @@ fn execGroup3(cpu: *Cpu, insn: *const Instruction) void {
                     cpu.halted = true;
                     return;
                 }
-                cpu.setReg8(0, @bitCast(@as(i8, @truncate(@divTrunc(dividend, divisor)))));
-                cpu.setReg8(4, @bitCast(@as(i8, @truncate(@rem(dividend, divisor)))));
+                // A quotient wider than AL raises #DE, so compute wide enough
+                // to see it (INT16_MIN / -1) instead of truncating it to 0x80.
+                const quot: i32 = @divTrunc(@as(i32, dividend), @as(i32, divisor));
+                if (quot < std.math.minInt(i8) or quot > std.math.maxInt(i8)) {
+                    cpu.halted = true;
+                    return;
+                }
+                const rem_val: i32 = @rem(@as(i32, dividend), @as(i32, divisor));
+                cpu.setReg8(0, @bitCast(@as(i8, @truncate(quot))));
+                cpu.setReg8(4, @bitCast(@as(i8, @truncate(rem_val))));
             } else {
                 const dividend: i64 = @bitCast((@as(u64, cpu.edx) << 32) | cpu.eax);
                 const divisor: i32 = @bitCast(val);
@@ -2099,8 +2107,12 @@ fn execGroup3(cpu: *Cpu, insn: *const Instruction) void {
                     cpu.halted = true;
                     return;
                 }
-                const quot = @divTrunc(dividend, divisor);
-                const rem_val = @rem(dividend, divisor);
+                const quot = @divTrunc(dividend, @as(i64, divisor));
+                if (quot < std.math.minInt(i32) or quot > std.math.maxInt(i32)) {
+                    cpu.halted = true;
+                    return;
+                }
+                const rem_val = @rem(dividend, @as(i64, divisor));
                 cpu.eax = @bitCast(@as(i32, @truncate(quot)));
                 cpu.edx = @bitCast(@as(i32, @truncate(rem_val)));
             }
@@ -2395,6 +2407,35 @@ test "execute: shifts retain the last bit shifted out in carry" {
         run(&cpu);
         try testing.expectEqual(case.result, cpu.eax);
         try testing.expectEqual(case.carry, cpu.flags.getCF());
+    }
+}
+
+test "execute: IDIV truncates toward zero and halts on a quotient overflow" {
+    // F7 F9 = IDIV ECX
+    var mem: [256]u8 = .{0} ** 256;
+    @memcpy(mem[0..3], &[_]u8{ 0xF7, 0xF9, 0xF4 });
+
+    // -7 / 2: the quotient truncates toward zero and the remainder keeps the
+    // sign of the dividend, as on real hardware.
+    {
+        var cpu = makeCpu(&mem);
+        cpu.eax = 0xFFFFFFF9; // -7
+        cpu.edx = 0xFFFFFFFF; // sign-extended dividend, as CDQ leaves it
+        cpu.ecx = 2;
+        run(&cpu);
+        try testing.expectEqual(@as(u32, @bitCast(@as(i32, -3))), cpu.eax);
+        try testing.expectEqual(@as(u32, @bitCast(@as(i32, -1))), cpu.edx);
+    }
+
+    // INT32_MIN / -1 cannot be represented in EAX, so the CPU raises #DE and
+    // stops instead of wrapping.
+    {
+        var cpu = makeCpu(&mem);
+        cpu.eax = 0x80000000;
+        cpu.edx = 0xFFFFFFFF;
+        cpu.ecx = 0xFFFFFFFF;
+        run(&cpu);
+        try testing.expect(cpu.halted);
     }
 }
 
