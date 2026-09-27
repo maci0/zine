@@ -169,7 +169,7 @@ Zine implements 37 DLL stub modules that provide Win32 API compatibility: 35 reg
 | **CRT (C Runtime)** | `msvcrt.zig` (argc/argv/envp, malloc/free, stdio, string functions) |
 | **Kernel** | `kernel32.zig` (process, memory, file I/O, heap, threading, registry), `ntdll.zig` (NT system information queries) |
 | **User Interface** | `user32.zig`, `comctl32.zig`, `comdlg32.zig`, `shell32.zig` |
-| **Graphics** | `gdi32.zig` (GDI — Graphics Device Interface), `ddraw.zig` (DirectDraw), `d3d7/d3d7.zig` (Direct3D 3/7 interfaces reached via DirectDraw's `QueryInterface`, with a software rasterizer), `d3d8.zig` (Direct3D 8) |
+| **Graphics** | `gdi32.zig` (GDI — Graphics Device Interface), `ddraw.zig` (DirectDraw), `d3d7/d3d7.zig` (Direct3D 3/7 interfaces reached via DirectDraw's `QueryInterface`, with a software rasterizer), `d3d8.zig` (Direct3D 8), `display_surface.zig` (the primary surface and display mode that ddraw and d3d7 present through) |
 | **Audio/Input** | `dsound.zig` (DirectSound), `winmm.zig` (Windows Multimedia), `dinput.zig` (DirectInput), `dinput8.zig` (DirectInput8), `mss32.zig` (Miles Sound System) |
 | **Security/RPC** | `advapi32.zig`, `rpcrt4.zig` (RPC — Remote Procedure Call), `ole32.zig` (OLE — Object Linking and Embedding), `oleaut32.zig` (OLE Automation) |
 | **Networking** | `wsock32.zig`, `ws2_32.zig`, `icmp.zig` |
@@ -494,7 +494,8 @@ zine/
 │   │   ├── ddraw.zig, ddraw/         # DirectDraw COM vtable emulation
 │   │   ├── dsound.zig, dsound/       # DirectSound COM vtable stubs
 │   │   ├── d3d8.zig, d3d8/           # Direct3D 8 COM vtable stubs
-│   │   ├── d3d7/d3d7.zig, rasterizer.zig # Direct3D 3/7 interfaces (via ddraw) + software rasterizer
+│   │   ├── d3d7/d3d7.zig, rasterizer.zig, state.zig # Direct3D 3/7 interfaces (via ddraw) + software rasterizer
+│   │   ├── display_surface.zig          # Primary surface + display mode shared by ddraw and d3d7
 │   │   ├── dinput.zig, dinput/       # DirectInput COM vtable stubs
 │   │   ├── dinput8.zig               # DirectInput8 stubs
 │   │   ├── shell32.zig, shell32/     # Shell API stubs

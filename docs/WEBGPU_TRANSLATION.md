@@ -171,7 +171,7 @@ Eight tiers of complexity, implemented incrementally:
 ## Tier 1: Framebuffer Presentation
 
 This replaces `renderer.pushFrame()` and the pixel-conversion loops in
-`ddraw.zig::pushSurfaceFrame()` and `d3d8.zig::device_Present()`.
+`display_surface.zig::pushFrame()` and `d3d8.zig::device_Present()`.
 
 **Implementation Checklist:**
 - [ ] Add WebGPU canvas context setup in `host.js` (`requestAdapter`, `requestDevice`, `configure`)

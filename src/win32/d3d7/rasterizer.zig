@@ -11,7 +11,7 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const renderer = @import("../../gui/renderer.zig");
 const w32cc = @import("../calling_convention.zig");
-const ddraw_stubs = @import("../ddraw/ddraw.zig");
+const display_surface = @import("../display_surface.zig");
 
 // ===== Types =====
 
@@ -51,8 +51,7 @@ pub fn clearZBuffer(depth: f32) void {
 
 // ===== Transform Pipeline =====
 
-/// Import transform/state storage from d3d7.zig
-const d3d7 = @import("d3d7.zig");
+const state = @import("state.zig");
 
 /// Transform a position through a 4×4 matrix using SIMD, returning homogeneous coords.
 inline fn transformVec4(m: [16]f32, v: Vec4) Vec4 {
@@ -71,11 +70,11 @@ inline fn transformVec4(m: [16]f32, v: Vec4) Vec4 {
 
 /// Build combined World×View×Projection matrix using SIMD multiply.
 inline fn getWVPMatrix() [16]f32 {
-    const world = d3d7.transform_matrices[1]; // D3DTRANSFORMSTATE_WORLD
-    const view = d3d7.transform_matrices[2]; // D3DTRANSFORMSTATE_VIEW
-    const proj = d3d7.transform_matrices[3]; // D3DTRANSFORMSTATE_PROJECTION
-    const wv = d3d7.mat4x4Multiply(world, view);
-    return d3d7.mat4x4Multiply(wv, proj);
+    const world = state.transform_matrices[1]; // D3DTRANSFORMSTATE_WORLD
+    const view = state.transform_matrices[2]; // D3DTRANSFORMSTATE_VIEW
+    const proj = state.transform_matrices[3]; // D3DTRANSFORMSTATE_PROJECTION
+    const wv = state.mat4x4Multiply(world, view);
+    return state.mat4x4Multiply(wv, proj);
 }
 
 /// Transform a 3D vertex to screen space.
@@ -127,7 +126,7 @@ inline fn rasterizeTriangle(v0: ScreenVertex, v1: ScreenVertex, v2: ScreenVertex
     if (area == 0) return; // degenerate
 
     // Cull mode: D3DCULL_NONE=1, D3DCULL_CW=2, D3DCULL_CCW=3
-    const cull_mode = d3d7.render_states[7]; // D3DRS_CULLMODE
+    const cull_mode = state.render_states[7]; // D3DRS_CULLMODE
     if (cull_mode == 2 and area > 0) return; // cull CW winding
     if (cull_mode == 3 and area < 0) return; // cull CCW winding
 
@@ -261,9 +260,9 @@ fn drawTriangles(comptime is_tl: bool, primType: usize, lpVertices: usize, count
 /// Shared setup for both DrawPrimitive and DrawIndexedPrimitive.
 fn setupDraw(vertexTypeOrFVF: usize, vw: u32, vh: u32) struct { is_tl: bool, wvp: [16]f32, vp_x: f32, vp_y: f32, vp_w: f32, vp_h: f32, buf: []u8 } {
     const is_tl = (vertexTypeOrFVF == 3) or (vertexTypeOrFVF & 0x004) != 0;
-    const wvp = if (!is_tl) getWVPMatrix() else d3d7.identity_4x4;
-    const buf = if (ddraw_stubs.surface_buffer.len >= @as(usize, vw) * @as(usize, vh) * 4)
-        ddraw_stubs.surface_buffer
+    const wvp = if (!is_tl) getWVPMatrix() else state.identity_4x4;
+    const buf = if (display_surface.buffer.len >= @as(usize, vw) * @as(usize, vh) * 4)
+        display_surface.buffer
     else
         renderer.global_framebuf;
     return .{

@@ -11,8 +11,9 @@ const renderer = @import("../../gui/renderer.zig");
 const kernel32 = @import("../kernel32.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
-const ddraw_stubs = @import("../ddraw/ddraw.zig");
+const display_surface = @import("../display_surface.zig");
 const rasterizer = @import("rasterizer.zig");
+const state = @import("state.zig");
 
 // ===== IDirect3D7 =====
 
@@ -298,37 +299,6 @@ var viewport_valid: bool = false;
 
 // ===== Pipeline State Storage =====
 
-/// Identity 4×4 matrix (row-major, matching D3D convention).
-pub const identity_4x4: [16]f32 = .{
-    1, 0, 0, 0,
-    0, 1, 0, 0,
-    0, 0, 1, 0,
-    0, 0, 0, 1,
-};
-
-/// D3DTRANSFORMSTATETYPE indices used by Europa / D3D3/D3D7.
-/// D3DTRANSFORMSTATE_WORLD = 1, VIEW = 2, PROJECTION = 3
-/// D3D7 adds WORLD1-3 = 4-6, TEXTURE0-7 = 16-23
-const MAX_TRANSFORMS = 24;
-pub var transform_matrices: [MAX_TRANSFORMS][16]f32 = [_][16]f32{identity_4x4} ** MAX_TRANSFORMS;
-
-/// Render state table — D3DRENDERSTATETYPE values up to 255.
-/// Defaults are set at comptime matching D3D7 documentation.
-const MAX_RENDER_STATES = 256;
-pub var render_states: [MAX_RENDER_STATES]u32 = blk: {
-    var rs = [_]u32{0} ** MAX_RENDER_STATES;
-    rs[7] = 2; // D3DRS_CULLMODE = D3DCULL_CCW
-    rs[14] = 1; // D3DRS_ZWRITEENABLE = TRUE
-    rs[19] = 1; // D3DRS_DITHERENABLE = TRUE
-    rs[24] = 1; // D3DRS_COLORVERTEX = TRUE
-    rs[25] = 8; // D3DRS_ALPHAFUNC = D3DCMP_ALWAYS
-    rs[27] = 2; // D3DRS_SRCBLEND = D3DBLEND_ONE
-    rs[28] = 1; // D3DRS_DESTBLEND = D3DBLEND_ZERO
-    rs[137] = 1; // D3DRS_LIGHTING = TRUE
-    rs[174] = 0x0F; // D3DRS_COLORWRITEENABLE = all channels
-    break :blk rs;
-};
-
 /// Texture stage state: 8 stages × 32 state types.
 const MAX_TEXTURE_STAGES = 8;
 const MAX_TSS_STATES = 32;
@@ -371,8 +341,8 @@ fn vp_GetViewport2(this: usize, lpData: usize) callconv(w32cc.WINAPI) i32 {
             const dst = @as(*[44]u8, @ptrFromInt(lpData));
             @memset(dst, 0);
             @as(*u32, @ptrFromInt(lpData + 0)).* = 44; // dwSize
-            @as(*u32, @ptrFromInt(lpData + 12)).* = ddraw_stubs.display_mode_w; // dwWidth
-            @as(*u32, @ptrFromInt(lpData + 16)).* = ddraw_stubs.display_mode_h; // dwHeight
+            @as(*u32, @ptrFromInt(lpData + 12)).* = display_surface.width; // dwWidth
+            @as(*u32, @ptrFromInt(lpData + 16)).* = display_surface.height; // dwHeight
         }
         if (trace.enable_tracing) {
             const w = @as(*const u32, @ptrFromInt(lpData + 12)).*;
@@ -409,8 +379,8 @@ fn vp_GetViewport(this: usize, lpData: usize) callconv(w32cc.WINAPI) i32 {
             const dst = @as(*[44]u8, @ptrFromInt(lpData));
             @memset(dst, 0);
             @as(*u32, @ptrFromInt(lpData + 0)).* = 44; // dwSize
-            @as(*u32, @ptrFromInt(lpData + 12)).* = ddraw_stubs.display_mode_w; // dwWidth
-            @as(*u32, @ptrFromInt(lpData + 16)).* = ddraw_stubs.display_mode_h; // dwHeight
+            @as(*u32, @ptrFromInt(lpData + 12)).* = display_surface.width; // dwWidth
+            @as(*u32, @ptrFromInt(lpData + 16)).* = display_surface.height; // dwHeight
         }
         if (trace.enable_tracing) trace.print("D3D7: GetViewport\n", .{});
     }
@@ -561,7 +531,7 @@ fn d3d7_CreateDevice(this: *IDirect3D7, rclsid: usize, lpDDS: usize, lplpD3DDevi
     _ = rclsid;
     _ = lpDDS;
     if (trace.enable_tracing) trace.print("D3D7: IDirect3D7::CreateDevice\n", .{});
-    renderer.setResolution(ddraw_stubs.display_mode_w, ddraw_stubs.display_mode_h);
+    renderer.setResolution(display_surface.width, display_surface.height);
     lplpD3DDevice.* = @ptrCast(&global_d3d7_device);
     return w32.D3D_OK;
 }
@@ -573,7 +543,7 @@ fn d3d3_CreateDevice(this: *IDirect3D7, rclsid: usize, lpDDS: usize, lplpD3DDevi
     _ = lpDDS;
     _ = pUnkOuter;
     if (trace.enable_tracing) trace.print("D3D7: IDirect3D3::CreateDevice\n", .{});
-    renderer.setResolution(ddraw_stubs.display_mode_w, ddraw_stubs.display_mode_h);
+    renderer.setResolution(display_surface.width, display_surface.height);
     lplpD3DDevice.* = @ptrCast(&global_d3d3_device);
     // Signal that a paint is needed — so the next PeekMessageA returns WM_PAINT,
     // allowing the game's WndProc to initialize rendering now that the D3D device exists.
@@ -673,7 +643,7 @@ fn device3_BeginScene(this: usize) callconv(w32cc.WINAPI) i32 {
 fn device3_EndScene(this: usize) callconv(w32cc.WINAPI) i32 {
     _ = this;
     if (trace.enable_tracing) trace.print("D3D7: EndScene\n", .{});
-    ddraw_stubs.pushSurfaceFrame();
+    display_surface.pushFrame();
     return w32.D3D_OK;
 }
 
@@ -754,7 +724,7 @@ fn device7_BeginScene(this: *IDirect3DDevice7) callconv(w32cc.WINAPI) i32 {
 fn device7_EndScene(this: *IDirect3DDevice7) callconv(w32cc.WINAPI) i32 {
     _ = this;
     if (trace.enable_tracing) trace.print("D3D7: EndScene\n", .{});
-    ddraw_stubs.pushSurfaceFrame();
+    display_surface.pushFrame();
     return w32.D3D_OK;
 }
 
@@ -774,15 +744,15 @@ fn device7_Clear(this: *IDirect3DDevice7, dwCount: u32, lpRects: usize, dwFlags:
         const vh = renderer.global_height;
         const pixels = vw * vh;
 
-        if (ddraw_stubs.surface_buffer.len >= pixels * 4) {
+        if (display_surface.buffer.len >= pixels * 4) {
             const b: u8 = @intCast(dwColor & 0xFF);
             const g: u8 = @intCast((dwColor >> 8) & 0xFF);
             const r: u8 = @intCast((dwColor >> 16) & 0xFF);
             for (0..pixels) |i| {
-                ddraw_stubs.surface_buffer[i * 4 + 0] = b;
-                ddraw_stubs.surface_buffer[i * 4 + 1] = g;
-                ddraw_stubs.surface_buffer[i * 4 + 2] = r;
-                ddraw_stubs.surface_buffer[i * 4 + 3] = 255;
+                display_surface.buffer[i * 4 + 0] = b;
+                display_surface.buffer[i * 4 + 1] = g;
+                display_surface.buffer[i * 4 + 2] = r;
+                display_surface.buffer[i * 4 + 3] = 255;
             }
         }
     }
@@ -932,34 +902,13 @@ fn n8(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: u
 }
 
 /// ===== Pipeline State Implementations =====
-/// 4×4 matrix multiply using @Vector(4, f32) SIMD intrinsics.
-/// result = a × b (row-major, matching D3D convention).
-pub fn mat4x4Multiply(a: [16]f32, b: [16]f32) [16]f32 {
-    // Extract columns of B for broadcast multiply
-    const b_cols: [4]@Vector(4, f32) = .{
-        .{ b[0], b[4], b[8], b[12] },
-        .{ b[1], b[5], b[9], b[13] },
-        .{ b[2], b[6], b[10], b[14] },
-        .{ b[3], b[7], b[11], b[15] },
-    };
-    var r: [16]f32 = undefined;
-    inline for (0..4) |row| {
-        const a_row: @Vector(4, f32) = a[row * 4 ..][0..4].*;
-        // Dot product of a_row with each column of B
-        inline for (0..4) |col| {
-            r[row * 4 + col] = @reduce(.Add, a_row * b_cols[col]);
-        }
-    }
-    return r;
-}
-
 /// SetTransform — shared implementation for Device3 (this, type, matrix) and Device7.
 /// D3D3 Device3 slot 25: SetTransform(this, d3dts, lpD3DMatrix)
 fn impl_SetTransform(this: usize, d3dts: usize, lpMatrix: usize) callconv(w32cc.WINAPI) usize {
     _ = this;
-    if (d3dts < MAX_TRANSFORMS and lpMatrix != 0) {
+    if (d3dts < state.max_transforms and lpMatrix != 0) {
         const src = @as(*const [16]f32, @ptrFromInt(lpMatrix));
-        transform_matrices[d3dts] = src.*;
+        state.transform_matrices[d3dts] = src.*;
         if (trace.enable_tracing) trace.print("D3D7: SetTransform(type={d})\\n", .{d3dts});
     }
     return 0; // D3D_OK
@@ -968,9 +917,9 @@ fn impl_SetTransform(this: usize, d3dts: usize, lpMatrix: usize) callconv(w32cc.
 /// GetTransform — retrieves a stored transform matrix.
 fn impl_GetTransform(this: usize, d3dts: usize, lpMatrix: usize) callconv(w32cc.WINAPI) usize {
     _ = this;
-    if (d3dts < MAX_TRANSFORMS and lpMatrix != 0) {
+    if (d3dts < state.max_transforms and lpMatrix != 0) {
         const dst = @as(*[16]f32, @ptrFromInt(lpMatrix));
-        dst.* = transform_matrices[d3dts];
+        dst.* = state.transform_matrices[d3dts];
         if (trace.enable_tracing) trace.print("D3D7: GetTransform(type={d})\\n", .{d3dts});
     }
     return 0;
@@ -979,9 +928,9 @@ fn impl_GetTransform(this: usize, d3dts: usize, lpMatrix: usize) callconv(w32cc.
 /// MultiplyTransform — multiplies current matrix by new matrix: M[type] = M[type] × lpMatrix.
 fn impl_MultiplyTransform(this: usize, d3dts: usize, lpMatrix: usize) callconv(w32cc.WINAPI) usize {
     _ = this;
-    if (d3dts < MAX_TRANSFORMS and lpMatrix != 0) {
+    if (d3dts < state.max_transforms and lpMatrix != 0) {
         const m = @as(*const [16]f32, @ptrFromInt(lpMatrix));
-        transform_matrices[d3dts] = mat4x4Multiply(transform_matrices[d3dts], m.*);
+        state.transform_matrices[d3dts] = state.mat4x4Multiply(state.transform_matrices[d3dts], m.*);
         if (trace.enable_tracing) trace.print("D3D7: MultiplyTransform(type={d})\\n", .{d3dts});
     }
     return 0;
@@ -991,8 +940,8 @@ fn impl_MultiplyTransform(this: usize, d3dts: usize, lpMatrix: usize) callconv(w
 fn impl_SetRenderState(this: usize, dwState: usize, dwValue: usize) callconv(w32cc.WINAPI) usize {
     _ = this;
 
-    if (dwState < MAX_RENDER_STATES) {
-        render_states[dwState] = @truncate(dwValue);
+    if (dwState < state.max_render_states) {
+        state.render_states[dwState] = @truncate(dwValue);
         if (trace.enable_tracing) trace.print("D3D7: SetRenderState({d} = 0x{x})\\n", .{ dwState, dwValue });
     }
     return 0;
@@ -1002,8 +951,8 @@ fn impl_SetRenderState(this: usize, dwState: usize, dwValue: usize) callconv(w32
 fn impl_GetRenderState(this: usize, dwState: usize, lpdwValue: usize) callconv(w32cc.WINAPI) usize {
     _ = this;
 
-    if (dwState < MAX_RENDER_STATES and lpdwValue != 0) {
-        @as(*u32, @ptrFromInt(lpdwValue)).* = render_states[dwState];
+    if (dwState < state.max_render_states and lpdwValue != 0) {
+        @as(*u32, @ptrFromInt(lpdwValue)).* = state.render_states[dwState];
     }
     return 0;
 }

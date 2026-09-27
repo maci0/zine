@@ -12,6 +12,7 @@ const renderer = @import("../../gui/renderer.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
 const d3d7 = @import("../d3d7/d3d7.zig");
+const display_surface = @import("../display_surface.zig");
 
 // --- COM VTables ---
 
@@ -140,16 +141,6 @@ var global_ddraw: IDirectDraw = undefined;
 var global_primary_surface: IDirectDrawSurface = undefined;
 var global_clipper: IDirectDrawClipper = undefined;
 
-/// Shared surface buffer.
-pub var surface_buffer: []u8 = &[_]u8{};
-
-/// Current display mode width.
-pub var display_mode_w: u32 = 640;
-/// Current display mode height.
-pub var display_mode_h: u32 = 480;
-/// Current display mode bits per pixel.
-pub var display_mode_bpp: u32 = 32;
-
 // Windows DirectDraw had no fixed surface count limit (bounded by VRAM/sysmem).
 // 256 is effectively unlimited for any real game.
 const MAX_SURFACES = 256;
@@ -238,7 +229,7 @@ fn surface_BltFast(this: *IDirectDrawSurface, dwX: u32, dwY: u32, lpDDSrcSurface
         src_h = if (bottom > src_top) bottom - src_top else 0;
     }
 
-    const bpp: u32 = if (display_mode_bpp == 16) 2 else 4;
+    const bpp: u32 = if (display_surface.bpp == 16) 2 else 4;
 
     // Copy pixels
     const copy_w = @min(src_w, if (dst_w > dwX) dst_w - dwX else 0);
@@ -410,13 +401,13 @@ fn ddraw_CreateSurface(this: *IDirectDraw, lpDDSurfaceDesc: usize, lplpDDSurface
     _ = pUnkOuter;
 
     // Ensure shared surface buffer exists (fallback for shared operations)
-    if (surface_buffer.len == 0) {
+    if (display_surface.buffer.len == 0) {
         if (@import("../kernel32.zig").global_env) |genv| {
-            surface_buffer = genv.allocator.alloc(u8, 2048 * 2048 * 4) catch {
+            display_surface.buffer = genv.allocator.alloc(u8, 2048 * 2048 * 4) catch {
                 log.err("ddraw: failed to allocate 16MB surface buffer", .{});
                 return @bitCast(@as(u32, 0x8007000E)); // E_OUTOFMEMORY
             };
-            @memset(surface_buffer, 0);
+            @memset(display_surface.buffer, 0);
         }
     }
 
@@ -452,7 +443,7 @@ fn ddraw_CreateSurface(this: *IDirectDraw, lpDDSurfaceDesc: usize, lplpDDSurface
 
             // Track as backbuffer only if it matches the display mode dimensions
             // (don't let offscreen sprite/texture surfaces override the resolution)
-            if (w == display_mode_w and h == display_mode_h and backbuffer_surface == null) {
+            if (w == display_surface.width and h == display_surface.height and backbuffer_surface == null) {
                 backbuffer_surface = &surface_pool[idx];
                 backbuffer_w = w;
                 backbuffer_h = h;
@@ -465,20 +456,20 @@ fn ddraw_CreateSurface(this: *IDirectDraw, lpDDSurfaceDesc: usize, lplpDDSurface
         lplpDDSurface.* = &global_primary_surface;
 
         // In fullscreen mode, set resolution and create implicit backbuffer
-        const is_fullscreen = display_mode_bpp != 32 or display_mode_w != 640 or display_mode_h != 480;
+        const is_fullscreen = display_surface.bpp != 32 or display_surface.width != 640 or display_surface.height != 480;
         if (is_fullscreen or back_buffer_count > 0) {
-            renderer.setResolution(display_mode_w, display_mode_h);
+            renderer.setResolution(display_surface.width, display_surface.height);
 
             // Create an implicit backbuffer in the pool
             if (surface_count < MAX_SURFACES) {
                 const idx = surface_count;
                 surface_pool[idx].lpVtbl = &surface_vtbl;
-                surface_widths[idx] = display_mode_w;
-                surface_heights[idx] = display_mode_h;
+                surface_widths[idx] = display_surface.width;
+                surface_heights[idx] = display_surface.height;
                 surface_count += 1;
                 backbuffer_surface = &surface_pool[idx];
-                backbuffer_w = display_mode_w;
-                backbuffer_h = display_mode_h;
+                backbuffer_w = display_surface.width;
+                backbuffer_h = display_surface.height;
             }
         }
     }
@@ -502,9 +493,9 @@ fn ddraw_SetDisplayMode(this: *IDirectDraw, dwWidth: u32, dwHeight: u32, dwBPP: 
     _ = dwRefreshRate;
     _ = dwFlags;
     if (trace.enable_tracing) trace.print("DDRAW: IDirectDraw::SetDisplayMode({d}x{d} @ {d}bpp)\n", .{ dwWidth, dwHeight, dwBPP });
-    display_mode_w = dwWidth;
-    display_mode_h = dwHeight;
-    display_mode_bpp = dwBPP;
+    display_surface.width = dwWidth;
+    display_surface.height = dwHeight;
+    display_surface.bpp = dwBPP;
 
     // In fullscreen DDraw mode, the window client area equals the display mode.
     // This ensures GetClientRect returns correct dimensions if the game cached
@@ -526,9 +517,9 @@ fn ddraw_SetDisplayMode(this: *IDirectDraw, dwWidth: u32, dwHeight: u32, dwBPP: 
 fn ddraw_RestoreDisplayMode(this: *IDirectDraw) callconv(w32cc.WINAPI) i32 {
     _ = this;
     if (trace.enable_tracing) trace.print("DDRAW: IDirectDraw::RestoreDisplayMode\n", .{});
-    display_mode_w = 640;
-    display_mode_h = 480;
-    display_mode_bpp = 32;
+    display_surface.width = 640;
+    display_surface.height = 480;
+    display_surface.bpp = 32;
     return w32.DD_OK;
 }
 
@@ -552,14 +543,14 @@ fn ddraw_GetDisplayMode(this: *IDirectDraw, lpDDSurfaceDesc: usize) callconv(w32
         const desc = @as(*w32.DDSURFACEDESC, @ptrFromInt(lpDDSurfaceDesc));
         desc.dwSize = 108;
         desc.dwFlags = w32.DDSD_WIDTH | w32.DDSD_HEIGHT | w32.DDSD_PIXELFORMAT;
-        desc.dwHeight = display_mode_h;
-        desc.dwWidth = display_mode_w;
+        desc.dwHeight = display_surface.height;
+        desc.dwWidth = display_surface.width;
 
         desc.ddpfPixelFormat.dwSize = 32;
         desc.ddpfPixelFormat.dwFlags = w32.DDPF_RGB;
         desc.ddpfPixelFormat.dwFourCC = 0;
-        desc.ddpfPixelFormat.dwRGBBitCount = display_mode_bpp;
-        if (display_mode_bpp == 16) {
+        desc.ddpfPixelFormat.dwRGBBitCount = display_surface.bpp;
+        if (display_surface.bpp == 16) {
             desc.ddpfPixelFormat.dwRBitMask = 0xF800; // RGB565
             desc.ddpfPixelFormat.dwGBitMask = 0x07E0;
             desc.ddpfPixelFormat.dwBBitMask = 0x001F;
@@ -677,7 +668,7 @@ fn surface_Blt(this: *IDirectDrawSurface, lpDestRect: usize, lpDDSrcSurface_raw:
             const w = renderer.global_width;
             const h = renderer.global_height;
             const pixels = @as(usize, w) * @as(usize, h);
-            if (display_mode_bpp == 16) {
+            if (display_surface.bpp == 16) {
                 // In 16bpp mode, fill_color is a raw 16-bit value
                 const fill16: u16 = @truncate(fill_color);
                 const lo: u8 = @truncate(fill16);
@@ -706,7 +697,7 @@ fn surface_Blt(this: *IDirectDrawSurface, lpDestRect: usize, lpDDSrcSurface_raw:
     // Blt with source to PRIMARY surface = windowed-mode present.
     // Only push frame when blitting TO the primary surface (this == primary).
     if (this == &global_primary_surface) {
-        const src_buf = getOrAllocSurfaceBuffer(lpDDSrcSurface_raw) orelse surface_buffer.ptr;
+        const src_buf = getOrAllocSurfaceBuffer(lpDDSrcSurface_raw) orelse display_surface.buffer.ptr;
         const src_surf: *IDirectDrawSurface = @ptrFromInt(lpDDSrcSurface_raw);
         const src_dims = getSurfaceDims(src_surf);
         pushSurfaceFrameFrom(src_buf, src_dims.w, src_dims.h);
@@ -716,29 +707,12 @@ fn surface_Blt(this: *IDirectDrawSurface, lpDestRect: usize, lpDDSrcSurface_raw:
         const dst_buf = getOrAllocSurfaceBuffer(@intFromPtr(this)) orelse return w32.DD_OK;
         const src_surf: *IDirectDrawSurface = @ptrFromInt(lpDDSrcSurface_raw);
         const src_dims = getSurfaceDims(src_surf);
-        const bpp: u32 = if (display_mode_bpp == 16) 2 else 4;
+        const bpp: u32 = if (display_surface.bpp == 16) 2 else 4;
         const size = @as(usize, src_dims.w) * @as(usize, src_dims.h) * bpp;
         @memcpy(dst_buf[0..size], src_buf[0..size]);
     }
 
     return w32.DD_OK;
-}
-
-inline fn unpack16To32(src: [*]const u8, si: usize, di: usize) void {
-    const lo: u16 = src[si * 2];
-    const hi: u16 = src[si * 2 + 1];
-    const rgb565 = lo | (hi << 8);
-    renderer.global_framebuf[di * 4 + 0] = @truncate((rgb565 >> 11) << 3);
-    renderer.global_framebuf[di * 4 + 1] = @truncate(((rgb565 >> 5) & 0x3F) << 2);
-    renderer.global_framebuf[di * 4 + 2] = @truncate((rgb565 & 0x1F) << 3);
-    renderer.global_framebuf[di * 4 + 3] = 255;
-}
-
-inline fn unpack32To32(src: [*]const u8, si: usize, di: usize) void {
-    renderer.global_framebuf[di * 4 + 0] = src[si * 4 + 2]; // R <- B
-    renderer.global_framebuf[di * 4 + 1] = src[si * 4 + 1]; // G
-    renderer.global_framebuf[di * 4 + 2] = src[si * 4 + 0]; // B <- R
-    renderer.global_framebuf[di * 4 + 3] = 255; // A
 }
 
 /// Push frame from a specific source buffer (used for Blt to primary).
@@ -752,12 +726,12 @@ fn pushSurfaceFrameFrom(src: [*]u8, w: u32, h: u32) void {
 
     if (w == vw and h == vh) {
         // Fast path: source matches viewport — direct pixel copy
-        if (display_mode_bpp == 16) {
+        if (display_surface.bpp == 16) {
             for (0..@as(usize, vh)) |y| {
                 for (0..@as(usize, vw)) |x| {
                     const si = y * @as(usize, w) + x;
                     const di = y * @as(usize, vw) + x;
-                    unpack16To32(src, si, di);
+                    display_surface.unpack16To32(src, si, di);
                 }
             }
         } else {
@@ -765,20 +739,20 @@ fn pushSurfaceFrameFrom(src: [*]u8, w: u32, h: u32) void {
                 for (0..@as(usize, vw)) |x| {
                     const si = y * @as(usize, w) + x;
                     const di = y * @as(usize, vw) + x;
-                    unpack32To32(src, si, di);
+                    display_surface.unpack32To32(src, si, di);
                 }
             }
         }
     } else {
         // Scaled path: nearest-neighbor resampling from source to viewport
-        if (display_mode_bpp == 16) {
+        if (display_surface.bpp == 16) {
             for (0..@as(usize, vh)) |dy| {
                 const sy = (dy * @as(usize, h)) / @as(usize, vh);
                 for (0..@as(usize, vw)) |dx| {
                     const sx = (dx * @as(usize, w)) / @as(usize, vw);
                     const si = sy * @as(usize, w) + sx;
                     const di = dy * @as(usize, vw) + dx;
-                    unpack16To32(src, si, di);
+                    display_surface.unpack16To32(src, si, di);
                 }
             }
         } else {
@@ -788,32 +762,9 @@ fn pushSurfaceFrameFrom(src: [*]u8, w: u32, h: u32) void {
                     const sx = (dx * @as(usize, w)) / @as(usize, vw);
                     const si = sy * @as(usize, w) + sx;
                     const di = dy * @as(usize, vw) + dx;
-                    unpack32To32(src, si, di);
+                    display_surface.unpack32To32(src, si, di);
                 }
             }
-        }
-    }
-    renderer.pushFrame();
-}
-
-/// Convert surface_buffer to BGRA in global_framebuf and push frame.
-/// Handles both 16bpp RGB565 and 32bpp BGRA based on current display mode.
-/// Implementation status: Partially implemented (supports direct copy from surface_buffer)
-pub fn pushSurfaceFrame() void {
-    const vw = renderer.global_width;
-    const vh = renderer.global_height;
-    const pixels = vw * vh;
-    const bpp: u32 = if (display_mode_bpp == 16) 2 else 4;
-
-    if (surface_buffer.len < pixels * bpp) return;
-
-    if (display_mode_bpp == 16) {
-        for (0..pixels) |i| {
-            unpack16To32(surface_buffer.ptr, i, i);
-        }
-    } else {
-        for (0..pixels) |i| {
-            unpack32To32(surface_buffer.ptr, i, i);
         }
     }
     renderer.pushFrame();
@@ -825,17 +776,17 @@ fn surface_Lock(this: *IDirectDrawSurface, lpDestRect: usize, lpDDSurfaceDesc: u
     _ = lpDestRect;
     _ = dwFlags;
     _ = hEvent;
-    const bytes_per_pixel: u32 = if (display_mode_bpp == 16) 2 else 4;
+    const bytes_per_pixel: u32 = if (display_surface.bpp == 16) 2 else 4;
     const dims = getSurfaceDims(this);
     const w = dims.w;
     const h = dims.h;
     if (trace.enable_tracing) {
-        trace.print("DDRAW: IDirectDrawSurface::Lock (this=0x{x} dims={d}x{d} pitch={d} bpp={d})\n", .{ @intFromPtr(this), w, h, w * bytes_per_pixel, display_mode_bpp });
+        trace.print("DDRAW: IDirectDrawSurface::Lock (this=0x{x} dims={d}x{d} pitch={d} bpp={d})\n", .{ @intFromPtr(this), w, h, w * bytes_per_pixel, display_surface.bpp });
     }
     if (lpDDSurfaceDesc != 0) {
         const desc = @as(*w32.DDSURFACEDESC, @ptrFromInt(lpDDSurfaceDesc));
         // Get or allocate per-surface buffer keyed by this pointer
-        const buf = getOrAllocSurfaceBuffer(@intFromPtr(this)) orelse surface_buffer.ptr;
+        const buf = getOrAllocSurfaceBuffer(@intFromPtr(this)) orelse display_surface.buffer.ptr;
         desc.lpSurface = @truncate(@intFromPtr(buf));
         desc.lPitch = w * bytes_per_pixel;
         desc.dwWidth = w;
@@ -922,7 +873,7 @@ fn surface_Flip(this: *IDirectDrawSurface, lpDDSurfaceTargetOverride: usize, dwF
     if (src_buf) |buf| {
         pushSurfaceFrameFrom(buf, renderer.global_width, renderer.global_height);
     } else {
-        pushSurfaceFrame();
+        display_surface.pushFrame();
     }
     return w32.DD_OK;
 }
@@ -956,7 +907,7 @@ fn surface_GetCaps(this: *IDirectDrawSurface, lpDDSCaps: usize) callconv(w32cc.W
 /// Implementation status: Partially implemented (returns dimensions and pixel format)
 fn surface_GetSurfaceDesc(this: *IDirectDrawSurface, lpDDSurfaceDesc: usize) callconv(w32cc.WINAPI) i32 {
     const dims = getSurfaceDims(this);
-    const bytes_per_pixel: u32 = if (display_mode_bpp == 16) 2 else 4;
+    const bytes_per_pixel: u32 = if (display_surface.bpp == 16) 2 else 4;
     if (lpDDSurfaceDesc != 0) {
         const desc = @as(*w32.DDSURFACEDESC, @ptrFromInt(lpDDSurfaceDesc));
         desc.dwSize = 108;
@@ -966,7 +917,7 @@ fn surface_GetSurfaceDesc(this: *IDirectDrawSurface, lpDDSurfaceDesc: usize) cal
         desc.lPitch = dims.w * bytes_per_pixel;
         // Pixel format
         desc.ddpfPixelFormat.dwSize = 32;
-        if (display_mode_bpp == 16) {
+        if (display_surface.bpp == 16) {
             desc.ddpfPixelFormat.dwFlags = 0x40; // DDPF_RGB
             desc.ddpfPixelFormat.dwRGBBitCount = 16;
             desc.ddpfPixelFormat.dwRBitMask = 0xF800;
@@ -995,7 +946,7 @@ fn surface_GetPixelFormat(this: *IDirectDrawSurface, lpDDPixelFormat: usize) cal
     if (lpDDPixelFormat != 0) {
         const pf = @as(*w32.DDPIXELFORMAT, @ptrFromInt(lpDDPixelFormat));
         pf.dwSize = 32;
-        if (display_mode_bpp == 16) {
+        if (display_surface.bpp == 16) {
             pf.dwFlags = 0x40; // DDPF_RGB
             pf.dwRGBBitCount = 16;
             pf.dwRBitMask = 0xF800;

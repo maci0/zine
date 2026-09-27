@@ -13,6 +13,7 @@ const log = @import("../log.zig");
 const teb = @import("../win32/teb.zig");
 const trace = @import("../trace.zig");
 const kernel32_error = @import("../win32/kernel32/error.zig");
+const compat_thunks = @import("../x86/compat_thunks.zig");
 
 // -------------------------------------------------------------------------
 // Architecture constants
@@ -741,7 +742,7 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
         // INT 0xFE thunk detection or CPUID trap — works in both compat and 64-bit mode
         if (sig == std.posix.SIG.SEGV and ip != 0) {
             // Only read instruction bytes if IP is in a mapped code range
-            const in_pool = if (@import("../x86/compat_thunks.zig").getPoolRange()) |r|
+            const in_pool = if (compat_thunks.getPoolRange()) |r|
                 (ip >= r[0] and ip < r[1])
             else
                 false;
@@ -749,7 +750,6 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
                 const code = @as([*]const u8, @ptrFromInt(ip));
                 if (code[0] == 0xCD and code[1] == 0xFE) {
                     const thunk_id = @as(*align(1) const u32, @ptrCast(code + 2)).*;
-                    const compat_thunks = @import("../x86/compat_thunks.zig");
                     compat_thunks.dispatchFromSignal(uctx, thunk_id);
                     return;
                 } else if (code[0] == 0x0F and code[1] == 0xA2) {
@@ -800,10 +800,9 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
     // cpuidsdk's SEH handler catches EXCEPTION_ILLEGAL_INSTRUCTION and sets
     // EIP/registers appropriately. Only skip directly if no SEH handler exists.
     if (sig == std.posix.SIG.ILL) {
-        const teb_mod = @import("../win32/teb.zig");
         var has_seh = false;
-        if (teb_mod.teb_base_addr != 0) {
-            const seh_head = @as(*const u32, @ptrFromInt(teb_mod.teb_base_addr)).*;
+        if (teb.teb_base_addr != 0) {
+            const seh_head = @as(*const u32, @ptrFromInt(teb.teb_base_addr)).*;
             if (seh_head != 0 and seh_head != 0xFFFFFFFF) has_seh = true;
         }
         if (!has_seh) {
@@ -1071,9 +1070,8 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
     // dispatch and the handler itself faults, signal the fault and skip the
     // instruction. Do NOT go through the NULL loop detector or AppCompat shims.
     {
-        const k32_error_early = @import("../win32/kernel32/error.zig");
-        if (k32_error_early.raise_exception_depth > 0) {
-            k32_error_early.handler_faulted = true;
+        if (kernel32_error.raise_exception_depth > 0) {
+            kernel32_error.handler_faulted = true;
             // Skip the faulting instruction to let the handler return
             if (ip != 0 and ip < 0x70000000) {
                 const ptr2 = @as([*]const u8, @ptrFromInt(ip));
@@ -1268,8 +1266,7 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
         0xC0000005; // EXCEPTION_ACCESS_VIOLATION
 
     // Save hardware context for RaiseException's SEH dispatch
-    const k32_error = @import("../win32/kernel32/error.zig");
-    const raise_addr = @intFromPtr(&k32_error.RaiseException);
+    const raise_addr = @intFromPtr(&kernel32_error.RaiseException);
 
     // Fill a static CONTEXT with the faulting register state
     const hw_ctx = &(struct {
@@ -1287,7 +1284,7 @@ fn sigsegvHandler(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx_ptr:
     hw_ctx.Esp = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_sp])));
     hw_ctx.Eip = @truncate(ip);
     hw_ctx.EFlags = @truncate(@as(usize, @bitCast(uctx.mcontext.gregs[reg_fl])));
-    k32_error.saved_hw_context = hw_ctx;
+    kernel32_error.saved_hw_context = hw_ctx;
 
     // Push RaiseException args on the guest stack (stdcall: right-to-left).
     // Verify ESP is in a plausible mapped range before writing to avoid
