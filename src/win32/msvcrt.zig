@@ -268,6 +268,8 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "_flushall", io._flushall);
     try environment.addBuiltinExportComptime(m, "setvbuf", io.setvbuf);
     try environment.addBuiltinExportComptime(m, "rewind", io.rewind);
+    try environment.addBuiltinExportComptime(m, "ferror", io.ferror);
+    try environment.addBuiltinExportComptime(m, "feof", io.feof);
     try environment.addBuiltinExportComptime(m, "freopen", io.freopen);
     try environment.addBuiltinExportComptime(m, "fgets", io.fgets);
     try environment.addBuiltinExportComptime(m, "_fsopen", io.fsopen);

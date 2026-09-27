@@ -73,12 +73,16 @@ pub fn mmap(
     _ = fixed;
 
     const slice = try std.heap.page_allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(4096), size);
+    errdefer std.heap.page_allocator.free(slice);
 
     // When a file descriptor is provided, read file content into the mapping
     // (e.g. CreateFileMappingA + MapViewOfFileEx used by LINK.EXE).
     if (file_fd >= 0) {
         const file = std.Io.File{ .handle = file_fd, .flags = .{ .nonblocking = false } };
-        const bytes_read = file.readPositionalAll(runtime.io(), slice, file_offset) catch 0;
+        // A short read means the file ends inside the mapping, which Windows
+        // zero-fills. A read error is different: it must not yield a mapping
+        // that looks valid but holds no file data, so it is propagated.
+        const bytes_read = try file.readPositionalAll(runtime.io(), slice, file_offset);
         if (bytes_read < slice.len) @memset(slice[bytes_read..], 0);
     }
     return slice;

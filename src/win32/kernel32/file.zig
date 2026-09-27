@@ -8,8 +8,10 @@ const w32cc = @import("../calling_convention.zig");
 const platform = @import("../../platform.zig");
 const host_io = @import("../host_io.zig");
 const kernel32_error = @import("error.zig");
+const log = @import("../../log.zig");
 
 const ERROR_WRITE_FAULT = 29;
+const ERROR_READ_FAULT = 30;
 const ERROR_INVALID_PARAMETER = 87;
 const ERROR_INVALID_ADDRESS = 487;
 const ERROR_INVALID_HANDLE = 6;
@@ -292,7 +294,16 @@ pub fn MapViewOfFileEx(hFileMappingObject: usize, dwDesiredAccess: u32, dwFileOf
                     if (va == 0) return 0;
                     const map_file = host_io.fileFromFd(fd);
                     const slice = gmem.base[(va - gmem.base_addr)..][0..guest_size];
-                    const bytes_read = host_io.readPositional(map_file, slice, offset) catch 0;
+                    // A short read means the file ends inside the view, which
+                    // Windows zero-fills. A read *error* must not be treated the
+                    // same: the view would be all zeros, and UnmapViewOfFile
+                    // writes a writable view back, overwriting the file with
+                    // those zeros. Fail the mapping instead of losing the data.
+                    const bytes_read = host_io.readPositional(map_file, slice, offset) catch |err| {
+                        log.err("MapViewOfFileEx: read of {d} bytes at offset {d} (fd={d}) failed: {t}; refusing to map", .{ guest_size, offset, fd, err });
+                        kernel32_error.SetLastError(ERROR_READ_FAULT);
+                        return 0;
+                    };
                     if (bytes_read < guest_size) @memset(slice[bytes_read..], 0);
                     // Register the view so UnmapViewOfFile can flush writes back.
                     // An unregistered view would silently lose every write on
@@ -1384,6 +1395,15 @@ fn fileExistsPosix(host_path: []const u8) bool {
     return true;
 }
 
+/// Reports a copy failure with the paths, the failing direction, and the
+/// host errno, then returns FALSE. The destination is left truncated; the
+/// guest learns of it only from this return value, so it must not be FALSE.
+fn copyFailed(src_buf: []const u8, dst_buf: []const u8, op: []const u8, errno: ?std.posix.E) i32 {
+    log.err("CopyFile '{s}' -> '{s}': host {s} failed, errno {?}", .{ src_buf, dst_buf, op, errno });
+    kernel32_error.SetLastError(ERROR_WRITE_FAULT);
+    return 0;
+}
+
 /// Shared copy core given resolved POSIX paths.
 fn copyFileHost(src_buf: []const u8, dst_buf: []const u8) i32 {
     if (comptime builtin.os.tag == .linux) {
@@ -1411,12 +1431,17 @@ fn copyFileHost(src_buf: []const u8, dst_buf: []const u8) i32 {
         while (true) {
             const n_rc = std.os.linux.pread(@intCast(src_fd), &buf, buf.len, @as(i64, @intCast(offset)));
             const n: isize = @bitCast(n_rc);
-            if (n <= 0) break;
+            // pread returns 0 only at end of file; a negative value is an
+            // errno. Collapsing both into a clean exit would report success
+            // for a truncated destination, so distinguish them.
+            if (n == 0) break;
+            if (n < 0) return copyFailed(src_buf, dst_buf, "read", std.posix.errno(n_rc));
             var woff: usize = 0;
             while (woff < @as(usize, @intCast(n))) {
                 const w_rc = std.os.linux.pwrite(@intCast(dst_fd), buf[woff..].ptr, @as(usize, @intCast(n)) - woff, @as(i64, @intCast(offset + woff)));
                 const w: isize = @bitCast(w_rc);
-                if (w <= 0) return 0;
+                if (w == 0) return copyFailed(src_buf, dst_buf, "write", null);
+                if (w < 0) return copyFailed(src_buf, dst_buf, "write", std.posix.errno(w_rc));
                 woff += @intCast(w);
             }
             offset += @intCast(n);

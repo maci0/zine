@@ -7,10 +7,26 @@
 const std = @import("std");
 const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
+const log = @import("../../log.zig");
 const platform_mod = @import("../../platform.zig");
 
 fn log_call(comptime name: []const u8) void {
     trace.print("MSVCRT_IO: {s}\n", .{name});
+}
+
+/// MSVCRT FILE._flag bits for stream error indicators. The guest reads these
+/// through ferror/feof, so a host read or write failure has to set _IOERR
+/// rather than look like a clean end of file.
+const FLAG_IOEOF: i32 = 0x0010;
+const FLAG_IOERR: i32 = 0x0020;
+
+/// Sets an error indicator on a guest FILE and reports the failure to the log.
+fn setStreamError(f: ?*anyopaque, comptime op: []const u8, err: anyerror) void {
+    if (f) |ptr| {
+        const ms_file = @as(*MSVCRT_FILE, @ptrCast(@alignCast(ptr)));
+        ms_file._flag |= FLAG_IOERR;
+    }
+    log.err("MSVCRT_IO: {s} failed, stream error indicator set: {t}", .{ op, err });
 }
 
 /// MSVC CRT FILE structure (32-bit).
@@ -487,12 +503,18 @@ pub fn fread(buffer: [*]u8, size: usize, count: usize, f: ?*anyopaque) callconv(
     if (getFile(f)) |file| {
         const bytes_to_read = size * count;
         if (bytes_to_read == 0) return 0;
-        const read_bytes = @import("../host_io.zig").readFromFile(file, buffer[0..bytes_to_read]) catch return 0;
+        const read_bytes = @import("../host_io.zig").readFromFile(file, buffer[0..bytes_to_read]) catch |err| {
+            // A failed read is not EOF: report it through _IOERR so the guest's
+            // ferror() sees it. Returning 0 alone makes the guest stop reading
+            // a stream that still has data.
+            setStreamError(f, "read", err);
+            return 0;
+        };
         const ret_count = read_bytes / size;
         if (read_bytes < bytes_to_read) {
             if (f) |ptr| {
                 var ms_file = @as(*MSVCRT_FILE, @ptrCast(@alignCast(ptr)));
-                ms_file._flag |= 0x0010; // _IOEOF
+                ms_file._flag |= FLAG_IOEOF;
             }
         }
         trace.print("MSVCRT_IO: fread (size: {d}, count: {d}) -> returned {d}\n", .{ size, count, ret_count });
@@ -522,7 +544,12 @@ pub fn fwrite(buffer: [*]const u8, size: usize, count: usize, f: ?*anyopaque) ca
         return 0;
     }
     if (getFile(f)) |file| {
-        @import("../host_io.zig").writeAllToFile(file, buffer[0..bytes_to_write]) catch return 0;
+        @import("../host_io.zig").writeAllToFile(file, buffer[0..bytes_to_write]) catch |err| {
+            // 0 items is the correct failure return, but without _IOERR the
+            // guest cannot tell a full disk from a valid short write.
+            setStreamError(f, "write", err);
+            return 0;
+        };
         return count;
     }
     return 0;
@@ -550,10 +577,28 @@ pub fn rewind(f: ?*anyopaque) callconv(.c) void {
     trace.print("MSVCRT_IO: rewind\n", .{});
     if (f == null) return;
     _ = fseek(f, 0, 0);
-    // Clear _IOEOF (0x10) and _IOERR (0x20) flags in the guest FILE struct.
+    // Clear the _IOEOF and _IOERR flags in the guest FILE struct.
     // f is a host pointer (translated by the thunk layer).
     const ms_file = @as(*MSVCRT_FILE, @ptrCast(@alignCast(f.?)));
-    ms_file._flag &= ~(@as(u16, 0x0010) | @as(u16, 0x0020));
+    ms_file._flag &= ~(FLAG_IOEOF | FLAG_IOERR);
+}
+
+/// Tests the error indicator on a stream. Returns nonzero when a host read or
+/// write has failed, so the guest can tell a real I/O fault from a clean EOF.
+/// Implementation status: Fully implemented
+pub fn ferror(f: ?*anyopaque) callconv(.c) i32 {
+    if (f == null) return 1;
+    const ms_file = @as(*MSVCRT_FILE, @ptrCast(@alignCast(f.?)));
+    return @intFromBool(ms_file._flag & FLAG_IOERR != 0);
+}
+
+/// Tests the end-of-file indicator on a stream. Returns nonzero only for a
+/// genuine end of file, never for a failed read.
+/// Implementation status: Fully implemented
+pub fn feof(f: ?*anyopaque) callconv(.c) i32 {
+    if (f == null) return 1;
+    const ms_file = @as(*MSVCRT_FILE, @ptrCast(@alignCast(f.?)));
+    return @intFromBool(ms_file._flag & FLAG_IOEOF != 0);
 }
 
 /// Gets the current position of a file pointer.
@@ -583,7 +628,11 @@ pub fn fgets(buf_ptr: usize, max_count: i32, f: ?*anyopaque) callconv(.c) usize 
         var i: usize = 0;
         while (i < limit) {
             var char_buf: [1]u8 = undefined;
-            const read_bytes = @import("../host_io.zig").readFromFile(file, &char_buf) catch break;
+            const read_bytes = @import("../host_io.zig").readFromFile(file, &char_buf) catch |err| {
+                // Do not hand back a half-read line as if it were complete.
+                setStreamError(f, "read", err);
+                return 0;
+            };
             if (read_bytes == 0) break;
             if (char_buf[0] == '\r') continue; // strip carriage return for now
             buf[i] = char_buf[0];
@@ -603,11 +652,16 @@ pub fn fgets(buf_ptr: usize, max_count: i32, f: ?*anyopaque) callconv(.c) usize 
 pub fn fgetc(f: ?*anyopaque) callconv(.c) i32 {
     if (getFile(f)) |file| {
         var buf: [1]u8 = undefined;
-        const bytes_read = @import("../host_io.zig").readFromFile(file, &buf) catch return -1;
+        const bytes_read = @import("../host_io.zig").readFromFile(file, &buf) catch |err| {
+            // -1 is also the EOF result, so the only way the guest can see a
+            // failed read is the _IOERR indicator.
+            setStreamError(f, "read", err);
+            return -1;
+        };
         if (bytes_read == 0) {
             if (f) |ptr| {
                 var ms_file = @as(*MSVCRT_FILE, @ptrCast(@alignCast(ptr)));
-                ms_file._flag |= 0x0010; // _IOEOF
+                ms_file._flag |= FLAG_IOEOF;
             }
             trace.print("MSVCRT_IO: fgetc -> EOF\n", .{});
             return -1; // EOF

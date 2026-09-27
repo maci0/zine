@@ -5,6 +5,7 @@
 //! on platforms that don't support it natively (like Linux).
 
 const std = @import("std");
+const log = @import("../../log.zig");
 const runtime = @import("../../runtime.zig");
 const path_utils = @import("../../path_utils.zig");
 const builtin = @import("builtin");
@@ -373,12 +374,34 @@ pub fn open(path: [*:0]const u8, flags: u32, mode: u32) i32 {
                     .mode = if ((flags & O_RDWR) != 0) .read_write else .write_only,
                 })) |f| {
                     if (is_trunc) {
+                        // O_TRUNC must actually truncate. If it fails (read-only
+                        // mount, quota, permissions) the caller would otherwise
+                        // get a valid fd on a file whose old contents survive, so
+                        // a shorter write would leave stale trailing bytes in a
+                        // file the guest believes is empty. Fail the open instead.
                         if (comptime builtin.target.os.tag == .linux) {
-                            _ = std.os.linux.ftruncate(f.handle, 0);
+                            const rc = std.os.linux.ftruncate(f.handle, 0);
+                            if (std.os.linux.errno(rc) != .SUCCESS) {
+                                log.err("_open('{s}'): O_TRUNC ftruncate failed, errno {t}", .{ p, std.os.linux.errno(rc) });
+                                _ = std.os.linux.close(f.handle);
+                                return -1;
+                            }
                         } else {
-                            f.setLength(runtime.io(), 0) catch {};
+                            f.setLength(runtime.io(), 0) catch |err| {
+                                log.err("_open('{s}'): O_TRUNC failed: {t}", .{ p, err });
+                                f.close(runtime.io());
+                                return -1;
+                            };
                         }
-                        _ = @import("../../platform.zig").lseek(f.handle, 0, 0);
+                        if (@import("../../platform.zig").lseek(f.handle, 0, 0) < 0) {
+                            log.err("_open('{s}'): rewind after O_TRUNC failed", .{p});
+                            if (comptime builtin.target.os.tag == .linux) {
+                                _ = std.os.linux.close(f.handle);
+                            } else {
+                                f.close(runtime.io());
+                            }
+                            return -1;
+                        }
                     }
                     if (is_append) _ = @import("../../platform.zig").lseek(f.handle, 0, 2);
                     return @intCast(f.handle);

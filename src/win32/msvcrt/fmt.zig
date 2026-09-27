@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const trace = @import("../../trace.zig");
+const log = @import("../../log.zig");
 const io = @import("io.zig");
 const string = @import("string.zig");
 const platform = @import("../../platform.zig");
@@ -325,9 +326,29 @@ fn sprintf_impl(out: [*]u8, fmt: [*:0]const u8, ap: usize) i32 {
 /// Implementation status: Fully implemented
 pub fn puts(str: [*:0]const u8) callconv(.c) i32 {
     const s = std.mem.span(str);
-    const f = @import("../host_io.zig").fileFromFd(1);
-    _ = @import("../host_io.zig").writeAllToFile(f, s) catch {};
-    _ = @import("../host_io.zig").writeAllToFile(f, "\n") catch {};
+    const host_io = @import("../host_io.zig");
+    const f = host_io.fileFromFd(1);
+    // Emit the string and its newline in a single write so a failure cannot
+    // leave a stray newline on stdout, and report the failure: returning 0
+    // told the guest the text had been written when nothing was.
+    var line_buf: [1024]u8 = undefined;
+    if (s.len < line_buf.len) {
+        @memcpy(line_buf[0..s.len], s);
+        line_buf[s.len] = '\n';
+        host_io.writeAllToFile(f, line_buf[0 .. s.len + 1]) catch |err| {
+            log.err("MSVCRT: puts write to stdout failed: {t}", .{err});
+            return -1;
+        };
+        return 0;
+    }
+    host_io.writeAllToFile(f, s) catch |err| {
+        log.err("MSVCRT: puts write to stdout failed: {t}", .{err});
+        return -1;
+    };
+    host_io.writeAllToFile(f, "\n") catch |err| {
+        log.err("MSVCRT: puts newline write to stdout failed: {t}", .{err});
+        return -1;
+    };
     return 0;
 }
 
