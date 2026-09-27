@@ -326,7 +326,10 @@ exists because nothing is persisted.
   fixed `src/gui` prefix plus the leading-`/` requirement
   (`src/gui/web_ui.zig:505`), not component resolution.
 - Supply chain: the only build-time external dependency is the pinned `toml`
-  package in `build.zig.zon`, fetched by Zig on first build. The MSVC 6.0
+  package in `build.zig.zon`, fetched by Zig on first build. `zig build sbom`
+  writes the CycloneDX inventory of it and of the vendored web UI library to
+  the install prefix, and the build fails when the inventory no longer matches
+  the pin, so the shipped list cannot lag the manifest. The MSVC 6.0
   fixtures used by the integration suite are proprietary and are not in the
   repository.
 

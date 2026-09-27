@@ -142,6 +142,11 @@ release, not a 0.2.1 patch.
 - `docs/THREAT_MODEL.md`, a risk ranking of the host process.
 - A transfer budget for the four precompressed web UI assets, checked by
   `zig build test`, so the bytes a visitor downloads cannot grow unnoticed.
+- A CycloneDX 1.5 SBOM of every third-party component behind a shipped
+  artifact, installed to `share/zine/sbom/zine.cdx.json` by `zig build` and
+  writable on its own with `zig build sbom`. It is generated from the pinned
+  manifests, and the build fails if the inventory no longer matches the
+  `zig-toml` pin, so a dependency bump cannot ship a stale list.
 - Named gate steps in `tests/check.sh`: `bash tests/check.sh --list` prints
   them and `bash tests/check.sh <name>` runs one, so a single check no longer
   means running the whole gate.
@@ -412,6 +417,24 @@ sudo apt install libfltk1.3-dev libx11-dev libxext-dev libxft-dev \
 
 `-Dhost` (the `zine-host` JIT wrapper) needs the Wasmer C API headers and
 library plus a system `cc` on `PATH`.
+
+### Third-party code
+
+Three things come from outside this repository, and each is pinned where it
+can be:
+
+| Component | Version | How it arrives |
+|---|---|---|
+| `zig-toml` (the only Zig package dependency, MIT) | commit `a73c94`, package `0.3.0` | `build.zig.zon` names a commit-pinned archive URL with a Zig content hash |
+| VanJS (MIT), embedded in the web UI | unpinned upstream release, repackaged | vendored at `src/gui/van.min.js`, shipped as `share/licenses/zine/van.LICENSE` |
+| `websocket-client`, MSVC integration tests only | `1.9.0` | `tests/requirements.txt`, exact pin with two sha256 hashes |
+
+`zig build sbom` writes a CycloneDX 1.5 inventory of these (plus zine itself)
+to `zig-out/share/zine/sbom/zine.cdx.json`, and every install ships it. The
+build re-checks the `zig-toml` commit and version in the inventory against
+`build.zig.zon` and fails if they have drifted, so the list cannot describe a
+dependency the build no longer uses. Upgrading a component is a deliberate
+edit of its pin and of the inventory together.
 
 ## Usage
 

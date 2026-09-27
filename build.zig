@@ -242,6 +242,139 @@ fn indexOfAsset(name: []const u8) usize {
     unreachable;
 }
 
+// The zig-toml revision named below, as a full commit SHA. Every value in the
+// SBOM is a transcription of something the tree already records, and the two a
+// dependency bump would invalidate (this commit and the package version) are
+// re-read from build.zig.zon at build time, so a bump cannot leave the
+// inventory describing the dependency the build no longer uses.
+const sbom_toml_commit = "a73c9423d88ed413204b39638fab7e9bccdb83fd";
+const sbom_toml_version = "0.3.0";
+
+/// CycloneDX 1.5 inventory of the third-party components behind a shipped
+/// artifact. Downstream consumers and vulnerability scanners cannot recover
+/// this by reading the manifests, so it is generated and installed next to the
+/// binaries; `zig build sbom` writes it alone.
+///
+/// websocket-client is listed with scope "excluded": tests/requirements.txt
+/// pins it with hashes, but nothing links it into a shipped artifact. Its
+/// license is NOASSERTION because neither the manifest nor the pinned
+/// distribution's metadata is recorded in-tree, and a guess would be worse
+/// than an admission.
+///
+/// No timestamp and no serial number: the byte-identical rebuild gate compares
+/// two builds of one commit, and a generated identity would differ between
+/// them for no informational gain.
+fn addSbom(b: *std.Build) void {
+    const zon = b.build_root.handle.readFileAlloc(b.graph.io, "build.zig.zon", b.allocator, .unlimited) catch
+        @panic("cannot read build.zig.zon");
+    if (std.mem.indexOf(u8, zon, sbom_toml_commit) == null) {
+        std.log.err("build.zig.zon no longer pins zig-toml at {s}; update sbom_toml_commit and the SBOM in build.zig", .{sbom_toml_commit});
+        @panic("SBOM dependency pin is stale");
+    }
+    // The package id in the manifest hash carries the dependency's own version
+    // ("toml-0.3.0-<multihash>"), so the pin and the version are both read
+    // from the manifest rather than from the fetched tree.
+    if (std.mem.indexOf(u8, zon, "toml-" ++ sbom_toml_version ++ "-") == null) {
+        std.log.err("build.zig.zon no longer resolves zig-toml {s}; update sbom_toml_version and the SBOM in build.zig", .{sbom_toml_version});
+        @panic("SBOM dependency version is stale");
+    }
+
+    const zine_ref = "pkg:generic/zine@" ++ package_version;
+    const toml_ref = "pkg:github/sam701/zig-toml@" ++ sbom_toml_commit;
+    const vanjs_ref = "pkg:npm/vanjs";
+    const websocket_ref = "pkg:pypi/websocket-client@1.9.0";
+
+    const document =
+        "{\n" ++
+        "  \"bomFormat\": \"CycloneDX\",\n" ++
+        "  \"specVersion\": \"1.5\",\n" ++
+        "  \"version\": 1,\n" ++
+        "  \"metadata\": {\n" ++
+        "    \"tools\": {\n" ++
+        "      \"components\": [\n" ++
+        "        { \"type\": \"application\", \"name\": \"zine build\", \"version\": \"" ++ package_version ++ "\" }\n" ++
+        "      ]\n" ++
+        "    },\n" ++
+        "    \"component\": {\n" ++
+        "      \"type\": \"application\",\n" ++
+        "      \"bom-ref\": \"" ++ zine_ref ++ "\",\n" ++
+        "      \"name\": \"zine\",\n" ++
+        "      \"version\": \"" ++ package_version ++ "\",\n" ++
+        "      \"purl\": \"" ++ zine_ref ++ "\"\n" ++
+        "    }\n" ++
+        "  },\n" ++
+        "  \"components\": [\n" ++
+        // The only Zig package dependency, compiled into every executable.
+        "    {\n" ++
+        "      \"type\": \"library\",\n" ++
+        "      \"bom-ref\": \"" ++ toml_ref ++ "\",\n" ++
+        "      \"name\": \"zig-toml\",\n" ++
+        "      \"version\": \"" ++ sbom_toml_version ++ "\",\n" ++
+        "      \"purl\": \"" ++ toml_ref ++ "\",\n" ++
+        "      \"licenses\": [ { \"license\": { \"id\": \"MIT\" } } ],\n" ++
+        "      \"externalReferences\": [\n" ++
+        "        { \"type\": \"vcs\", \"url\": \"https://github.com/sam701/zig-toml\" },\n" ++
+        "        { \"type\": \"distribution\", \"url\": \"https://github.com/sam701/zig-toml/archive/" ++ sbom_toml_commit ++ ".tar.gz\" }\n" ++
+        "      ],\n" ++
+        "      \"properties\": [\n" ++
+        "        { \"name\": \"zine:consumer\", \"value\": \"src/win32/advapi32/registry_config.zig\" },\n" ++
+        "        { \"name\": \"zine:licenseFile\", \"value\": \"share/licenses/zine/zig-toml.LICENSE\" }\n" ++
+        "      ]\n" ++
+        "    },\n" ++
+        // Vendored, not fetched: src/gui/van.min.js carries the SPDX header
+        // the license expression below is transcribed from, and the file's own
+        // comment records that it is a repackaging rather than an upstream
+        // artifact. No version: the tree does not record which one.
+        "    {\n" ++
+        "      \"type\": \"library\",\n" ++
+        "      \"bom-ref\": \"" ++ vanjs_ref ++ "\",\n" ++
+        "      \"name\": \"vanjs\",\n" ++
+        "      \"purl\": \"" ++ vanjs_ref ++ "\",\n" ++
+        "      \"licenses\": [ { \"license\": { \"id\": \"MIT\" } } ],\n" ++
+        "      \"externalReferences\": [\n" ++
+        "        { \"type\": \"website\", \"url\": \"https://vanjs.org\" }\n" ++
+        "      ],\n" ++
+        "      \"properties\": [\n" ++
+        "        { \"name\": \"zine:vendored\", \"value\": \"src/gui/van.min.js\" },\n" ++
+        "        { \"name\": \"zine:licenseFile\", \"value\": \"share/licenses/zine/van.LICENSE\" }\n" ++
+        "      ]\n" ++
+        "    },\n" ++
+        // Test-only. The two sha256 values are the ones tests/requirements.txt
+        // pins, copied rather than re-fetched.
+        "    {\n" ++
+        "      \"type\": \"library\",\n" ++
+        "      \"scope\": \"excluded\",\n" ++
+        "      \"bom-ref\": \"" ++ websocket_ref ++ "\",\n" ++
+        "      \"name\": \"websocket-client\",\n" ++
+        "      \"version\": \"1.9.0\",\n" ++
+        "      \"purl\": \"" ++ websocket_ref ++ "\",\n" ++
+        "      \"licenses\": [ { \"license\": { \"id\": \"NOASSERTION\" } } ],\n" ++
+        "      \"hashes\": [\n" ++
+        "        { \"alg\": \"SHA-256\", \"content\": \"af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef\" },\n" ++
+        "        { \"alg\": \"SHA-256\", \"content\": \"9e813624b6eb619999a97dc7958469217c3176312b3a16a4bd1bc7e08a46ec98\" }\n" ++
+        "      ],\n" ++
+        "      \"properties\": [\n" ++
+        "        { \"name\": \"zine:consumer\", \"value\": \"tests/test_msvc_cli.sh\" },\n" ++
+        "        { \"name\": \"zine:manifest\", \"value\": \"tests/requirements.txt\" }\n" ++
+        "      ]\n" ++
+        "    }\n" ++
+        "  ],\n" ++
+        "  \"dependencies\": [\n" ++
+        "    { \"ref\": \"" ++ zine_ref ++ "\", \"dependsOn\": [ \"" ++ toml_ref ++ "\", \"" ++ vanjs_ref ++ "\" ] },\n" ++
+        "    { \"ref\": \"" ++ toml_ref ++ "\", \"dependsOn\": [] },\n" ++
+        "    { \"ref\": \"" ++ vanjs_ref ++ "\", \"dependsOn\": [] },\n" ++
+        "    { \"ref\": \"" ++ websocket_ref ++ "\", \"dependsOn\": [] }\n" ++
+        "  ]\n" ++
+        "}\n";
+
+    const generated = b.addWriteFiles();
+    const document_path = generated.add("zine.cdx.json", document);
+    const install_document = b.addInstallFileWithDir(document_path, .prefix, "share/zine/sbom/zine.cdx.json");
+    b.getInstallStep().dependOn(&install_document.step);
+    const sbom_step = b.step("sbom", "Write the CycloneDX SBOM to the install prefix");
+    sbom_step.dependOn(&install_document.step);
+}
+
 pub fn build(b: *std.Build) void {
     const web_assets = compressedWebAssets(b) catch @panic("failed to compress Web UI assets");
     const arch = b.option(std.Target.Cpu.Arch, "arch", "Target architecture (x86, x86_64, wasm32, or wasm64)");
@@ -304,6 +437,7 @@ pub fn build(b: *std.Build) void {
             // license text alongside it keeps the attribution grant traceable.
             const van_license = b.addInstallFileWithDir(b.path("src/gui/van.LICENSE"), .prefix, "share/licenses/zine/van.LICENSE");
             b.getInstallStep().dependOn(&van_license.step);
+            addSbom(b);
         }
 
         if (a == .wasm32 or a == .wasm64) {
