@@ -40,10 +40,20 @@ tracked-file steps stop there. Everything below runs from the repository root.
 | List gate step names | `bash tests/check.sh --list` |
 | List build steps and options | `zig build --help` |
 
-The filter is a substring of the test name, and it applies to the whole
-suite, so `zig build test -Dtest-filter=x86.decoder` runs the decoder tests
-across files. `-Darch` does not change the target of the unit tests: they
-always run on the host. Only `test-cli` varies by architecture.
+The filter is a substring of the qualified test name, which spells the source
+path with dots and without the extension, and it applies to the whole suite:
+`-Dtest-filter=x86.decoder` runs the 14 tests in `src/x86/decoder.zig`, and
+`-Dtest-filter="decode: NOP"` runs one by its declared name. `x86/decoder` and
+`log.zig` select nothing, which the compiler reports as a green run with no
+test count, so the build fails at configure time and names the filter instead.
+
+The unit suite starts with diagnostics at their quietest level, because the
+loader, stub and parser tests drive the deliberate failure paths and each logs
+a warning or an error. `ZINE_LOG_LEVEL` raises it when a test needs to see
+them.
+
+`-Darch` does not change the target of the unit tests: they always run on the
+host. Only `test-cli` varies by architecture.
 
 `-Doptimize` defaults to ReleaseSafe so the installed artifacts are the
 optimized ones and stay free of the absolute build path that a Debug binary

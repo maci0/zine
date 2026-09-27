@@ -86,7 +86,19 @@ pub const Level = enum(u3) {
 /// Minimum log level.  Messages below this level are suppressed.
 /// Default: .trace (show everything).  Set via ZINE_LOG_LEVEL env var
 /// or programmatically.
-pub var min_level: Level = .trace;
+///
+/// A test binary starts at .fatal instead. The loader, stub and parser tests
+/// drive the deliberate failure paths, which each log a WARN or an ERROR, and
+/// the suite emitted around 1400 lines of expected output that buried the one
+/// real failure among them. Nothing under test reads the default, and
+/// ZINE_LOG_LEVEL raises it like any other build.
+pub var min_level: Level = defaultLevel();
+
+/// The level an unset ZINE_LOG_LEVEL leaves in place. A test binary starts
+/// quiet; everything else shows everything.
+fn defaultLevel() Level {
+    return if (builtin.is_test) .fatal else .trace;
+}
 
 fn levelPrefix(level: Level) struct { plain: []const u8, color: []const u8 } {
     return switch (level) {
@@ -292,7 +304,7 @@ pub fn levelErrorMessage() []const u8 {
 pub fn initFromEnv(env: *const std.process.Environ.Map) error{InvalidLogLevel}!void {
     initHomeRedaction(env);
     const val = env.get("ZINE_LOG_LEVEL") orelse {
-        min_level = .trace;
+        min_level = defaultLevel();
         return;
     };
     min_level = if (std.mem.eql(u8, val, "error"))
@@ -309,7 +321,7 @@ test "log level environment validates values before changing the active level" {
 
     min_level = .fatal;
     try initFromEnv(&env);
-    try std.testing.expectEqual(Level.trace, min_level);
+    try std.testing.expectEqual(defaultLevel(), min_level);
 
     const cases = .{
         .{ "fatal", Level.fatal },

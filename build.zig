@@ -26,6 +26,60 @@ comptime {
     }
 }
 
+/// Counts the `test "name"` declarations under src/ that a `-Dtest-filter`
+/// would select, and reports the total found. A filter that matches nothing is
+/// otherwise a green build that ran no tests, after a full compile: the build
+/// runner reports "run test success" with no test count, so only a
+/// contributor re-reading their own filter spelling catches it.
+///
+/// Zig matches the filter against the qualified test name, which spells the
+/// source path with dots and without the extension: `x86.decoder` selects the
+/// tests in src/x86/decoder.zig, while `x86/decoder` and `log.zig` select
+/// nothing, silently. Each declaration is therefore matched against its
+/// declared name and against the dotted path ahead of it.
+///
+/// The scan covers every file in src/ rather than the ones src/test_root.zig
+/// reaches, which can only over-count: a filter that matches here matches a
+/// reachable test, so the check fires only when the compiler would have run
+/// nothing. A scan that finds no declarations at all reports the total as
+/// inconclusive rather than failing, so a change to the declaration syntax
+/// cannot turn this into a gate failure.
+fn testFilterMatches(root: std.Io.Dir, io: std.Io, gpa: std.mem.Allocator, filter: []const u8) struct { matched: usize, total: usize } {
+    var matched: usize = 0;
+    var total: usize = 0;
+    var src = root.openDir(io, "src", .{ .iterate = true }) catch
+        return .{ .matched = 0, .total = 0 };
+    defer src.close(io);
+    var walker = src.walk(gpa) catch return .{ .matched = 0, .total = 0 };
+    while (walker.next(io) catch return .{ .matched = 0, .total = 0 }) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".zig")) continue;
+        const source = src.readFileAlloc(io, entry.path, gpa, .limited(4 << 20)) catch continue;
+        defer gpa.free(source);
+
+        // The path as it precedes a declared name: separators become dots and
+        // the extension is dropped.
+        const dotted = gpa.dupe(u8, entry.path[0 .. entry.path.len - ".zig".len]) catch
+            return .{ .matched = 0, .total = 0 };
+        defer gpa.free(dotted);
+        for (dotted, 0..) |c, i| {
+            if (c == '/') dotted[i] = '.';
+        }
+
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        while (lines.next()) |line| {
+            const rest = std.mem.trimStart(u8, line, " \t");
+            if (!std.mem.startsWith(u8, rest, "test \"")) continue;
+            total += 1;
+            if (std.mem.indexOf(u8, rest, filter) != null or
+                std.mem.indexOf(u8, dotted, filter) != null)
+            {
+                matched += 1;
+            }
+        }
+    }
+    return .{ .matched = matched, .total = total };
+}
+
 fn queryForArch(arch: std.Target.Cpu.Arch) std.Target.Query {
     return switch (arch) {
         .x86 => blk: {
@@ -699,6 +753,24 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
         .optimize = optimize,
     });
+    if (test_filter) |filter| {
+        const scan = testFilterMatches(b.build_root.handle, b.graph.io, b.allocator, filter);
+        if (scan.matched == 0) {
+            if (scan.total == 0) {
+                std.debug.print(
+                    "warning: no `test \"name\"` declaration found under src/, so -Dtest-filter={s} could not be checked\n",
+                    .{filter},
+                );
+            } else {
+                std.debug.print(
+                    "error: -Dtest-filter={s} matches none of the {d} tests under src/\n" ++
+                        "a test name contains it as a substring; run without -Dtest-filter, or pass a shorter one\n",
+                    .{ filter, scan.total },
+                );
+                std.process.exit(1);
+            }
+        }
+    }
     const t = b.addTest(.{
         .filters = if (test_filter) |filter| &.{filter} else &.{},
         .root_module = b.createModule(.{

@@ -8,7 +8,7 @@ No Windows installation, no Wine.
 ## What works
 
 - Full MSVC 6.0 toolchain: CL.EXE, LINK.EXE, RC.EXE, NMAKE.EXE, and 8 more utilities run to completion
-- 436 unit tests pass (2 skipped, 438 total) on the host with `zig build test`; the gate in
+- 459 unit tests pass (2 skipped, 461 total) on the host with `zig build test`; the gate in
   `tests/check.sh` adds the CLI suites on native x86 and x86_64
 - 158/128 integration checks on native/WASM, 20 FLTK smoke tests (these need guest
   binaries and are not part of `tests/check.sh`)
@@ -41,6 +41,17 @@ release, not a 0.2.1 patch.
 
 #### Breaking and migration
 
+- `zig build test -Dtest-filter=<substring>` now fails at configure time when
+  the filter matches no test. The compiler reported a filter matching nothing
+  as `run test success` with no test count, so a mistyped filter was a green
+  build that ran nothing after a full compile. The filter matches the
+  qualified test name, which spells the source path with dots and without the
+  extension, so `x86.decoder` selects the tests in `src/x86/decoder.zig` while
+  `x86/decoder` and `log.zig` select none and are now refused by name.
+- The unit suite runs with diagnostics at their quietest level. The loader,
+  stub and parser tests drive the deliberate failure paths, and the suite
+  emitted around 1400 lines of expected warnings and errors that buried a real
+  failure among them. `ZINE_LOG_LEVEL` raises the level as before.
 - The build now fails when `src/gui/van.min.js` does not hash to the digest
   recorded as `sbom_vanjs_sha256` in `build.zig`. The vendored VanJS copy is a
   re-wrap, so no upstream release names it, and nothing checked its bytes; the
