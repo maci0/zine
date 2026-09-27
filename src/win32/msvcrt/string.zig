@@ -174,12 +174,42 @@ pub fn wcsdup(str: [*]const u16) callconv(.c) ?[*]u16 {
 pub fn itoa(value: i32, buffer: [*]u8, radix: i32) callconv(.c) [*]u8 {
     if (trace.enable_tracing) trace.print("MSVCRT: _itoa(value={d}, radix={d})\n", .{ value, radix });
     const slice = buffer[0..33];
-    if (radix == 10) {
-        _ = std.fmt.bufPrint(slice, "{d}\x00", .{value}) catch return buffer;
-    } else if (radix == 16) {
-        _ = std.fmt.bufPrint(slice, "{x}\x00", .{@as(u32, @bitCast(value))}) catch return buffer;
-    } else buffer[0] = 0;
+    // MSVCRT accepts any radix in 2..36; a value outside that has no digit
+    // set, and the empty string is the only result the caller can use.
+    if (radix < 2 or radix > 36) {
+        buffer[0] = 0;
+        return buffer;
+    }
+    const u: u32 = if (value < 0) ~@as(u32, @bitCast(value)) +% 1 else @as(u32, @bitCast(value));
+    if (value < 0) {
+        var digits: [32]u8 = undefined;
+        const n = formatRadix(u, @intCast(radix), &digits).len;
+        if (n + 2 > slice.len) return buffer;
+        slice[0] = '-';
+        @memcpy(slice[1 .. 1 + n], digits[0..n]);
+        slice[1 + n] = 0;
+    } else {
+        _ = formatRadix(u, @intCast(radix), slice);
+    }
     return buffer;
+}
+
+/// Writes `value` in `radix` digits with no terminator into `out`, which must
+/// have room for all of them, and returns the written prefix.
+fn formatRadix(value: u32, radix: u8, out: []u8) []const u8 {
+    const digits = "0123456789abcdefghijklmnopqrstuvwxyz";
+    var tmp: [32]u8 = undefined;
+    var n: usize = 0;
+    var v = value;
+    while (true) {
+        tmp[n] = digits[v % radix];
+        n += 1;
+        v /= radix;
+        if (v == 0) break;
+    }
+    for (0..n) |i| out[i] = tmp[n - 1 - i];
+    if (out.len > n) out[n] = 0;
+    return out[0..n];
 }
 
 /// Implementation status: Partially implemented
@@ -883,12 +913,18 @@ test "strlwr and strupr return the same pointer and leave non-letters alone" {
 
 // --- numeric parsing ---
 
-test "itoa formats decimal and hex and rejects other radices" {
+test "itoa formats any radix in 2..36 and rejects the rest" {
     var buf: [33]u8 = undefined;
     try std.testing.expectEqualStrings("-42", std.mem.span(@as([*:0]u8, @ptrCast(itoa(-42, @ptrCast(&buf), 10)))));
     try std.testing.expectEqualStrings("ff", std.mem.span(@as([*:0]u8, @ptrCast(itoa(255, @ptrCast(&buf), 16)))));
+    try std.testing.expectEqualStrings("5", std.mem.span(@as([*:0]u8, @ptrCast(itoa(5, @ptrCast(&buf), 8)))));
+    try std.testing.expectEqualStrings("377", std.mem.span(@as([*:0]u8, @ptrCast(itoa(255, @ptrCast(&buf), 8)))));
+    try std.testing.expectEqualStrings("-1010", std.mem.span(@as([*:0]u8, @ptrCast(itoa(-10, @ptrCast(&buf), 2)))));
+    try std.testing.expectEqualStrings("zz", std.mem.span(@as([*:0]u8, @ptrCast(itoa(1295, @ptrCast(&buf), 36)))));
     buf[1] = 'X';
-    _ = itoa(5, @ptrCast(&buf), 8);
+    _ = itoa(5, @ptrCast(&buf), 1);
+    try std.testing.expectEqual(@as(u8, 0), buf[0]);
+    _ = itoa(5, @ptrCast(&buf), 37);
     try std.testing.expectEqual(@as(u8, 0), buf[0]);
 }
 

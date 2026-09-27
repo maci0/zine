@@ -7,77 +7,6 @@ const io = @import("io.zig");
 const string = @import("string.zig");
 const platform = @import("../../platform.zig");
 
-/// Renders `val` for the printf conversion `spec` (`f`, `e`, `E`, `g`, `G`)
-/// into `buf` and returns the written slice.
-///
-/// `e`/`E` and `g`/`G` are not fixed-point: C prints an exponent for the
-/// first pair and picks between the two styles for the second, so
-/// `printf("%e", 12345.0)` is `1.234500e+04`, not `12345.000000`. NaN and
-/// infinity have no C exponent form and pass through as `nan`/`inf`.
-fn renderFloat(buf: []u8, val: f64, spec: u8, prec: u8) ?[]const u8 {
-    if (std.math.isNan(val)) return std.fmt.bufPrint(buf, "{s}", .{if (std.math.signbit(val)) "-nan" else "nan"}) catch null;
-    if (std.math.isInf(val)) return std.fmt.bufPrint(buf, "{s}", .{if (val < 0) "-inf" else "inf"}) catch null;
-
-    return switch (spec) {
-        'f' => std.fmt.bufPrint(buf, "{d:.[1]}", .{ val, prec }) catch null,
-        'e', 'E' => formatExp(buf, val, spec == 'E', prec),
-        else => formatGeneral(buf, val, spec == 'G', prec),
-    };
-}
-
-/// C `%e`: `[-]d.dddde[+-]NN` with at least two exponent digits.
-fn formatExp(buf: []u8, val: f64, upper: bool, prec: u8) ?[]u8 {
-    var mantissa: [96]u8 = undefined;
-    const sci = std.fmt.bufPrint(&mantissa, "{e:.[1]}", .{ val, prec }) catch return null;
-    const e_pos = std.mem.indexOfAny(u8, sci, "eE") orelse return sci[0..sci.len];
-    const exp = std.fmt.parseInt(i32, sci[e_pos + 1 ..], 10) catch return sci[0..sci.len];
-    return std.fmt.bufPrint(buf, "{s}{c}{s}{d:0>2}", .{
-        sci[0..e_pos],
-        @as(u8, if (upper) 'E' else 'e'),
-        @as([]const u8, if (exp < 0) "-" else "+"),
-        @abs(exp),
-    }) catch null;
-}
-
-/// C `%g`: fixed-point when the decimal exponent is in `[-4, prec)`, otherwise
-/// scientific, with trailing fractional zeros removed in both cases.
-fn formatGeneral(buf: []u8, val: f64, upper: bool, prec: u8) ?[]u8 {
-    // A precision of 0 is treated as 1, and `val` is never zero-exponented
-    // here because a zero value formats as "0" with no exponent at all.
-    const p: i32 = if (prec == 0) 1 else prec;
-    var sci: [96]u8 = undefined;
-    const sci_str = std.fmt.bufPrint(&sci, "{e}", .{val}) catch return null;
-    const e_pos = std.mem.indexOfAny(u8, sci_str, "eE") orelse return std.fmt.bufPrint(buf, "{d:.[1]}", .{ val, prec }) catch null;
-    const exp = std.fmt.parseInt(i32, sci_str[e_pos + 1 ..], 10) catch 0;
-
-    if (exp < -4 or exp >= p) {
-        const s = formatExp(buf, val, upper, @intCast(@max(p - 1, 0))) orelse return null;
-        return stripTrailingZeros(s);
-    }
-    const digits: u8 = @intCast(@min(@max(p - 1 - exp, 0), 20));
-    const s = std.fmt.bufPrint(buf, "{d:.[1]}", .{ val, digits }) catch return null;
-    return stripTrailingZeros(s);
-}
-
-/// Drops trailing fractional zeros and a bare trailing '.', as C does for
-/// `%g` without the `#` flag. The exponent marker ends the scan, so a
-/// scientific form keeps its `1.23e+04` mantissa and exponent intact. The
-/// exponent is shifted back over the trimmed zeros in the caller's buffer
-/// rather than allocated.
-fn stripTrailingZeros(s: []u8) []u8 {
-    const dot = std.mem.indexOfScalar(u8, s, '.') orelse return s;
-    const marker = std.mem.indexOfAny(u8, s, "eE") orelse s.len;
-    if (dot + 1 >= marker) return s;
-    var end = marker;
-    while (end > dot + 1 and s[end - 1] == '0') end -= 1;
-    // Nothing to trim: hand back the whole string, exponent included.
-    if (end == marker) return s;
-    if (end == dot + 1) end = dot;
-    const tail = s[marker..];
-    std.mem.copyForwards(u8, s[end .. end + tail.len], tail);
-    return s[0 .. end + tail.len];
-}
-
 /// Helper to convert C va_list to a raw usize address.
 /// Implementation status: Fully implemented
 pub inline fn va_list_to_usize(ap: anytype) usize {
@@ -98,18 +27,137 @@ fn appendDigit(val: usize, digit: u8) usize {
     return std.math.add(usize, scaled, digit) catch std.math.maxInt(usize);
 }
 
-/// Pads `text` on the left to `width` with `pad_char`, copies it into `buf`,
-/// and returns the new write offset. The NUL terminator slot is left free.
-fn emitPadded(buf: [*]u8, oi: usize, max: usize, width: usize, pad_char: u8, text: []const u8) usize {
+/// Pads `text` to `width` with `pad_char`, copies it into `buf`, and returns
+/// the new write offset. The NUL terminator slot is left free. A '-' flag
+/// left-justifies; a '0' flag right-justifies with zeroes.
+fn emitPadded(buf: [*]u8, oi: usize, max: usize, width: usize, pad_char: u8, left: bool, sign: ?u8, text: []const u8) usize {
+    const sign_len: usize = if (sign != null) 1 else 0;
+    const content = text.len + sign_len;
+    var pad: usize = if (width > content) width - content else 0;
     var o = oi;
-    var w = width;
-    while (text.len < w and o < max - 1) : (w -= 1) {
-        buf[o] = pad_char;
-        o += 1;
+    const zero_pad = !left and pad_char == '0';
+    if (!left) {
+        // A '0' pad fills after the sign, a space pad before the whole field.
+        if (zero_pad) {
+            if (sign) |s| {
+                if (o < max - 1) {
+                    buf[o] = s;
+                    o += 1;
+                }
+            }
+        }
+        while (pad > 0 and o < max - 1) : (pad -= 1) {
+            buf[o] = if (zero_pad) '0' else pad_char;
+            o += 1;
+        }
+        if (!zero_pad) {
+            if (sign) |s| {
+                if (o < max - 1) {
+                    buf[o] = s;
+                    o += 1;
+                }
+            }
+        }
+    } else if (sign) |s| {
+        if (o < max - 1) {
+            buf[o] = s;
+            o += 1;
+        }
     }
     const n = @min(text.len, max - 1 - o);
     @memcpy(buf[o .. o + n], text[0..n]);
-    return o + n;
+    o += n;
+    if (left) {
+        while (pad > 0 and o < max - 1) : (pad -= 1) {
+            buf[o] = pad_char;
+            o += 1;
+        }
+    }
+    return o;
+}
+
+/// %f of a non-negative magnitude, with C's "always keep the point under #"
+/// rule handled by the caller-visible `alt` flag.
+fn formatFixed(mag: f64, prec: usize, alt: bool, out: []u8) []u8 {
+    const s = std.fmt.bufPrint(out, "{d:.[1]}", .{ mag, @as(u8, @intCast(@min(prec, 20))) }) catch return out[0..0];
+    if (alt and prec == 0 and s.len == 1 and s[0] != 'n' and s[0] != 'i') {
+        out[1] = '.';
+        return out[0..2];
+    }
+    return s;
+}
+
+/// Splits "d.dddde[-]k" into its mantissa and exponent parts.
+fn splitSci(s: []const u8) struct { mant: []const u8, exp: i32 } {
+    const at = std.mem.lastIndexOfScalar(u8, s, 'e') orelse std.mem.lastIndexOfScalar(u8, s, 'E') orelse return .{ .mant = s, .exp = 0 };
+    return .{
+        .mant = s[0..at],
+        .exp = std.fmt.parseInt(i32, s[at + 1 ..], 10) catch 0,
+    };
+}
+
+/// %e/%E: a mantissa in [1, 10) and an explicitly signed exponent of at least
+/// two digits, which is what C prints and what Zig's `{e}` does not.
+fn formatSci(mag: f64, prec: usize, upper: bool, alt: bool, out: []u8) []u8 {
+    var nb: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&nb, "{e:.[1]}", .{ mag, @as(u8, @intCast(@min(prec, 20))) }) catch return out[0..0];
+    const parts = splitSci(s);
+    var mant = parts.mant;
+    if (alt and prec == 0 and mant.len == 1) {
+        out[0] = mant[0];
+        out[1] = '.';
+        mant = out[0..2];
+    } else {
+        @memcpy(out[0..mant.len], mant);
+    }
+    var o = mant.len;
+    out[o] = if (upper) 'E' else 'e';
+    o += 1;
+    out[o] = if (parts.exp < 0) '-' else '+';
+    o += 1;
+    const exp_abs: u32 = @intCast(if (parts.exp < 0) -parts.exp else parts.exp);
+    o += (std.fmt.bufPrint(out[o..], "{d}", .{exp_abs}) catch return out[0..o]).len;
+    if (exp_abs < 10) {
+        // Two exponent digits minimum; inserting one shifts the rest right.
+        var i = o;
+        while (i > mant.len + 2) : (i -= 1) out[i] = out[i - 1];
+        out[mant.len + 2] = '0';
+        o += 1;
+    }
+    return out[0..o];
+}
+
+/// %g/%G: the shorter of %e and %f at precision P-1, with trailing zeros
+/// dropped unless '#' asked to keep them.
+fn formatGeneral(mag: f64, prec_in: usize, upper: bool, alt: bool, out: []u8) []u8 {
+    const p: usize = if (prec_in == 0) 1 else prec_in;
+    var nb: [64]u8 = undefined;
+    const probe = std.fmt.bufPrint(&nb, "{e:.[1]}", .{ mag, @as(u8, @intCast(@min(p - 1, 20))) }) catch return out[0..0];
+    const exp = splitSci(probe).exp;
+    var text: []u8 = undefined;
+    if (exp < -4 or exp >= @as(i32, @intCast(p)))
+        text = formatSci(mag, p - 1, upper, alt, out)
+    else {
+        const fixed_prec = @as(i32, @intCast(p)) - 1 - exp;
+        text = formatFixed(mag, @intCast(@max(fixed_prec, 0)), alt, out);
+    }
+    if (alt) return text;
+    // Strip trailing fractional zeros, then a bare trailing point. In the
+    // exponent form they sit before the 'e'.
+    const at_e = std.mem.indexOfAny(u8, text, "eE") orelse text.len;
+    var mant_end = at_e;
+    if (std.mem.indexOfScalar(u8, text[0..mant_end], '.') != null) {
+        while (mant_end > 0 and text[mant_end - 1] == '0') mant_end -= 1;
+        if (mant_end > 0 and text[mant_end - 1] == '.') mant_end -= 1;
+    }
+    // Compact in place: the mantissa shrinks and the exponent suffix moves
+    // left over it, so the result still lives in the caller's buffer.
+    if (mant_end == at_e) return text;
+    const tail_len = text.len - at_e;
+    for (text[at_e..], 0..) |byte, i| {
+        text[mant_end + i] = byte;
+    }
+    return text[0 .. mant_end + tail_len];
 }
 
 /// Internal helper for vsnprintf implementation.
@@ -131,9 +179,23 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
             ii += 1;
             if (format[ii] == 0) break;
 
+            // Flags. '-' left-justifies; '0' pads with zeroes unless '-'
+            // is also given; '+' and ' ' prefix a sign; '#' keeps the 0x of
+            // %x/%X and the decimal point of %f.
+            var left = false;
             var pad_char: u8 = ' ';
-            if (format[ii] == '0') {
-                pad_char = '0';
+            var force_sign = false;
+            var space_sign = false;
+            var alt = false;
+            flag_loop: while (true) {
+                switch (format[ii]) {
+                    '-' => left = true,
+                    '0' => pad_char = '0',
+                    '+' => force_sign = true,
+                    ' ' => space_sign = true,
+                    '#' => alt = true,
+                    else => break :flag_loop,
+                }
                 ii += 1;
             }
             // A width or precision the guest spells out runs no bound; both
@@ -166,28 +228,45 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
                 if (args[ai] >= 0x10000) {
                     const s = @as([*:0]const u8, @ptrFromInt(trace.addr(args[ai])));
                     const len = std.mem.indexOfScalar(u8, s[0..4096], 0) orelse 0;
-                    oi = emitPadded(buf, oi, max, width, pad_char, s[0..len]);
+                    oi = emitPadded(buf, oi, max, width, pad_char, left, null, s[0..len]);
                 }
                 ai += 1;
             } else if (c == 'd' or c == 'i') {
                 const v = @as(i32, @bitCast(@as(u32, @truncate(args[ai]))));
                 ai += 1;
                 var nb: [32]u8 = undefined;
-                oi = emitPadded(buf, oi, max, width, pad_char, std.fmt.bufPrint(&nb, "{d}", .{v}) catch "");
-            } else if (c == 'x' or c == 'X') {
+                const sign: ?u8 = if (v < 0)
+                    '-'
+                else if (force_sign)
+                    '+'
+                else if (space_sign)
+                    ' '
+                else
+                    null;
+                // A negative value prints its magnitude, so the sign lands
+                // where the field expects it rather than inside the digits.
+                const mag: u32 = if (v < 0) @as(u32, @bitCast(~@as(u32, @bitCast(v)) +% 1)) else @as(u32, @bitCast(v));
+                oi = emitPadded(buf, oi, max, width, pad_char, left, sign, std.fmt.bufPrint(&nb, "{d}", .{mag}) catch "");
+            } else if (c == 'x' or c == 'X' or c == 'p') {
                 const v = args[ai];
                 ai += 1;
                 var nb: [32]u8 = undefined;
-                const ns = if (c == 'x')
-                    std.fmt.bufPrint(&nb, "{x}", .{v}) catch ""
+                var prefix: []const u8 = "";
+                if (c != 'p' and alt and v != 0) prefix = if (c == 'x') "0x" else "0X";
+                const ns = if (c == 'X')
+                    std.fmt.bufPrint(&nb, "{X}", .{v}) catch ""
                 else
-                    std.fmt.bufPrint(&nb, "{X}", .{v}) catch "";
-                oi = emitPadded(buf, oi, max, width, pad_char, ns);
+                    std.fmt.bufPrint(&nb, "{x}", .{v}) catch "";
+                var pb: [34]u8 = undefined;
+                @memcpy(pb[0..prefix.len], prefix);
+                @memcpy(pb[prefix.len .. prefix.len + ns.len], ns);
+                oi = emitPadded(buf, oi, max, width, pad_char, left, null, pb[0 .. prefix.len + ns.len]);
             } else if (c == 'u') {
                 const v = @as(u32, @truncate(args[ai]));
                 ai += 1;
                 var nb: [32]u8 = undefined;
-                oi = emitPadded(buf, oi, max, width, pad_char, std.fmt.bufPrint(&nb, "{d}", .{v}) catch "");
+                const sign: ?u8 = if (force_sign) '+' else if (space_sign) ' ' else null;
+                oi = emitPadded(buf, oi, max, width, pad_char, left, sign, std.fmt.bufPrint(&nb, "{d}", .{v}) catch "");
             } else if (c == 'c') {
                 if (oi < max - 1) {
                     buf[oi] = @as(u8, @truncate(args[ai]));
@@ -202,28 +281,40 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
                     ai += 2;
                     const bits: u64 = (@as(u64, hi) << 32) | @as(u64, lo);
                     const val: f64 = @bitCast(bits);
-                    var nb: [128]u8 = undefined;
                     // A float with no precision prints six fractional digits,
                     // and an explicit one (including ".0") prints exactly
                     // that many, so "$%.0f" of 3.5 reads "4" and not "3.5".
-                    const prec_val: u8 = if (precision_given) @intCast(@min(precision, 20)) else 6;
-                    const ns = renderFloat(&nb, val, c, prec_val) orelse "?";
-
-                    const len = ns.len;
-                    while (len < width and oi < max - 1) : (width -= 1) {
-                        buf[oi] = pad_char;
-                        oi += 1;
-                    }
-
-                    const copy_len = @min(ns.len, max - 1 - oi);
-                    @memcpy(buf[oi .. oi + copy_len], ns[0..copy_len]);
-                    oi += copy_len;
+                    const prec: usize = if (precision_given) @min(precision, 20) else 6;
+                    const sign: ?u8 = if (val < 0 or std.math.signbit(val))
+                        '-'
+                    else if (force_sign)
+                        '+'
+                    else if (space_sign)
+                        ' '
+                    else
+                        null;
+                    const mag = if (val < 0) -val else val;
+                    var nb: [512]u8 = undefined;
+                    const text: []const u8 = if (std.math.isNan(mag) or std.math.isInf(mag))
+                        // Neither has a C exponent form, so it passes through
+                        // spelled out, with the sign in the field.
+                        if (std.math.isNan(mag)) "nan" else "inf"
+                    else switch (c) {
+                        'f' => formatFixed(mag, prec, alt, &nb),
+                        'e', 'E' => formatSci(mag, prec, c == 'E', alt, &nb),
+                        else => formatGeneral(mag, prec, c == 'G', alt, &nb),
+                    };
+                    oi = emitPadded(buf, oi, max, width, pad_char, left, sign, text);
                 }
             } else if (c == '%') {
                 if (oi < max - 1) {
                     buf[oi] = '%';
                     oi += 1;
                 }
+            } else {
+                // An unsupported conversion still consumes its argument, or
+                // every conversion after it reads one slot too early.
+                ai += 1;
             }
         } else {
             buf[oi] = format[ii];
@@ -729,7 +820,7 @@ test "vsnprintf rounds to the requested precision and survives a huge width" {
     try testing.expectEqualStrings("0000002147483647", buf[0..x86_vsnprintf(&buf, 64, "%016d", @intFromPtr(&int_args))]);
 }
 
-test "vsnprintf %e and %g use the exponent form C specifies" {
+test "vsnprintf honours flags, signs, and the exponent conversions" {
     const doubleArg = struct {
         fn of(v: f64) [2]u32 {
             const bits: u64 = @bitCast(v);
@@ -738,8 +829,40 @@ test "vsnprintf %e and %g use the exponent form C specifies" {
     }.of;
 
     var buf: [64]u8 = undefined;
-    var args = doubleArg(12345.0);
+    var int_args = [_]u32{ @bitCast(@as(i32, -42)), 255 };
+    try testing.expectEqualStrings("-42     ", buf[0..x86_vsnprintf(&buf, 64, "%-8d", @intFromPtr(&int_args))]);
+    try testing.expectEqualStrings("     -42", buf[0..x86_vsnprintf(&buf, 64, "%8d", @intFromPtr(&int_args))]);
+    try testing.expectEqualStrings("-0000042", buf[0..x86_vsnprintf(&buf, 64, "%08d", @intFromPtr(&int_args))]);
+    var pos_args = [_]u32{42};
+    try testing.expectEqualStrings("     +42", buf[0..x86_vsnprintf(&buf, 64, "%+8u", @intFromPtr(&pos_args))]);
+    try testing.expectEqualStrings("+42", buf[0..x86_vsnprintf(&buf, 64, "%+d", @intFromPtr(&pos_args))]);
+    var hex_args = [_]u32{255};
+    try testing.expectEqualStrings("    0xff", buf[0..x86_vsnprintf(&buf, 64, "%#8x", @intFromPtr(&hex_args))]);
+
+    // A width the old formatter dropped for every float conversion.
+    var fargs = doubleArg(3.14);
+    try testing.expectEqualStrings("    3.14", buf[0..x86_vsnprintf(&buf, 64, "%8.2f", @intFromPtr(&fargs))]);
+    try testing.expectEqualStrings("0003.140", buf[0..x86_vsnprintf(&buf, 64, "%08.3f", @intFromPtr(&fargs))]);
+    fargs = doubleArg(-3.14);
+    try testing.expectEqualStrings("-0003.14", buf[0..x86_vsnprintf(&buf, 64, "%08.2f", @intFromPtr(&fargs))]);
+    try testing.expectEqualStrings("  -3.14", buf[0..x86_vsnprintf(&buf, 64, "%7.2f", @intFromPtr(&fargs))]);
+
+    fargs = doubleArg(1234.5);
+    try testing.expectEqualStrings("1.234500e+03", buf[0..x86_vsnprintf(&buf, 64, "%e", @intFromPtr(&fargs))]);
+    try testing.expectEqualStrings("1.23E+03", buf[0..x86_vsnprintf(&buf, 64, "%.2E", @intFromPtr(&fargs))]);
+    try testing.expectEqualStrings("1234.5", buf[0..x86_vsnprintf(&buf, 64, "%g", @intFromPtr(&fargs))]);
+    fargs = doubleArg(0.00012345);
+    try testing.expectEqualStrings("0.00012345", buf[0..x86_vsnprintf(&buf, 64, "%g", @intFromPtr(&fargs))]);
+    fargs = doubleArg(0.000012345);
+    try testing.expectEqualStrings("1.2345e-05", buf[0..x86_vsnprintf(&buf, 64, "%g", @intFromPtr(&fargs))]);
+
+    // An unsupported conversion still takes its argument, so the one after
+    // it prints its own value instead of the abandoned one.
+    var mixed = [_]u32{ 7, 5 };
+    try testing.expectEqualStrings(" 5", buf[0..x86_vsnprintf(&buf, 64, "%y %d", @intFromPtr(&mixed))]);
+
     // %e always carries an exponent, with a sign and at least two digits.
+    var args = doubleArg(12345.0);
     try testing.expectEqualStrings("1.234500e+04", buf[0..x86_vsnprintf(&buf, 64, "%e", @intFromPtr(&args))]);
     try testing.expectEqualStrings("1.234500E+04", buf[0..x86_vsnprintf(&buf, 64, "%E", @intFromPtr(&args))]);
 
