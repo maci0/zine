@@ -11,6 +11,7 @@ const std = @import("std");
 const platform = @import("platform.zig");
 const pe = @import("pe.zig");
 const teb = @import("win32/teb.zig");
+const teb_layout = @import("win32/teb_layout.zig");
 const path_utils = @import("path_utils.zig");
 const text_utils = @import("text_utils.zig");
 const Module = @import("loader/module.zig").Module;
@@ -643,7 +644,7 @@ pub fn main(init: std.process.Init) !void {
     cpu.fs_base = @truncate(@intFromPtr(thread_env));
     // Record the TEB base so host stubs (e.g. RaiseException's SEH walk) can
     // read the guest's FS:[0] exception chain via guest memory.
-    teb.teb_base_addr = @intFromPtr(thread_env);
+    teb_layout.teb_base_addr = @intFromPtr(thread_env);
 
     log.info("wasm: starting x86 interpreter at EIP=0x{X}, ESP=0x{X}, FS_BASE=0x{X}", .{
         cpu.eip,
@@ -894,7 +895,7 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     child_cpu.ebp = child_cpu.esp;
 
     // Reuse parent's TEB
-    child_cpu.fs_base = @truncate(teb.teb_base_addr);
+    child_cpu.fs_base = @truncate(teb_layout.teb_base_addr);
 
     x86_memory.guest_memory = &child_cpu.memory;
 

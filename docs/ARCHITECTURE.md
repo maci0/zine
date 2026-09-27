@@ -184,7 +184,7 @@ Zine implements 37 DLL stub modules that provide Win32 API compatibility: 36 reg
 
 ### 6. TEB (Thread Environment Block) / PEB (Process Environment Block) and the FS Segment Register
 
-[`src/win32/teb.zig`](../src/win32/teb.zig)
+[`src/win32/teb_layout.zig`](../src/win32/teb_layout.zig) holds the structure layouts (`TEB`, `PEB`, `NT_TIB`, `CONTEXT`, `EXCEPTION_RECORD`, ...) and the host-visible TEB globals (`teb_address`, `teb_fs_selector`, `teb_base_addr`). It imports nothing but `std`, because the host signal handler in `src/platform/native.zig` reads and writes those globals: a layout module that reached back into `src/platform.zig` would close an import cycle. [`src/win32/teb.zig`](../src/win32/teb.zig) owns the allocation and FS-segment setup that do need the platform layer.
 
 #### What is the FS segment register?
 
@@ -484,7 +484,8 @@ zine/
 │   │   └── wasm.zig         # WASM constants and opcodes
 │   ├── win32/               # Win32 API stub implementations (37 DLLs)
 │   │   ├── shared.zig       # Shared utilities, allocators, generic N-arg stubs
-│   │   ├── teb.zig          # Thread Environment Block (TEB/PEB/TIB)
+│   │   ├── teb.zig          # TEB/PEB allocation and FS segment setup
+│   │   ├── teb_layout.zig   # Dependency-free TEB/PEB/TIB layouts and TEB globals
 │   │   ├── constants.zig    # Shared Win32 constant definitions
 │   │   ├── calling_convention.zig # WINAPI calling convention abstraction
 │   │   ├── civil_time.zig    # Gregorian/UTC calendar arithmetic

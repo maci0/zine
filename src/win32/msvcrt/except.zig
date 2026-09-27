@@ -228,7 +228,7 @@ pub var wasm_seh_redirect: ?struct { eip: u32, esp: u32, ebp: u32 } = null;
 fn call_seh_filter_wasm(filter_addr: usize, frame_ebp: usize) i32 {
     const x86_cpu = @import("../../x86/cpu.zig");
     const x86_execute = @import("../../x86/execute.zig");
-    const teb_mod = @import("../teb.zig");
+    const teb_mod = @import("../teb_layout.zig");
     var cpu = x86_cpu.Cpu{};
     if (x86_memory.guest_memory) |gm| cpu.memory = gm.*;
     if (teb_mod.teb_base_addr != 0) cpu.fs_base = @intCast(teb_mod.teb_base_addr);

@@ -979,7 +979,7 @@ const SEH_Frame = extern struct {
     catch_ebp: u32,
 };
 
-export fn user32_seh_handler(record: *anyopaque, frame_ptr: *SEH_Frame, context: *@import("teb.zig").CONTEXT, dispatch: usize) callconv(.c) u32 {
+export fn user32_seh_handler(record: *anyopaque, frame_ptr: *SEH_Frame, context: *@import("teb_layout.zig").CONTEXT, dispatch: usize) callconv(.c) u32 {
     _ = record;
     _ = dispatch;
     if (trace.enable_tracing) trace.print("USER32: Swallowing exception in WindowProc, jumping to catch handler.\n", .{});
@@ -1069,7 +1069,7 @@ fn callWndProcSafe_zig(wndproc: usize, hwnd: usize, msg: u32, wParam: usize, lPa
     if (comptime @import("../platform.zig").is_wasm) {
         const x86_cpu = @import("../x86/cpu.zig");
         const x86_execute = @import("../x86/execute.zig");
-        const teb_mod = @import("teb.zig");
+        const teb_mod = @import("teb_layout.zig");
         const stack_size: u32 = 64 * 1024;
         var cpu = x86_cpu.Cpu{};
         if (x86_memory.guest_memory) |gm| cpu.memory = gm.*;

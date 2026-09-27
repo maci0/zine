@@ -1727,7 +1727,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             // Check if guest has an SEH handler — if so, this is likely a deliberate
             // CPU feature probe (e.g., cpuidsdk uses 0F 3F to trigger #UD and catch
             // it via SEH). Dispatch the exception to SEH so the handler runs properly.
-            const teb_mod = @import("../win32/teb.zig");
+            const teb_mod = @import("../win32/teb_layout.zig");
             var seh_head: u32 = 0;
             if (teb_mod.teb_base_addr != 0) {
                 seh_head = @as(*const u32, @ptrFromInt(teb_mod.teb_base_addr)).*;

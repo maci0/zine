@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const teb = @import("win32/teb.zig");
+const teb_layout = @import("win32/teb_layout.zig");
 const Module = @import("loader/module.zig").Module;
 const Environment = @import("loader/env.zig").Environment;
 const loader = @import("loader/loader.zig");
@@ -548,7 +549,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Initialize TEB/PEB
     const thread_env = try teb.initTEB();
-    teb.teb_base_addr = @intFromPtr(thread_env);
+    teb_layout.teb_base_addr = @intFromPtr(thread_env);
 
     // On x86_64, set very wide stack bounds to cover all MAP_32BIT allocations.
     // Multiple stacks are used (callCompat32 shared stack, enterCompatMode guest
@@ -598,8 +599,8 @@ pub fn main(init: std.process.Init) !void {
     }
     env_block[env_pos] = 0;
 
-    const peb = @as(*teb.PEB, @ptrFromInt(thread_env.ProcessEnvironmentBlock));
-    const params = @as(*teb.RTL_USER_PROCESS_PARAMETERS, @ptrFromInt(peb.ProcessParameters));
+    const peb = @as(*teb_layout.PEB, @ptrFromInt(thread_env.ProcessEnvironmentBlock));
+    const params = @as(*teb_layout.RTL_USER_PROCESS_PARAMETERS, @ptrFromInt(peb.ProcessParameters));
     params.Environment = @truncate(@intFromPtr(env_block));
 
     // Capture the host TLS base before FS is switched to the guest TEB, so
@@ -637,7 +638,7 @@ pub fn main(init: std.process.Init) !void {
         cpu.eip = @truncate(ep);
         cpu.esp = @intCast(@intFromPtr(stack_mem.ptr) + stack_size - 16);
         cpu.ebp = cpu.esp;
-        cpu.fs_base = @truncate(teb.teb_base_addr);
+        cpu.fs_base = @truncate(teb_layout.teb_base_addr);
 
         trace.print("Interpreter: EIP=0x{X} ESP=0x{X} fs_base=0x{X} (image base=0x{X}, stack base=0x{X})\n", .{ cpu.eip, cpu.esp, cpu.fs_base, base, @intFromPtr(stack_mem.ptr) });
 

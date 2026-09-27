@@ -48,8 +48,8 @@ fn isSystemDirPath(path: []const u8) bool {
 }
 
 const EXCEPTION_POINTERS = extern struct {
-    ExceptionRecord: *const @import("../teb.zig").EXCEPTION_RECORD,
-    ContextRecord: *const @import("../teb.zig").CONTEXT,
+    ExceptionRecord: *const @import("../teb_layout.zig").EXCEPTION_RECORD,
+    ContextRecord: *const @import("../teb_layout.zig").CONTEXT,
 };
 
 /// Called when an exception occurs that is not handled by any exception handlers.
@@ -1301,7 +1301,8 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
     // Copy the main thread's TEB as a template. The allocation belongs to the
     // registry slot (thread_info.teb_mem) and is reused across CreateThread
     // cycles on that slot, so repeated thread create/exit stays bounded.
-    const teb_mod = @import("../teb.zig");
+    const teb_mod = @import("../teb_layout.zig");
+    const teb_setup = @import("../teb.zig");
     const builtin_mod = @import("builtin");
 
     // This OS thread's own TLS location, captured before setupFS points FS
@@ -1345,7 +1346,7 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
             if (thread_info.teb_mem) |m| break :blk m;
             const m = std.heap.page_allocator.alloc(u8, teb_size) catch {
                 // Fallback: share main thread's TEB
-                teb_mod.setupFS(@ptrFromInt(teb_mod.teb_base_addr)) catch {};
+                teb_setup.setupFS(@ptrFromInt(teb_mod.teb_base_addr)) catch {};
                 if (start_address != 0) {
                     const func = @as(ThreadStartFn, @ptrFromInt(start_address));
                     thread_info.setExitCode(func(parameter));
@@ -1381,7 +1382,7 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
         thread_teb.NtTib.ExceptionList = 0xFFFFFFFF; // Empty SEH chain
         thread_teb.NtTib.Self = @truncate(@intFromPtr(thread_teb_mem.ptr) + 0x18); // Self pointer
         // Set up FS to point to this thread's TEB
-        teb_mod.setupFS(@ptrCast(@alignCast(thread_teb_mem.ptr))) catch {};
+        teb_setup.setupFS(@ptrCast(@alignCast(thread_teb_mem.ptr))) catch {};
     }
 
     if (start_address == 0) {

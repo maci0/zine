@@ -74,7 +74,7 @@ fn callComparator(compare_ptr: usize, a: usize, b: usize) i32 {
     // WASM: run the comparator on a fresh interpreter CPU sharing guest memory.
     const x86_cpu = @import("../../x86/cpu.zig");
     const x86_execute = @import("../../x86/execute.zig");
-    const teb_mod = @import("../teb.zig");
+    const teb_mod = @import("../teb_layout.zig");
     const stack_size: u32 = 64 * 1024;
     // Lazily allocate the stack from the GLOBAL guest memory (once per guest
     // memory instance), then copy the (now advanced) GuestMemory state into the

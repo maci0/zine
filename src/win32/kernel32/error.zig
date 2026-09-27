@@ -157,7 +157,7 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
     // pointer dereference) but readExceptionList uses the FS segment register.
     // If the result is 0 or 0xFFFFFFFF (empty), try reading directly from TEB.
     if (exception_list == 0 or exception_list == 0xFFFFFFFF) {
-        const teb_mod = @import("../teb.zig");
+        const teb_mod = @import("../teb_layout.zig");
         if (teb_mod.teb_base_addr != 0) {
             const teb_val = readGuestU32(@intCast(teb_mod.teb_base_addr));
             if (teb_val != 0 and teb_val != 0xFFFFFFFF) {
@@ -242,7 +242,7 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
             const disp = if (comptime platform.is_x86_64) blk: {
                 // On x86_64, SEH handlers are 32-bit PE code — call via compat mode
                 const compat_thunks = @import("../../x86/compat_thunks.zig");
-                const teb = @import("../teb.zig");
+                const teb = @import("../teb_layout.zig");
                 const teb_ptr = @as(*teb.TEB, @ptrFromInt(teb.teb_base_addr));
                 const old_limit = teb_ptr.NtTib.StackLimit;
                 const old_base = teb_ptr.NtTib.StackBase;
@@ -268,7 +268,7 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
                 // disposition for the walk. rec/ctx must live in guest memory so
                 // the interpreted handler can read them.
                 const except_mod = @import("../msvcrt/except.zig");
-                const teb_mod = @import("../teb.zig");
+                const teb_mod = @import("../teb_layout.zig");
                 var rec_va: u32 = 0;
                 var ctx_va: u32 = 0;
                 if (x86_memory.guest_memory) |gmem| {
@@ -383,7 +383,7 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
 pub var signal_context: ?*@import("../../platform/signal_context.zig").ucontext_t = null;
 
 /// Saved CONTEXT from signal handler for hardware exceptions (SIGILL/SIGSEGV).
-pub var saved_hw_context: ?*@import("../teb.zig").CONTEXT = null;
+pub var saved_hw_context: ?*@import("../teb_layout.zig").CONTEXT = null;
 
 /// Unwinds the stack to TargetFrame, calling SEH handlers along the way, then transfer control to TargetIp.
 /// Implementation status: Partially implemented
@@ -393,7 +393,7 @@ pub fn RtlUnwind(targetFrame: u32, targetIp: u32, pExceptionRecord: usize, retur
     // Walk the SEH chain and call handlers with EXCEPTION_UNWIND (0x2)
     var exception_list: u32 = platform.readExceptionList();
     if (exception_list == 0 or exception_list == 0xFFFFFFFF) {
-        const teb_mod = @import("../teb.zig");
+        const teb_mod = @import("../teb_layout.zig");
         if (teb_mod.teb_base_addr != 0) {
             const teb_val = @as(*const u32, @ptrFromInt(teb_mod.teb_base_addr)).*;
             if (teb_val != 0 and teb_val != 0xFFFFFFFF) {
@@ -409,7 +409,7 @@ pub fn RtlUnwind(targetFrame: u32, targetIp: u32, pExceptionRecord: usize, retur
     // already inside a handler call from RaiseException — calling handlers
     // re-entrantly corrupts the stack. The MSVC C++ exception handler
     // (__CxxFrameHandler) that called us will handle the control transfer.
-    const teb_mod = @import("../teb.zig");
+    const teb_mod = @import("../teb_layout.zig");
     var current_node = exception_list;
     while (current_node != 0 and current_node != 0xFFFFFFFF) {
         if (targetFrame != 0 and current_node == targetFrame) break;

@@ -158,7 +158,7 @@ const MmTimerCtx = struct { idx: usize, generation: u32 };
 fn mmTimerThread(ctx: MmTimerCtx) void {
     const idx = ctx.idx;
     const timer = &mm_timers[idx];
-    const teb = @import("../teb.zig");
+    const teb = @import("../teb_layout.zig");
     const builtin = @import("builtin");
 
     while (true) {
