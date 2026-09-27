@@ -151,6 +151,16 @@ release, not a 0.2.1 patch.
 
 #### Fixed
 
+- `ctime` prints the day of month space-padded to two columns and the clock
+  fields without a sign, so the epoch reads `Thu Jan  1 00:00:00 1970` instead
+  of `Thu Jan +1 +0:+0:+0 1970`.
+- A `SetDIBitsToDevice` destination rectangle that starts at or past the surface
+  edge is clipped to an empty span instead of trapping the emulator on a
+  negative span width, and the `SetDIBitsToDevice` line count saturates rather
+  than overflowing its `int` return.
+- `wcstol` and `_wtoi` saturate on a digit run that overflows `int`, matching
+  the narrow `strtoul` and `atoi`, and `wcstol` falls back to base 10 for a
+  radix outside 2..36 instead of trapping the conversion.
 - The web UI's font dialog applies the chosen face, size, and style again. The
   OK button ran its handler instead of registering it, so the dialog never
   closed and the guest never saw the selection.

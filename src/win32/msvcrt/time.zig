@@ -76,13 +76,13 @@ pub fn ctime(time_in: ?*const i32) callconv(.c) [*]const u8 {
     }
     const wday: usize = @intCast(@mod(tm.tm_wday, 7));
     const mon: usize = @intCast(@mod(tm.tm_mon, 12));
-    const result = std.fmt.bufPrint(&ctime_buf, "{s} {s} {d:0>2} {d:0>2}:{d:0>2}:{d:0>2} {d}\n", .{
+    const result = std.fmt.bufPrint(&ctime_buf, "{s} {s} {d: >2} {d:0>2}:{d:0>2}:{d:0>2} {d}\n", .{
         day_names[wday],
         mon_names[mon],
-        tm.tm_mday,
-        tm.tm_hour,
-        tm.tm_min,
-        tm.tm_sec,
+        @as(u32, @intCast(@max(tm.tm_mday, 0))),
+        @as(u32, @intCast(@max(tm.tm_hour, 0))),
+        @as(u32, @intCast(@max(tm.tm_min, 0))),
+        @as(u32, @intCast(@max(tm.tm_sec, 0))),
         @as(i32, tm.tm_year + 1900),
     }) catch {
         @memcpy(ctime_buf[0..25], "Thu Jan 01 00:00:00 1970\n");
@@ -265,6 +265,17 @@ const testing = std.testing;
 
 fn asctimeStr(tm: *const Tm) []const u8 {
     return std.mem.sliceTo(asctime(@intFromPtr(tm)), 0);
+}
+
+test "ctime space-pads the day of month like C" {
+    // "Thu Jan  1", not "Thu Jan 01": C's ctime day column is space-padded
+    // to width 2, the same layout asctime uses at width 3.
+    const epoch: i32 = 0;
+    try testing.expectEqualStrings("Thu Jan  1 00:00:00 1970\n", std.mem.sliceTo(ctime(&epoch), 0));
+
+    // A two-digit day occupies the whole column.
+    const two_digit: i32 = 1000598400; // 2001-09-16T00:00:00Z
+    try testing.expectEqualStrings("Sun Sep 16 00:00:00 2001\n", std.mem.sliceTo(ctime(&two_digit), 0));
 }
 
 test "asctime formats the caller's tm per the C standard layout" {

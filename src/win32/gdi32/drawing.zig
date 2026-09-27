@@ -314,11 +314,14 @@ pub fn blitDIBToBufferAt(lpBits: usize, lpbmi: usize, dest_buf: []u8, dest_w: u3
 
     // Clip the blit rectangle to both surfaces up front so the inner loop
     // runs without per-pixel bounds checks. Logical source column
-    // (srcX + d) maps to dest column (dstX + d).
+    // (srcX + d) maps to dest column (dstX + d). A destination rectangle that
+    // starts at or past the surface edge leaves hi below lo; clamping keeps the
+    // span empty instead of handing the conversions below a negative width.
     const lo_dy: i64 = @max(0, @max(-@as(i64, srcY), -@as(i64, dstY)));
-    const hi_dy: i64 = @min(@as(i64, blitH), @min(@as(i64, h) - srcY, @as(i64, dest_h) - dstY));
+    const hi_dy: i64 = @max(lo_dy, @min(@as(i64, blitH), @min(@as(i64, h) - srcY, @as(i64, dest_h) - dstY)));
     const lo_dx: i64 = @max(0, @max(-@as(i64, srcX), -@as(i64, dstX)));
-    const hi_dx: i64 = @min(@as(i64, blitW), @min(@as(i64, w) - srcX, @as(i64, dest_w) - dstX));
+    const hi_dx: i64 = @max(lo_dx, @min(@as(i64, blitW), @min(@as(i64, w) - srcX, @as(i64, dest_w) - dstX)));
+    if (hi_dy <= lo_dy or hi_dx <= lo_dx) return;
 
     var dy: i64 = lo_dy;
     while (dy < hi_dy) : (dy += 1) {
@@ -705,8 +708,14 @@ pub fn SetDIBitsToDevice(hdc: usize, xDest: i32, yDest: i32, w: u32, h: u32, xSr
     }
 
     // cLines == 0 means "copy the whole bitmap", and the scan lines actually
-    // transferred are what the caller gets back.
-    return @intCast(if (cLines != 0) cLines else @as(u32, @intCast(@abs(hdr.biHeight))));
+    // transferred are what the caller gets back. A guest-supplied cLines above
+    // INT32_MAX, or a biHeight of INT32_MIN, must saturate rather than trap in
+    // the cast.
+    const transferred: u32 = if (cLines != 0)
+        @min(cLines, std.math.maxInt(i32))
+    else
+        @min(@abs(@as(i64, hdr.biHeight)), std.math.maxInt(i32));
+    return @intCast(transferred);
 }
 
 pub fn stub_GetDIBits(hdc: usize, hbm: usize, start: u32, cLines: u32, lpvBits: usize, lpbmi: usize, usage: u32) callconv(w32cc.WINAPI) i32 {
@@ -995,6 +1004,26 @@ test "fillRect: fills clamped intersection with BGRA bytes" {
     // Rect entirely outside the buffer is a no-op
     fb.fillRect(100, 100, 10, 10, 0x00FFFFFF);
     try testing.expectEqual(@as(u8, 0), buf[4 * 24]);
+}
+
+test "blitDIBToBufferAt: destination entirely off the surface is a no-op" {
+    // A guest can hand SetDIBitsToDevice a destination rectangle that starts
+    // at or past the surface edge. The clip bounds then invert, which used to
+    // trap the usize conversions below instead of writing nothing.
+    const header = makeDibHeader(4, -2, 32);
+    var src_bytes: [8 * 4]u8 = @splat(0x7F);
+    var dest: [4 * 2 * 4]u8 = @splat(0x11);
+
+    for ([_]struct { x: i32, y: i32 }{
+        .{ .x = 4, .y = 0 }, // right of the surface
+        .{ .x = 0, .y = 2 }, // below the surface
+        .{ .x = 99, .y = 99 }, // far outside on both axes
+        .{ .x = -99, .y = 0 }, // far left, source offset pushes the span empty
+    }) |off| {
+        @memset(&dest, 0x11);
+        blitDIBToBufferAt(@intFromPtr(&src_bytes), @intFromPtr(&header), &dest, 4, 2, off.x, off.y, 0, 0, 4, 2, null, 0x00CC0020);
+        for (dest) |b| try testing.expectEqual(@as(u8, 0x11), b);
+    }
 }
 
 test "blitDIBToBufferAt: 32bpp top-down copy with clipping" {

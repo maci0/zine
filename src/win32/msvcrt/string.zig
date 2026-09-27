@@ -360,8 +360,10 @@ pub fn wcstol(str: [*]const u16, end_ptr: usize, radix: i32) callconv(.c) i32 {
         sign = -1;
         i += 1;
     } else if (str[i] == '+') i += 1;
-    var r = radix;
-    if (r == 0) {
+    // A radix outside 2..36 has no digit set to convert with; C falls back to
+    // base 10 rather than trapping on the u8 cast.
+    var r: u8 = if (radix >= 2 and radix <= 36) @intCast(radix) else 10;
+    if (radix == 0) {
         if (str[i] == '0' and (str[i + 1] == 'x' or str[i + 1] == 'X')) {
             r = 16;
             i += 2;
@@ -372,9 +374,20 @@ pub fn wcstol(str: [*]const u16, end_ptr: usize, radix: i32) callconv(.c) i32 {
     } else if (r == 16 and str[i] == '0' and (str[i + 1] == 'x' or str[i + 1] == 'X')) i += 2;
     var val: i32 = 0;
     var parsed = false;
+    // Saturate on a long digit run, matching strtoul: wrapping arithmetic
+    // would fold "99999999999" to a small value.
+    var overflow = false;
     while (str[i] != 0) : (i += 1) {
-        const digit = std.fmt.charToDigit(@intCast(str[i] & 0xFF), @intCast(r)) catch break;
-        val = val * r + @as(i32, @intCast(digit));
+        const digit = std.fmt.charToDigit(@intCast(str[i] & 0xFF), r) catch break;
+        if (overflow) continue;
+        const scaled = std.math.mul(i32, val, @intCast(r)) catch {
+            overflow = true;
+            continue;
+        };
+        val = std.math.add(i32, scaled, @intCast(digit)) catch {
+            overflow = true;
+            continue;
+        };
         parsed = true;
     }
     // end_ptr stays usize — writes back a guest VA for x86 code
@@ -382,7 +395,8 @@ pub fn wcstol(str: [*]const u16, end_ptr: usize, radix: i32) callconv(.c) i32 {
         const end_val: u32 = @truncate(if (parsed) @intFromPtr(str) + i * 2 else @intFromPtr(str));
         @as(*u32, @ptrFromInt(end_ptr)).* = end_val;
     }
-    return val * sign;
+    if (overflow) return if (sign == -1) std.math.minInt(i32) else std.math.maxInt(i32);
+    return val *% sign;
 }
 
 pub fn wtoi(str: [*]const u16) callconv(.c) i32 {
@@ -394,11 +408,24 @@ pub fn wtoi(str: [*]const u16) callconv(.c) i32 {
         i += 1;
     } else if (str[i] == '+') i += 1;
     var val: i32 = 0;
+    var overflow = false;
     while (str[i] >= '0' and str[i] <= '9') {
-        val = val * 10 + @as(i32, str[i] - '0');
+        if (!overflow) {
+            const scaled = std.math.mul(i32, val, 10) catch {
+                overflow = true;
+                i += 1;
+                continue;
+            };
+            val = std.math.add(i32, scaled, @as(i32, str[i] - '0')) catch {
+                overflow = true;
+                i += 1;
+                continue;
+            };
+        }
         i += 1;
     }
-    return val * sign;
+    if (overflow) return if (sign == -1) std.math.minInt(i32) else std.math.maxInt(i32);
+    return val *% sign;
 }
 
 /// Implementation status: Partially implemented
