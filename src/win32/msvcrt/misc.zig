@@ -19,7 +19,6 @@ pub fn srand(seed: u32) callconv(.c) void {
     if (trace.enable_tracing) trace.print("MSVCRT: srand({d})\n", .{seed});
 }
 
-/// rand
 /// Implementation status: Partially implemented
 pub fn rand() callconv(.c) i32 {
     rand_seed = rand_seed *% 214013 +% 2531011;
@@ -28,7 +27,6 @@ pub fn rand() callconv(.c) i32 {
     return result;
 }
 
-/// stub_ignore_i32
 /// Implementation status: Stub
 pub fn stub_ignore_i32() callconv(.c) i32 {
     if (trace.enable_tracing) {
@@ -37,7 +35,6 @@ pub fn stub_ignore_i32() callconv(.c) i32 {
     return 0;
 }
 
-/// stub_ignore_ptr
 /// Implementation status: No-op fallback
 pub fn stub_ignore_ptr() callconv(.c) ?*anyopaque {
     const ra = @returnAddress();
@@ -130,7 +127,6 @@ pub fn qsort(base: usize, num: usize, width: usize, compare_ptr: usize) callconv
     }
 }
 
-/// bsearch
 /// Implementation status: Partially implemented
 pub fn bsearch(key: usize, base: usize, num: usize, width: usize, compare_ptr: usize) callconv(.c) usize {
     if (key == 0 or base == 0 or num == 0 or width == 0 or compare_ptr == 0) return 0;
@@ -193,7 +189,6 @@ pub fn setlocale(category: i32, locale: ?[*:0]const u8) callconv(.c) ?[*:0]const
     return @ptrCast(&setlocale_buf);
 }
 
-/// strupr
 /// Implementation status: Partially implemented
 pub fn strupr(s: [*]u8) callconv(.c) [*]u8 {
     var i: usize = 0;
@@ -233,12 +228,9 @@ pub fn abs(n: i32) callconv(.c) i32 {
     return if (n < 0) -n else n;
 }
 
-/// stub_noop0
 /// Implementation status: Stub
 pub fn stub_noop0() callconv(.c) void {}
-/// stub_noop1
 /// Implementation status: Stub
 pub fn stub_noop1(_: usize) callconv(.c) void {}
-/// stub_noop3
 /// Implementation status: Stub
 pub fn stub_noop3(_: usize, _: usize, _: usize) callconv(.c) void {}

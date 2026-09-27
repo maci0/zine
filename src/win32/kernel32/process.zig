@@ -85,7 +85,6 @@ pub fn ExitProcess(exitCode: u32) callconv(w32cc.WINAPI) void {
     platform.exitProcess(@intCast(exitCode & 0xFF));
 }
 
-/// stub_SetConsoleCtrlHandler
 /// Implementation status: No-op fallback
 pub fn stub_SetConsoleCtrlHandler(handler: *const anyopaque, add: i32) callconv(w32cc.WINAPI) i32 {
     _ = handler;
@@ -93,7 +92,6 @@ pub fn stub_SetConsoleCtrlHandler(handler: *const anyopaque, add: i32) callconv(
     return 1;
 }
 
-/// stub_DisableThreadLibraryCalls
 /// Implementation status: No-op fallback
 pub fn stub_DisableThreadLibraryCalls(hLibModule: ?*anyopaque) callconv(w32cc.WINAPI) i32 {
     _ = hLibModule;
@@ -771,7 +769,6 @@ pub fn reapExitedChildren() void {
     }
 }
 
-/// getChildProc
 /// Implementation status: Partially implemented
 pub fn getChildProc(handle: usize) ?*ChildProc {
     for (&child_procs) |*cp| {
@@ -1452,7 +1449,6 @@ pub fn LoadLibraryW(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
     return LoadLibraryA(@intFromPtr(&narrow_buf));
 }
 
-/// stub_OpenProcess
 /// Implementation status: Stub
 pub fn stub_OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) callconv(w32cc.WINAPI) usize {
     _ = dwDesiredAccess;
@@ -1462,7 +1458,6 @@ pub fn stub_OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: 
     return 0;
 }
 
-/// stub_SetHandleInformation
 /// Implementation status: No-op fallback
 pub fn stub_SetHandleInformation(hObject: usize, dwMask: u32, dwFlags: u32) callconv(w32cc.WINAPI) i32 {
     _ = hObject;
@@ -1552,14 +1547,12 @@ pub fn GetCurrentThread() callconv(w32cc.WINAPI) usize {
     return 0xFFFFFFFE; // Pseudo-handle for current thread
 }
 
-/// stub_FreeLibrary
 /// Implementation status: No-op fallback
 pub fn stub_FreeLibrary(hLibModule: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: FreeLibrary({x})\n", .{hLibModule});
     return 1; // TRUE = success (no-op, we don't unload)
 }
 
-/// stub_SetPriorityClass
 /// Implementation status: No-op fallback
 pub fn stub_SetPriorityClass(hProcess: usize, dwPriorityClass: u32) callconv(w32cc.WINAPI) i32 {
     _ = hProcess;
@@ -1567,7 +1560,6 @@ pub fn stub_SetPriorityClass(hProcess: usize, dwPriorityClass: u32) callconv(w32
     return 1; // TRUE
 }
 
-/// stub_SetThreadPriority
 /// Implementation status: No-op fallback
 pub fn stub_SetThreadPriority(hThread: usize, nPriority: i32) callconv(w32cc.WINAPI) i32 {
     _ = hThread;
@@ -1575,14 +1567,12 @@ pub fn stub_SetThreadPriority(hThread: usize, nPriority: i32) callconv(w32cc.WIN
     return 1; // TRUE
 }
 
-/// stub_ResumeThread
 /// Implementation status: No-op fallback
 pub fn stub_ResumeThread(hThread: usize) callconv(w32cc.WINAPI) u32 {
     _ = hThread;
     return 1; // Previous suspend count = 1
 }
 
-/// stub_TerminateProcess
 /// Implementation status: No-op fallback
 pub fn stub_TerminateProcess(hProcess: usize, uExitCode: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: TerminateProcess({x}, {d})\n", .{ hProcess, uExitCode });
@@ -1607,14 +1597,12 @@ pub fn GetExitCodeProcess(hProcess: usize, lpExitCode: usize) callconv(w32cc.WIN
     return 1; // TRUE
 }
 
-/// stub_SuspendThread
 /// Implementation status: Stub
 pub fn stub_SuspendThread(hThread: usize) callconv(w32cc.WINAPI) u32 {
     _ = hThread;
     return 0; // Previous suspend count = 0
 }
 
-/// stub_GetThreadPriority
 /// Implementation status: Stub
 pub fn stub_GetThreadPriority(hThread: usize) callconv(w32cc.WINAPI) i32 {
     _ = hThread;

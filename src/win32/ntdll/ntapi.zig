@@ -16,34 +16,29 @@ pub fn stub_RtlFreeAnsiString(ansiString: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("NTDLL: RtlFreeAnsiString({x})\n", .{ansiString});
 }
 
-/// stub_RtlUnicodeStringToAnsiString
 /// Implementation status: Stub
 pub fn stub_RtlUnicodeStringToAnsiString(destinationString: usize, sourceString: usize, allocateDestinationString: u32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("NTDLL: RtlUnicodeStringToAnsiString({x}, {x}, {d})\n", .{ destinationString, sourceString, allocateDestinationString });
     return 0; // STATUS_SUCCESS
 }
 
-/// stub_RtlTimeToElapsedTimeFields
 /// Implementation status: Stub
 pub fn stub_RtlTimeToElapsedTimeFields(time: usize, timeFields: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("NTDLL: RtlTimeToElapsedTimeFields({x}, {x})\n", .{ time, timeFields });
 }
 
-/// stub_NtClose
 /// Implementation status: Stub
 pub fn stub_NtClose(handle: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("NTDLL: NtClose({x})\n", .{handle});
     return 0; // STATUS_SUCCESS
 }
 
-/// stub_RtlFreeSid
 /// Implementation status: Stub
 pub fn stub_RtlFreeSid(sid: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("NTDLL: RtlFreeSid({x})\n", .{sid});
     return 0;
 }
 
-/// stub_RtlUnwind
 /// Implementation status: No-op fallback
 pub fn stub_RtlUnwind(targetFrame: usize, targetIp: usize, exceptionRecord: usize, returnValue: usize) callconv(w32cc.WINAPI) void {
     _ = targetFrame;
@@ -54,7 +49,6 @@ pub fn stub_RtlUnwind(targetFrame: usize, targetIp: usize, exceptionRecord: usiz
 }
 
 /// =============================================================================
-/// NtQuerySystemInformation
 /// =============================================================================
 /// Implementation status: Partially implemented
 pub fn NtQuerySystemInformation(systemInformationClass: u32, systemInformation: usize, systemInformationLength: u32, returnLength: usize) callconv(w32cc.WINAPI) u32 {
@@ -151,7 +145,6 @@ pub fn NtQuerySystemInformation(systemInformationClass: u32, systemInformation: 
 }
 
 /// =============================================================================
-/// VerSetConditionMask
 /// =============================================================================
 /// Implementation status: Partially implemented
 pub fn VerSetConditionMask(mask_lo: u32, mask_hi: u32, typeMask: u32, condition: u8) callconv(w32cc.WINAPI) u64 {
@@ -408,7 +401,6 @@ pub fn strrchr(str_ptr: usize, c: i32) callconv(w32cc.WINAPI) usize {
     return last;
 }
 
-/// wcsicmp
 /// Implementation status: Partially implemented
 pub fn wcsicmp(s1_ptr: usize, s2_ptr: usize) callconv(w32cc.WINAPI) i32 {
     if (s1_ptr == 0 or s2_ptr == 0) return 0;
@@ -429,7 +421,6 @@ fn toLowerW(c: u16) u16 {
     return c;
 }
 
-/// memmove
 /// Implementation status: Partially implemented
 pub fn memmove(dest_ptr: usize, src_ptr: usize, count: usize) callconv(w32cc.WINAPI) usize {
     if (dest_ptr == 0 or src_ptr == 0 or count == 0) return dest_ptr;

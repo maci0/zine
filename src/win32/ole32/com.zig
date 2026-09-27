@@ -3,7 +3,6 @@ const trace = @import("../../trace.zig");
 const shared = @import("../shared.zig");
 const w32cc = @import("../calling_convention.zig");
 
-/// stub_CoInitialize
 /// Implementation status: Stub
 pub fn stub_CoInitialize(pvReserved: usize) callconv(w32cc.WINAPI) i32 {
     _ = pvReserved;
@@ -11,7 +10,6 @@ pub fn stub_CoInitialize(pvReserved: usize) callconv(w32cc.WINAPI) i32 {
     return 0; // S_OK
 }
 
-/// stub_CoInitializeEx
 /// Implementation status: Stub
 pub fn stub_CoInitializeEx(pvReserved: usize, dwCoInit: u32) callconv(w32cc.WINAPI) i32 {
     _ = pvReserved;
@@ -20,13 +18,11 @@ pub fn stub_CoInitializeEx(pvReserved: usize, dwCoInit: u32) callconv(w32cc.WINA
     return 0; // S_OK
 }
 
-/// stub_CoUninitialize
 /// Implementation status: No-op fallback
 pub fn stub_CoUninitialize() callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("OLE32: CoUninitialize\n", .{});
 }
 
-/// stub_CoCreateInstance
 /// Implementation status: No-op fallback
 pub fn stub_CoCreateInstance(rclsid: usize, pUnkOuter: usize, dwClsContext: u32, riid: usize, ppv: usize) callconv(w32cc.WINAPI) i32 {
     _ = pUnkOuter;
@@ -66,14 +62,12 @@ pub fn CoTaskMemAlloc(cb: usize) callconv(w32cc.WINAPI) usize {
     return 0;
 }
 
-/// stub_CoTaskMemFree
 /// Implementation status: Stub
 pub fn stub_CoTaskMemFree(pv: usize) callconv(w32cc.WINAPI) void {
     _ = pv;
     if (trace.enable_tracing) trace.print("OLE32: CoTaskMemFree\n", .{});
 }
 
-/// stub_DoDragDrop
 /// Implementation status: No-op fallback
 pub fn stub_DoDragDrop(pDataObj: usize, pDropSource: usize, dwOKEffects: u32, pdwEffect: usize) callconv(w32cc.WINAPI) i32 {
     _ = pDataObj;

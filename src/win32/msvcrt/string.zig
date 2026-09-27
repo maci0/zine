@@ -3,7 +3,6 @@ const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
 const io = @import("io.zig");
 
-/// strlen
 /// Implementation status: Partially implemented
 pub fn strlen(str: [*:0]const u8) callconv(.c) usize {
     const len = std.mem.span(str).len;
@@ -11,7 +10,6 @@ pub fn strlen(str: [*:0]const u8) callconv(.c) usize {
     return len;
 }
 
-/// strcpy
 /// Implementation status: Partially implemented
 pub fn strcpy(dest: [*]u8, src: [*:0]const u8) callconv(.c) [*]u8 {
     var i: usize = 0;
@@ -21,7 +19,6 @@ pub fn strcpy(dest: [*]u8, src: [*:0]const u8) callconv(.c) [*]u8 {
     return dest;
 }
 
-/// strncpy
 /// Implementation status: Partially implemented
 pub fn strncpy(dest: [*]u8, src: [*:0]const u8, count: usize) callconv(.c) [*]u8 {
     var i: usize = 0;
@@ -30,7 +27,6 @@ pub fn strncpy(dest: [*]u8, src: [*:0]const u8, count: usize) callconv(.c) [*]u8
     return dest;
 }
 
-/// strcat
 pub fn strcat(dest: [*]u8, src: [*:0]const u8) callconv(.c) [*]u8 {
     var dest_len: usize = 0;
     while (dest[dest_len] != 0) : (dest_len += 1) {}
@@ -41,7 +37,6 @@ pub fn strcat(dest: [*]u8, src: [*:0]const u8) callconv(.c) [*]u8 {
     return dest;
 }
 
-/// strncat
 pub fn strncat(dest: [*]u8, src: [*:0]const u8, count: usize) callconv(.c) [*]u8 {
     var dest_len: usize = 0;
     while (dest[dest_len] != 0) : (dest_len += 1) {}
@@ -51,7 +46,6 @@ pub fn strncat(dest: [*]u8, src: [*:0]const u8, count: usize) callconv(.c) [*]u8
     return dest;
 }
 
-/// strcmp
 /// Implementation status: Partially implemented
 pub fn strcmp(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) i32 {
     var i: usize = 0;
@@ -59,7 +53,6 @@ pub fn strcmp(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) i32 {
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
-/// strncmp
 pub fn strncmp(s1: [*:0]const u8, s2: [*:0]const u8, count: usize) callconv(.c) i32 {
     if (trace.enable_tracing) trace.print("MSVCRT: _strncmp('{s}', '{s}', {d})\n", .{ std.mem.span(s1), std.mem.span(s2), count });
     if (count == 0) return 0;
@@ -69,7 +62,6 @@ pub fn strncmp(s1: [*:0]const u8, s2: [*:0]const u8, count: usize) callconv(.c) 
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
-/// stricmp
 /// Implementation status: Partially implemented
 pub fn stricmp(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) i32 {
     const sp1 = std.mem.span(s1);
@@ -91,7 +83,6 @@ pub fn stricmp(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) i32 {
     return ret;
 }
 
-/// mbsicmp
 pub fn mbsicmp(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) i32 {
     const sp1 = std.mem.span(s1);
     const sp2 = std.mem.span(s2);
@@ -106,7 +97,6 @@ pub fn mbsicmp(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) i32 {
     return ret;
 }
 
-/// strnicmp
 pub fn strnicmp(s1: [*:0]const u8, s2: [*:0]const u8, count: usize) callconv(.c) i32 {
     if (count == 0) return 0;
     const sp1 = std.mem.span(s1);
@@ -123,7 +113,6 @@ pub fn strnicmp(s1: [*:0]const u8, s2: [*:0]const u8, count: usize) callconv(.c)
     return 0;
 }
 
-/// strchr
 pub fn strchr(s: [*:0]const u8, c: i32) callconv(.c) ?[*:0]const u8 {
     const target = @as(u8, @intCast(c & 0xFF));
     const span = std.mem.span(s);
@@ -132,7 +121,6 @@ pub fn strchr(s: [*:0]const u8, c: i32) callconv(.c) ?[*:0]const u8 {
     return null;
 }
 
-/// strrchr
 pub fn strrchr(s: [*:0]const u8, c: i32) callconv(.c) ?[*:0]const u8 {
     const target = @as(u8, @intCast(c & 0xFF));
     const span = std.mem.span(s);
@@ -141,7 +129,6 @@ pub fn strrchr(s: [*:0]const u8, c: i32) callconv(.c) ?[*:0]const u8 {
     return null;
 }
 
-/// strstr
 pub fn strstr(haystack: [*:0]const u8, needle: [*:0]const u8) callconv(.c) ?[*:0]const u8 {
     const h = std.mem.span(haystack);
     const n = std.mem.span(needle);
@@ -150,7 +137,6 @@ pub fn strstr(haystack: [*:0]const u8, needle: [*:0]const u8) callconv(.c) ?[*:0
     return null;
 }
 
-/// strpbrk
 pub fn strpbrk(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) ?[*]u8 {
     const sp1 = std.mem.span(s1);
     const sp2 = std.mem.span(s2);
@@ -158,12 +144,10 @@ pub fn strpbrk(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) ?[*]u8 {
     return null;
 }
 
-/// strcspn
 pub fn strcspn(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) usize {
     return std.mem.indexOfAny(u8, std.mem.span(s1), std.mem.span(s2)) orelse std.mem.span(s1).len;
 }
 
-/// strdup
 pub fn strdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8 {
     const span = std.mem.span(s);
     const stub_common = @import("../shared.zig");
@@ -174,7 +158,6 @@ pub fn strdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8 {
     return @ptrCast(ptr);
 }
 
-/// wcsdup
 /// Implementation status: Partially implemented
 pub fn wcsdup(str: [*]const u16) callconv(.c) ?[*]u16 {
     const len = std.mem.indexOfScalar(u16, str[0..65536], 0) orelse 0;
@@ -186,7 +169,6 @@ pub fn wcsdup(str: [*]const u16) callconv(.c) ?[*]u16 {
     return ptr;
 }
 
-/// itoa
 /// Implementation status: Partially implemented
 pub fn itoa(value: i32, buffer: [*]u8, radix: i32) callconv(.c) [*]u8 {
     if (trace.enable_tracing) trace.print("MSVCRT: _itoa(value={d}, radix={d})\n", .{ value, radix });
@@ -199,7 +181,6 @@ pub fn itoa(value: i32, buffer: [*]u8, radix: i32) callconv(.c) [*]u8 {
     return buffer;
 }
 
-/// strtoul
 /// Implementation status: Partially implemented
 pub fn strtoul(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) u32 {
     if (str_ptr == 0) return 0;
@@ -239,7 +220,6 @@ pub fn strtoul(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) u32 {
     return final_val;
 }
 
-/// strtol
 /// Implementation status: Partially implemented
 pub fn strtol(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) i32 {
     const val = @as(i32, @bitCast(strtoul(str_ptr, end_ptr, radix)));
@@ -249,7 +229,6 @@ pub fn strtol(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) i32 {
     return val;
 }
 
-/// atoi
 /// Implementation status: Partially implemented
 pub fn atoi(str_ptr: usize) callconv(.c) i32 {
     const val = @as(i32, @bitCast(strtoul(str_ptr, 0, 10)));
@@ -266,7 +245,6 @@ pub fn wcslen(str: [*]const u16) callconv(.c) usize {
     return std.mem.indexOfScalar(u16, str[0..65536], 0) orelse 0;
 }
 
-/// wcsupr
 pub fn wcsupr(str: [*]u16) callconv(.c) [*]u16 {
     const len = std.mem.indexOfScalar(u16, str[0..65536], 0) orelse 0;
     for (str[0..len]) |*ch| {
@@ -275,7 +253,6 @@ pub fn wcsupr(str: [*]u16) callconv(.c) [*]u16 {
     return str;
 }
 
-/// wcscpy
 pub fn wcscpy(dst: [*]u16, src: [*]const u16) callconv(.c) [*]u16 {
     var i: usize = 0;
     while (src[i] != 0) : (i += 1) dst[i] = src[i];
@@ -283,7 +260,6 @@ pub fn wcscpy(dst: [*]u16, src: [*]const u16) callconv(.c) [*]u16 {
     return dst;
 }
 
-/// wcsncpy
 pub fn wcsncpy(dst: [*]u16, src: [*]const u16, count: usize) callconv(.c) [*]u16 {
     var i: usize = 0;
     while (i < count and src[i] != 0) : (i += 1) dst[i] = src[i];
@@ -291,7 +267,6 @@ pub fn wcsncpy(dst: [*]u16, src: [*]const u16, count: usize) callconv(.c) [*]u16
     return dst;
 }
 
-/// wcscat
 pub fn wcscat(dst: [*]u16, src: [*]const u16) callconv(.c) [*]u16 {
     var dst_len: usize = 0;
     while (dst[dst_len] != 0) : (dst_len += 1) {}
@@ -301,14 +276,12 @@ pub fn wcscat(dst: [*]u16, src: [*]const u16) callconv(.c) [*]u16 {
     return dst;
 }
 
-/// wcscmp
 pub fn wcscmp(s1: [*]const u16, s2: [*]const u16) callconv(.c) i32 {
     var i: usize = 0;
     while (s1[i] == s2[i] and s1[i] != 0) : (i += 1) {}
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
-/// wcsncmp
 pub fn wcsncmp(s1: [*]const u16, s2: [*]const u16, count: usize) callconv(.c) i32 {
     if (count == 0) return 0;
     var i: usize = 0;
@@ -317,7 +290,6 @@ pub fn wcsncmp(s1: [*]const u16, s2: [*]const u16, count: usize) callconv(.c) i3
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
-/// wcsicmp
 pub fn wcsicmp(s1: [*]const u16, s2: [*]const u16) callconv(.c) i32 {
     var i: usize = 0;
     while (s1[i] != 0 and s2[i] != 0) : (i += 1) {
@@ -328,7 +300,6 @@ pub fn wcsicmp(s1: [*]const u16, s2: [*]const u16) callconv(.c) i32 {
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
-/// wcsnicmp
 pub fn wcsnicmp(s1: [*]const u16, s2: [*]const u16, count: usize) callconv(.c) i32 {
     if (count == 0) return 0;
     var i: usize = 0;
@@ -341,7 +312,6 @@ pub fn wcsnicmp(s1: [*]const u16, s2: [*]const u16, count: usize) callconv(.c) i
     return @as(i32, s1[i]) - @as(i32, s2[i]);
 }
 
-/// wcschr
 pub fn wcschr(str: [*]const u16, c: i32) callconv(.c) ?[*]const u16 {
     const target = @as(u16, @intCast(c & 0xFFFF));
     const len = std.mem.indexOfScalar(u16, str[0..65536], 0) orelse 0;
@@ -350,7 +320,6 @@ pub fn wcschr(str: [*]const u16, c: i32) callconv(.c) ?[*]const u16 {
     return null;
 }
 
-/// wcsrchr
 pub fn wcsrchr(str: [*]const u16, c: i32) callconv(.c) ?[*]const u16 {
     const target = @as(u16, @intCast(c & 0xFFFF));
     const len = std.mem.indexOfScalar(u16, str[0..65536], 0) orelse 0;
@@ -359,7 +328,6 @@ pub fn wcsrchr(str: [*]const u16, c: i32) callconv(.c) ?[*]const u16 {
     return null;
 }
 
-/// wcsstr
 pub fn wcsstr(haystack: [*]const u16, needle: [*]const u16) callconv(.c) ?[*]const u16 {
     const h_len = std.mem.indexOfScalar(u16, haystack[0..65536], 0) orelse 0;
     const n_len = std.mem.indexOfScalar(u16, needle[0..65536], 0) orelse 0;
@@ -406,7 +374,6 @@ pub fn wcstol(str: [*]const u16, end_ptr: usize, radix: i32) callconv(.c) i32 {
     return val * sign;
 }
 
-/// wtoi
 pub fn wtoi(str: [*]const u16) callconv(.c) i32 {
     var i: usize = 0;
     while (str[i] != 0 and std.ascii.isWhitespace(@intCast(str[i] & 0xFF))) i += 1;
@@ -423,7 +390,6 @@ pub fn wtoi(str: [*]const u16) callconv(.c) i32 {
     return val * sign;
 }
 
-/// init_pctype
 /// Implementation status: Partially implemented
 pub fn init_pctype() void {
     const pctype_data = [_]u16{
@@ -469,7 +435,6 @@ pub fn init_pctype() void {
     @memcpy(msvcrt.msvcrt_mbctype[1..257], mbctype_data[0..256]);
 }
 
-/// p_pctype
 /// Implementation status: Partially implemented
 pub fn p_pctype() callconv(.c) *?*u16 {
     const process = @import("process.zig");
@@ -483,7 +448,6 @@ pub fn p_pctype() callconv(.c) *?*u16 {
     return @ptrCast(@constCast(&static.p));
 }
 
-/// isalnum
 /// Implementation status: Partially implemented
 pub fn isalnum(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
@@ -493,7 +457,6 @@ pub fn isalnum(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-/// isalpha
 /// Implementation status: Partially implemented
 pub fn isalpha(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
@@ -505,7 +468,6 @@ pub fn isalpha(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-/// isdigit
 /// Implementation status: Partially implemented
 pub fn isdigit(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
@@ -515,7 +477,6 @@ pub fn isdigit(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-/// isupper
 /// Implementation status: Partially implemented
 pub fn isupper(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
@@ -525,7 +486,6 @@ pub fn isupper(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-/// islower
 /// Implementation status: Partially implemented
 pub fn islower(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
@@ -535,7 +495,6 @@ pub fn islower(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-/// isspace
 /// Implementation status: Partially implemented
 pub fn isspace(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
@@ -547,7 +506,6 @@ pub fn isspace(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-/// isxdigit
 /// Implementation status: Partially implemented
 pub fn isxdigit(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
@@ -557,7 +515,6 @@ pub fn isxdigit(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-/// isprint
 /// Implementation status: Partially implemented
 pub fn isprint(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
@@ -567,7 +524,6 @@ pub fn isprint(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-/// ispunct
 /// Implementation status: Partially implemented
 pub fn ispunct(c: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
@@ -577,7 +533,6 @@ pub fn ispunct(c: i32) callconv(.c) i32 {
     return 0;
 }
 
-/// isctype
 /// Implementation status: Partially implemented
 pub fn isctype(c: i32, mask: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
@@ -587,7 +542,6 @@ pub fn isctype(c: i32, mask: i32) callconv(.c) i32 {
     return 0;
 }
 
-/// tolower
 /// Implementation status: Partially implemented
 pub fn tolower(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
@@ -595,7 +549,6 @@ pub fn tolower(c: i32) callconv(.c) i32 {
     return v;
 }
 
-/// toupper
 /// Implementation status: Partially implemented
 pub fn toupper(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
@@ -603,7 +556,6 @@ pub fn toupper(c: i32) callconv(.c) i32 {
     return v;
 }
 
-/// iswctype
 /// Implementation status: Partially implemented
 pub fn iswctype(c: i32, desc: i32) callconv(.c) i32 {
     if (c >= -1 and c <= 255) {
@@ -616,7 +568,6 @@ pub fn iswctype(c: i32, desc: i32) callconv(.c) i32 {
     return 0;
 }
 
-/// towupper
 /// Implementation status: Partially implemented
 pub fn towupper(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
@@ -624,7 +575,6 @@ pub fn towupper(c: i32) callconv(.c) i32 {
     return v;
 }
 
-/// towlower
 /// Implementation status: Partially implemented
 pub fn towlower(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
@@ -632,14 +582,12 @@ pub fn towlower(c: i32) callconv(.c) i32 {
     return v;
 }
 
-/// ismbcspace
 /// Implementation status: Partially implemented
 pub fn ismbcspace(c: i32) callconv(.c) i32 {
     const v = c & 0xFFFF;
     return if (v == ' ' or v == '\t' or v == '\n' or v == '\r' or v == 0x0B or v == 0x0C) 1 else 0;
 }
 
-/// mbsinc
 /// Implementation status: Partially implemented
 pub fn mbsinc(str: ?[*]const u8) callconv(.c) ?[*]const u8 {
     if (str) |s| {
@@ -649,19 +597,16 @@ pub fn mbsinc(str: ?[*]const u8) callconv(.c) ?[*]const u8 {
     return null;
 }
 
-/// mbccpy
 /// Implementation status: Partially implemented
 pub fn mbccpy(dest: [*]u8, src: [*]const u8) callconv(.c) void {
     dest[0] = src[0];
 }
 
-/// mbclen
 /// Implementation status: Partially implemented
 pub fn mbclen(c_ptr: usize) callconv(.c) usize {
     return if (c_ptr == 0) 0 else 1;
 }
 
-/// mbsdec
 /// Implementation status: Partially implemented
 pub fn mbsdec(start: ?[*]const u8, current: ?[*]const u8) callconv(.c) ?[*]const u8 {
     if (start == null or current == null or @intFromPtr(current.?) <= @intFromPtr(start.?)) return null;

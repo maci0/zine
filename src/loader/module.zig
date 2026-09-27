@@ -155,15 +155,6 @@ pub const Module = struct {
     attached: bool = false,
 
     /// Loads a PE module from the specified path and prepares it for execution.
-    ///
-    /// This function:
-    ///   1. Reads the file data into memory.
-    ///   2. Parses the PE headers.
-    ///   3. Allocates executable guest memory for the image (attempting to match its preferred ImageBase).
-    ///   4. Maps all PE sections into the newly allocated memory.
-    ///   5. Applies base relocations if the mapping base address differs from the preferred ImageBase.
-    ///
-    /// Returns a pointer to the initialized Module.
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !*Module {
         const file = openFilePortable(path) catch |err| {
             log.err("Module.load: failed to open '{s}': {}", .{ path, err });

@@ -404,14 +404,8 @@ fn patchImport(
 
 /// Recursively resolves all imports for a given module, patching its Import
 /// Address Table (IAT) with either host stub addresses (on native) or guest
-/// thunk addresses (on WASM).
-///
-/// For each imported DLL, it:
-/// 1. Loads the dependency DLL if it is not already loaded.
-/// 2. Iterates through all imported functions.
-/// 3. Resolves each function to its export in the corresponding module.
-/// 4. Patches the IAT slot with the resolved address or a thunk.
-/// 5. Registers unresolved imports for diagnostic purposes if they cannot be found.
+/// thunk addresses (on WASM). Imports that resolve to nothing are registered
+/// for diagnostics rather than aborting the load.
 pub fn resolveImports(env: *Environment, mod: *Module) !void {
     if (mod.imports_resolved) return;
 

@@ -586,11 +586,6 @@ pub fn main(init: std.process.Init) !void {
     // --- Initialize TEB/PEB ---
     const thread_env = try teb.initTEB(allocator);
 
-    // Set up PEB environment block (minimal)
-    const peb_ptr = @as(*teb.PEB, @ptrFromInt(thread_env.ProcessEnvironmentBlock));
-    const params = @as(*teb.RTL_USER_PROCESS_PARAMETERS, @ptrFromInt(peb_ptr.ProcessParameters));
-    _ = params; // Environment block stays at 0 (empty)
-
     // On WASM, setupFS is a no-op (interpreter uses cpu.fs_base directly)
     try teb.setupFS(thread_env);
 

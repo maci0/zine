@@ -14,7 +14,6 @@ const w32cc = @import("../calling_convention.zig");
 /// stubs below do not have to import their own registrar.
 pub var waveout_volume: u32 = 0xFFFFFFFF; // max volume
 
-/// timeGetTime
 /// Implementation status: Partially implemented
 pub fn timeGetTime() callconv(w32cc.WINAPI) u32 {
     // Called in tight timing loops; yield to avoid 100% CPU usage.
@@ -25,7 +24,6 @@ pub fn timeGetTime() callconv(w32cc.WINAPI) u32 {
     return @intCast(runtime.monoMilliTimestamp() & 0xFFFFFFFF);
 }
 
-/// waveOutSetVolume
 /// Implementation status: Partially implemented
 pub fn waveOutSetVolume(hwo: u32, dwVolume: u32) callconv(w32cc.WINAPI) u32 {
     _ = hwo;
@@ -50,7 +48,6 @@ pub fn waveOutSetVolume(hwo: u32, dwVolume: u32) callconv(w32cc.WINAPI) u32 {
     return 0; // MMSYSERR_NOERROR
 }
 
-/// waveOutGetVolume
 /// Implementation status: Partially implemented
 pub fn waveOutGetVolume(hwo: u32, pdwVolume: usize) callconv(w32cc.WINAPI) u32 {
     _ = hwo;
@@ -61,7 +58,6 @@ pub fn waveOutGetVolume(hwo: u32, pdwVolume: usize) callconv(w32cc.WINAPI) u32 {
     return 0; // MMSYSERR_NOERROR
 }
 
-/// stub_PlaySoundA
 /// Implementation status: No-op fallback
 pub fn stub_PlaySoundA(pszSound: usize, hmod: usize, fdwSound: u32) callconv(w32cc.WINAPI) i32 {
     _ = pszSound;
@@ -83,14 +79,12 @@ pub fn stub_timeGetDevCaps(ptc: usize, cbtc: u32) callconv(w32cc.WINAPI) u32 {
     return 0; // TIMERR_NOERROR
 }
 
-/// stub_timeBeginPeriod
 /// Implementation status: Stub
 pub fn stub_timeBeginPeriod(uPeriod: u32) callconv(w32cc.WINAPI) u32 {
     _ = uPeriod;
     return 0; // TIMERR_NOERROR
 }
 
-/// stub_timeEndPeriod
 /// Implementation status: Stub
 pub fn stub_timeEndPeriod(uPeriod: u32) callconv(w32cc.WINAPI) u32 {
     _ = uPeriod;
@@ -392,7 +386,6 @@ fn mmTimerThread(idx: usize) void {
     }
 }
 
-/// timeSetEvent
 /// Implementation status: Partially implemented
 pub fn timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usize, fuEvent: u32) callconv(w32cc.WINAPI) u32 {
     _ = uResolution;
@@ -437,7 +430,6 @@ pub fn timeSetEvent(uDelay: u32, uResolution: u32, fptc: usize, dwUser: usize, f
     return id;
 }
 
-/// timeKillEvent
 /// Implementation status: Partially implemented
 pub fn timeKillEvent(uTimerID: u32) callconv(w32cc.WINAPI) u32 {
     for (&mm_timers) |*t| {
@@ -478,7 +470,6 @@ pub fn waveOutOpen(phwo: usize, uDeviceID: u32, pwfx: usize, dwCallback: usize, 
     return 0; // MMSYSERR_NOERROR
 }
 
-/// stub_waveOutClose_
 /// Implementation status: Stub
 pub fn stub_waveOutClose_(hwo: u32) callconv(w32cc.WINAPI) u32 {
     _ = hwo;
@@ -486,7 +477,6 @@ pub fn stub_waveOutClose_(hwo: u32) callconv(w32cc.WINAPI) u32 {
     return 0; // MMSYSERR_NOERROR
 }
 
-/// stub_waveOutReset
 /// Implementation status: Stub
 pub fn stub_waveOutReset(hwo: u32) callconv(w32cc.WINAPI) u32 {
     _ = hwo;
@@ -519,7 +509,6 @@ pub fn waveOutPrepareHeader(hwo: u32, pwh: usize, cbwh: u32) callconv(w32cc.WINA
     return 0;
 }
 
-/// stub_waveOutUnprepareHeader
 /// Implementation status: Stub
 pub fn stub_waveOutUnprepareHeader(hwo: u32, pwh: usize, cbwh: u32) callconv(w32cc.WINAPI) u32 {
     _ = hwo;
@@ -555,7 +544,6 @@ pub fn waveOutGetDevCapsA(uDeviceID: u32, pwoc: usize, cbwoc: u32) callconv(w32c
     return 0;
 }
 
-/// stub_waveOutGetID
 /// Implementation status: Stub
 pub fn stub_waveOutGetID(hwo: u32, puDeviceID: usize) callconv(w32cc.WINAPI) u32 {
     _ = hwo;

@@ -327,7 +327,6 @@ pub fn RegQueryInfoKeyA(hKey: usize, lpClass: usize, lpcchClass: usize, lpReserv
     return 0;
 }
 
-/// stub_RegFlushKey
 /// Implementation status: Stub
 pub fn stub_RegFlushKey(hKey: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
@@ -335,7 +334,6 @@ pub fn stub_RegFlushKey(hKey: usize) callconv(w32cc.WINAPI) u32 {
     return 0;
 }
 
-/// stub_RegOpenKeyA
 /// Implementation status: No-op fallback
 pub fn stub_RegOpenKeyA(hKey: usize, lpSubKey: usize, phkResult: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
@@ -416,7 +414,6 @@ pub fn RegSetValueExW(hKey: usize, lpValueName: usize, reserved: u32, dwType: u3
     return 0;
 }
 
-/// stub_RegCreateKeyA
 /// Implementation status: Stub
 pub fn stub_RegCreateKeyA(hKey: usize, lpSubKey: usize, phkResult: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
@@ -431,7 +428,6 @@ pub fn stub_RegCreateKeyA(hKey: usize, lpSubKey: usize, phkResult: usize) callco
     return 0; // ERROR_SUCCESS
 }
 
-/// stub_RegCreateKeyW
 /// Implementation status: Stub
 pub fn stub_RegCreateKeyW(hKey: usize, lpSubKey: usize, phkResult: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
@@ -489,7 +485,6 @@ pub fn RegCreateKeyExW(hKey: usize, lpSubKey: usize, reserved: u32, lpClass: usi
     return 0;
 }
 
-/// stub_RegOpenKeyW
 /// Implementation status: No-op fallback
 pub fn stub_RegOpenKeyW(hKey: usize, lpSubKey: usize, phkResult: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
@@ -507,7 +502,6 @@ pub fn RegDeleteKeyW(hKey: usize, lpSubKey: usize) callconv(w32cc.WINAPI) u32 {
     return 0;
 }
 
-/// stub_RegDeleteValueW
 /// Implementation status: Stub
 pub fn stub_RegDeleteValueW(hKey: usize, lpValueName: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
@@ -516,7 +510,6 @@ pub fn stub_RegDeleteValueW(hKey: usize, lpValueName: usize) callconv(w32cc.WINA
     return 0;
 }
 
-/// stub_RegSetValueW
 /// Implementation status: Stub
 pub fn stub_RegSetValueW(hKey: usize, lpSubKey: usize, dwType: u32, lpData: usize, cbData: u32) callconv(w32cc.WINAPI) u32 {
     _ = hKey;
@@ -538,7 +531,6 @@ pub fn RegEnumKeyW(hKey: usize, dwIndex: u32, lpName: usize, cchName: u32) callc
     return 259;
 }
 
-/// stub_RegQueryValueW
 /// Implementation status: No-op fallback
 pub fn stub_RegQueryValueW(hKey: usize, lpSubKey: usize, lpData: usize, lpcbData: usize) callconv(w32cc.WINAPI) u32 {
     _ = hKey;

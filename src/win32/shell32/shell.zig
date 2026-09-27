@@ -2,7 +2,6 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
 
-/// stub_ShellExecuteA
 /// Implementation status: Stub
 pub fn stub_ShellExecuteA(hwnd: usize, lpOperation: usize, lpFile: usize, lpParameters: usize, lpDirectory: usize, nShowCmd: i32) callconv(w32cc.WINAPI) usize {
     _ = hwnd;
@@ -17,14 +16,12 @@ pub fn stub_ShellExecuteA(hwnd: usize, lpOperation: usize, lpFile: usize, lpPara
     return 33; // > 32 means success
 }
 
-/// stub_DragFinish
 /// Implementation status: Stub
 pub fn stub_DragFinish(hDrop: usize) callconv(w32cc.WINAPI) void {
     _ = hDrop;
     if (trace.enable_tracing) trace.print("SHELL32: DragFinish\n", .{});
 }
 
-/// stub_DragAcceptFiles
 /// Implementation status: Stub
 pub fn stub_DragAcceptFiles(hWnd: usize, fAccept: i32) callconv(w32cc.WINAPI) void {
     _ = hWnd;
@@ -32,7 +29,6 @@ pub fn stub_DragAcceptFiles(hWnd: usize, fAccept: i32) callconv(w32cc.WINAPI) vo
     if (trace.enable_tracing) trace.print("SHELL32: DragAcceptFiles\n", .{});
 }
 
-/// stub_DragQueryFileA
 /// Implementation status: Stub
 pub fn stub_DragQueryFileA(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) callconv(w32cc.WINAPI) u32 {
     _ = hDrop;
@@ -43,7 +39,6 @@ pub fn stub_DragQueryFileA(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) 
     return 0;
 }
 
-/// stub_DragQueryFileW
 /// Implementation status: Stub
 pub fn stub_DragQueryFileW(hDrop: usize, iFile: u32, lpszFile: usize, cch: u32) callconv(w32cc.WINAPI) u32 {
     _ = hDrop;
@@ -170,7 +165,6 @@ pub fn stub_SHGetPathFromIDListA(pidl: usize, pszPath: usize) callconv(w32cc.WIN
     return 0;
 }
 
-/// stub_SHBrowseForFolderA
 /// Implementation status: Stub
 pub fn stub_SHBrowseForFolderA(lpbi: usize) callconv(w32cc.WINAPI) usize {
     _ = lpbi;
@@ -178,7 +172,6 @@ pub fn stub_SHBrowseForFolderA(lpbi: usize) callconv(w32cc.WINAPI) usize {
     return 0; // cancelled
 }
 
-/// stub_ExtractIconA
 /// Implementation status: Stub
 pub fn stub_ExtractIconA(hInst: usize, pszExeFileName: usize, nIconIndex: u32) callconv(w32cc.WINAPI) usize {
     _ = hInst;
@@ -192,7 +185,6 @@ pub fn stub_ExtractIconA(hInst: usize, pszExeFileName: usize, nIconIndex: u32) c
     return 0x0000BEEF; // Dummy icon handle
 }
 
-/// stub_Shell_NotifyIconA
 /// Implementation status: No-op fallback
 pub fn stub_Shell_NotifyIconA(dwMessage: u32, lpData: usize) callconv(w32cc.WINAPI) i32 {
     _ = dwMessage;

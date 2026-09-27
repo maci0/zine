@@ -23,7 +23,6 @@ pub fn AdjustTokenPrivileges(TokenHandle: usize, DisableAllPrivileges: i32, NewS
     return 1;
 }
 
-/// stub_LookupPrivilegeValueW
 /// Implementation status: Stub
 pub fn stub_LookupPrivilegeValueW(lpSystemName: usize, lpName: usize, lpLuid: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpSystemName;
@@ -33,7 +32,6 @@ pub fn stub_LookupPrivilegeValueW(lpSystemName: usize, lpName: usize, lpLuid: us
     return 0;
 }
 
-/// stub_GetTokenInformation
 /// Implementation status: Stub
 pub fn stub_GetTokenInformation(TokenHandle: usize, TokenInformationClass: u32, TokenInformation: usize, TokenInformationLength: u32, ReturnLength: usize) callconv(w32cc.WINAPI) i32 {
     _ = TokenHandle;
@@ -45,7 +43,6 @@ pub fn stub_GetTokenInformation(TokenHandle: usize, TokenInformationClass: u32, 
     return 0;
 }
 
-/// stub_OpenThreadToken
 /// Implementation status: No-op fallback
 pub fn stub_OpenThreadToken(ThreadHandle: usize, DesiredAccess: u32, OpenAsSelf: i32, TokenHandle: usize) callconv(w32cc.WINAPI) i32 {
     _ = ThreadHandle;
@@ -69,7 +66,6 @@ pub fn GetFileSecurityW(lpFileName: usize, RequestedInformation: u32, pSecurityD
     return 0;
 }
 
-/// stub_SetFileSecurityW
 /// Implementation status: Stub
 pub fn stub_SetFileSecurityW(lpFileName: usize, SecurityInformation: u32, pSecurityDescriptor: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpFileName;
@@ -79,7 +75,6 @@ pub fn stub_SetFileSecurityW(lpFileName: usize, SecurityInformation: u32, pSecur
     return 0;
 }
 
-/// stub_IsTextUnicode
 /// Implementation status: Stub
 pub fn stub_IsTextUnicode(lpv: usize, iSize: i32, lpiResult: usize) callconv(w32cc.WINAPI) i32 {
     _ = lpv;

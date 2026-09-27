@@ -49,11 +49,6 @@ pub fn run(cpu: *Cpu) void {
 }
 
 /// Executes a single x86 instruction at the current EIP.
-/// This function handles:
-///   1. Checking for native imports (thunks).
-///   2. Decode cache lookup, falling back to full decode on miss.
-///   3. Advancing EIP.
-///   4. Dispatching to the appropriate execution handler via `executeInsn`.
 pub fn step(cpu: *Cpu) void {
     const eip = cpu.eip;
 

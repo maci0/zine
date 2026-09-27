@@ -1187,7 +1187,6 @@ pub fn init() void {
     global_light.lpVtbl = &light_vtbl;
 }
 
-/// registerVtables
 /// Implementation status: Partially implemented
 pub fn registerVtables(environment: anytype) void {
     environment.addBuiltinVtableComptime(IDirect3D7Vtbl, &d3d7_vtbl);

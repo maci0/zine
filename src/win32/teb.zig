@@ -275,7 +275,6 @@ pub const TEB = extern struct {
     _padding: [0x1000 - 0xCC]u8 = [_]u8{0} ** (0x1000 - 0xCC),
 };
 
-/// initTEB
 /// Implementation status: Partially implemented
 pub fn initTEB(allocator: std.mem.Allocator) !*TEB {
     _ = allocator; // PEB/params now use raw_alloc for 32-bit address range
@@ -338,7 +337,6 @@ pub fn initTEB(allocator: std.mem.Allocator) !*TEB {
     return teb_val;
 }
 
-/// setupFS
 /// Implementation status: Partially implemented
 pub fn setupFS(teb_ptr: *TEB) !void {
     teb_address = @intFromPtr(teb_ptr);

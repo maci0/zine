@@ -189,7 +189,6 @@ pub fn updateGuestGlobals() void {
     }
 }
 
-/// p_argc
 /// Implementation status: Partially implemented
 pub fn p_argc() callconv(.c) usize {
     const g = ensureGuestGlobals();
@@ -197,7 +196,6 @@ pub fn p_argc() callconv(.c) usize {
     return @intFromPtr(&msvcrt.global_argc);
 }
 
-/// p_argv
 /// Implementation status: Partially implemented
 pub fn p_argv() callconv(.c) usize {
     const g = ensureGuestGlobals();
@@ -210,7 +208,6 @@ pub fn p_argv() callconv(.c) usize {
     return @intFromPtr(&msvcrt.global_argv);
 }
 
-/// p_environ
 /// Implementation status: Partially implemented
 pub fn p_environ() callconv(.c) usize {
     const g = ensureGuestGlobals();
@@ -331,7 +328,6 @@ pub fn ensureGuestArgs() void {
     if (trace.enable_tracing) trace.print("MSVCRT: built guest args at 0x{X} ({d} bytes)\n", .{ base_addr, gpos });
 }
 
-/// getmainargs
 /// Implementation status: Partially implemented
 pub fn getmainargs(
     argc_ptr: usize,
@@ -374,7 +370,6 @@ pub fn getmainargs(
     return 0;
 }
 
-/// exit
 /// Implementation status: Partially implemented
 pub fn exit(status: i32) callconv(.c) void {
     if (trace.enable_tracing) trace.print("MSVCRT: exit({d}) called from 0x{X}\n", .{ status, @returnAddress() });
@@ -410,7 +405,6 @@ pub fn beginthreadex(
     return kernel32_process.CreateThread(0, stack_size, start_address, arglist, 0, thrdaddr);
 }
 
-/// spawnvp
 /// Implementation status: Partially implemented
 pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 {
     if (comptime !platform.is_native) {
@@ -638,7 +632,6 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     }
 }
 
-/// getenv
 /// Implementation status: Partially implemented
 pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
     if (name_ptr == 0) return null;
@@ -701,7 +694,6 @@ pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
     return null;
 }
 
-/// putenv
 /// Implementation status: Partially implemented
 pub fn putenv(envstring_ptr: usize) callconv(.c) i32 {
     if (envstring_ptr == 0) return -1;
@@ -764,7 +756,6 @@ pub fn putenv(envstring_ptr: usize) callconv(.c) i32 {
     return 0;
 }
 
-/// p_pgmptr
 /// Implementation status: Partially implemented
 pub fn p_pgmptr() callconv(.c) usize {
     const g = ensureGuestGlobals();
@@ -794,7 +785,6 @@ pub fn p_pgmptr() callconv(.c) usize {
     return @intFromPtr(&msvcrt.msvcrt_pgmptr);
 }
 
-/// stub_XcptFilter
 /// Implementation status: Stub
 pub fn stub_XcptFilter(xcptnum: u32, pxcptinfoptrs: *anyopaque) callconv(.c) i32 {
     _ = xcptnum;
@@ -802,7 +792,6 @@ pub fn stub_XcptFilter(xcptnum: u32, pxcptinfoptrs: *anyopaque) callconv(.c) i32
     return 0;
 }
 
-/// initterm
 /// Implementation status: Partially implemented
 pub fn initterm(pfbegin: [*]const ?*const fn () callconv(.c) void, pfend: [*]const ?*const fn () callconv(.c) void) callconv(.c) void {
     if (comptime !platform.is_native) {
@@ -872,7 +861,6 @@ pub fn initterm_e(pfbegin: [*]const ?*const fn () callconv(.c) i32, pfend: [*]co
     return 0;
 }
 
-/// p_fmode
 /// Implementation status: Partially implemented
 pub fn p_fmode() callconv(.c) usize {
     const g = ensureGuestGlobals();
@@ -880,7 +868,6 @@ pub fn p_fmode() callconv(.c) usize {
     return @intFromPtr(&msvcrt.msvcrt_fmode);
 }
 
-/// p_commode
 /// Implementation status: Partially implemented
 pub fn p_commode() callconv(.c) usize {
     const g = ensureGuestGlobals();
@@ -888,7 +875,6 @@ pub fn p_commode() callconv(.c) usize {
     return @intFromPtr(&msvcrt.msvcrt_commode);
 }
 
-/// p_initenv
 /// Implementation status: Partially implemented
 pub fn p_initenv() callconv(.c) usize {
     const g = ensureGuestGlobals();
@@ -900,7 +886,6 @@ pub fn p_initenv() callconv(.c) usize {
     return @intFromPtr(@as(*const anyopaque, @ptrCast(@constCast(&static_p.p))));
 }
 
-/// p_timezone
 /// Implementation status: Partially implemented
 pub fn p_timezone() callconv(.c) *i32 {
     const g = ensureGuestGlobals();
@@ -908,7 +893,6 @@ pub fn p_timezone() callconv(.c) *i32 {
     return &msvcrt.msvcrt_timezone;
 }
 
-/// p_daylight
 /// Implementation status: Partially implemented
 pub fn p_daylight() callconv(.c) *i32 {
     const g = ensureGuestGlobals();
@@ -916,7 +900,6 @@ pub fn p_daylight() callconv(.c) *i32 {
     return &msvcrt.msvcrt_daylight;
 }
 
-/// p_tzname
 /// Implementation status: Partially implemented
 pub fn p_tzname() callconv(.c) *[2]?*anyopaque {
     const g = ensureGuestGlobals();
@@ -924,7 +907,6 @@ pub fn p_tzname() callconv(.c) *[2]?*anyopaque {
     return &msvcrt.msvcrt_tzname;
 }
 
-/// stub_set_app_type
 /// Implementation status: Stub
 pub fn stub_set_app_type(app_type: i32) callconv(.c) void {
     _ = app_type;

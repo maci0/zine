@@ -52,7 +52,6 @@ pub fn mktemp(template: ?*anyopaque) callconv(.c) ?*anyopaque {
     return null;
 }
 
-/// splitpath
 /// Implementation status: Partially implemented
 pub fn splitpath(path: [*:0]const u8, drv_out: ?[*]u8, dir_out: ?[*]u8, fname_out: ?[*]u8, ext_out: ?[*]u8) callconv(.c) void {
     const s = std.mem.span(path);
@@ -93,7 +92,6 @@ pub fn splitpath(path: [*:0]const u8, drv_out: ?[*]u8, dir_out: ?[*]u8, fname_ou
     }
 }
 
-/// makepath
 /// Implementation status: Partially implemented
 pub fn makepath(out: [*]u8, drv: ?[*:0]const u8, dir: ?[*:0]const u8, fname: ?[*:0]const u8, ext: ?[*:0]const u8) callconv(.c) void {
     if (trace.enable_tracing) {
@@ -146,7 +144,6 @@ pub fn makepath(out: [*]u8, drv: ?[*:0]const u8, dir: ?[*:0]const u8, fname: ?[*
     if (trace.enable_tracing) trace.print("MSVCRT: _makepath -> {s}\n", .{out[0..len]});
 }
 
-/// fullpath
 /// Implementation status: Partially implemented
 pub fn fullpath(abs_buf: usize, rel: usize, max: usize) callconv(.c) usize {
     if (rel == 0) return 0;
@@ -226,7 +223,6 @@ pub fn searchenv(filename_ptr: usize, varname_ptr: usize, result_ptr: usize) cal
     if (trace.enable_tracing) trace.print("MSVCRT: _searchenv -> NOT FOUND\n", .{});
 }
 
-/// getcwd
 /// Implementation status: Partially implemented
 pub fn getcwd(buffer_ptr: usize, maxlen: i32) callconv(.c) ?*anyopaque {
     const host_io = @import("../host_io.zig");

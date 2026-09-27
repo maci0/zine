@@ -3,7 +3,6 @@ const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
 const io = @import("io.zig");
 
-/// controlfp
 /// Implementation status: Partially implemented
 pub fn controlfp(new: u32, mask: u32) callconv(.c) u32 {
     _ = new;
@@ -11,7 +10,6 @@ pub fn controlfp(new: u32, mask: u32) callconv(.c) u32 {
     return 0x9001f;
 }
 
-/// stub_setusermatherr
 /// Implementation status: Stub
 pub fn stub_setusermatherr(handler: *anyopaque) callconv(.c) void {
     _ = handler;
@@ -54,13 +52,11 @@ fn stub_ftol_generic() callconv(.c) i64 {
     return 0;
 }
 
-/// ceil
 /// Implementation status: Partially implemented
 pub fn ceil(x: f64) callconv(.c) f64 {
     return @ceil(x);
 }
 
-/// floor
 /// Implementation status: Partially implemented
 pub fn floor(x: f64) callconv(.c) f64 {
     return @floor(x);
