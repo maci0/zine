@@ -177,16 +177,31 @@ pub const Module = struct {
         const file_data = try allocator.alloc(u8, @intCast(file_size));
         errdefer allocator.free(file_data);
 
+        // A short read leaves the tail of file_data uninitialized, and the PE
+        // parser would then read garbage as if it were file content. Report
+        // the shortfall with the path and both byte counts instead.
         if (comptime builtin.os.tag == .linux) {
             var off: u64 = 0;
             while (off < file_data.len) {
                 const rc = std.os.linux.pread(file.handle, file_data.ptr + @as(usize, @intCast(off)), file_data.len - @as(usize, @intCast(off)), @as(i64, @intCast(off)));
+                if (std.os.linux.errno(rc) == .INTR) continue;
                 const signed: isize = @bitCast(rc);
-                if (signed <= 0) return error.ReadFailed;
+                if (signed < 0) {
+                    log.err("Module.load: read of '{s}' failed at offset {d} of {d}: errno {}", .{ path, off, file_data.len, std.os.linux.errno(rc) });
+                    return error.ReadFailed;
+                }
+                if (signed == 0) {
+                    log.err("Module.load: '{s}' ended at {d} of {d} bytes, the PE image is truncated", .{ path, off, file_data.len });
+                    return error.ReadFailed;
+                }
                 off += @intCast(rc);
             }
         } else {
-            _ = try file.readPositionalAll(runtime.io(), file_data, 0);
+            const got = try file.readPositionalAll(runtime.io(), file_data, 0);
+            if (got < file_data.len) {
+                log.err("Module.load: '{s}' ended at {d} of {d} bytes, the PE image is truncated", .{ path, got, file_data.len });
+                return error.ReadFailed;
+            }
         }
 
         var parser = pe.PEParser.parse(allocator, file_data) catch |err| {

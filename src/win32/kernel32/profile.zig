@@ -1,6 +1,7 @@
 const std = @import("std");
 const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
+const log = @import("../../log.zig");
 const kernel32_mem = @import("mem.zig");
 const w32cc = @import("../calling_convention.zig");
 
@@ -125,7 +126,10 @@ pub fn GetPrivateProfileSectionA(lpAppName: usize, lpReturnedString: usize, nSiz
     defer file.close(runtime.io());
 
     var content_buf: [16384]u8 = undefined;
-    const bytes_read = file.readPositionalAll(runtime.io(), &content_buf, 0) catch return 0;
+    const bytes_read = file.readPositionalAll(runtime.io(), &content_buf, 0) catch |err| {
+        log.err("GetPrivateProfileSectionA: reading '{s}' failed, the section is reported as empty: {t}", .{ file_path_raw, err });
+        return 0;
+    };
     const content = content_buf[0..bytes_read];
 
     var out_pos: u32 = 0;

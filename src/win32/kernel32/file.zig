@@ -17,6 +17,7 @@ const ERROR_INVALID_PARAMETER = 87;
 const ERROR_INVALID_ADDRESS = 487;
 const ERROR_INVALID_HANDLE = 6;
 const ERROR_DISK_FULL = 112;
+const ERROR_FILE_NOT_FOUND = 2;
 
 /// Narrow a guest wide string to the CP1252 bytes its `A` twin takes, leaving
 /// room for the terminator. Truncating each code unit to its low byte instead
@@ -510,7 +511,15 @@ pub fn ReadFile(hFile: usize, lpBuffer: [*]u8, nNumberOfBytesToRead: u32, lpNumb
 
     const file = host_io.fileFromFd(fd);
     const buffer = lpBuffer[0..nNumberOfBytesToRead];
-    const bytes_read = @import("../host_io.zig").readFromFile(file, buffer) catch return 0;
+    // A failed read is not a short read: the guest gets FALSE with no byte
+    // count, so the only way it learns the read faulted rather than hitting
+    // EOF is the last error.
+    const bytes_read = @import("../host_io.zig").readFromFile(file, buffer) catch |err| {
+        log.err("ReadFile(hFile={d}, len={d}) failed: {t}", .{ fd, nNumberOfBytesToRead, err });
+        kernel32_error.SetLastError(ERROR_READ_FAULT);
+        if (lpNumberOfBytesRead) |p| p.* = 0;
+        return 0;
+    };
 
     if (lpNumberOfBytesRead) |p| p.* = @intCast(bytes_read);
 
@@ -673,8 +682,18 @@ pub fn SetEndOfFile(hFile: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: SetEndOfFile(hFile={d})\n", .{fd});
     const file = host_io.fileFromFd(fd);
     const pos = @import("../../platform.zig").lseek(file.handle, 0, 1); // SEEK_CUR
-    if (pos < 0) return 0;
-    host_io.setLength(file, @intCast(pos)) catch return 0;
+    if (pos < 0) {
+        log.err("SetEndOfFile(hFile={d}): the current position is unavailable, the file is left at its old length", .{fd});
+        kernel32_error.SetLastError(ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    // A failed truncate leaves the file longer than the guest believes, and
+    // the guest keeps writing at offsets past the end believing they landed.
+    host_io.setLength(file, @intCast(pos)) catch |err| {
+        log.err("SetEndOfFile(hFile={d}): truncating to {d} bytes failed: {t}", .{ fd, pos, err });
+        kernel32_error.SetLastError(ERROR_WRITE_FAULT);
+        return 0;
+    };
     return 1; // TRUE
 }
 
@@ -1097,7 +1116,15 @@ pub fn WriteFile(hFile: usize, lpBuffer: [*]const u8, nNumberOfBytesToWrite: u32
 
     const buf = lpBuffer[0..nNumberOfBytesToWrite];
     const file = host_io.fileFromFd(fd);
-    host_io.writeAllToFile(file, buf) catch return 0;
+    // writeAllToFile is all-or-nothing, so a failure wrote nothing: report
+    // FALSE with a zero byte count and a last error, never a silent success
+    // that leaves the guest believing the bytes landed.
+    host_io.writeAllToFile(file, buf) catch |err| {
+        log.err("WriteFile(hFile={d}, size={d}) failed: {t}", .{ fd, nNumberOfBytesToWrite, err });
+        kernel32_error.SetLastError(ERROR_WRITE_FAULT);
+        if (lpNumberOfBytesWritten) |p| p.* = 0;
+        return 0;
+    };
     if (lpNumberOfBytesWritten) |p| p.* = @intCast(buf.len);
     return 1;
 }
@@ -1386,9 +1413,9 @@ fn fileExistsPosix(host_path: []const u8) bool {
 /// Reports a copy failure with the paths, the failing direction, and the
 /// host errno, then returns FALSE. The destination is left truncated; the
 /// guest learns of it only from this return value, so it must not be FALSE.
-fn copyFailed(src_buf: []const u8, dst_buf: []const u8, op: []const u8, errno: ?std.posix.E) i32 {
-    log.err("CopyFile '{s}' -> '{s}': host {s} failed, errno {?}", .{ src_buf, dst_buf, op, errno });
-    kernel32_error.SetLastError(ERROR_WRITE_FAULT);
+fn copyFailed(src_buf: []const u8, dst_buf: []const u8, op: []const u8, errno: ?std.posix.E, err: ?anyerror) i32 {
+    log.err("CopyFile '{s}' -> '{s}': host {s} failed, errno {?}, error {?}", .{ src_buf, dst_buf, op, errno, err });
+    kernel32_error.SetLastError(if (std.mem.eql(u8, op, "read")) ERROR_READ_FAULT else ERROR_WRITE_FAULT);
     return 0;
 }
 
@@ -1423,13 +1450,13 @@ fn copyFileHost(src_buf: []const u8, dst_buf: []const u8) i32 {
             // errno. Collapsing both into a clean exit would report success
             // for a truncated destination, so distinguish them.
             if (n == 0) break;
-            if (n < 0) return copyFailed(src_buf, dst_buf, "read", std.posix.errno(n_rc));
+            if (n < 0) return copyFailed(src_buf, dst_buf, "read", std.posix.errno(n_rc), null);
             var woff: usize = 0;
             while (woff < @as(usize, @intCast(n))) {
                 const w_rc = std.os.linux.pwrite(@intCast(dst_fd), buf[woff..].ptr, @as(usize, @intCast(n)) - woff, @as(i64, @intCast(offset + woff)));
                 const w: isize = @bitCast(w_rc);
-                if (w == 0) return copyFailed(src_buf, dst_buf, "write", null);
-                if (w < 0) return copyFailed(src_buf, dst_buf, "write", std.posix.errno(w_rc));
+                if (w == 0) return copyFailed(src_buf, dst_buf, "write", null, null);
+                if (w < 0) return copyFailed(src_buf, dst_buf, "write", std.posix.errno(w_rc), null);
                 woff += @intCast(w);
             }
             offset += @intCast(n);
@@ -1437,17 +1464,25 @@ fn copyFileHost(src_buf: []const u8, dst_buf: []const u8) i32 {
         return 1;
     }
     const cwd = std.Io.Dir.cwd();
-    const src_file = cwd.openFile(runtime.io(), src_buf, .{}) catch return 0;
+    const src_file = cwd.openFile(runtime.io(), src_buf, .{}) catch |err| {
+        log.err("CopyFile '{s}' -> '{s}': host open of the source failed: {t}", .{ src_buf, dst_buf, err });
+        kernel32_error.SetLastError(ERROR_FILE_NOT_FOUND);
+        return 0;
+    };
     defer host_io.closeFile(src_file);
-    const dst_file = cwd.createFile(runtime.io(), dst_buf, .{}) catch return 0;
+    const dst_file = cwd.createFile(runtime.io(), dst_buf, .{}) catch |err| {
+        log.err("CopyFile '{s}' -> '{s}': host create of the destination failed: {t}", .{ src_buf, dst_buf, err });
+        kernel32_error.SetLastError(ERROR_WRITE_FAULT);
+        return 0;
+    };
     defer host_io.closeFile(dst_file);
 
     var buf: [4096]u8 = undefined;
     var offset: u64 = 0;
     while (true) {
-        const n = host_io.readPositional(src_file, &buf, offset) catch return 0;
+        const n = host_io.readPositional(src_file, &buf, offset) catch |err| return copyFailed(src_buf, dst_buf, "read", null, err);
         if (n == 0) break;
-        host_io.writePositional(dst_file, buf[0..n], offset) catch return 0;
+        host_io.writePositional(dst_file, buf[0..n], offset) catch |err| return copyFailed(src_buf, dst_buf, "write", null, err);
         offset += n;
     }
     return 1; // TRUE
@@ -1706,4 +1741,56 @@ test "native map registry unmaps registered views" {
     // Unknown addresses are ignored without panicking.
     unregisterNativeMap(0xDEAD000);
     try std.testing.expect(native_map_addrs[0] == 0x1234000);
+}
+
+test "a failed WriteFile reports a byte count of zero and a last error" {
+    if (comptime !platform.is_native) return error.SkipZigTest;
+    const saved_error = kernel32_error.GetLastError();
+    defer kernel32_error.SetLastError(saved_error);
+
+    // A read-only descriptor makes every write fail. The guest must not read
+    // back an untouched byte count that says the data was written.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(runtime.io(), .{ .sub_path = "written.bin", .data = "seed" });
+    const read_only = try tmp.dir.openFile(runtime.io(), "written.bin", .{ .mode = .read_only });
+    defer host_io.closeFile(read_only);
+
+    var written: u32 = 0xDEAD_BEEF;
+    kernel32_error.SetLastError(0);
+    try std.testing.expectEqual(@as(i32, 0), WriteFile(@intCast(read_only.handle), "payload", 7, &written, 0));
+    try std.testing.expectEqual(@as(u32, 0), written);
+    try std.testing.expect(kernel32_error.GetLastError() != 0);
+}
+
+test "a failed ReadFile reports a byte count of zero and a last error" {
+    if (comptime !platform.is_native) return error.SkipZigTest;
+    const saved_error = kernel32_error.GetLastError();
+    defer kernel32_error.SetLastError(saved_error);
+
+    // A write-only descriptor makes every read fail, which is not EOF.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(runtime.io(), .{ .sub_path = "read.bin", .data = "seed" });
+    const write_only = try tmp.dir.createFile(runtime.io(), "read.bin", .{ .truncate = false });
+    defer host_io.closeFile(write_only);
+    const reopened = try tmp.dir.openFile(runtime.io(), "read.bin", .{ .mode = .write_only });
+    defer host_io.closeFile(reopened);
+
+    var buf: [4]u8 = undefined;
+    var read_count: u32 = 0xDEAD_BEEF;
+    kernel32_error.SetLastError(0);
+    try std.testing.expectEqual(@as(i32, 0), ReadFile(@intCast(reopened.handle), &buf, 4, &read_count, 0));
+    try std.testing.expectEqual(@as(u32, 0), read_count);
+    try std.testing.expect(kernel32_error.GetLastError() != 0);
+}
+
+test "SetEndOfFile reports a last error when the position is unavailable" {
+    if (comptime !platform.is_native) return error.SkipZigTest;
+    const saved_error = kernel32_error.GetLastError();
+    defer kernel32_error.SetLastError(saved_error);
+
+    kernel32_error.SetLastError(0);
+    try std.testing.expectEqual(@as(i32, 0), SetEndOfFile(w32.INVALID_HANDLE_VALUE));
+    try std.testing.expect(kernel32_error.GetLastError() != 0);
 }

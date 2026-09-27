@@ -3,6 +3,11 @@ const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
 const host_io = @import("../host_io.zig");
+const log = @import("../../log.zig");
+const kernel32_error = @import("error.zig");
+
+const ERROR_READ_FAULT = 30;
+const ERROR_WRITE_FAULT = 29;
 
 /// Retrieves the current input mode of a console's input buffer.
 pub fn GetConsoleMode(hConsoleHandle: usize, lpMode: *u32) callconv(w32cc.WINAPI) i32 {
@@ -39,7 +44,12 @@ pub fn ReadConsoleW(hConsoleInput: usize, lpBuffer: [*]u16, nNumberOfCharsToRead
     const stdin = host_io.fileFromFd(0);
     var narrow_buf: [4096]u8 = undefined;
     const max_read = @min(nNumberOfCharsToRead, narrow_buf.len);
-    const bytes_read = @import("../host_io.zig").readFromFile(stdin, narrow_buf[0..max_read]) catch return 0;
+    const bytes_read = @import("../host_io.zig").readFromFile(stdin, narrow_buf[0..max_read]) catch |err| {
+        log.err("ReadConsoleW: reading up to {d} characters from stdin failed: {t}", .{ max_read, err });
+        kernel32_error.SetLastError(ERROR_READ_FAULT);
+        if (lpNumberOfCharsRead) |p| p.* = 0;
+        return 0;
+    };
     if (bytes_read == 0) return 0;
 
     for (0..bytes_read) |i| {
@@ -60,7 +70,12 @@ pub fn WriteConsoleW(hConsoleOutput: usize, lpBuffer: [*]const u16, nNumberOfCha
     }
     const file = host_io.fileFromFd(fd);
     const io = runtime.io();
-    file.writeStreamingAll(io, buf_a[0..len]) catch return 0;
+    file.writeStreamingAll(io, buf_a[0..len]) catch |err| {
+        log.err("WriteConsoleW: writing {d} characters to fd {d} failed: {t}", .{ len, fd, err });
+        kernel32_error.SetLastError(ERROR_WRITE_FAULT);
+        if (lpNumberOfCharsWritten) |p| p.* = 0;
+        return 0;
+    };
     const written = len;
     if (lpNumberOfCharsWritten) |p| p.* = @intCast(written);
     return 1;
@@ -73,7 +88,12 @@ pub fn WriteConsoleA(hConsoleOutput: usize, lpBuffer: [*]const u8, nNumberOfChar
     const buf = lpBuffer[0..nNumberOfCharsToWrite];
     const file = host_io.fileFromFd(fd);
     const io = runtime.io();
-    file.writeStreamingAll(io, buf) catch return 0;
+    file.writeStreamingAll(io, buf) catch |err| {
+        log.err("WriteConsoleA: writing {d} bytes to fd {d} failed: {t}", .{ buf.len, fd, err });
+        kernel32_error.SetLastError(ERROR_WRITE_FAULT);
+        if (lpNumberOfCharsWritten) |p| p.* = 0;
+        return 0;
+    };
     const written = buf.len;
     if (lpNumberOfCharsWritten) |p| p.* = @intCast(written);
     return 1;

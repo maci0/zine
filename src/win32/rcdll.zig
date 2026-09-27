@@ -8,6 +8,7 @@
 const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
+const log = @import("../log.zig");
 const w32cc = @import("calling_convention.zig");
 
 // Preprocessor #define map (name -> numeric value) collected from the .rc.
@@ -1125,7 +1126,14 @@ fn compileResources(arg_list: []const []const u8) i32 {
         ob += gb;
     }
 
-    host_io.writeAllToFile(out_file, out_buf[0..ob]) catch return 1;
+    // The output file was already created and truncated by the open above, so
+    // a failed write leaves a partial .res on disk that a later build step
+    // would link as if it were complete. Say which file and how much is
+    // missing, then fail.
+    host_io.writeAllToFile(out_file, out_buf[0..ob]) catch |err| {
+        log.err("RCDLL: writing {d} bytes to '{s}' failed: {t}; the output file is truncated", .{ ob, res_host_buf[0..res_host_len], err });
+        return 1;
+    };
     if (trace.enable_tracing) trace.print("RCDLL: wrote {d} bytes to '{s}'\n", .{ ob, res_host_buf[0..res_host_len] });
     return 0; // success
 }

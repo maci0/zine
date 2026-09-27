@@ -458,7 +458,10 @@ pub fn fputs(str: [*:0]const u8, file_ptr: ?*anyopaque) callconv(.c) i32 {
     const s = std.mem.span(str);
     if (trace.enable_tracing) trace.print("MSVCRT: fputs '{s}'\n", .{s});
     if (io.getFile(file_ptr)) |file| {
-        @import("../host_io.zig").writeAllToFile(file, s) catch return -1;
+        @import("../host_io.zig").writeAllToFile(file, s) catch |err| {
+            log.err("MSVCRT: fputs write failed, {d} bytes lost: {t}", .{ s.len, err });
+            return -1;
+        };
         return 0;
     }
     return -1;

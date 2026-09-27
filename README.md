@@ -426,9 +426,26 @@ release, not a 0.2.1 patch.
   holds is rejected at load with `PE write-protection table overflow`, instead
   of dropping a section and silently discarding the guest's writes to it.
 - File and stream I/O failures report the error instead of reading as success or
-  EOF: `CopyFileA`/`CopyFileW` return FALSE with `ERROR_WRITE_FAULT`, a host read
-  error in a file mapping sets `ERROR_READ_FAULT` rather than zero-filling, and
-  MSVCRT sets the stream error indicator that `ferror` reports.
+  EOF: `CopyFileA`/`CopyFileW` return FALSE with `ERROR_WRITE_FAULT` on every
+  host failure, including the open and create steps and on the non-Linux
+  branch, a host read error in a file mapping sets `ERROR_READ_FAULT` rather
+  than zero-filling, and MSVCRT sets the stream error indicator that `ferror`
+  reports. `ReadFile`, `WriteFile`, `WriteConsoleA`/`W`, and `ReadConsoleW` now
+  set `ERROR_READ_FAULT`/`ERROR_WRITE_FAULT` and report a byte count of zero on
+  failure instead of leaving the caller's count untouched, `SetEndOfFile` says
+  which of its two host steps failed, and a `fwrite` over the 256 MB limit sets
+  the stream error rather than reading as a short write. `fputc`, `putchar`,
+  `fprintf`, `fwprintf`, and `fputs` log a dropped write, `freopen` abandons the
+  reopen when the old stream cannot be closed, and `RC` reports a truncated
+  `.res` instead of leaving a partial file for the next build step to link.
+- A Winsock failure names itself. `WSAGetLastError`/`WSASetLastError` were
+  stubs that always returned or discarded 0, so a refused connection, an
+  unreachable host, and a bad argument were the same `SOCKET_ERROR` to the
+  guest. Every failing socket call now records the Winsock code its host errno
+  maps to, `send` on a target without real sockets reports failure instead of
+  claiming the bytes went out, and a loadable module that is shorter than its
+  own size table is rejected at load rather than parsed from an uninitialized
+  buffer.
 - The guest argv array is read as 32-bit pointers on a 64-bit host (x86_64 and
   wasm64) rather than as host-width values, which on wasm64 straddled the array
   elements and gave the guest a wrong command line. The host stack range is read

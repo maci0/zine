@@ -12,6 +12,99 @@ const linux = std.os.linux;
 const INVALID_SOCKET: usize = @as(usize, @bitCast(@as(isize, -1)));
 const SOCKET_ERROR: i32 = -1;
 
+// Winsock error codes. A guest can only tell a refused connect from a
+// timed-out one through WSAGetLastError, and returning SOCKET_ERROR with a
+// fixed 0 behind it makes every socket failure look the same.
+const WSAEACCES: i32 = 10013;
+const WSAEFAULT: i32 = 10014;
+const WSAEINTR: i32 = 10004;
+const WSAEBADF: i32 = 10009;
+const WSAEINVAL: i32 = 10022;
+const WSAEMFILE: i32 = 10024;
+const WSAENOTSOCK: i32 = 10038;
+const WSAEOPNOTSUPP: i32 = 10045;
+const WSAEAFNOSUPPORT: i32 = 10047;
+const WSAEADDRINUSE: i32 = 10048;
+const WSAEADDRNOTAVAIL: i32 = 10049;
+const WSAENETDOWN: i32 = 10050;
+const WSAENETUNREACH: i32 = 10051;
+const WSAENETRESET: i32 = 10052;
+const WSAECONNABORTED: i32 = 10053;
+const WSAECONNRESET: i32 = 10054;
+const WSAENOBUFS: i32 = 10055;
+const WSAEISCONN: i32 = 10056;
+const WSAENOTCONN: i32 = 10057;
+const WSAETIMEDOUT: i32 = 10060;
+const WSAECONNREFUSED: i32 = 10061;
+const WSAEHOSTDOWN: i32 = 10064;
+const WSAEHOSTUNREACH: i32 = 10065;
+
+/// The error the next WSAGetLastError reports. Winsock scopes it to the
+/// calling thread; the emulator runs one guest, and kernel32's last_error
+/// uses the same process-wide slot.
+var last_wsa_error: i32 = 0;
+
+/// Records `code` and returns SOCKET_ERROR, so every failing call site both
+/// signals failure and says why through one path.
+fn wsaFail(code: i32) i32 {
+    last_wsa_error = code;
+    return SOCKET_ERROR;
+}
+
+/// As wsaFail, for the call sites whose return type is a SOCKET handle.
+fn wsaFailSocket(code: i32) usize {
+    last_wsa_error = code;
+    return INVALID_SOCKET;
+}
+
+/// The errno of the syscall that just failed, captured by sys_ok before the
+/// Zig error discards it.
+var last_host_errno: linux.E = .SUCCESS;
+
+/// Translates a host errno into the Winsock code a guest expects. Unmapped
+/// errnos report WSAEOPNOTSUPP rather than a misleading success, so an
+/// unsupported call is visible to the guest instead of looking like a
+/// different, already-handled failure.
+fn wsaCodeFromErrno(errno: linux.E) i32 {
+    return switch (errno) {
+        .INTR => WSAEINTR,
+        .ACCES => WSAEACCES,
+        .BADF => WSAEBADF,
+        .FAULT => WSAEFAULT,
+        .INVAL => WSAEINVAL,
+        .MFILE, .NFILE => WSAEMFILE,
+        .NOBUFS => WSAENOBUFS,
+        .NOTSOCK => WSAENOTSOCK,
+        .ADDRINUSE => WSAEADDRINUSE,
+        .ADDRNOTAVAIL => WSAEADDRNOTAVAIL,
+        .AFNOSUPPORT => WSAEAFNOSUPPORT,
+        .NETDOWN => WSAENETDOWN,
+        .NETUNREACH => WSAENETUNREACH,
+        .NETRESET => WSAENETRESET,
+        .CONNABORTED => WSAECONNABORTED,
+        .CONNRESET => WSAECONNRESET,
+        .ISCONN => WSAEISCONN,
+        .NOTCONN => WSAENOTCONN,
+        .TIMEDOUT => WSAETIMEDOUT,
+        .CONNREFUSED => WSAECONNREFUSED,
+        .HOSTDOWN => WSAEHOSTDOWN,
+        .HOSTUNREACH => WSAEHOSTUNREACH,
+        .OPNOTSUPP, .NOPROTOOPT, .PROTONOSUPPORT => WSAEOPNOTSUPP,
+        else => WSAEOPNOTSUPP,
+    };
+}
+
+/// Records the host errno of a failed syscall so wsaFailFromHost can name it.
+fn wsaFailFromHost() i32 {
+    return wsaFail(wsaCodeFromErrno(last_host_errno));
+}
+
+/// Records the host errno of a failed syscall and returns INVALID_SOCKET.
+fn wsaFailSocketFromHost() usize {
+    last_wsa_error = wsaCodeFromErrno(last_host_errno);
+    return INVALID_SOCKET;
+}
+
 /// Win32 FD_SETSIZE: the capacity of the fd_array inside an fd_set. Also the
 /// per-set ceiling `select` applies to a caller-supplied fd_count.
 const fd_setsize: u32 = 64;
@@ -19,7 +112,13 @@ const fd_setsize: u32 = 64;
 /// 0.16 removed std.posix wrappers for sockets; use raw syscalls + local errno check.
 inline fn sys_ok(ret: usize) !usize {
     const s: isize = @bitCast(ret);
-    if (s < 0) return error.SocketOpFailed;
+    if (s < 0) {
+        // Keep the errno: the Zig error alone loses the distinction between a
+        // refused connection and a full socket table, which is exactly what
+        // the guest reads through WSAGetLastError.
+        last_host_errno = linux.errno(ret);
+        return error.SocketOpFailed;
+    }
     return ret;
 }
 
@@ -179,14 +278,15 @@ pub fn WSACleanup() callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
-/// Implementation status: Stub
+/// Reports the code recorded by the last failing socket call.
+/// Implementation status: Fully implemented
 pub fn stub_WSAGetLastError() callconv(w32cc.WINAPI) i32 {
-    return 0;
+    return last_wsa_error;
 }
 
-/// Implementation status: Stub
+/// Implementation status: Fully implemented
 pub fn stub_WSASetLastError(iError: i32) callconv(w32cc.WINAPI) void {
-    _ = iError;
+    last_wsa_error = iError;
 }
 
 /// Implementation status: Partially implemented
@@ -199,26 +299,26 @@ pub fn socket(af: i32, sock_type: i32, protocol: i32) callconv(w32cc.WINAPI) usi
             @intCast(@as(u32, @bitCast(protocol))),
         ) catch |err| {
             if (trace.enable_tracing) trace.print("WS2_32: socket failed: {}\n", .{err});
-            return INVALID_SOCKET;
+            return wsaFailSocketFromHost();
         };
         if (trace.enable_tracing) trace.print("WS2_32: socket => fd {d}\n", .{fd});
         return fdToSocket(fd);
     }
-    return INVALID_SOCKET;
+    return wsaFailSocket(WSAENOTSOCK);
 }
 
 /// Implementation status: Partially implemented
 pub fn bind(s: usize, name: usize, namelen: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("WS2_32: bind(s={d})\n", .{s});
     if (comptime platform.is_native) {
-        const addr = sockaddrToAddress(name, namelen) orelse return SOCKET_ERROR;
+        const addr = sockaddrToAddress(name, namelen) orelse return wsaFail(WSAEFAULT);
         PosixCompat.bind(socketToFd(s), &addr.any, @intCast(@as(u32, @bitCast(namelen)))) catch |err| {
             if (trace.enable_tracing) trace.print("WS2_32: bind failed: {}\n", .{err});
-            return SOCKET_ERROR;
+            return wsaFailFromHost();
         };
         return 0;
     }
-    return SOCKET_ERROR;
+    return wsaFail(WSAENOTSOCK);
 }
 
 /// Implementation status: Partially implemented
@@ -227,11 +327,11 @@ pub fn listen(s: usize, backlog: i32) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
         PosixCompat.listen(socketToFd(s), @intCast(@as(u32, @bitCast(backlog)))) catch |err| {
             if (trace.enable_tracing) trace.print("WS2_32: listen failed: {}\n", .{err});
-            return SOCKET_ERROR;
+            return wsaFailFromHost();
         };
         return 0;
     }
-    return SOCKET_ERROR;
+    return wsaFail(WSAENOTSOCK);
 }
 
 /// Implementation status: Partially implemented
@@ -242,34 +342,34 @@ pub fn accept(s: usize, addr: usize, addrlen: usize) callconv(w32cc.WINAPI) usiz
         var addr_len: PosixCompat.socklen_t = 16; // sizeof(sockaddr_in)
         const new_fd = PosixCompat.accept(socketToFd(s), &address.any, &addr_len, 0) catch |err| {
             if (trace.enable_tracing) trace.print("WS2_32: accept failed: {}\n", .{err});
-            return INVALID_SOCKET;
+            return wsaFailSocketFromHost();
         };
         // Write back the peer address if caller provided a buffer
         if (addr != 0) addressToSockaddr(address, addr, addrlen);
         if (trace.enable_tracing) trace.print("WS2_32: accept => fd {d}\n", .{new_fd});
         return fdToSocket(new_fd);
     }
-    return INVALID_SOCKET;
+    return wsaFailSocket(WSAENOTSOCK);
 }
 
 /// Implementation status: Partially implemented
 pub fn connect(s: usize, name: usize, namelen: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("WS2_32: connect(s={d})\n", .{s});
     if (comptime platform.is_native) {
-        const addr = sockaddrToAddress(name, namelen) orelse return SOCKET_ERROR;
+        const addr = sockaddrToAddress(name, namelen) orelse return wsaFail(WSAEFAULT);
         PosixCompat.connect(socketToFd(s), &addr.any, @intCast(@as(u32, @bitCast(namelen)))) catch |err| {
             if (trace.enable_tracing) trace.print("WS2_32: connect failed: {}\n", .{err});
-            return SOCKET_ERROR;
+            return wsaFailFromHost();
         };
         return 0;
     }
-    return SOCKET_ERROR;
+    return wsaFail(WSAENOTSOCK);
 }
 
 /// Implementation status: Partially implemented
 pub fn send(s: usize, buf: usize, len: i32, flags: i32) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
-        if (buf == 0 or len <= 0) return SOCKET_ERROR;
+        if (buf == 0 or len <= 0) return wsaFail(WSAEINVAL);
         const data = @as([*]const u8, @ptrFromInt(buf))[0..@intCast(@as(u32, @bitCast(len)))];
         const sent = PosixCompat.send(
             socketToFd(s),
@@ -277,17 +377,19 @@ pub fn send(s: usize, buf: usize, len: i32, flags: i32) callconv(w32cc.WINAPI) i
             @bitCast(@as(u32, @bitCast(flags))),
         ) catch |err| {
             if (trace.enable_tracing) trace.print("WS2_32: send failed: {}\n", .{err});
-            return SOCKET_ERROR;
+            return wsaFailFromHost();
         };
         return @intCast(sent);
     }
-    return len; // pretend we sent everything
+    // Reporting `len` bytes sent would tell the guest its data reached the
+    // network when nothing was transmitted, so the caller loses it silently.
+    return wsaFail(WSAENOTSOCK);
 }
 
 /// Implementation status: Partially implemented
 pub fn sendto(s: usize, buf: usize, len: i32, flags: i32, to: usize, tolen: i32) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
-        if (buf == 0 or len <= 0) return SOCKET_ERROR;
+        if (buf == 0 or len <= 0) return wsaFail(WSAEINVAL);
         const data = @as([*]const u8, @ptrFromInt(buf))[0..@intCast(@as(u32, @bitCast(len)))];
         const dest_addr: ?*const PosixCompat.sockaddr = if (to != 0)
             @ptrCast(@alignCast(@as(*const PosixCompat.sockaddr, @ptrFromInt(to))))
@@ -302,7 +404,7 @@ pub fn sendto(s: usize, buf: usize, len: i32, flags: i32, to: usize, tolen: i32)
             dest_len,
         ) catch |err| {
             if (trace.enable_tracing) trace.print("WS2_32: sendto failed: {}\n", .{err});
-            return SOCKET_ERROR;
+            return wsaFailFromHost();
         };
         return @intCast(sent);
     }
@@ -312,7 +414,7 @@ pub fn sendto(s: usize, buf: usize, len: i32, flags: i32, to: usize, tolen: i32)
 /// Implementation status: Partially implemented
 pub fn recv(s: usize, buf: usize, len: i32, flags: i32) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
-        if (buf == 0 or len <= 0) return SOCKET_ERROR;
+        if (buf == 0 or len <= 0) return wsaFail(WSAEINVAL);
         const buffer = @as([*]u8, @ptrFromInt(buf))[0..@intCast(@as(u32, @bitCast(len)))];
         const received = PosixCompat.recv(
             socketToFd(s),
@@ -320,17 +422,17 @@ pub fn recv(s: usize, buf: usize, len: i32, flags: i32) callconv(w32cc.WINAPI) i
             @bitCast(@as(u32, @bitCast(flags))),
         ) catch |err| {
             if (trace.enable_tracing) trace.print("WS2_32: recv failed: {}\n", .{err});
-            return SOCKET_ERROR;
+            return wsaFailFromHost();
         };
         return @intCast(received);
     }
-    return SOCKET_ERROR;
+    return wsaFail(WSAENOTSOCK);
 }
 
 /// Implementation status: Partially implemented
 pub fn recvfrom(s: usize, buf: usize, len: i32, flags: i32, from: usize, fromlen: usize) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
-        if (buf == 0 or len <= 0) return SOCKET_ERROR;
+        if (buf == 0 or len <= 0) return wsaFail(WSAEINVAL);
         const buffer = @as([*]u8, @ptrFromInt(buf))[0..@intCast(@as(u32, @bitCast(len)))];
         var src_addr: SockAddrInet = SockAddrInet.initIp4(.{ 0, 0, 0, 0 }, 0);
         var addr_len: PosixCompat.socklen_t = 16; // sizeof(sockaddr_in)
@@ -342,12 +444,12 @@ pub fn recvfrom(s: usize, buf: usize, len: i32, flags: i32, from: usize, fromlen
             &addr_len,
         ) catch |err| {
             if (trace.enable_tracing) trace.print("WS2_32: recvfrom failed: {}\n", .{err});
-            return SOCKET_ERROR;
+            return wsaFailFromHost();
         };
         if (from != 0) addressToSockaddr(src_addr, from, fromlen);
         return @intCast(received);
     }
-    return SOCKET_ERROR;
+    return wsaFail(WSAENOTSOCK);
 }
 
 /// Implementation status: Partially implemented
@@ -366,7 +468,7 @@ pub fn stub_shutdown(s: usize, how: i32) callconv(w32cc.WINAPI) i32 {
         // Win32 SD_RECEIVE=0, SD_SEND=1, SD_BOTH=2 — same as POSIX SHUT_*
         PosixCompat.shutdown(socketToFd(s), @as(u32, @bitCast(how))) catch |err| {
             if (trace.enable_tracing) trace.print("WS2_32: shutdown failed: {}\n", .{err});
-            return SOCKET_ERROR;
+            return wsaFailFromHost();
         };
         return 0;
     }
@@ -486,7 +588,7 @@ pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, time
 
         const n_ready = std.posix.poll(pollfds[0..n_poll], timeout_ms) catch |err| {
             if (trace.enable_tracing) trace.print("WS2_32: select/poll failed: {}\n", .{err});
-            return SOCKET_ERROR;
+            return wsaFail(WSAENOTSOCK);
         };
 
         // Write results back into Win32 fd_sets — keep only ready fds
@@ -560,7 +662,7 @@ pub fn setsockopt(s: usize, level: i32, optname: i32, optval: usize, optlen: i32
             if (val_ptr) |p| p[0..val_len] else &[_]u8{},
         ) catch |err| {
             if (trace.enable_tracing) trace.print("WS2_32: setsockopt failed: {}\n", .{err});
-            return SOCKET_ERROR;
+            return wsaFail(WSAENOTSOCK);
         };
         return 0;
     }
@@ -570,7 +672,7 @@ pub fn setsockopt(s: usize, level: i32, optname: i32, optval: usize, optlen: i32
 /// Implementation status: Partially implemented
 pub fn getsockopt(s: usize, level: i32, optname: i32, optval: usize, optlen: usize) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
-        if (optval == 0 or optlen == 0) return SOCKET_ERROR;
+        if (optval == 0 or optlen == 0) return wsaFail(WSAEINVAL);
         const lenp = @as(*PosixCompat.socklen_t, @ptrFromInt(optlen));
         const native_level: i32 = if (level == @as(i32, @bitCast(@as(u32, 0xFFFF))))
             @intCast(PosixCompat.SOL.SOCKET)
@@ -585,11 +687,11 @@ pub fn getsockopt(s: usize, level: i32, optname: i32, optval: usize, optlen: usi
             val_ptr[0..lenp.*],
         ) catch |err| {
             if (trace.enable_tracing) trace.print("WS2_32: getsockopt failed: {}\n", .{err});
-            return SOCKET_ERROR;
+            return wsaFail(WSAENOTSOCK);
         };
         return 0;
     }
-    return SOCKET_ERROR;
+    return wsaFail(WSAENOTSOCK);
 }
 
 /// Implementation status: Partially implemented
@@ -601,10 +703,10 @@ pub fn ioctlsocket(s: usize, cmd: i32, argp: usize) callconv(w32cc.WINAPI) i32 {
             if (argp != 0) {
                 const flag = @as(*const u32, @ptrFromInt(argp)).*;
                 const F = PosixCompat.F;
-                const cur = PosixCompat.fcntl(socketToFd(s), F.GETFL, 0) catch return SOCKET_ERROR;
+                const cur = PosixCompat.fcntl(socketToFd(s), F.GETFL, 0) catch return wsaFailFromHost();
                 const nonblock = @as(u32, @bitCast(PosixCompat.O{ .NONBLOCK = true }));
                 const new_flags = if (flag != 0) cur | nonblock else cur & ~nonblock;
-                _ = PosixCompat.fcntl(socketToFd(s), F.SETFL, new_flags) catch return SOCKET_ERROR;
+                _ = PosixCompat.fcntl(socketToFd(s), F.SETFL, new_flags) catch return wsaFailFromHost();
             }
         }
         return 0;
@@ -619,12 +721,12 @@ pub fn getpeername(s: usize, name: usize, namelen: usize) callconv(w32cc.WINAPI)
         var addr: SockAddrInet = SockAddrInet.initIp4(.{ 0, 0, 0, 0 }, 0);
         var addr_len: PosixCompat.socklen_t = 16; // sizeof(sockaddr_in)
         PosixCompat.getpeername(socketToFd(s), &addr.any, &addr_len) catch {
-            return SOCKET_ERROR;
+            return wsaFailFromHost();
         };
         addressToSockaddr(addr, name, namelen);
         return 0;
     }
-    return SOCKET_ERROR;
+    return wsaFail(WSAENOTSOCK);
 }
 
 /// Implementation status: Partially implemented
@@ -633,12 +735,12 @@ pub fn getsockname(s: usize, name: usize, namelen: usize) callconv(w32cc.WINAPI)
         var addr: SockAddrInet = SockAddrInet.initIp4(.{ 0, 0, 0, 0 }, 0);
         var addr_len: PosixCompat.socklen_t = 16; // sizeof(sockaddr_in)
         PosixCompat.getsockname(socketToFd(s), &addr.any, &addr_len) catch {
-            return SOCKET_ERROR;
+            return wsaFailFromHost();
         };
         addressToSockaddr(addr, name, namelen);
         return 0;
     }
-    return SOCKET_ERROR;
+    return wsaFail(WSAENOTSOCK);
 }
 
 /// ============================================================
@@ -944,4 +1046,45 @@ test "timeval to nanoseconds conversion matches the millisecond rounding" {
     // Sub-millisecond waits keep at least one millisecond instead of vanishing.
     try testing.expectEqual(@as(u64, std.time.ns_per_ms), timevalToNs(0, 1));
     try testing.expectEqual(@as(u64, 0), timevalToNs(-1, 0));
+}
+
+test "a failing socket call records a code WSAGetLastError reports" {
+    const saved = last_wsa_error;
+    defer last_wsa_error = saved;
+
+    // A descriptor that is not a socket, given a well-formed address so the
+    // host syscall is what fails: the guest must be able to read why rather
+    // than seeing a bare SOCKET_ERROR.
+    var sa: WinSockAddrIn = .{
+        .sin_family = @intCast(AF_INET),
+        .sin_port = std.mem.nativeToBig(u16, 80),
+        .sin_addr = @bitCast([_]u8{ 127, 0, 0, 1 }),
+        .sin_zero = [_]u8{0} ** 8,
+    };
+    try testing.expectEqual(SOCKET_ERROR, connect(0xFFFF, @intFromPtr(&sa), @sizeOf(WinSockAddrIn)));
+    try testing.expect(stub_WSAGetLastError() != 0);
+    try testing.expectEqual(wsaCodeFromErrno(last_host_errno), stub_WSAGetLastError());
+}
+
+test "a bad argument reports WSAEINVAL rather than a host code" {
+    const saved = last_wsa_error;
+    defer last_wsa_error = saved;
+
+    try testing.expectEqual(SOCKET_ERROR, getsockopt(0, 0, 0, 0, 0));
+    try testing.expectEqual(WSAEINVAL, stub_WSAGetLastError());
+}
+
+test "an unmapped host errno still reports a failure code" {
+    // An errno with no Winsock equivalent must not read back as 0, which a
+    // guest would take as "no error".
+    const mapped = wsaCodeFromErrno(.RANGE);
+    try testing.expect(mapped != 0);
+}
+
+test "WSASetLastError round-trips through WSAGetLastError" {
+    const saved = last_wsa_error;
+    defer last_wsa_error = saved;
+
+    stub_WSASetLastError(WSAETIMEDOUT);
+    try testing.expectEqual(WSAETIMEDOUT, stub_WSAGetLastError());
 }

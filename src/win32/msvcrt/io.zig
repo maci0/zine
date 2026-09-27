@@ -495,7 +495,13 @@ pub fn _fcloseall() callconv(.c) i32 {
 /// Closes a stream and reopens it with a new path/mode. Returns the new
 /// stream pointer (or null on failure).
 pub fn freopen(filename_ptr: usize, mode_ptr: usize, f: ?*anyopaque) callconv(.c) ?*anyopaque {
-    _ = fclose(f);
+    // A close that fails leaves the descriptor owned by neither this call nor
+    // the stream table, so the reopen would leak it. Report the failure
+    // instead of returning a fresh stream over a lost fd.
+    if (fclose(f) != 0) {
+        log.err("MSVCRT_IO: freopen could not close the old stream, the reopen is abandoned", .{});
+        return null;
+    }
     return fopen(filename_ptr, mode_ptr);
 }
 
@@ -540,14 +546,16 @@ pub fn fread(buffer: [*]u8, size: usize, count: usize, f: ?*anyopaque) callconv(
 pub fn fwrite(buffer: [*]const u8, size: usize, count: usize, f: ?*anyopaque) callconv(.c) usize {
     const bytes_to_write = size *% count;
     trace.print("MSVCRT_IO: fwrite (size: {d}, count: {d}, total: {d})\n", .{ size, count, bytes_to_write });
-    // Defensive: a size > 256MB is almost certainly a sign-extension bug.
-    if (bytes_to_write > 256 * 1024 * 1024 or bytes_to_write == 0) {
+    // A size > 256MB is almost certainly a sign-extension bug in the guest, and
+    // the allocation it implies would take the emulator down. Refusing it
+    // silently would read as a short write, so the stream error indicator
+    // records that the data never left the buffer.
+    const max_write_bytes = 256 * 1024 * 1024;
+    if (bytes_to_write > max_write_bytes or bytes_to_write == 0) {
         if (bytes_to_write > 0) {
-            // Try to read up to 256 bytes from the buffer to see what was being written
-            const preview_len: usize = @min(256, @as(usize, @intFromPtr(buffer)) + 256);
-            _ = preview_len;
             const preview = buffer[0..@min(256, bytes_to_write)];
-            trace.print("MSVCRT_IO: fwrite REJECTED (size {d}) preview: {s}\n", .{ bytes_to_write, preview });
+            log.err("MSVCRT_IO: fwrite rejected {d} bytes (limit {d}), preview: {s}", .{ bytes_to_write, max_write_bytes, preview });
+            setStreamError(f, "write", error.WriteRejected);
         }
         return 0;
     }
@@ -687,7 +695,13 @@ pub fn fputc(c: i32, f: ?*anyopaque) callconv(.c) i32 {
     if (getFile(f)) |file| {
         var buf: [1]u8 = undefined;
         buf[0] = @intCast(c & 0xFF);
-        @import("../host_io.zig").writeAllToFile(file, &buf) catch return -1;
+        @import("../host_io.zig").writeAllToFile(file, &buf) catch |err| {
+            // -1 is the documented failure return, but it is also what a
+            // character 0xFF would report as a successful unsigned char, so
+            // the stream error indicator is the only unambiguous signal.
+            setStreamError(f, "write", err);
+            return -1;
+        };
         // Don't trace every single character to avoid spam, or maybe just trace it if needed
         return buf[0];
     }
@@ -700,7 +714,10 @@ pub fn putchar(c: i32) callconv(.c) i32 {
     var buf: [1]u8 = undefined;
     buf[0] = @intCast(c & 0xFF);
     const out_file = @import("../host_io.zig").fileFromFd(1);
-    @import("../../win32/host_io.zig").writeAllToFile(out_file, &buf) catch return -1;
+    @import("../../win32/host_io.zig").writeAllToFile(out_file, &buf) catch |err| {
+        log.err("MSVCRT_IO: putchar to stdout failed, character lost: {t}", .{err});
+        return -1;
+    };
     return buf[0];
 }
 
@@ -733,7 +750,12 @@ fn fprintf_impl(f: ?*anyopaque, format: [*:0]const u8, ap: usize) i32 {
         const fmt = format;
         var buf: [4096]u8 = undefined;
         const len = fmt_mod.x86_vsnprintf(&buf, 4096, fmt, ap);
-        @import("../host_io.zig").writeAllToFile(file, buf[0..len]) catch return -1;
+        // A dropped write loses formatted output the guest will never see
+        // again; name the stream and the reason before reporting failure.
+        @import("../host_io.zig").writeAllToFile(file, buf[0..len]) catch |err| {
+            setStreamError(f, "write", err);
+            return -1;
+        };
         return @intCast(len);
     }
     return -1;
@@ -752,7 +774,10 @@ pub fn fwprintf(f: ?*anyopaque, format_ptr: usize) callconv(.c) i32 {
             for (0..len) |i| {
                 buf[i] = @intCast(fmt[i] & 0xFF);
             }
-            @import("../host_io.zig").writeAllToFile(file, buf[0..len]) catch return -1;
+            @import("../host_io.zig").writeAllToFile(file, buf[0..len]) catch |err| {
+                setStreamError(f, "write", err);
+                return -1;
+            };
             return @intCast(len);
         }
         return -1;
