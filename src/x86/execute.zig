@@ -1430,7 +1430,11 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 const shifted = wide << count;
                 const result: u32 = @truncate(shifted >> 32);
                 writeOperand(cpu, insn, 0, result);
-                cpu.flags.update(.shl, insn.op_size, result, dst, @as(u32, count));
+                // CF is the last bit of the source to leave, at bit 32-count
+                // of it, not the bit a single-precision shift picks out of
+                // the destination.
+                const cf = ((src << @as(u5, count - 1)) & 0x8000_0000) != 0;
+                cpu.flags.updateWithCF(.shl, insn.op_size, result, dst, @as(u32, count), cf);
             }
         },
         // SHRD imm8 (0F AC) / SHRD CL (0F AD)
@@ -2170,24 +2174,99 @@ fn execShift(cpu: *Cpu, insn: *const Instruction) void {
     };
     if (count == 0) return;
 
+    switch (sub_op) {
+        // ROL, ROR, RCL, RCR: the rotated-in source differs from a shift's,
+        // so they carry their own CF/OF handling.
+        0, 1, 2, 3 => {
+            execRotate(cpu, insn, sub_op, val, count);
+            return;
+        },
+        // /6 is the undocumented SAL alias of /4.
+        4, 5, 6, 7 => {},
+    }
+
     const result: u32 = switch (sub_op) {
-        0 => (val << count) | (val >> (@as(u5, @truncate(@as(u32, 32) -% @as(u32, count))))), // ROL
-        1 => (val >> count) | (val << (@as(u5, @truncate(@as(u32, 32) -% @as(u32, count))))), // ROR
-        4 => val << count, // SHL
+        4, 6 => val << count, // SHL
         5 => val >> count, // SHR
         7 => @bitCast(@as(i32, @bitCast(val)) >> count), // SAR
-        else => val,
+        else => unreachable,
     };
 
     if (insn.op_size == .byte) writeOperand8(cpu, insn, 0, @truncate(result)) else writeOperand(cpu, insn, 0, result);
 
     const fop: FlagOp = switch (sub_op) {
-        4 => .shl,
+        4, 6 => .shl,
         5 => .shr,
         7 => .sar,
-        else => .logic,
+        else => unreachable,
     };
     cpu.flags.update(fop, insn.op_size, result, val, @as(u32, count));
+}
+
+/// Executes the Group 2 rotate instructions (ROL, ROR, RCL, RCR).
+///
+/// The rotation width is the operand width, one bit wider for the
+/// through-carry forms, so an 8-bit rotate must not be computed over 32 bits
+/// and truncated (0x81 ROL 1 is 0x03, not 0x02). The count is masked to the
+/// rotation width, so `ROL EAX, 32` is a no-op that still updates the flags
+/// from the unchanged value.
+fn execRotate(cpu: *Cpu, insn: *const Instruction, sub_op: u3, val: u32, count: u5) void {
+    const size = insn.op_size;
+    const width: u6 = size.bits();
+    const mask: u32 = size.mask();
+    const through_carry = sub_op >= 2;
+    const rot_width: u6 = if (through_carry) width + 1 else width;
+    const rot_mask: u64 = (@as(u64, 1) << rot_width) - 1;
+
+    const carry_in: u32 = @intFromBool(cpu.flags.getCF());
+    const prev_cf = cpu.flags.getCF();
+    const prev_of = cpu.flags.getOF();
+    const src = val & mask;
+
+    // RCL/RCR rotate the value and the carry flag as one field of
+    // width + 1 bits, with the value in the low bits and CF above it; ROL/ROR
+    // keep CF out of the rotation.
+    const wide: u64 = if (through_carry)
+        @as(u64, src) | (@as(u64, carry_in) << width)
+    else
+        src;
+
+    const n: u6 = @as(u6, count) % rot_width;
+    // The bits that wrap past the far end land in the low `n` bits, so the
+    // wrap term of a left rotate is masked to `n` bits: the others are
+    // already carried by the left shift.
+    const wrap_mask: u64 = if (n == 0) 0 else (@as(u64, 1) << n) - 1;
+    const rotated: u64 = if (n == 0)
+        wide
+    else switch (sub_op) {
+        0, 2 => ((wide << n) | ((wide >> (rot_width - n)) & wrap_mask)) & rot_mask,
+        else => ((wide >> n) | (wide << (rot_width - n))) & rot_mask,
+    };
+    const result: u32 = @truncate(rotated);
+
+    if (size == .byte) writeOperand8(cpu, insn, 0, @truncate(result)) else writeOperand(cpu, insn, 0, result);
+
+    // CF is the last bit rotated out: bit width-n of the source for a left
+    // rotate, bit n-1 for a right one. A count that is a whole number of
+    // rotations moves nothing and leaves CF alone.
+    const cf: bool = if (n == 0)
+        (if (through_carry) carry_in != 0 else prev_cf)
+    else if (sub_op == 0 or sub_op == 2)
+        ((@as(u64, src) << n) >> width) & 1 != 0
+    else
+        ((@as(u64, src) >> (n - 1)) & 1) != 0;
+    // OF is only architecturally defined for a count of one: the new MSB xor
+    // the carry the rotation took in (RCL) or the bit rotated out (ROL), and
+    // the original MSB for the right rotates.
+    const of: ?bool = if (n == 1) switch (sub_op) {
+        0 => ((result & size.signBit()) != 0) != cf,
+        2 => ((result & size.signBit()) != 0) != (carry_in != 0),
+        else => ((result & size.signBit()) != 0) != ((src & size.signBit()) != 0),
+    } else null;
+
+    cpu.flags.updateWithCF(.logic, size, result, src, 0, cf);
+    const of_final = of orelse prev_of;
+    if (of_final) cpu.flags.setFlag(flags_mod.FLAG_OF) else cpu.flags.clearFlag(flags_mod.FLAG_OF);
 }
 
 /// Executes the MOVSB string instruction (copy byte from ESI to EDI).
@@ -2407,6 +2486,107 @@ test "execute: shifts retain the last bit shifted out in carry" {
         run(&cpu);
         try testing.expectEqual(case.result, cpu.eax);
         try testing.expectEqual(case.carry, cpu.flags.getCF());
+    }
+}
+
+test "execute: rotates use the operand width" {
+    // C0 C0 01 = ROL AL, 1; C0 C8 01 = ROR AL, 1
+    {
+        var mem: [256]u8 = .{0} ** 256;
+        @memcpy(mem[0..4], &[_]u8{ 0xC0, 0xC0, 0x01, 0xF4 });
+        var cpu = makeCpu(&mem);
+        cpu.eax = 0x81;
+        run(&cpu);
+        // 0x81 rotated left within 8 bits is 0x03, not the low byte of the
+        // 32-bit rotation (0x02).
+        try testing.expectEqual(@as(u32, 0x03), cpu.eax & 0xFF);
+        try testing.expect(cpu.flags.getCF());
+    }
+    {
+        var mem: [256]u8 = .{0} ** 256;
+        @memcpy(mem[0..4], &[_]u8{ 0xC0, 0xC8, 0x01, 0xF4 });
+        var cpu = makeCpu(&mem);
+        cpu.eax = 0x03;
+        run(&cpu);
+        try testing.expectEqual(@as(u32, 0x81), cpu.eax & 0xFF);
+        try testing.expect(cpu.flags.getCF());
+    }
+
+    // C1 C0 01 = ROL EAX, 1 with a full-width rotation and CF from the bit
+    // rotated out.
+    {
+        var mem: [256]u8 = .{0} ** 256;
+        @memcpy(mem[0..4], &[_]u8{ 0xC1, 0xC0, 0x01, 0xF4 });
+        var cpu = makeCpu(&mem);
+        cpu.eax = 0x80000001;
+        run(&cpu);
+        try testing.expectEqual(@as(u32, 0x00000003), cpu.eax);
+        try testing.expect(cpu.flags.getCF());
+    }
+}
+
+test "execute: rotates through carry" {
+    // D1 D0 = RCL EAX, 1; D1 D8 = RCR EAX, 1
+    var mem: [256]u8 = .{0} ** 256;
+    @memcpy(mem[0..3], &[_]u8{ 0xD1, 0xD0, 0xF4 });
+    {
+        var cpu = makeCpu(&mem);
+        cpu.eax = 0x80000000;
+        cpu.flags.setFlag(flags_mod.FLAG_CF);
+        run(&cpu);
+        // The carry rotates into bit 0 and the old MSB leaves into CF.
+        try testing.expectEqual(@as(u32, 0x00000001), cpu.eax);
+        try testing.expect(cpu.flags.getCF());
+    }
+    {
+        var cpu = makeCpu(&mem);
+        cpu.eax = 0x00000000;
+        cpu.flags.setFlag(flags_mod.FLAG_CF);
+        run(&cpu);
+        // The carry rotates in at the bottom, and the vacated top is 0.
+        try testing.expectEqual(@as(u32, 0x00000001), cpu.eax);
+        try testing.expect(!cpu.flags.getCF());
+    }
+
+    @memcpy(mem[0..3], &[_]u8{ 0xD1, 0xD8, 0xF4 });
+    {
+        var cpu = makeCpu(&mem);
+        cpu.eax = 0x00000001;
+        cpu.flags.setFlag(flags_mod.FLAG_CF);
+        run(&cpu);
+        try testing.expectEqual(@as(u32, 0x80000000), cpu.eax);
+        try testing.expect(cpu.flags.getCF());
+    }
+}
+
+test "execute: SHL alias /6 and SHLD carry" {
+    // C0 /6 is the SAL alias of /4: SHL AL, 1.
+    var mem: [256]u8 = .{0} ** 256;
+    @memcpy(mem[0..4], &[_]u8{ 0xC0, 0xF0, 0x01, 0xF4 });
+    {
+        var cpu = makeCpu(&mem);
+        cpu.eax = 0x03;
+        run(&cpu);
+        try testing.expectEqual(@as(u32, 0x06), cpu.eax & 0xFF);
+    }
+
+    // 0F A4 C8 02 = SHL EAX, ECX, 2. CF is bit 30 of the source.
+    @memcpy(mem[0..5], &[_]u8{ 0x0F, 0xA4, 0xC8, 0x02, 0xF4 });
+    {
+        var cpu = makeCpu(&mem);
+        cpu.eax = 0x00000001;
+        cpu.ecx = 0x40000000;
+        run(&cpu);
+        try testing.expectEqual(@as(u32, 0x00000005), cpu.eax);
+        try testing.expect(cpu.flags.getCF());
+    }
+    {
+        var cpu = makeCpu(&mem);
+        cpu.eax = 0x00000001;
+        cpu.ecx = 0x00000003; // bit 30 clear: CF comes out of the source
+        run(&cpu);
+        try testing.expectEqual(@as(u32, 0x00000004), cpu.eax);
+        try testing.expect(!cpu.flags.getCF());
     }
 }
 

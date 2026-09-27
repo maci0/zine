@@ -64,6 +64,11 @@ pub const LazyFlags = struct {
     carry_in: u32 = 0,
     size: OpSize = .dword,
 
+    /// CF value carried in directly for instructions the shift formula does
+    /// not describe (double-precision shifts, rotates through carry). Null
+    /// means "derive CF from op and the operands".
+    cf_forced: ?bool = null,
+
     // When op == .none, these hold the raw EFLAGS bits
     raw_flags: u32 = EFLAGS_DEFAULT, // IF set, reserved bit 1 set
 
@@ -87,6 +92,7 @@ pub const LazyFlags = struct {
     /// Return the Carry Flag (CF).
     pub fn getCF(self: *const LazyFlags) bool {
         if (self.op == .none) return (self.raw_flags & FLAG_CF) != 0;
+        if (self.cf_forced) |cf| return cf;
         const m = self.size.mask();
         return switch (self.op) {
             .add => (@as(u64, self.operand1 & m) + @as(u64, self.operand2 & m)) > m,
@@ -228,6 +234,7 @@ pub const LazyFlags = struct {
         self.operand1 = op1;
         self.operand2 = op2;
         self.carry_in = 0;
+        self.cf_forced = null;
     }
 
     /// Set flags after an ALU operation with carry/borrow input.
@@ -238,6 +245,15 @@ pub const LazyFlags = struct {
         self.operand1 = op1;
         self.operand2 = op2;
         self.carry_in = carry_in;
+        self.cf_forced = null;
+    }
+
+    /// Set flags after an operation whose CF does not follow from its
+    /// operands: the caller supplies the last bit shifted out, and every
+    /// other flag comes from `op` as usual.
+    pub fn updateWithCF(self: *LazyFlags, op: FlagOp, size: OpSize, result: u32, op1: u32, op2: u32, cf: bool) void {
+        self.update(op, size, result, op1, op2);
+        self.cf_forced = cf;
     }
 
     /// Clear a single flag bit.
