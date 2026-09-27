@@ -4,6 +4,12 @@ const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
 const platform = @import("../../platform.zig");
 
+/// Gap between polls of an object that may be signaled by another thread.
+/// Charged to the virtual clock when one is installed, so a simulated run
+/// spends no host time and its guest clock advances by the amount the guest
+/// asked to wait.
+const wait_poll_ns: u64 = std.time.ns_per_ms;
+
 /// --- Interlocked operations ---
 /// Implementation status: Partially implemented
 pub fn InterlockedIncrement(lpAddend: *i32) callconv(w32cc.WINAPI) i32 {
@@ -391,7 +397,7 @@ fn waitOnKernelObject(ko: *KernelObject, dwMilliseconds: u32) u32 {
                 while (!ko.mutex_obj.inner.tryLock()) {
                     if (dwMilliseconds == 0) return 258; // WAIT_TIMEOUT
                     if (runtime.monoMilliTimestamp() >= deadline_ms) return 258; // WAIT_TIMEOUT
-                    platform.sleep(1_000_000); // 1ms
+                    runtime.pauseOrAdvance(wait_poll_ns);
                 }
             }
             ko.mutex_obj.owner.store(tid, .release);
@@ -514,7 +520,7 @@ pub fn WaitForMultipleObjects(nCount: u32, lpHandles: usize, bWaitAll: i32, dwMi
             if (dwMilliseconds == 0) return 258; // WAIT_TIMEOUT
             iterations += 1;
             if (dwMilliseconds != 0xFFFFFFFF and iterations >= dwMilliseconds) return 258;
-            @import("../../platform.zig").sleep(1_000_000); // 1ms between polls
+            runtime.pauseOrAdvance(wait_poll_ns); // 1ms between polls
         }
     } else {
         // Wait for ALL
@@ -535,7 +541,7 @@ pub fn WaitForMultipleObjects(nCount: u32, lpHandles: usize, bWaitAll: i32, dwMi
             if (dwMilliseconds == 0) return 258;
             iterations += 1;
             if (dwMilliseconds != 0xFFFFFFFF and iterations >= dwMilliseconds) return 258;
-            @import("../../platform.zig").sleep(1_000_000);
+            runtime.pauseOrAdvance(wait_poll_ns);
         }
     }
 }

@@ -76,7 +76,7 @@ pub fn UnhandledExceptionFilter(ExceptionInfo: usize) callconv(w32cc.WINAPI) u32
     }
 
     // Give WebSocket time to flush
-    platform.sleep(100 * std.time.ns_per_ms);
+    runtime.pauseOrAdvance(100 * std.time.ns_per_ms);
     platform.exitProcess(1);
     return 1; // EXCEPTION_EXECUTE_HANDLER (though we never reach here)
 }
@@ -393,21 +393,17 @@ pub fn GetModuleHandleA(lpModuleName_ptr: usize) callconv(w32cc.WINAPI) usize {
     if (trace.enable_tracing) trace.print("KERNEL32: GetModuleHandleA('{s}')\n", .{name});
 
     if (kernel32.global_env) |genv| {
-        // Extract basename for comparison (strip directory path)
+        // Basename form, for the built-in modules the guest may also name by
+        // path.
         var basename = name;
         for (name, 0..) |c, i| {
             if (c == '\\' or c == '/') basename = name[i + 1 ..];
         }
 
-        var it = genv.registry.modules.iterator();
-        while (it.next()) |entry| {
-            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name) or
-                std.ascii.eqlIgnoreCase(entry.key_ptr.*, basename))
-            {
-                const handle = @intFromPtr(entry.value_ptr.*.mapped_memory.ptr);
-                if (trace.enable_tracing) trace.print("KERNEL32: GetModuleHandleA -> {x}\n", .{handle});
-                return handle;
-            }
+        if (genv.registry.findModuleByName(name)) |found| {
+            const handle = @intFromPtr(found.mapped_memory.ptr);
+            if (trace.enable_tracing) trace.print("KERNEL32: GetModuleHandleA -> {x}\n", .{handle});
+            return handle;
         }
 
         if (genv.getBuiltinHandle(name)) |handle| {

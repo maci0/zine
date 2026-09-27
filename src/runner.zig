@@ -251,23 +251,24 @@ pub fn freeHostPathDirs(allocator: std.mem.Allocator, dirs: *std.ArrayListUnmana
 // -----------------------------------------------------------------------
 
 /// Iteratively resolve all PE imports until no new modules are loaded.
+/// Modules are visited in load order, so the sequence of loads a run performs
+/// is the one the guest's import tables ask for.
 pub fn resolveAllImports(environment: *Environment, allocator: std.mem.Allocator) !void {
     var resolved_count: usize = 0;
     while (true) {
-        var to_resolve: std.ArrayListUnmanaged(*Module) = .empty;
-        defer to_resolve.deinit(allocator);
+        const to_resolve = environment.registry.modulesInLoadOrder();
+        if (to_resolve.len == resolved_count) break;
 
-        var it = environment.registry.modules.iterator();
-        while (it.next()) |entry| {
-            try to_resolve.append(allocator, entry.value_ptr.*);
-        }
+        // A copy: resolving a module's imports appends to the load order, and
+        // the slice must not change under this pass.
+        var pending: std.ArrayListUnmanaged(*Module) = .empty;
+        defer pending.deinit(allocator);
+        try pending.appendSlice(allocator, to_resolve);
 
-        if (to_resolve.items.len == resolved_count) break;
-
-        for (to_resolve.items) |mod| {
+        for (pending.items) |mod| {
             try loader.resolveImports(environment, mod);
         }
-        resolved_count = to_resolve.items.len;
+        resolved_count = pending.items.len;
     }
 }
 

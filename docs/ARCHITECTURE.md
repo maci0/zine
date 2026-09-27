@@ -100,7 +100,7 @@ The loader subsystem consists of four core modules and three resource parsers:
 | Module | Responsibility |
 |--------|---------------|
 | [module.zig](../src/loader/module.zig) | Loads a PE file from disk, maps it into memory via `platform.mmap`, copies section data, and applies base relocations if the image was loaded at a non-preferred address. |
-| [registry.zig](../src/loader/registry.zig) | Maintains a name → `Module*` mapping and search path list. Handles DLL (Dynamic Link Library) search order. |
+| [registry.zig](../src/loader/registry.zig) | Maintains a name → `Module*` mapping and search path list. Handles DLL (Dynamic Link Library) search order. `modulesInLoadOrder` and `findModuleByName` read the insertion-ordered list rather than the map, so import resolution and a name two modules share resolve the same way on every run. |
 | [env.zig](../src/loader/env.zig) | The `Environment` struct ties together the module registry and built-in stub exports. Provides `resolveExport()` which first checks built-in stubs (our verified implementations), then falls back to PE DLLs loaded from disk. Also contains `addBuiltinExportComptime()`, which registers a comptime thunk handler as a builtin export and picks the cdecl calling convention for the `MSVCRT.dll` and `MSVCP*` modules. |
 | [loader.zig](../src/loader/loader.zig) | Walks the PE import directory, resolves each function by name or ordinal, and patches the IAT (Import Address Table). On native targets, writes host function addresses directly. On WASM, allocates `INT 0xFE` thunk stubs in guest memory. The `DllMain` (`DLL_PROCESS_ATTACH`) call for a loaded PE DLL belongs to KERNEL32's `LoadLibraryA` path ([kernel32/process.zig](../src/win32/kernel32/process.zig)), not here. |
 

@@ -219,6 +219,11 @@ pub const Registry = struct {
     allocator: std.mem.Allocator,
     /// Mapping from lowercase DLL name to loaded Module instance.
     modules: std.StringHashMap(*Module),
+    /// The same modules in the order they were loaded. Anything that walks
+    /// every module (import resolution, or a name that two modules share)
+    /// reads this instead of the map, whose iteration order follows the hash
+    /// of the keys and so is not the order the guest caused.
+    load_order: std.ArrayListUnmanaged(*Module),
     /// List of directories to search for DLLs.
     search_paths: std.ArrayListUnmanaged([]const u8),
 
@@ -227,6 +232,7 @@ pub const Registry = struct {
         return Registry{
             .allocator = allocator,
             .modules = std.StringHashMap(*Module).init(allocator),
+            .load_order = .empty,
             .search_paths = .empty,
         };
     }
@@ -239,6 +245,7 @@ pub const Registry = struct {
             self.allocator.free(entry.key_ptr.*);
         }
         self.modules.deinit();
+        self.load_order.deinit(self.allocator);
 
         for (self.search_paths.items) |path| {
             self.allocator.free(path);
@@ -443,6 +450,8 @@ pub const Registry = struct {
             }
 
             try self.modules.put(mod_lower_name, mod);
+            errdefer _ = self.modules.remove(mod_lower_name);
+            try self.load_order.append(self.allocator, mod);
 
             return mod;
         }
@@ -463,6 +472,28 @@ pub const Registry = struct {
         const mod = self.modules.get(key) orelse return null;
         if (!sameFile(mod.path, path)) return null;
         return mod;
+    }
+
+    /// Every loaded module, oldest first. The order a guest caused, so a walk
+    /// over it resolves imports and picks between same-named modules the same
+    /// way on every run.
+    pub fn modulesInLoadOrder(self: *const Registry) []const *Module {
+        return self.load_order.items;
+    }
+
+    /// Looks a loaded module up by the name the guest passed, matching its
+    /// basename case-insensitively. Two modules can share a basename (the
+    /// registry keys by basename), so the first one loaded wins: the answer
+    /// depends on the guest's own load sequence, not on map order.
+    pub fn findModuleByName(self: *const Registry, name: []const u8) ?*Module {
+        var basename = name;
+        for (name, 0..) |c, i| {
+            if (c == '\\' or c == '/') basename = name[i + 1 ..];
+        }
+        for (self.load_order.items) |m| {
+            if (std.ascii.eqlIgnoreCase(m.name, basename)) return m;
+        }
+        return null;
     }
 
     /// Finds the loaded module whose mapping starts at `handle`, the guest
@@ -490,6 +521,34 @@ pub const Registry = struct {
 };
 
 const testing = std.testing;
+
+test "registry: name lookup follows load order, not map order" {
+    var reg = Registry.init(testing.allocator);
+    defer reg.deinit();
+
+    // Two mappings sharing a basename cannot both be keyed, so the first one
+    // loaded has to be the answer for every later request. Stand-ins:
+    // deinit would try to unmap them, so drop them from the table first.
+    var first: Module = undefined;
+    first.name = "game.dll";
+    var second: Module = undefined;
+    second.name = "other.dll";
+    try reg.modules.put("game.dll", &first);
+    try reg.load_order.append(testing.allocator, &first);
+    try reg.modules.put("other.dll", &second);
+    try reg.load_order.append(testing.allocator, &second);
+    defer {
+        _ = reg.modules.fetchRemove("game.dll");
+        _ = reg.modules.fetchRemove("other.dll");
+    }
+
+    try testing.expectEqualSlices(*Module, &.{ &first, &second }, reg.modulesInLoadOrder());
+    // Any spelling of the name, and any case, finds the same module.
+    try testing.expect(reg.findModuleByName("GAME.DLL") == &first);
+    try testing.expect(reg.findModuleByName("bin\\game.dll") == &first);
+    try testing.expect(reg.findModuleByName("other.dll") == &second);
+    try testing.expect(reg.findModuleByName("missing.dll") == null);
+}
 
 test "registry: cachedFile reuses a mapping only for the same file" {
     var reg = Registry.init(testing.allocator);
