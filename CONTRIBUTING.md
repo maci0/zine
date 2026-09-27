@@ -34,6 +34,11 @@ in the same order, as the `static-analysis` job in `.github/workflows/ci.yml`:
 builds, the unit tests, and both native `test-cli` runs. If you add a check,
 add it in both places or local runs stop predicting CI.
 
+The job takes its Zig version from `build.zig.zon` and restores `.zig-cache/`
+and `zig-pkg/` from a cache keyed on `build.zig`, `build.zig.zon`, and `src/`.
+Both paths are content addressed, so a restored entry that no longer matches is
+recompiled rather than reused; a run that misses the cache pays the full build.
+
 Tests that need more than Zig are opt-in and say so in the README: the MSVC
 integration suite (`tests/test_msvc_cli.sh`, needs MSVC 6.0 fixtures under
 `tools/MSVC600/` and a runtime on `PATH` for WASM), the FLTK smoke tests
