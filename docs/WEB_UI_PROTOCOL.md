@@ -83,8 +83,8 @@ sides may then send text messages at any time.
 | `set_clipboard` | `text` |
 | `set_volume` | `volume` (0-100) |
 | `audio_format` | `sampleRate`, `channels`, `bitsPerSample` |
-| `directory_listing` | answer to `browse_directory` |
-| `desktop_icons` | desktop listing: `name`, `is_dir`, `ext`, optional `icon` |
+| `directory_listing` | answer to `browse_directory`: `path` (the path asked for), `folders` and `files` (arrays of names) |
+| `desktop_icons` | desktop listing: `items`, an array of `name`, `is_dir`, `ext`, optional `icon` |
 | `set_icon` | `base64` (the window icon image, for titlebar, taskbar, and favicon) |
 | `open_file_dialog`, `open_find_dialog`, `open_font_dialog`, `show_page_setup_dialog`, `show_print_dialog` (`from`, `to`, `min`, `max`, `copies`), `show_color_dialog`, `show_context_menu`, `message_box` | dialog requests |
 | `show_controls`, `add_control`, `set_control_checked`, `set_control_color`, `set_listbox_items`, `update_control_range`, `update_control_text`, `update_control_value` | guest control state |
@@ -95,10 +95,13 @@ sides may then send text messages at any time.
 ### Client to server
 
 A message the server cannot act on is answered with
-`{"type":"error","message":"..."}` and otherwise ignored. That covers malformed
-JSON, a body that is not an object, a missing or non-string `type`, an unknown
-`type`, a missing required field, and a field of the wrong JSON type. The
-connection stays open either way.
+`{"type":"error","message":"..."}` and otherwise ignored. That covers a binary
+frame, malformed JSON, a body that is not an object, a missing or non-string
+`type`, an unknown `type`, a missing required field, and a field of the wrong
+JSON type. The connection stays open either way. One exception: a frame larger
+than the 66560-byte frame limit is answered with the same envelope and then
+ends the connection, because its bytes were never read and the stream cannot
+be resynchronized behind it.
 
 | `type` | Fields |
 | --- | --- |
@@ -112,9 +115,9 @@ connection stays open either way.
 | `browse_directory` | `path` (string, required) |
 | `launch` | `path` (string, required) |
 | `find_action` | `action` (string, required: `find_next`, `replace`, `replace_all`, or `close`), `findText` (string, required), `replaceText` (string, default `""`), `matchCase` (bool, default false), `searchDown` (bool, default true) |
-| `font_chosen` | `face` (string, required), `size` (integer, required), `bold`, `italic` (bools, default false) |
+| `font_chosen` | `face` (string, required), `size` (integer, required, positive), `bold`, `italic` (bools, default false) |
 | `print_chosen` | `from`, `to` (integers, required, both positive), `copies` (integer, default 1, positive) |
-| `page_setup_chosen` | `left`, `top` (integers, required), `right`, `bottom`, `paperW`, `paperH`, `orientation` (integers, default 0/0/8500/11000/0) |
+| `page_setup_chosen` | `left`, `top` (integers, required), `right`, `bottom`, `paperW`, `paperH`, `orientation` (integers, default 0/0/8500/11000/0); an integer too large for a 32-bit field is refused instead of answered with the default |
 | `color_selected` | `color` (integer, required; `0x000000` to `0xFFFFFF`, a negative value means cancel) |
 | `listbox_select` | `id` (integer, required, u32 range), `index` (integer, required, i32 range; a value outside either range is refused with an `error` frame) |
 | `context_menu_select` | `id` (integer, required, u32 range; 0 dismisses the menu) |

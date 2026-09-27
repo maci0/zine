@@ -291,6 +291,14 @@ fn deliverLaunch(resolved_path: []const u8) bool {
     return true;
 }
 
+/// Sends the rejection reason a parse helper wrote. The buffer is a stack
+/// array, so a reason that did not fit (`reject` refuses to write it) is not
+/// NUL-terminated and is dropped rather than read as uninitialized bytes.
+fn sendReason(ws: *std.http.Server.WebSocket, reason: []const u8) void {
+    const end = std.mem.indexOfScalar(u8, reason, 0) orelse return;
+    sendError(ws, reason[0..end]);
+}
+
 /// Methods the static branch serves. Anything else is a client mistake, not
 /// a missing resource, so it gets 405 with `Allow` rather than a body.
 const static_allowed_methods = "GET, HEAD";
@@ -352,6 +360,19 @@ const max_sync_text_len = 65536;
 
 /// Largest color a client may report from a color dialog, `0xRRGGBB`.
 const max_dialog_color = 0xFFFFFF;
+
+/// Slack around a maximum-length payload for the JSON envelope carrying it.
+/// A client that escapes a payload's control characters expands it as it
+/// writes, so the frame that carries a full-length `text_sync` is longer than
+/// the payload.
+const max_message_envelope_len = 1024;
+
+/// Largest frame the WebSocket reader accepts. std refuses a frame larger than
+/// the read buffer with `MessageOversize`, which ends the connection, so this
+/// is what bounds the payload limits above: a client that sends the full
+/// `max_sync_text_len` has to get a rejection it can act on, not a dropped
+/// connection.
+const max_ws_message_len = max_sync_text_len + max_message_envelope_len;
 
 /// Actions the find and replace dialogs answer with. An unlisted value would
 /// otherwise reach the guest as a find-next request, because the handler
@@ -426,6 +447,98 @@ fn parsePrintRequest(object: std.json.ObjectMap, reason: []u8) error{Malformed}!
     return .{ .from = from_page, .to = to_page, .copies = copies };
 }
 
+/// A font dialog's answer. A point size of 0 or less would reach the guest as
+/// a zero or wrapped height, so it is refused the way a print page below 1 is.
+const FontRequest = struct {
+    face: []const u8,
+    size: i32,
+    bold: bool,
+    italic: bool,
+};
+
+/// Reads `{ face, size, bold, italic }`. `face` and `size` are required; the
+/// styles default to off, as the dialog shows them.
+fn parseFontRequest(object: std.json.ObjectMap, reason: []u8) error{Malformed}!FontRequest {
+    const face = jsonStr(object, "face") orelse return reject(
+        reason,
+        "font_chosen requires a string field \"face\" and an integer field \"size\"",
+    );
+    const pt_size = std.math.cast(i32, jsonInt(object, "size") orelse return reject(
+        reason,
+        "font_chosen requires a string field \"face\" and an integer field \"size\"",
+    )) orelse return reject(reason, "font_chosen field \"size\" is out of range");
+    if (pt_size < 1) return reject(reason, "font_chosen field \"size\" must be positive");
+    return .{
+        .face = face,
+        .size = pt_size,
+        .bold = jsonBool(object, "bold", false),
+        .italic = jsonBool(object, "italic", false),
+    };
+}
+
+/// A page-setup dialog's answer. The units are the guest's, tenths of a
+/// millimetre for the paper and whatever margin unit the dialog announced.
+const PageSetupRequest = struct {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+    paper_w: i32,
+    paper_h: i32,
+    orientation: i32,
+};
+
+/// Paper size the guest gets when the client names none, in tenths of a
+/// millimetre: US Letter at the dialog's fixed point.
+const default_paper_width = 8500;
+const default_paper_height = 11000;
+
+/// Reads `{ left, top, right, bottom, paperW, paperH, orientation }`. `left`
+/// and `top` are required; the rest fall back to the defaults above, the way
+/// `print_chosen` falls back to one copy. A value the callback cannot hold is
+/// refused rather than replaced by a default, which would lay the page out
+/// with a margin or a paper size the client never chose.
+fn parsePageSetupRequest(object: std.json.ObjectMap, reason: []u8) error{Malformed}!PageSetupRequest {
+    const required = "page_setup_chosen requires integer fields \"left\" and \"top\"";
+    const left = jsonInt(object, "left") orelse return reject(reason, required);
+    const top = jsonInt(object, "top") orelse return reject(reason, required);
+    return .{
+        .left = try narrowToI32(left, "page_setup_chosen", "left", reason),
+        .top = try narrowToI32(top, "page_setup_chosen", "top", reason),
+        .right = try optionalI32(object, "right", 0, "page_setup_chosen", reason),
+        .bottom = try optionalI32(object, "bottom", 0, "page_setup_chosen", reason),
+        .paper_w = try optionalI32(object, "paperW", default_paper_width, "page_setup_chosen", reason),
+        .paper_h = try optionalI32(object, "paperH", default_paper_height, "page_setup_chosen", reason),
+        .orientation = try optionalI32(object, "orientation", 0, "page_setup_chosen", reason),
+    };
+}
+
+/// Narrows a client's integer to the i32 a dialog callback takes. Truncating
+/// would answer with a different number than the client sent, so a value that
+/// does not fit is refused by name.
+fn narrowToI32(raw: i64, message_type: []const u8, key: []const u8, reason: []u8) error{Malformed}!i32 {
+    return std.math.cast(i32, raw) orelse blk: {
+        var msg_buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&msg_buf, "{s} field \"{s}\" is out of range", .{ message_type, key }) catch
+            "field is out of range";
+        break :blk reject(reason, msg);
+    };
+}
+
+/// A field with a default: absent or wrong-typed takes the default, as every
+/// optional field does, while a value that is present but too large is refused
+/// by `narrowToI32`.
+fn optionalI32(
+    object: std.json.ObjectMap,
+    key: []const u8,
+    default: i32,
+    message_type: []const u8,
+    reason: []u8,
+) error{Malformed}!i32 {
+    const raw = jsonInt(object, key) orelse return default;
+    return narrowToI32(raw, message_type, key, reason);
+}
+
 /// Writes `msg` to `reason` and fails, so a rejection reason lives next to the
 /// check that produces it.
 fn reject(reason: []u8, msg: []const u8) error{Malformed} {
@@ -459,7 +572,7 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var in_buf: [8192]u8 = undefined;
+    var in_buf: [max_ws_message_len]u8 = undefined;
     var out_buf: [8192]u8 = undefined;
     var r = std.Io.net.Stream.reader(stream, runtime.io(), &in_buf);
     var w = std.Io.net.Stream.writer(stream, runtime.io(), &out_buf);
@@ -512,12 +625,23 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
             // Read loop for incoming messages
             while (true) {
                 const msg = ws.readSmallMessage() catch |err| {
-                    if (err != error.ConnectionClose and err != error.EndOfStream and err != error.ConnectionResetByPeer) {
-                        std.debug.print("WS read error: {}\n", .{err});
+                    switch (err) {
+                        // The frame's bytes are still unread, so the stream
+                        // cannot be resynchronized and the connection ends
+                        // either way; the client is told the limit first.
+                        error.MessageOversize => sendError(&ws, "message exceeds the maximum frame size"),
+                        error.ConnectionClose, error.EndOfStream => {},
+                        else => std.debug.print("WS read error: {}\n", .{err}),
                     }
                     break;
                 };
-                if (msg.opcode == .text) handleSocketMessage(&ws, allocator, msg);
+                // A frame the server cannot act on is answered with the error
+                // envelope, like a text frame it cannot read.
+                if (msg.opcode == .text) {
+                    handleSocketMessage(&ws, allocator, msg);
+                } else {
+                    sendError(&ws, "only text messages are accepted");
+                }
             }
             // Deregister BEFORE closing the socket: pushFrame/pushMessage run on
             // other threads and must never touch this fd again. After close() the
@@ -750,45 +874,34 @@ fn handleSocketMessage(ws: *std.http.Server.WebSocket, allocator: std.mem.Alloca
     } else if (std.mem.eql(u8, type_val.string, "close")) {
         if (renderer.on_close) |cb| cb();
     } else if (std.mem.eql(u8, type_val.string, "font_chosen")) {
-        // Parse font selection: { face: "...", size: N, bold: bool, italic: bool }
-        const face = jsonStr(root.object, "face") orelse {
-            sendError(ws, "font_chosen requires a string field \"face\" and an integer field \"size\"");
+        var reason: [128]u8 = undefined;
+        const request = parseFontRequest(root.object, &reason) catch {
+            sendReason(ws, &reason);
             return;
         };
-        const pt_size = std.math.cast(i32, jsonInt(root.object, "size") orelse {
-            sendError(ws, "font_chosen requires a string field \"face\" and an integer field \"size\"");
-            return;
-        }) orelse {
-            sendError(ws, "font_chosen field \"size\" is out of range");
-            return;
-        };
-        const is_bold = jsonBool(root.object, "bold", false);
-        const is_italic = jsonBool(root.object, "italic", false);
-        if (renderer.on_font_chosen) |cb| cb(face, pt_size, is_bold, is_italic);
+        if (renderer.on_font_chosen) |cb| cb(request.face, request.size, request.bold, request.italic);
     } else if (std.mem.eql(u8, type_val.string, "print_chosen")) {
         var reason: [128]u8 = undefined;
         const request = parsePrintRequest(root.object, &reason) catch {
-            const length = std.mem.indexOfScalar(u8, &reason, 0) orelse reason.len;
-            sendError(ws, reason[0..length]);
+            sendReason(ws, &reason);
             return;
         };
         if (renderer.on_print_chosen) |cb| cb(request.from, request.to, request.copies);
     } else if (std.mem.eql(u8, type_val.string, "page_setup_chosen")) {
-        // Parse page-setup confirmation:
-        // { left, top, right, bottom, paperW, paperH, orientation }
-        if (jsonInt(root.object, "left") == null or jsonInt(root.object, "top") == null) {
-            sendError(ws, "page_setup_chosen requires integer fields \"left\" and \"top\"");
+        var reason: [128]u8 = undefined;
+        const request = parsePageSetupRequest(root.object, &reason) catch {
+            sendReason(ws, &reason);
             return;
-        }
+        };
         if (renderer.on_page_setup_chosen) |cb| {
             cb(
-                jsonIntOr(root.object, "left", 0),
-                jsonIntOr(root.object, "top", 0),
-                jsonIntOr(root.object, "right", 0),
-                jsonIntOr(root.object, "bottom", 0),
-                jsonIntOr(root.object, "paperW", 8500),
-                jsonIntOr(root.object, "paperH", 11000),
-                jsonIntOr(root.object, "orientation", 0),
+                request.left,
+                request.top,
+                request.right,
+                request.bottom,
+                request.paper_w,
+                request.paper_h,
+                request.orientation,
             );
         }
     } else if (std.mem.eql(u8, type_val.string, "cancel_dialog")) {
@@ -1184,6 +1297,81 @@ test "the print dialog answer is validated before it reaches the guest" {
         };
         try std.testing.expect(case.expected != null);
         try std.testing.expectEqual(case.expected.?, request);
+    }
+}
+
+test "the frame limit covers the largest payload the protocol documents" {
+    // A client that sends a full-length text_sync or clipboard_sync has to
+    // reach the handler that reports the payload as too long, not the frame
+    // reader, which ends the connection without reading the frame.
+    try std.testing.expect(max_ws_message_len > max_sync_text_len);
+}
+
+test "a page setup answer is validated before it reaches the guest" {
+    const cases = [_]struct { body: []const u8, expected: ?PageSetupRequest }{
+        .{
+            .body = "{\"type\":\"page_setup_chosen\",\"left\":720,\"top\":1440}",
+            .expected = .{ .left = 720, .top = 1440, .right = 0, .bottom = 0, .paper_w = default_paper_width, .paper_h = default_paper_height, .orientation = 0 },
+        },
+        .{
+            .body = "{\"type\":\"page_setup_chosen\",\"left\":720,\"top\":1440,\"right\":360,\"bottom\":360,\"paperW\":11900,\"paperH\":16840,\"orientation\":1}",
+            .expected = .{ .left = 720, .top = 1440, .right = 360, .bottom = 360, .paper_w = 11900, .paper_h = 16840, .orientation = 1 },
+        },
+        // A missing margin is malformed, and a value too large for the
+        // callback is refused rather than answered with a default margin the
+        // client never chose.
+        .{ .body = "{\"type\":\"page_setup_chosen\",\"top\":1440}", .expected = null },
+        .{ .body = "{\"type\":\"page_setup_chosen\",\"left\":\"720\",\"top\":1440}", .expected = null },
+        .{ .body = "{\"type\":\"page_setup_chosen\",\"left\":4294967296,\"top\":1440}", .expected = null },
+        .{ .body = "{\"type\":\"page_setup_chosen\",\"left\":720,\"top\":1440,\"paperH\":4294967296}", .expected = null },
+    };
+    for (cases) |case| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, case.body, .{});
+        defer parsed.deinit();
+        var reason: [128]u8 = undefined;
+        const request = parsePageSetupRequest(parsed.value.object, &reason) catch |err| {
+            try std.testing.expectEqual(error.Malformed, err);
+            try std.testing.expect(case.expected == null);
+            const message = reason[0 .. std.mem.indexOfScalar(u8, &reason, 0) orelse return error.TestUnexpectedResult];
+            try std.testing.expect(std.mem.startsWith(u8, message, "page_setup_chosen"));
+            continue;
+        };
+        try std.testing.expect(case.expected != null);
+        try std.testing.expectEqual(case.expected.?, request);
+    }
+}
+
+test "a font answer is validated before it reaches the guest" {
+    const cases = [_]struct { body: []const u8, expected: ?FontRequest }{
+        .{ .body = "{\"type\":\"font_chosen\",\"face\":\"Arial\",\"size\":12}", .expected = .{ .face = "Arial", .size = 12, .bold = false, .italic = false } },
+        .{
+            .body = "{\"type\":\"font_chosen\",\"face\":\"Times New Roman\",\"size\":9,\"bold\":true,\"italic\":true}",
+            .expected = .{ .face = "Times New Roman", .size = 9, .bold = true, .italic = true },
+        },
+        .{ .body = "{\"type\":\"font_chosen\",\"size\":12}", .expected = null },
+        .{ .body = "{\"type\":\"font_chosen\",\"face\":\"Arial\"}", .expected = null },
+        .{ .body = "{\"type\":\"font_chosen\",\"face\":\"Arial\",\"size\":\"12\"}", .expected = null },
+        // A point size below 1 reaches the guest as a zero or wrapped height.
+        .{ .body = "{\"type\":\"font_chosen\",\"face\":\"Arial\",\"size\":0}", .expected = null },
+        .{ .body = "{\"type\":\"font_chosen\",\"face\":\"Arial\",\"size\":-12}", .expected = null },
+        .{ .body = "{\"type\":\"font_chosen\",\"face\":\"Arial\",\"size\":4294967296}", .expected = null },
+    };
+    for (cases) |case| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, case.body, .{});
+        defer parsed.deinit();
+        var reason: [128]u8 = undefined;
+        const request = parseFontRequest(parsed.value.object, &reason) catch |err| {
+            try std.testing.expectEqual(error.Malformed, err);
+            try std.testing.expect(case.expected == null);
+            const message = reason[0 .. std.mem.indexOfScalar(u8, &reason, 0) orelse return error.TestUnexpectedResult];
+            try std.testing.expect(std.mem.startsWith(u8, message, "font_chosen"));
+            continue;
+        };
+        try std.testing.expect(case.expected != null);
+        try std.testing.expectEqualStrings(case.expected.?.face, request.face);
+        try std.testing.expectEqual(case.expected.?.size, request.size);
+        try std.testing.expectEqual(case.expected.?.bold, request.bold);
+        try std.testing.expectEqual(case.expected.?.italic, request.italic);
     }
 }
 

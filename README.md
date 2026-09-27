@@ -62,6 +62,11 @@ release, not a 0.2.1 patch.
   and PE string-table resources with non-ASCII bytes now render as on Win98,
   which changes text that previously displayed as raw UTF-8 or mojibake.
   Guests that store UTF-8 in an ANSI field still need to convert it themselves.
+- Web UI dialog answers are validated before they reach the guest.
+  `font_chosen` refuses a point size below 1, and `page_setup_chosen` refuses
+  an integer too large for the field instead of answering with the default
+  margin or paper size. Both answer with the existing `{"type":"error"}`
+  envelope naming the field.
 - Web UI commands that name a guest file must send a relative path with no
   drive letter, backslash, NUL, or `.`/`..` component. Anything else, and any
   path with more than 128 components, is refused instead of being resolved:
