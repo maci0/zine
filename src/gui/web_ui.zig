@@ -168,6 +168,90 @@ fn sendError(ws: *std.http.Server.WebSocket, msg: []const u8) void {
     _ = ws.writeMessage(json, .text) catch {};
 }
 
+/// Methods the static branch serves. Anything else is a client mistake, not
+/// a missing resource, so it gets 405 with `Allow` rather than a body.
+const static_allowed_methods = "GET, HEAD";
+/// The WebSocket endpoint exists only as a GET upgrade.
+const websocket_allowed_methods = "GET";
+
+/// True when `method` is named in a comma-separated `Allow` list. The same
+/// list drives the 405 and its `Allow` header, so the two cannot drift.
+fn methodAllowed(method: std.http.Method, allowed: []const u8) bool {
+    var rest = allowed;
+    while (std.mem.indexOfScalar(u8, rest, ',')) |i| {
+        if (std.mem.eql(u8, std.mem.trim(u8, rest[0..i], " \t"), @tagName(method))) return true;
+        rest = rest[i + 1 ..];
+    }
+    return std.mem.eql(u8, std.mem.trim(u8, rest, " \t"), @tagName(method));
+}
+
+/// Single body for every non-file response: a plain-text reason carrying the
+/// `Content-Type` a client needs to read it. `Allow` is set on 405.
+fn respondStatus(
+    req: *std.http.Server.Request,
+    status: std.http.Status,
+    body: []const u8,
+    allow: ?[]const u8,
+) !void {
+    var headers: [2]std.http.Header = undefined;
+    var count: usize = 1;
+    headers[0] = .{ .name = "content-type", .value = "text/plain; charset=utf-8" };
+    if (allow) |methods| {
+        headers[1] = .{ .name = "allow", .value = methods };
+        count = 2;
+    }
+    try req.respond(body, .{ .status = status, .extra_headers = headers[0..count] });
+}
+
+/// Content type for a static asset, or null when the extension is unknown and
+/// the caller should fall back to `application/octet-stream`.
+fn contentTypeForPath(req_path: []const u8) ?[]const u8 {
+    const table = .{
+        .{ ".html", "text/html; charset=utf-8" },
+        .{ ".css", "text/css; charset=utf-8" },
+        .{ ".js", "application/javascript; charset=utf-8" },
+        .{ ".json", "application/json; charset=utf-8" },
+        .{ ".svg", "image/svg+xml" },
+        .{ ".png", "image/png" },
+        .{ ".ico", "image/vnd.microsoft.icon" },
+        .{ ".wav", "audio/wav" },
+    };
+    inline for (table) |entry| {
+        if (std.mem.endsWith(u8, req_path, entry[0])) return entry[1];
+    }
+    return null;
+}
+
+/// Upper bound on one text_sync or clipboard_sync payload. The guest edit
+/// control and the clipboard are both page-sized; anything larger is a client
+/// bug and is rejected before it reaches the cached strings.
+const max_sync_text_len = 65536;
+
+// A message field is either present with the right JSON type or it is not:
+// `null` covers a missing key and a wrong-typed value alike, so every handler
+// reports the same rejection for both.
+fn jsonInt(object: std.json.ObjectMap, key: []const u8) ?i64 {
+    const value = object.get(key) orelse return null;
+    if (value != .integer) return null;
+    return value.integer;
+}
+
+fn jsonIntOr(object: std.json.ObjectMap, key: []const u8, default: i32) i32 {
+    return std.math.cast(i32, jsonInt(object, key) orelse return default) orelse default;
+}
+
+fn jsonStr(object: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const value = object.get(key) orelse return null;
+    if (value != .string) return null;
+    return value.string;
+}
+
+fn jsonBool(object: std.json.ObjectMap, key: []const u8, default: bool) bool {
+    const value = object.get(key) orelse return default;
+    if (value != .bool) return default;
+    return value.bool;
+}
+
 /// True if the request may talk to this UI. Browsers always send an Origin
 /// header on WebSocket handshakes and on cross-site fetches; without this
 /// check any webpage the user visits could open the UI's WebSocket, receive
@@ -208,15 +292,21 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
     };
 
     const target = req.head.target;
+    const query_start = std.mem.indexOfScalar(u8, target, '?') orelse target.len;
+    const req_path = target[0..query_start];
 
-    if (std.mem.startsWith(u8, target, "/ws")) {
+    if (std.mem.eql(u8, req_path, "/ws")) {
         if (!originAllowed(&req)) {
-            try req.respond("Forbidden", .{ .status = .forbidden });
+            try respondStatus(&req, .forbidden, "Forbidden", null);
+            return stream.close(runtime.io());
+        }
+        if (!methodAllowed(req.head.method, websocket_allowed_methods)) {
+            try respondStatus(&req, .method_not_allowed, "Method not allowed", websocket_allowed_methods);
             return stream.close(runtime.io());
         }
         const upgrade = req.upgradeRequested();
         if (upgrade != .websocket) {
-            try req.respond("Expected websocket upgrade", .{ .status = .bad_request });
+            try respondStatus(&req, .bad_request, "Expected websocket upgrade", null);
             return stream.close(runtime.io());
         }
 
@@ -263,253 +353,289 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
             if (msg.opcode == .text) {
                 const parsed = std.json.parseFromSlice(std.json.Value, allocator, msg.data, .{}) catch {
                     log.warn("WebSocket: malformed JSON message (len={d})", .{msg.data.len});
+                    sendError(&ws, "malformed JSON message");
                     continue;
                 };
                 defer parsed.deinit();
                 const root = parsed.value;
 
-                if (root == .object) {
-                    const type_val = root.object.get("type");
-                    if (type_val != null and type_val.? == .string) {
-                        if (std.mem.eql(u8, type_val.?.string, "command")) {
-                            if (root.object.get("id")) |id_val| {
-                                if (id_val == .integer) {
-                                    if (renderer.on_command) |cb| cb(std.math.cast(u32, id_val.integer) orelse continue);
-                                }
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "open_file")) {
-                            if (root.object.get("filename")) |file_val| {
-                                if (file_val == .string) {
-                                    // Use the dir path provided by the client (defaults to Desktop)
-                                    const dir_path = if (root.object.get("dir")) |dir_val|
-                                        (if (dir_val == .string) dir_val.string else "Desktop")
-                                    else
-                                        "Desktop";
-
-                                    var rel_buf: [1024]u8 = undefined;
-                                    const rel = std.fmt.bufPrint(&rel_buf, "{s}/{s}", .{ dir_path, file_val.string }) catch {
-                                        sendError(&ws, "Path too long");
-                                        continue;
-                                    };
-                                    // Reject anything that resolves outside drive_c/
-                                    // (absolute, drive-qualified, "..", NUL).
-                                    var path_buf: [1024]u8 = undefined;
-                                    const resolved = path_utils.virtualPathToDriveC(rel, &path_buf);
-                                    if (resolved == 0) {
-                                        sendError(&ws, "Invalid path");
-                                    } else if (renderer.on_file_uploaded) |cb| {
-                                        cb(path_buf[0..resolved]);
-                                    }
-                                }
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "browse_directory")) {
-                            // Client requests directory listing for navigation
-                            if (root.object.get("path")) |path_val| {
-                                if (path_val == .string) {
-                                    // Listing stays inside drive_c/; listDirectory
-                                    // resolves and rejects escaping paths itself.
-                                    renderer.listDirectory(path_val.string);
-                                }
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "launch")) {
-                            // Desktop icon double-click: launch a file from drive_c/
-                            if (root.object.get("path")) |path_val| {
-                                if (path_val == .string) {
-                                    var path_buf: [1024]u8 = undefined;
-                                    const resolved = path_utils.virtualPathToDriveC(path_val.string, &path_buf);
-                                    if (resolved != 0) {
-                                        if (renderer.on_file_uploaded) |cb| {
-                                            cb(path_buf[0..resolved]);
-                                        }
-                                    } else {
-                                        sendError(&ws, "Invalid path");
-                                    }
-                                }
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "resize")) {
-                            const cw = root.object.get("clientW");
-                            const ch = root.object.get("clientH");
-                            if (cw != null and ch != null and cw.? == .integer and ch.? == .integer) {
-                                const new_cw = std.math.cast(i32, cw.?.integer) orelse continue;
-                                const new_ch = std.math.cast(i32, ch.?.integer) orelse continue;
-                                const size_type_val = root.object.get("sizeType");
-                                const size_type: usize = if (size_type_val != null and size_type_val.? == .integer)
-                                    std.math.cast(usize, size_type_val.?.integer) orelse 0
-                                else
-                                    0;
-                                if (renderer.on_resize) |cb| cb(new_cw, new_ch, size_type);
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "close")) {
-                            if (renderer.on_close) |cb| cb();
-                        } else if (std.mem.eql(u8, type_val.?.string, "font_chosen")) {
-                            // Parse font selection: { face: "...", size: N, bold: bool, italic: bool }
-                            const face_val = root.object.get("face");
-                            const size_val = root.object.get("size");
-                            const bold_val = root.object.get("bold");
-                            const italic_val = root.object.get("italic");
-                            if (face_val != null and face_val.? == .string and
-                                size_val != null and size_val.? == .integer)
-                            {
-                                const pt_size = std.math.cast(i32, size_val.?.integer) orelse continue;
-                                const is_bold = if (bold_val != null and bold_val.? == .bool) bold_val.?.bool else false;
-                                const is_italic = if (italic_val != null and italic_val.? == .bool) italic_val.?.bool else false;
-                                if (renderer.on_font_chosen) |cb| cb(face_val.?.string, pt_size, is_bold, is_italic);
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "print_chosen")) {
-                            // Parse print confirmation: { from, to, copies }
-                            const from_val = root.object.get("from");
-                            const to_val = root.object.get("to");
-                            const copies_val = root.object.get("copies");
-                            if (from_val != null and from_val.? == .integer and
-                                to_val != null and to_val.? == .integer)
-                            {
-                                const from_page = std.math.cast(i32, from_val.?.integer) orelse continue;
-                                const to_page = std.math.cast(i32, to_val.?.integer) orelse continue;
-                                const copies: i32 = if (copies_val != null and copies_val.? == .integer)
-                                    std.math.cast(i32, copies_val.?.integer) orelse 1
-                                else
-                                    1;
-                                if (renderer.on_print_chosen) |cb| cb(from_page, to_page, copies);
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "page_setup_chosen")) {
-                            // Parse page-setup confirmation:
-                            // { left, top, right, bottom, paperW, paperH, orientation }
-                            const left_val = root.object.get("left");
-                            const top_val = root.object.get("top");
-                            if (left_val != null and left_val.? == .integer and top_val != null and top_val.? == .integer) {
-                                const gv = struct {
-                                    fn get(o: std.json.ObjectMap, k: []const u8, dflt: i32) i32 {
-                                        const v = o.get(k);
-                                        if (v != null and v.? == .integer) return std.math.cast(i32, v.?.integer) orelse dflt;
-                                        return dflt;
-                                    }
-                                }.get;
-                                if (renderer.on_page_setup_chosen) |cb| {
-                                    const left = std.math.cast(i32, left_val.?.integer) orelse 0;
-                                    const top = std.math.cast(i32, top_val.?.integer) orelse 0;
-                                    cb(left, top, gv(root.object, "right", 0), gv(root.object, "bottom", 0), gv(root.object, "paperW", 8500), gv(root.object, "paperH", 11000), gv(root.object, "orientation", 0));
-                                }
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "cancel_dialog")) {
-                            if (renderer.on_cancel_dialog) |cb| cb();
-                        } else if (std.mem.eql(u8, type_val.?.string, "find_action")) {
-                            // Parse: { action: "find_next"|"replace"|"replace_all"|"close",
-                            //          findText: "...", replaceText: "...",
-                            //          matchCase: bool, searchDown: bool }
-                            const action_val = root.object.get("action");
-                            const find_val = root.object.get("findText");
-                            if (action_val != null and action_val.? == .string and
-                                find_val != null and find_val.? == .string)
-                            {
-                                const replace_val = root.object.get("replaceText");
-                                const replace_str = if (replace_val != null and replace_val.? == .string) replace_val.?.string else "";
-                                const mc_val = root.object.get("matchCase");
-                                const sd_val = root.object.get("searchDown");
-                                const match_case = if (mc_val != null and mc_val.? == .bool) mc_val.?.bool else false;
-                                const search_down = if (sd_val != null and sd_val.? == .bool) sd_val.?.bool else true;
-                                if (renderer.on_find_action) |cb| cb(action_val.?.string, find_val.?.string, replace_str, match_case, search_down);
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "text_sync")) {
-                            // Frontend syncs textarea content to backend cache
-                            if (root.object.get("text")) |text_val| {
-                                if (text_val == .string) {
-                                    if (text_val.string.len > 65536) {
-                                        sendError(&ws, "Text payload exceeds maximum size");
-                                        continue;
-                                    }
-                                    renderer.setEditTextFromSlice(text_val.string);
-                                }
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "clipboard_sync")) {
-                            // Browser clipboard → backend clipboard buffer
-                            if (root.object.get("text")) |text_val| {
-                                if (text_val == .string) {
-                                    if (text_val.string.len > 65536) {
-                                        sendError(&ws, "Clipboard payload exceeds maximum size");
-                                        continue;
-                                    }
-                                    renderer.setClipboardFromSlice(text_val.string);
-                                }
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "color_selected")) {
-                            // Color dialog result: { color: 0xRRGGBB } (-1 = cancel)
-                            if (root.object.get("color")) |color_val| {
-                                if (color_val == .integer) {
-                                    if (color_val.integer < 0) {
-                                        if (renderer.on_cancel_dialog) |cb| cb();
-                                    } else if (renderer.on_color_selected) |cb| {
-                                        cb(@intCast(@as(u64, @bitCast(color_val.integer)) & 0xFFFFFF));
-                                    }
-                                }
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "listbox_select")) {
-                            // Listbox item clicked: (id, index)
-                            const id_val = root.object.get("id");
-                            const idx_val = root.object.get("index");
-                            if (id_val != null and id_val.? == .integer and idx_val != null and idx_val.? == .integer) {
-                                if (renderer.on_listbox_select) |cb| {
-                                    cb(@intCast(@as(u64, @bitCast(id_val.?.integer))), @intCast(@as(i64, idx_val.?.integer)));
-                                }
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "context_menu_select")) {
-                            // Context menu item selected
-                            if (root.object.get("id")) |id_val| {
-                                if (id_val == .integer) {
-                                    // Result first so a guest that observes
-                                    // chosen==true also observes the result.
-                                    renderer.context_menu_result.store(@intCast(@as(u32, @truncate(@as(u64, @bitCast(id_val.integer))))), .release);
-                                    renderer.context_menu_chosen.store(true, .release);
-                                }
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "set_volume")) {
-                            if (root.object.get("volume")) |vol_val| {
-                                if (vol_val == .integer) {
-                                    const pct: f32 = @floatFromInt(@as(i64, vol_val.integer));
-                                    const linear = std.math.clamp(pct / 100.0, 0.0, 1.0);
-                                    if (renderer.on_volume_change) |cb| cb(linear);
-                                }
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "keydown") or std.mem.eql(u8, type_val.?.string, "keyup")) {
-                            const is_down = std.mem.eql(u8, type_val.?.string, "keydown");
-                            if (root.object.get("key")) |key_val| {
-                                if (key_val == .string) {
-                                    const vk_code = mapBrowserKey(key_val.string);
-                                    if (vk_code != 0) {
-                                        if (renderer.on_key_event) |cb| cb(vk_code, is_down);
-                                    }
-                                }
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "wheel")) {
-                            if (root.object.get("delta")) |d_val| {
-                                if (d_val == .integer) {
-                                    if (renderer.on_wheel_event) |cb| {
-                                        const delta = std.math.cast(i32, d_val.integer) orelse 0;
-                                        cb(delta, 0, 0);
-                                    }
-                                }
-                            }
-                        } else if (std.mem.eql(u8, type_val.?.string, "mousedown") or
-                            std.mem.eql(u8, type_val.?.string, "mouseup") or
-                            std.mem.eql(u8, type_val.?.string, "mousemove"))
-                        {
-                            const x_val = root.object.get("x");
-                            const y_val = root.object.get("y");
-                            const btn_val = root.object.get("button");
-                            if (x_val != null and y_val != null and x_val.? == .integer and y_val.? == .integer) {
-                                const x = std.math.cast(i32, x_val.?.integer) orelse continue;
-                                const y = std.math.cast(i32, y_val.?.integer) orelse continue;
-                                const button: i32 = if (btn_val != null and btn_val.? == .integer) std.math.cast(i32, btn_val.?.integer) orelse 0 else 0;
-                                const w32 = @import("../win32/constants.zig");
-                                var msg_id: u32 = w32.WM_MOUSEMOVE;
-                                if (std.mem.eql(u8, type_val.?.string, "mousedown")) {
-                                    msg_id = if (button == 2) w32.WM_RBUTTONDOWN else w32.WM_LBUTTONDOWN;
-                                } else if (std.mem.eql(u8, type_val.?.string, "mouseup")) {
-                                    msg_id = if (button == 2) w32.WM_RBUTTONUP else w32.WM_LBUTTONUP;
-                                }
-                                if (renderer.on_mouse_event) |cb| cb(msg_id, x, y);
-                            }
+                // A message the server cannot read is answered with the same
+                // {"type":"error",...} envelope as a message whose fields fail
+                // validation, so a client has one way to learn a send failed.
+                if (root != .object) {
+                    sendError(&ws, "message must be a JSON object");
+                    continue;
+                }
+                const type_val = root.object.get("type") orelse {
+                    sendError(&ws, "missing string field \"type\"");
+                    continue;
+                };
+                if (type_val != .string) {
+                    sendError(&ws, "field \"type\" must be a string");
+                    continue;
+                }
+                if (std.mem.eql(u8, type_val.string, "command")) {
+                    if (jsonInt(root.object, "id")) |id| {
+                        if (std.math.cast(u32, id)) |cmd_id| {
+                            if (renderer.on_command) |cb| cb(cmd_id);
+                        } else {
+                            sendError(&ws, "command field \"id\" is out of range");
                         }
+                    } else {
+                        sendError(&ws, "command requires an integer field \"id\"");
                     }
+                } else if (std.mem.eql(u8, type_val.string, "open_file")) {
+                    if (jsonStr(root.object, "filename")) |file_val| {
+                        // Use the dir path provided by the client (defaults to Desktop)
+                        const dir_path = jsonStr(root.object, "dir") orelse "Desktop";
+
+                        var rel_buf: [1024]u8 = undefined;
+                        const rel = std.fmt.bufPrint(&rel_buf, "{s}/{s}", .{ dir_path, file_val }) catch {
+                            sendError(&ws, "Path too long");
+                            continue;
+                        };
+                        // Reject anything that resolves outside drive_c/
+                        // (absolute, drive-qualified, "..", NUL).
+                        var path_buf: [1024]u8 = undefined;
+                        const resolved = path_utils.virtualPathToDriveC(rel, &path_buf);
+                        if (resolved == 0) {
+                            sendError(&ws, "Invalid path");
+                        } else if (renderer.on_file_uploaded) |cb| {
+                            cb(path_buf[0..resolved]);
+                        }
+                    } else {
+                        sendError(&ws, "open_file requires a string field \"filename\"");
+                    }
+                } else if (std.mem.eql(u8, type_val.string, "browse_directory")) {
+                    // Client requests directory listing for navigation
+                    if (jsonStr(root.object, "path")) |path_val| {
+                        // Listing stays inside drive_c/; listDirectory
+                        // resolves and rejects escaping paths itself.
+                        renderer.listDirectory(path_val);
+                    } else {
+                        sendError(&ws, "browse_directory requires a string field \"path\"");
+                    }
+                } else if (std.mem.eql(u8, type_val.string, "launch")) {
+                    // Desktop icon double-click: launch a file from drive_c/
+                    if (jsonStr(root.object, "path")) |path_val| {
+                        var path_buf: [1024]u8 = undefined;
+                        const resolved = path_utils.virtualPathToDriveC(path_val, &path_buf);
+                        if (resolved != 0) {
+                            if (renderer.on_file_uploaded) |cb| {
+                                cb(path_buf[0..resolved]);
+                            }
+                        } else {
+                            sendError(&ws, "Invalid path");
+                        }
+                    } else {
+                        sendError(&ws, "launch requires a string field \"path\"");
+                    }
+                } else if (std.mem.eql(u8, type_val.string, "resize")) {
+                    const client_w = jsonInt(root.object, "clientW") orelse {
+                        sendError(&ws, "resize requires integer fields \"clientW\" and \"clientH\"");
+                        continue;
+                    };
+                    const client_h = jsonInt(root.object, "clientH") orelse {
+                        sendError(&ws, "resize requires integer fields \"clientW\" and \"clientH\"");
+                        continue;
+                    };
+                    const new_cw = std.math.cast(i32, client_w) orelse {
+                        sendError(&ws, "resize field \"clientW\" is out of range");
+                        continue;
+                    };
+                    const new_ch = std.math.cast(i32, client_h) orelse {
+                        sendError(&ws, "resize field \"clientH\" is out of range");
+                        continue;
+                    };
+                    const size_type: usize = @intCast(@max(jsonInt(root.object, "sizeType") orelse 0, 0));
+                    if (renderer.on_resize) |cb| cb(new_cw, new_ch, size_type);
+                } else if (std.mem.eql(u8, type_val.string, "close")) {
+                    if (renderer.on_close) |cb| cb();
+                } else if (std.mem.eql(u8, type_val.string, "font_chosen")) {
+                    // Parse font selection: { face: "...", size: N, bold: bool, italic: bool }
+                    const face = jsonStr(root.object, "face") orelse {
+                        sendError(&ws, "font_chosen requires a string field \"face\" and an integer field \"size\"");
+                        continue;
+                    };
+                    const pt_size = std.math.cast(i32, jsonInt(root.object, "size") orelse {
+                        sendError(&ws, "font_chosen requires a string field \"face\" and an integer field \"size\"");
+                        continue;
+                    }) orelse {
+                        sendError(&ws, "font_chosen field \"size\" is out of range");
+                        continue;
+                    };
+                    const is_bold = jsonBool(root.object, "bold", false);
+                    const is_italic = jsonBool(root.object, "italic", false);
+                    if (renderer.on_font_chosen) |cb| cb(face, pt_size, is_bold, is_italic);
+                } else if (std.mem.eql(u8, type_val.string, "print_chosen")) {
+                    // Parse print confirmation: { from, to, copies }
+                    const from_page = std.math.cast(i32, jsonInt(root.object, "from") orelse {
+                        sendError(&ws, "print_chosen requires integer fields \"from\" and \"to\"");
+                        continue;
+                    }) orelse {
+                        sendError(&ws, "print_chosen field \"from\" is out of range");
+                        continue;
+                    };
+                    const to_page = std.math.cast(i32, jsonInt(root.object, "to") orelse {
+                        sendError(&ws, "print_chosen requires integer fields \"from\" and \"to\"");
+                        continue;
+                    }) orelse {
+                        sendError(&ws, "print_chosen field \"to\" is out of range");
+                        continue;
+                    };
+                    const copies = jsonIntOr(root.object, "copies", 1);
+                    if (renderer.on_print_chosen) |cb| cb(from_page, to_page, copies);
+                } else if (std.mem.eql(u8, type_val.string, "page_setup_chosen")) {
+                    // Parse page-setup confirmation:
+                    // { left, top, right, bottom, paperW, paperH, orientation }
+                    if (jsonInt(root.object, "left") == null or jsonInt(root.object, "top") == null) {
+                        sendError(&ws, "page_setup_chosen requires integer fields \"left\" and \"top\"");
+                        continue;
+                    }
+                    if (renderer.on_page_setup_chosen) |cb| {
+                        cb(
+                            jsonIntOr(root.object, "left", 0),
+                            jsonIntOr(root.object, "top", 0),
+                            jsonIntOr(root.object, "right", 0),
+                            jsonIntOr(root.object, "bottom", 0),
+                            jsonIntOr(root.object, "paperW", 8500),
+                            jsonIntOr(root.object, "paperH", 11000),
+                            jsonIntOr(root.object, "orientation", 0),
+                        );
+                    }
+                } else if (std.mem.eql(u8, type_val.string, "cancel_dialog")) {
+                    if (renderer.on_cancel_dialog) |cb| cb();
+                } else if (std.mem.eql(u8, type_val.string, "find_action")) {
+                    // Parse: { action: "find_next"|"replace"|"replace_all"|"close",
+                    //          findText: "...", replaceText: "...",
+                    //          matchCase: bool, searchDown: bool }
+                    const action = jsonStr(root.object, "action") orelse {
+                        sendError(&ws, "find_action requires string fields \"action\" and \"findText\"");
+                        continue;
+                    };
+                    const find_text = jsonStr(root.object, "findText") orelse {
+                        sendError(&ws, "find_action requires string fields \"action\" and \"findText\"");
+                        continue;
+                    };
+                    const replace_str = jsonStr(root.object, "replaceText") orelse "";
+                    const match_case = jsonBool(root.object, "matchCase", false);
+                    const search_down = jsonBool(root.object, "searchDown", true);
+                    if (renderer.on_find_action) |cb| cb(action, find_text, replace_str, match_case, search_down);
+                } else if (std.mem.eql(u8, type_val.string, "text_sync")) {
+                    // Frontend syncs textarea content to backend cache
+                    if (jsonStr(root.object, "text")) |text| {
+                        if (text.len > max_sync_text_len) {
+                            sendError(&ws, "Text payload exceeds maximum size");
+                            continue;
+                        }
+                        renderer.setEditTextFromSlice(text);
+                    } else {
+                        sendError(&ws, "text_sync requires a string field \"text\"");
+                    }
+                } else if (std.mem.eql(u8, type_val.string, "clipboard_sync")) {
+                    // Browser clipboard → backend clipboard buffer
+                    if (jsonStr(root.object, "text")) |text| {
+                        if (text.len > max_sync_text_len) {
+                            sendError(&ws, "Clipboard payload exceeds maximum size");
+                            continue;
+                        }
+                        renderer.setClipboardFromSlice(text);
+                    } else {
+                        sendError(&ws, "clipboard_sync requires a string field \"text\"");
+                    }
+                } else if (std.mem.eql(u8, type_val.string, "color_selected")) {
+                    // Color dialog result: { color: 0xRRGGBB } (-1 = cancel)
+                    if (jsonInt(root.object, "color")) |color| {
+                        if (color < 0) {
+                            if (renderer.on_cancel_dialog) |cb| cb();
+                        } else if (renderer.on_color_selected) |cb| {
+                            cb(@intCast(@as(u64, @bitCast(color)) & 0xFFFFFF));
+                        }
+                    } else {
+                        sendError(&ws, "color_selected requires an integer field \"color\"");
+                    }
+                } else if (std.mem.eql(u8, type_val.string, "listbox_select")) {
+                    // Listbox item clicked: (id, index)
+                    if (jsonInt(root.object, "id")) |id| {
+                        if (jsonInt(root.object, "index")) |index| {
+                            if (renderer.on_listbox_select) |cb| {
+                                cb(@intCast(@as(u64, @bitCast(id))), @intCast(index));
+                            }
+                        } else {
+                            sendError(&ws, "listbox_select requires integer fields \"id\" and \"index\"");
+                        }
+                    } else {
+                        sendError(&ws, "listbox_select requires integer fields \"id\" and \"index\"");
+                    }
+                } else if (std.mem.eql(u8, type_val.string, "context_menu_select")) {
+                    // Context menu item selected
+                    if (jsonInt(root.object, "id")) |id| {
+                        // Result first so a guest that observes
+                        // chosen==true also observes the result.
+                        renderer.context_menu_result.store(@intCast(@as(u32, @truncate(@as(u64, @bitCast(id))))), .release);
+                        renderer.context_menu_chosen.store(true, .release);
+                    } else {
+                        sendError(&ws, "context_menu_select requires an integer field \"id\"");
+                    }
+                } else if (std.mem.eql(u8, type_val.string, "set_volume")) {
+                    if (jsonInt(root.object, "volume")) |pct| {
+                        const linear = std.math.clamp(@as(f32, @floatFromInt(pct)) / 100.0, 0.0, 1.0);
+                        if (renderer.on_volume_change) |cb| cb(linear);
+                    } else {
+                        sendError(&ws, "set_volume requires an integer field \"volume\"");
+                    }
+                } else if (std.mem.eql(u8, type_val.string, "keydown") or std.mem.eql(u8, type_val.string, "keyup")) {
+                    const is_down = std.mem.eql(u8, type_val.string, "keydown");
+                    if (jsonStr(root.object, "key")) |key| {
+                        // A key with no Win32 equivalent is not an
+                        // error: browsers report many more keys than
+                        // the guest window can use.
+                        const vk_code = mapBrowserKey(key);
+                        if (vk_code != 0) {
+                            if (renderer.on_key_event) |cb| cb(vk_code, is_down);
+                        }
+                    } else {
+                        sendError(&ws, "key event requires a string field \"key\"");
+                    }
+                } else if (std.mem.eql(u8, type_val.string, "wheel")) {
+                    if (jsonInt(root.object, "delta")) |raw_delta| {
+                        const delta = std.math.cast(i32, raw_delta) orelse {
+                            sendError(&ws, "wheel field \"delta\" is out of range");
+                            continue;
+                        };
+                        if (renderer.on_wheel_event) |cb| cb(delta, 0, 0);
+                    } else {
+                        sendError(&ws, "wheel requires an integer field \"delta\"");
+                    }
+                } else if (std.mem.eql(u8, type_val.string, "mousedown") or
+                    std.mem.eql(u8, type_val.string, "mouseup") or
+                    std.mem.eql(u8, type_val.string, "mousemove"))
+                {
+                    const x = std.math.cast(i32, jsonInt(root.object, "x") orelse {
+                        sendError(&ws, "mouse event requires integer fields \"x\" and \"y\"");
+                        continue;
+                    }) orelse {
+                        sendError(&ws, "mouse event field \"x\" is out of range");
+                        continue;
+                    };
+                    const y = std.math.cast(i32, jsonInt(root.object, "y") orelse {
+                        sendError(&ws, "mouse event requires integer fields \"x\" and \"y\"");
+                        continue;
+                    }) orelse {
+                        sendError(&ws, "mouse event field \"y\" is out of range");
+                        continue;
+                    };
+                    const button = jsonIntOr(root.object, "button", 0);
+                    const w32 = @import("../win32/constants.zig");
+                    var msg_id: u32 = w32.WM_MOUSEMOVE;
+                    if (std.mem.eql(u8, type_val.string, "mousedown")) {
+                        msg_id = if (button == 2) w32.WM_RBUTTONDOWN else w32.WM_LBUTTONDOWN;
+                    } else if (std.mem.eql(u8, type_val.string, "mouseup")) {
+                        msg_id = if (button == 2) w32.WM_RBUTTONUP else w32.WM_LBUTTONUP;
+                    }
+                    if (renderer.on_mouse_event) |cb| cb(msg_id, x, y);
+                } else {
+                    sendError(&ws, "unknown message type");
                 }
             }
         }
@@ -528,64 +654,57 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
         clients_mutex.unlock();
         stream.close(runtime.io());
     } else {
-        var file_path_buf: [256]u8 = undefined;
-        var req_path = target;
-        if (std.mem.indexOfScalar(u8, req_path, '?')) |idx| {
-            req_path = req_path[0..idx];
+        if (!methodAllowed(req.head.method, static_allowed_methods)) {
+            try respondStatus(&req, .method_not_allowed, "Method not allowed", static_allowed_methods);
+            return stream.close(runtime.io());
         }
-        if (std.mem.eql(u8, req_path, "/")) req_path = "/index.html";
+
+        var file_path_buf: [256]u8 = undefined;
+        var asset_path = req_path;
+        if (std.mem.eql(u8, asset_path, "/")) asset_path = "/index.html";
 
         // Security: reject path traversal sequences, encoded variants, and null bytes.
         // Check for ".." (literal), "%2e" / "%2E" (percent-encoded dot), and null bytes.
-        if (std.mem.indexOf(u8, req_path, "..") != null or
-            std.mem.indexOf(u8, req_path, "%2e") != null or
-            std.mem.indexOf(u8, req_path, "%2E") != null or
-            std.mem.indexOf(u8, req_path, "%00") != null or
-            std.mem.indexOfScalar(u8, req_path, 0) != null)
+        if (std.mem.indexOf(u8, asset_path, "..") != null or
+            std.mem.indexOf(u8, asset_path, "%2e") != null or
+            std.mem.indexOf(u8, asset_path, "%2E") != null or
+            std.mem.indexOf(u8, asset_path, "%00") != null or
+            std.mem.indexOfScalar(u8, asset_path, 0) != null)
         {
-            try req.respond("Forbidden", .{ .status = .forbidden });
+            try respondStatus(&req, .forbidden, "Forbidden", null);
             return stream.close(runtime.io());
         }
 
         // Only allow paths starting with / and containing only safe characters
-        if (req_path.len == 0 or req_path[0] != '/') {
-            try req.respond("Forbidden", .{ .status = .forbidden });
+        if (asset_path.len == 0 or asset_path[0] != '/') {
+            try respondStatus(&req, .forbidden, "Forbidden", null);
             return stream.close(runtime.io());
         }
 
-        const full_path = std.fmt.bufPrint(&file_path_buf, "src/gui{s}", .{req_path}) catch {
+        const full_path = std.fmt.bufPrint(&file_path_buf, "src/gui{s}", .{asset_path}) catch {
             return stream.close(runtime.io());
         };
 
         var file = std.Io.Dir.cwd().openFile(runtime.io(), full_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
-                try req.respond("Not found", .{ .status = .not_found });
+                try respondStatus(&req, .not_found, "Not found", null);
             } else {
-                try req.respond("Internal server error", .{ .status = .internal_server_error });
+                try respondStatus(&req, .internal_server_error, "Internal server error", null);
             }
             std.debug.print("Closing FD {} (File error: {s})\n", .{ stream.socket.handle, full_path });
             return stream.close(runtime.io());
         };
         defer file.close(runtime.io());
 
-        var content_type: []const u8 = "application/octet-stream";
-        if (std.mem.endsWith(u8, req_path, ".html")) {
-            content_type = "text/html";
-        } else if (std.mem.endsWith(u8, req_path, ".css")) {
-            content_type = "text/css";
-        } else if (std.mem.endsWith(u8, req_path, ".js")) {
-            content_type = "application/javascript";
-        } else if (std.mem.endsWith(u8, req_path, ".svg")) {
-            content_type = "image/svg+xml";
-        }
+        const content_type = contentTypeForPath(asset_path) orelse "application/octet-stream";
 
         const file_size = try file.length(runtime.io());
-        if (file_size > 10 * 1024 * 1024) {
-            try req.respond("File too large", .{ .status = .internal_server_error });
+        if (file_size > max_static_file_size) {
+            try respondStatus(&req, .payload_too_large, "File too large", null);
             return stream.close(runtime.io());
         }
         const content = allocator.alloc(u8, @intCast(file_size)) catch {
-            try req.respond("Out of memory", .{ .status = .internal_server_error });
+            try respondStatus(&req, .internal_server_error, "Out of memory", null);
             return stream.close(runtime.io());
         };
         const bytes_read = try file.readPositionalAll(runtime.io(), content, 0);
@@ -593,6 +712,10 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
         return stream.close(runtime.io());
     }
 }
+
+/// Largest asset the static branch reads into memory. Matches the
+/// uncompressed size one desktop asset can plausibly reach.
+const max_static_file_size = 10 * 1024 * 1024;
 
 fn staticContentNotModified(req: *const std.http.Server.Request, etag: []const u8) bool {
     if (req.head.method != .GET and req.head.method != .HEAD) return false;
@@ -661,15 +784,22 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
     const etag = try std.fmt.bufPrint(&etag_buf, "\"{s}\"", .{std.fmt.bytesToHex(digest, .lower)});
 
     if (staticContentNotModified(req, etag)) {
+        // A 304 has to describe the representation it revalidated, so a
+        // client that negotiated gzip sees the same Content-Encoding it would
+        // have seen on the 200.
+        var not_modified_headers: [4]std.http.Header = undefined;
+        not_modified_headers[0] = .{ .name = "etag", .value = etag };
+        not_modified_headers[1] = .{ .name = "cache-control", .value = "private, no-cache" };
+        not_modified_headers[2] = .{ .name = "vary", .value = "Accept-Encoding" };
+        const not_modified_count: usize = 3 + @as(usize, @intFromBool(compressed != null));
+        if (compressed != null) {
+            not_modified_headers[3] = .{ .name = "content-encoding", .value = "gzip" };
+        }
         try req.respond("", .{
             .status = .not_modified,
             .keep_alive = false,
             .transfer_encoding = .none,
-            .extra_headers = &.{
-                .{ .name = "etag", .value = etag },
-                .{ .name = "cache-control", .value = "private, no-cache" },
-                .{ .name = "vary", .value = "Accept-Encoding" },
-            },
+            .extra_headers = not_modified_headers[0..not_modified_count],
         });
         return;
     }
@@ -689,6 +819,126 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
         .{ .name = "content-encoding", .value = "gzip" },
     };
     try req.respond(body, .{ .keep_alive = false, .extra_headers = response_headers[0 .. response_headers.len - @intFromBool(compressed == null)] });
+}
+
+test "endpoints answer an unsupported method with 405 and their Allow list" {
+    try std.testing.expect(methodAllowed(.GET, static_allowed_methods));
+    try std.testing.expect(methodAllowed(.HEAD, static_allowed_methods));
+    try std.testing.expect(!methodAllowed(.POST, static_allowed_methods));
+    try std.testing.expect(!methodAllowed(.PUT, static_allowed_methods));
+    try std.testing.expect(!methodAllowed(.DELETE, static_allowed_methods));
+    try std.testing.expect(methodAllowed(.GET, websocket_allowed_methods));
+    try std.testing.expect(!methodAllowed(.HEAD, websocket_allowed_methods));
+    try std.testing.expect(!methodAllowed(.POST, websocket_allowed_methods));
+
+    var input = std.Io.Reader.fixed("POST /app.js HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n");
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    var server = std.http.Server.init(&input, &output.writer);
+    var req = try server.receiveHead();
+    try std.testing.expect(!methodAllowed(req.head.method, static_allowed_methods));
+    try respondStatus(&req, .method_not_allowed, "Method not allowed", static_allowed_methods);
+    const response = output.written();
+    try std.testing.expect(std.mem.startsWith(u8, response, "HTTP/1.1 405 Method Not Allowed\r\n"));
+    try std.testing.expect(std.mem.indexOf(u8, response, "\r\nallow: GET, HEAD\r\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\r\ncontent-type: text/plain; charset=utf-8\r\n") != null);
+    try std.testing.expect(std.mem.endsWith(u8, response, "\r\n\r\nMethod not allowed"));
+}
+
+test "error responses share one plain-text envelope" {
+    const cases = [_]struct { status: std.http.Status, body: []const u8 }{
+        .{ .status = .forbidden, .body = "Forbidden" },
+        .{ .status = .not_found, .body = "Not found" },
+        .{ .status = .internal_server_error, .body = "Internal server error" },
+        .{ .status = .payload_too_large, .body = "File too large" },
+    };
+    for (cases) |case| {
+        var input = std.Io.Reader.fixed("GET /missing HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer output.deinit();
+        var server = std.http.Server.init(&input, &output.writer);
+        var req = try server.receiveHead();
+        try respondStatus(&req, case.status, case.body, null);
+        const response = output.written();
+        try std.testing.expect(std.mem.indexOf(u8, response, "\r\ncontent-type: text/plain; charset=utf-8\r\n") != null);
+        try std.testing.expect(std.mem.indexOf(u8, response, "\r\nallow:") == null);
+        try std.testing.expect(std.mem.endsWith(u8, response, case.body));
+    }
+}
+
+test "static assets map their extension to a content type" {
+    try std.testing.expectEqualStrings("text/html; charset=utf-8", contentTypeForPath("/index.html").?);
+    try std.testing.expectEqualStrings("text/css; charset=utf-8", contentTypeForPath("/win2k.css").?);
+    try std.testing.expectEqualStrings("application/javascript; charset=utf-8", contentTypeForPath("/app.js").?);
+    try std.testing.expectEqualStrings("application/json; charset=utf-8", contentTypeForPath("/menu.json").?);
+    try std.testing.expectEqualStrings("image/svg+xml", contentTypeForPath("/assets/back.svg").?);
+    try std.testing.expectEqualStrings("image/png", contentTypeForPath("/assets/wall.png").?);
+    try std.testing.expectEqualStrings("image/vnd.microsoft.icon", contentTypeForPath("/favicon.ico").?);
+    try std.testing.expect(contentTypeForPath("/drive_c/game.exe") == null);
+}
+
+test "a 304 describes the gzip representation it revalidated" {
+    const content = @embedFile("app.js");
+    var input = std.Io.Reader.fixed("GET /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n");
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    var server = std.http.Server.init(&input, &output.writer);
+    var req = try server.receiveHead();
+    try respondStaticContent(&req, content, "application/javascript; charset=utf-8");
+    const response = output.written();
+    const etag_start = (std.mem.indexOf(u8, response, "\r\netag: ") orelse return error.TestUnexpectedResult) + "\r\netag: ".len;
+    const etag_end = std.mem.indexOfPos(u8, response, etag_start, "\r\n") orelse return error.TestUnexpectedResult;
+    const etag = response[etag_start..etag_end];
+
+    const conditional = try std.fmt.allocPrint(std.testing.allocator, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\nIf-None-Match: {s}\r\n\r\n", .{etag});
+    defer std.testing.allocator.free(conditional);
+    var conditional_input = std.Io.Reader.fixed(conditional);
+    var conditional_output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer conditional_output.deinit();
+    var conditional_server = std.http.Server.init(&conditional_input, &conditional_output.writer);
+    var conditional_req = try conditional_server.receiveHead();
+    try respondStaticContent(&conditional_req, content, "application/javascript; charset=utf-8");
+    const revalidated = conditional_output.written();
+    try std.testing.expect(std.mem.startsWith(u8, revalidated, "HTTP/1.1 304 Not Modified\r\n"));
+    try std.testing.expect(std.mem.indexOf(u8, revalidated, "\r\ncontent-encoding: gzip\r\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, revalidated, "\r\nvary: Accept-Encoding\r\n") != null);
+
+    // An identity client revalidates a different ETag and must not be told
+    // the resource is gzip encoded.
+    const identity = try std.fmt.allocPrint(std.testing.allocator, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: identity\r\nIf-None-Match: {s}\r\n\r\n", .{etag});
+    defer std.testing.allocator.free(identity);
+    var identity_input = std.Io.Reader.fixed(identity);
+    var identity_output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer identity_output.deinit();
+    var identity_server = std.http.Server.init(&identity_input, &identity_output.writer);
+    var identity_req = try identity_server.receiveHead();
+    try respondStaticContent(&identity_req, content, "application/javascript; charset=utf-8");
+    const identity_response = identity_output.written();
+    try std.testing.expect(std.mem.startsWith(u8, identity_response, "HTTP/1.1 200 OK\r\n"));
+    try std.testing.expect(std.mem.indexOf(u8, identity_response, "\r\ncontent-encoding: gzip\r\n") == null);
+}
+
+test "message fields are read by JSON type, missing and wrong-typed alike" {
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator,
+        \\{"id":7,"face":"Arial","size":"12","bold":true,"loud":"x","null_id":null}
+    , .{});
+    defer parsed.deinit();
+
+    const object = parsed.value.object;
+    try std.testing.expectEqual(@as(?i64, 7), jsonInt(object, "id"));
+    try std.testing.expect(jsonInt(object, "size") == null);
+    try std.testing.expect(jsonInt(object, "loud") == null);
+    try std.testing.expect(jsonInt(object, "null_id") == null);
+    try std.testing.expect(jsonInt(object, "absent") == null);
+    try std.testing.expectEqualStrings("Arial", jsonStr(object, "face").?);
+    try std.testing.expect(jsonStr(object, "id") == null);
+    try std.testing.expect(jsonStr(object, "absent") == null);
+    try std.testing.expect(jsonBool(object, "bold", false));
+    try std.testing.expect(!jsonBool(object, "loud", false));
+    try std.testing.expect(jsonBool(object, "absent", true));
+    try std.testing.expectEqual(@as(i32, 1), jsonIntOr(object, "absent", 1));
+    try std.testing.expectEqual(@as(i32, 0), jsonIntOr(object, "size", 0));
+    try std.testing.expectEqual(@as(i32, 7), jsonIntOr(object, "id", 0));
 }
 
 test "static asset responses carry an etag and 304 on a matching If-None-Match" {
