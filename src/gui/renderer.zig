@@ -298,6 +298,16 @@ fn cacheReplace(field: *?[]const u8, json: []const u8) void {
     field.* = owned;
 }
 
+/// Drops a cached JSON string, freeing it. The field owns what cacheReplace
+/// stored, so clearing one without this strands that copy for the life of the
+/// process: the next cacheReplace sees null and has nothing left to free.
+fn cacheClear(field: *?[]const u8) void {
+    cache_mutex.lock();
+    defer cache_mutex.unlock();
+    if (field.*) |old| g_allocator.free(old);
+    field.* = null;
+}
+
 /// Cap on the control-update replay cache. Control updates arrive
 /// continuously (progress bars, status text, window titles); each entry is a
 /// heap string kept forever, and every web-client reconnect replays the whole
@@ -1118,11 +1128,7 @@ pub fn closeDialog() void {
     // web_ui.pushMessage takes its own registry lock and then blocks on a
     // socket write, so sending while holding cache_mutex would stall every
     // other cache writer (the guest thread) behind one slow client.
-    {
-        cache_mutex.lock();
-        defer cache_mutex.unlock();
-        active_dialog = null;
-    }
+    cacheClear(&active_dialog);
     switch (active_backend) {
         .web_ui => web_ui.pushMessage("{\"type\":\"close_dialog\"}"),
         .fltk => fltk_ui.closeDialog(),
@@ -1469,6 +1475,31 @@ fn getResourceDataById(data: []const u8, dir_offset: u32, rsrc_base: u32, rsrc_r
         entry += 8;
     }
     return null;
+}
+
+test "closeDialog frees the dialog it drops from the cache" {
+    const saved_allocator = g_allocator;
+    const saved_backend = active_backend;
+    const saved_dialog = active_dialog;
+    defer {
+        g_allocator = saved_allocator;
+        active_backend = saved_backend;
+        active_dialog = saved_dialog;
+    }
+    g_allocator = std.testing.allocator;
+    active_backend = .none;
+    active_dialog = null;
+
+    // Open, close, open again. Each close used to null the field without
+    // freeing the copy cacheReplace owned, and the next open had nothing left
+    // to free, so a guest that cycled dialogs leaked one string per cycle.
+    var cycle: usize = 0;
+    while (cycle < 3) : (cycle += 1) {
+        cacheReplace(&active_dialog, "{\"type\":\"show_dialog\"}");
+        try std.testing.expect(active_dialog != null);
+        closeDialog();
+        try std.testing.expect(active_dialog == null);
+    }
 }
 
 test "clampResolution keeps guest dimensions inside the framebuffer" {

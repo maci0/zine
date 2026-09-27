@@ -176,6 +176,10 @@ pub const JitCompiler = struct {
     pub fn compile(self: *JitCompiler, guest_eip: u32, x86_code: []const u8) ![]u8 {
         var offset: usize = 0;
         self.markCached(guest_eip, @intCast(self.module.func_section.bytes.items.len));
+        // isCached() is what gates a compile attempt, so a mark left behind by
+        // a failed compile would silence this EIP for the rest of the run. The
+        // mark belongs to a block that exists only once the module is finished.
+        errdefer self.invalidateEip(guest_eip);
 
         // Type section: 1 function type (void -> void)
         try self.module.type_section.appendUleb128(1);
@@ -2048,4 +2052,18 @@ test "compiler: invalidateEip clears the compile mark for that EIP only" {
     compiler.invalidateEip(eip_a);
     try std.testing.expect(!compiler.isCached(eip_a));
     try std.testing.expect(compiler.isCached(eip_b));
+}
+
+test "compiler: a failed compile leaves no mark that would suppress a retry" {
+    var compiler = JitCompiler.init(std.testing.allocator, 0);
+    defer compiler.deinit();
+
+    const eip: u32 = 0x401000;
+    // SAHF is one of the opcodes translateInstruction refuses, so the compile
+    // fails after the mark was taken.
+    try std.testing.expectError(error.UnsupportedOpcode, compiler.compile(eip, &.{0x9E}));
+
+    // The mark gated the compile attempt, so a surviving one would keep this
+    // EIP from ever being compiled again.
+    try std.testing.expect(!compiler.isCached(eip));
 }

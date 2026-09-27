@@ -201,6 +201,20 @@ release, not a 0.2.1 patch.
   compile in the loop over the sources did not stop it and the step exited on
   the status of the last compile. It now returns the collected status, and the
   same guard covers the new `check_web` step.
+- The guest argv/envp block can no longer be written past. `__getmainargs`
+  copied the host command line and environment into a fixed 256 KB guest block
+  with no capacity check, so a long command line or a large environment wrote
+  into whatever the guest heap placed after it. Arguments and environment
+  entries that do not fit are now dropped, the first argument that does not fit
+  ends the list, and both losses are logged.
+- A block the JIT cannot compile is no longer marked as compiled for the rest
+  of the run. `compile` took the "already compiled" mark before the work that
+  can fail, and that mark is what gates a compile attempt, so one failed
+  translation silenced the block permanently on `zine --jit`.
+- Closing a dialog no longer strands the JSON the web UI replays to
+  reconnecting clients. The cached copy was dropped without being freed, and
+  the next dialog had nothing left to free, so a guest that cycled dialogs
+  leaked one string per cycle.
 - The web UI's content-addressed stylesheet and scripts are served again. The
   document names each asset by its digest (`/win2k-<digest>.css`), and those
   names exist only inside the build, so the server answered the document's own

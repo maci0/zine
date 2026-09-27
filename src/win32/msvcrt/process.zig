@@ -243,6 +243,12 @@ pub fn resetGuestArgs() void {
 }
 const guest_args_base: u32 = 0x04000000;
 
+/// Upper bounds on the entries copied into the guest argv/envp block. The
+/// block is a fixed 256 KB, so both the pointer tables and the strings they
+/// point at have to stop somewhere the block cannot overrun.
+const MAX_GUEST_ARGV: usize = 128;
+const MAX_GUEST_ENVP: usize = 4096;
+
 pub fn ensureGuestArgs() void {
     if (guest_args_buf != null) return;
 
@@ -274,57 +280,88 @@ pub fn ensureGuestArgs() void {
     var gpos: usize = 0;
     const block = guest_args_buf.?;
 
-    // Copy a null-terminated string into the block, return guest address
+    // Copy a null-terminated string into the block, return guest address.
+    // Null when the block is full: the strings come from the host
+    // environment and the command line, so their total size is not bounded by
+    // anything this function controls, and writing past the block would
+    // corrupt whatever the guest heap placed after it.
     const putStr = struct {
-        fn f(buf: []u8, pos: *usize, src: []const u8, base: u32) u32 {
+        fn f(buf: []u8, pos: *usize, src: []const u8, base: u32) ?u32 {
+            const end = (pos.* + src.len + 1 + 3) & ~@as(usize, 3); // align 4
+            if (end > buf.len) return null;
             const guest_addr: u32 = base +% @as(u32, @intCast(pos.*));
             @memcpy(buf[pos.* .. pos.* + src.len], src);
             buf[pos.* + src.len] = 0;
-            pos.* += src.len + 1;
-            pos.* = (pos.* + 3) & ~@as(usize, 3); // align 4
+            pos.* = end;
             return guest_addr;
+        }
+    }.f;
+
+    // Append one guest pointer to the block, if it still fits.
+    const putPtr = struct {
+        fn f(buf: []u8, pos: *usize, value: u32) bool {
+            if (pos.* + 4 > buf.len) return false;
+            @memcpy(buf[pos.* .. pos.* + 4], std.mem.asBytes(&value));
+            pos.* += 4;
+            return true;
         }
     }.f;
 
     // 1) Copy argv strings, record 32-bit addresses
     const argc_val: usize = @intCast(msvcrt.global_argc);
-    var argv_str_addrs: [128]u32 = [_]u32{0} ** 128;
-    for (0..@min(argc_val, 127)) |i| {
-        if (msvcrt.global_argv[i]) |arg_ptr| {
-            argv_str_addrs[i] = putStr(block, &gpos, std.mem.span(arg_ptr), base_addr);
+    var argv_str_addrs: [MAX_GUEST_ARGV]u32 = [_]u32{0} ** MAX_GUEST_ARGV;
+    var argv_str_count: usize = 0;
+    var dropped_argv: usize = 0;
+    for (0..@min(argc_val, MAX_GUEST_ARGV)) |i| {
+        const arg_ptr = msvcrt.global_argv[i] orelse continue;
+        if (putStr(block, &gpos, std.mem.span(arg_ptr), base_addr)) |addr| {
+            argv_str_addrs[argv_str_count] = addr;
+            argv_str_count += 1;
+        } else {
+            // Stop at the first one that does not fit: a later string would
+            // only be reachable through a hole in the argv array.
+            dropped_argv = argc_val - argv_str_count;
+            break;
         }
     }
-    guest_pgmptr_addr = if (argc_val > 0) argv_str_addrs[0] else 0;
+    if (dropped_argv > 0) {
+        log.err("MSVCRT: guest argv block holds {d} of {d} arguments", .{ argv_str_count, argc_val });
+    }
+    guest_pgmptr_addr = if (argv_str_count > 0) argv_str_addrs[0] else 0;
 
     // 2) Build argv array of u32 pointers, null-terminated
     guest_argv_addr = base_addr +% @as(u32, @intCast(gpos));
-    for (0..argc_val + 1) |i| {
-        const val: u32 = if (i < argc_val) argv_str_addrs[i] else 0;
-        @memcpy(block[gpos .. gpos + 4], std.mem.asBytes(&val));
-        gpos += 4;
+    for (argv_str_addrs[0..argv_str_count]) |ptr| {
+        if (!putPtr(block, &gpos, ptr)) break;
     }
+    _ = putPtr(block, &gpos, 0);
 
     // 3) Copy envp strings and build envp array
-    var envp_str_addrs: [4096]u32 = undefined;
+    var envp_str_addrs: [MAX_GUEST_ENVP]u32 = undefined;
     var envp_str_count: usize = 0;
     {
         var i: usize = 0;
         while (msvcrt.global_envp[i]) |env_ptr| : (i += 1) {
+            if (envp_str_count >= MAX_GUEST_ENVP) break;
             const src = std.mem.span(env_ptr);
-            if (envp_str_count < 4096) {
-                envp_str_addrs[envp_str_count] = putStr(block, &gpos, src, base_addr);
+            if (putStr(block, &gpos, src, base_addr)) |addr| {
+                envp_str_addrs[envp_str_count] = addr;
                 envp_str_count += 1;
+            } else {
+                // A truncated environment ends where the block ends; the
+                // array below is null-terminated, so the guest reads a shorter
+                // environment rather than a hole.
+                log.err("MSVCRT: guest argv block is full, environment truncated after {d} entries", .{envp_str_count});
+                break;
             }
         }
     }
     guest_envp_addr = base_addr +% @as(u32, @intCast(gpos));
     for (envp_str_addrs[0..envp_str_count]) |ptr| {
-        @memcpy(block[gpos .. gpos + 4], std.mem.asBytes(&ptr));
-        gpos += 4;
+        if (!putPtr(block, &gpos, ptr)) break;
     }
     // null terminator
-    @memset(block[gpos .. gpos + 4], 0);
-    gpos += 4;
+    _ = putPtr(block, &gpos, 0);
 
     if (trace.enable_tracing) trace.print("MSVCRT: built guest args at 0x{X} ({d} bytes)\n", .{ base_addr, gpos });
 }
