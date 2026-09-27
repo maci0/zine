@@ -29,15 +29,16 @@ tag exists in this repository yet, so identify 0.2.0 by the version in
 support-window, or security-backport policy. Pin a commit when reproducing a
 build.
 
-Changes after the last tag are listed under **Unreleased** below. The package
-version, `--version`, and `build.zig.zon` stay at the last released number until
-a release moves all three together, and a release is finished with a
-`v<version>` tag on that commit, so every later release has one. A released
-version is never edited
-retroactively. The Unreleased set carries breaking changes, so it is a **0.3.0**
-release, not a 0.2.1 patch.
+Changes after the latest release are listed under **Unreleased** below. The
+package version, `--version`, and `build.zig.zon` stay at the last released
+number until a release moves all three together, and a release is finished
+with a `v<version>` tag on that commit, so every later release has one. A
+released version is never edited retroactively. `0.x` has no compatibility
+promise between versions, so a breaking change takes the next minor.
 
 ### Unreleased
+
+### 0.3.0 (2026-09-27)
 
 #### Breaking and migration
 
