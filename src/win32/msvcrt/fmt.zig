@@ -660,9 +660,20 @@ test "vsnprintf rounds to the requested precision and survives a huge width" {
     try testing.expectEqualStrings("3.141590", buf[0..x86_vsnprintf(&buf, 64, "%f", @intFromPtr(&args))]);
 
     // A width longer than usize can hold saturates instead of trapping; the
-    // padding loop still stops at the buffer.
+    // padding loop still stops at the buffer. The padding goes out first and
+    // never fits alongside the digits, so the buffer comes back full of
+    // spaces with the number cut off after it.
     var int_args = [_]u32{std.math.maxInt(i32)};
     try testing.expectEqual(@as(usize, 63), x86_vsnprintf(&buf, 64, "%99999999999d", @intFromPtr(&int_args)));
+    // The count alone would pass with a missing terminator or with the
+    // saturation dropped, so pin both.
+    try testing.expectEqual(@as(u8, 0), buf[63]);
+    for (buf[0..63]) |pad| try testing.expectEqual(@as(u8, ' '), pad);
+
+    // A width that does fit keeps the digits after the padding, and "%0"
+    // moves the padding to the left of them.
+    try testing.expectEqualStrings("      2147483647", buf[0..x86_vsnprintf(&buf, 64, "%16d", @intFromPtr(&int_args))]);
+    try testing.expectEqualStrings("0000002147483647", buf[0..x86_vsnprintf(&buf, 64, "%016d", @intFromPtr(&int_args))]);
 }
 
 test "narrowWide truncates and always terminates" {

@@ -1490,3 +1490,50 @@ test "clampResolution keeps guest dimensions inside the framebuffer" {
     try std.testing.expectEqual(@as(u32, 1), degenerate.w);
     try std.testing.expectEqual(@as(u32, 1), degenerate.h);
 }
+
+test "jsonEscape keeps guest text inside one JSON string value" {
+    // The property callers depend on is that the escaped bytes parse back out
+    // of a JSON string as the original text: guest window titles, menu items,
+    // and dialog text are all embedded this way, and an unescaped quote is a
+    // frame the client cannot parse. CR is the documented exception, dropped
+    // so a Windows CRLF reaches the client as LF.
+    const cases = [_]struct { text: []const u8, decoded: []const u8 }{
+        .{ .text = "plain", .decoded = "plain" },
+        .{ .text = "a \"type\" b", .decoded = "a \"type\" b" },
+        .{ .text = "a\\b", .decoded = "a\\b" },
+        .{ .text = "line\none\ttabbed", .decoded = "line\none\ttabbed" },
+        .{ .text = "crlf\r\nhere", .decoded = "crlf\nhere" },
+        .{ .text = "bell\x07null-ish\x01end", .decoded = "bell\x07null-ish\x01end" },
+        .{ .text = "\x08\x0c\x1f", .decoded = "\x08\x0c\x1f" },
+        // Bytes above 0x7f are not valid UTF-8 on their own, but the escaping
+        // is byte transparent, so a UTF-8 sequence survives unchanged.
+        .{ .text = "caf\xc3\xa9 \xe2\x9c\x93", .decoded = "caf\xc3\xa9 \xe2\x9c\x93" },
+        .{ .text = "", .decoded = "" },
+    };
+    for (cases) |case| {
+        var buf: [64]u8 = undefined;
+        const len = jsonEscape(case.text, &buf);
+        var frame_buf: [128]u8 = undefined;
+        const frame = try std.fmt.bufPrint(&frame_buf, "{{\"message\":\"{s}\"}}", .{buf[0..len]});
+        const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, frame, .{});
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings(case.decoded, parsed.value.object.get("message").?.string);
+    }
+}
+
+test "jsonEscape never writes past the buffer or half an escape" {
+    // Callers size the buffer for the worst case, but a short one must stop
+    // at a character boundary: a truncated \u00XX leaves the client reading a
+    // backslash escape that was never finished.
+    const text = "a\"b\\c\nd\x01e";
+    var full: [text.len * 6]u8 = undefined;
+    const full_len = jsonEscape(text, &full);
+    for (0..full_len + 1) |out_len| {
+        var buf: [text.len * 6]u8 = @splat(0xAA);
+        const len = jsonEscape(text, buf[0..out_len]);
+        try std.testing.expect(len <= out_len);
+        // Whatever survived has to be a prefix of the untruncated escape, so
+        // it never ends mid-escape.
+        try std.testing.expectEqualStrings(full[0..len], buf[0..len]);
+    }
+}

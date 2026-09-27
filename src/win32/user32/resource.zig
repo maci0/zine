@@ -414,3 +414,62 @@ pub fn LoadBitmapW(hInstance: usize, lpBitmapName: usize) callconv(w32cc.WINAPI)
     if (bmp != 0) return bmp;
     return 0xB17B0001; // Dummy bitmap handle
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+test "a handle that names no mapping resolves to no image" {
+    // A guest can pass any hInstance. Only a mapping the registry knows has a
+    // length, so an address one byte past the mapped base, or a readable host
+    // address the registry never saw, must resolve to nothing rather than to
+    // an image whose offsets are unchecked.
+    const env_mod = @import("../../loader/env.zig");
+    const Module = @import("../../loader/module.zig").Module;
+    const testing = std.testing;
+
+    const saved_env = kernel32.global_env;
+    const saved_main = kernel32.main_module_handle;
+    defer {
+        kernel32.global_env = saved_env;
+        kernel32.main_module_handle = saved_main;
+    }
+
+    var environment = env_mod.Environment.init(testing.allocator);
+    defer {
+        _ = environment.registry.modules.fetchRemove("game.dll");
+        environment.deinit();
+    }
+
+    const image = try testing.allocator.alignedAlloc(u8, .fromByteUnits(4096), 4096);
+    defer testing.allocator.free(image);
+    @memset(image, 0);
+
+    var stand_in: Module = undefined;
+    stand_in.path = "bin/game.dll";
+    stand_in.mapped_memory = image;
+    try environment.registry.modules.put("game.dll", &stand_in);
+    kernel32.global_env = &environment;
+    kernel32.main_module_handle = 0;
+
+    const base = @intFromPtr(image.ptr);
+    try testing.expectEqual(@as(usize, image.len), imageForHandle(base).?.len);
+
+    for ([_]usize{ 0, base + 1, base - 1, @intFromPtr(&stand_in), std.math.maxInt(usize) }) |handle| {
+        try testing.expect(imageForHandle(handle) == null);
+    }
+
+    // The stubs must clear the caller's buffer and report zero for an
+    // unregistered handle, rather than walking a length they never learned.
+    var decoy: [64]u8 = @splat('A');
+    try testing.expectEqual(@as(i32, 0), LoadStringA(@ptrFromInt(base + 1), 1, &decoy, decoy.len));
+    try testing.expectEqual(@as(u8, 0), decoy[0]);
+    // The rest of the buffer is the caller's to reuse; the stub writes only
+    // the terminator it promises.
+    try testing.expectEqual(@as(u8, 'A'), decoy[1]);
+
+    var wide: [64]u16 = @splat(0x0041);
+    try testing.expectEqual(@as(i32, 0), LoadStringW(@ptrFromInt(base + 1), 1, @intFromPtr(&wide), wide.len));
+    try testing.expectEqual(@as(u16, 0), wide[0]);
+    try testing.expectEqual(@as(u16, 0x0041), wide[1]);
+}

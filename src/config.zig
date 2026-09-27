@@ -192,6 +192,12 @@ fn isValidHost(host: []const u8) bool {
 }
 
 test "defaults bind loopback only" {
+    const saved_server = web_server;
+    const saved_clock = clock;
+    defer {
+        web_server = saved_server;
+        clock = saved_clock;
+    }
     var env = std.process.Environ.Map.init(std.testing.allocator);
     defer env.deinit();
 
