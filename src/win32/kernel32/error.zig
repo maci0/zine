@@ -380,7 +380,7 @@ pub fn RaiseException(dwExceptionCode: u32, dwExceptionFlags: u32, nNumberOfArgu
 }
 
 /// Saved signal context when dispatching SEH from a signal handler.
-pub var signal_context: ?*@import("../../platform/native.zig").ucontext_t = null;
+pub var signal_context: ?*@import("../../platform/signal_context.zig").ucontext_t = null;
 
 /// Saved CONTEXT from signal handler for hardware exceptions (SIGILL/SIGSEGV).
 pub var saved_hw_context: ?*@import("../teb.zig").CONTEXT = null;
@@ -428,7 +428,7 @@ pub fn RtlUnwind(targetFrame: u32, targetIp: u32, pExceptionRecord: usize, retur
     // This prevents the handler from jumping out of the signal handler context.
     if (signal_context) |uctx| {
         if (targetIp != 0 and comptime platform.is_native) {
-            const REG = @import("../../platform/native.zig").REG;
+            const REG = @import("../../platform/signal_context.zig").REG;
             const frame_ebp = targetFrame +% 8;
             if (comptime platform.is_x86) {
                 uctx.mcontext.gregs[REG.EIP] = targetIp;

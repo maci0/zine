@@ -120,8 +120,8 @@ pub fn makeExitStub() u32 {
 /// Reads the guest stack (32-bit ESP from ucontext), calls the 64-bit
 /// Zig stub, writes the return value to EAX, adjusts ESP for stdcall,
 /// and sets RIP to the return address so the guest resumes after the CALL.
-pub fn dispatchFromSignal(uctx: *@import("../platform/native.zig").ucontext_t, thunk_id: u32) void {
-    const REG = @import("../platform/native.zig").REG;
+pub fn dispatchFromSignal(uctx: *@import("../platform/signal_context.zig").ucontext_t, thunk_id: u32) void {
+    const REG = @import("../platform/signal_context.zig").REG;
 
     if (thunk_id >= thunks.MAX_THUNKS) {
         log.err("compat_thunks: invalid thunk ID {d}", .{thunk_id});
@@ -278,8 +278,8 @@ var return_thunk_id: u32 = 0;
 
 /// Signal-level return handler. Called by dispatchFromSignal for the return thunk.
 /// Restores 64-bit mode by modifying the ucontext.
-fn returnFromCompat(uctx: *@import("../platform/native.zig").ucontext_t) void {
-    const REG = @import("../platform/native.zig").REG;
+fn returnFromCompat(uctx: *@import("../platform/signal_context.zig").ucontext_t) void {
+    const REG = @import("../platform/signal_context.zig").REG;
     if (saved_depth == 0) {
         log.err("compat_thunks: return with empty saved stack", .{});
         std.process.exit(1);

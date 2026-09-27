@@ -453,6 +453,7 @@ zine/
 │   ├── version.zig          # Single source of truth for version string
 │   ├── platform/
 │   │   ├── native.zig       # Linux-specific implementation
+│   │   ├── signal_context.zig # Host REG indices and glibc-compatible ucontext_t types
 │   │   └── wasm.zig         # WASM-specific implementation
 │   ├── x86/
 │   │   ├── cpu.zig          # CPU state struct
