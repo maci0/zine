@@ -1627,12 +1627,6 @@ pub fn stub_SuspendThread(hThread: usize) callconv(w32cc.WINAPI) u32 {
     return 0; // Previous suspend count = 0
 }
 
-/// Implementation status: Stub
-pub fn stub_GetThreadPriority(hThread: usize) callconv(w32cc.WINAPI) i32 {
-    _ = hThread;
-    return 0; // THREAD_PRIORITY_NORMAL
-}
-
 // -------------------------------------------------------------------------
 // Module / atom / env-string functions (moved from misc.zig)
 // -------------------------------------------------------------------------

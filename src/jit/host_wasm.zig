@@ -17,7 +17,8 @@ const host = @import("host.zig");
 extern "jit" fn jit_compile(wasm_ptr: u32, wasm_len: u32) i32;
 extern "jit" fn jit_call(block_id: i32) void;
 
-fn compile(_: *anyopaque, wasm_bytes: []const u8) ?host.BlockId {
+/// Hands a compiled WASM block to the host, or null when the host rejects it.
+pub fn compile(wasm_bytes: []const u8) ?host.BlockId {
     const ptr: u32 = @intFromPtr(wasm_bytes.ptr);
     const len: u32 = @intCast(wasm_bytes.len);
     const result = jit_compile(ptr, len);
@@ -25,21 +26,7 @@ fn compile(_: *anyopaque, wasm_bytes: []const u8) ?host.BlockId {
     return @intCast(result);
 }
 
-fn call(_: *anyopaque, block_id: host.BlockId) void {
+/// Runs a block previously accepted by `compile`.
+pub fn call(block_id: host.BlockId) void {
     jit_call(@intCast(block_id));
-}
-
-fn deinitBlock(_: *anyopaque, _: host.BlockId) void {}
-
-// Singleton context (stateless — all state lives on the host side).
-var ctx: u8 = 0;
-
-/// Returns a JitHost backed by WASM extern imports.
-pub fn wasmJitHost() host.JitHost {
-    return .{
-        .compile_fn = &compile,
-        .call_fn = &call,
-        .deinit_block_fn = &deinitBlock,
-        .ctx = @ptrCast(&ctx),
-    };
 }

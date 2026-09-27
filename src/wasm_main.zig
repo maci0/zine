@@ -938,7 +938,6 @@ fn runInterpretedOnly(cpu: *x86_cpu.Cpu) void {
 /// CPU state is transferred via JitCpuState in shared linear memory.
 fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: u32) void {
     const host_wasm = @import("jit/host_wasm.zig");
-    const jit_host = host_wasm.wasmJitHost();
 
     // Allocate the JitCpuState in the arena — its WASM linear memory
     // address is used by the generated code for state transfer.
@@ -1008,7 +1007,7 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: 
 
                         if (jit.compile(eip, code[0..block_len])) |wasm_bin| {
                             // Send to host for compilation
-                            if (jit_host.compile(wasm_bin)) |new_block_id| {
+                            if (host_wasm.compile(wasm_bin)) |new_block_id| {
                                 block_index.store(eip, code[0..block_len], new_block_id);
                                 blocks_compiled += 1;
                                 if (blocks_compiled <= 10) {
@@ -1042,7 +1041,7 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: 
                 jit_state.fs_base = cpu.fs_base;
 
                 // Execute the compiled block via the host
-                jit_host.call(bid);
+                host_wasm.call(bid);
 
                 // Read state back
                 cpu.eax = jit_state.eax;

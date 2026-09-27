@@ -59,28 +59,5 @@ pub const JitCpuState = extern struct {
     }
 };
 
-/// Opaque block identifier returned by compile.
+/// Opaque block identifier returned by the host's compile import.
 pub const BlockId = u32;
-
-/// JIT host interface.
-///
-/// Implementations:
-/// - WASM guest: extern imports provided by zine-host (host_wasm.zig)
-pub const JitHost = struct {
-    compile_fn: *const fn (ctx: *anyopaque, wasm_bytes: []const u8) ?BlockId,
-    call_fn: *const fn (ctx: *anyopaque, block_id: BlockId) void,
-    deinit_block_fn: *const fn (ctx: *anyopaque, block_id: BlockId) void,
-    ctx: *anyopaque,
-
-    pub fn compile(self: *const JitHost, wasm_bytes: []const u8) ?BlockId {
-        return self.compile_fn(self.ctx, wasm_bytes);
-    }
-
-    pub fn call(self: *const JitHost, block_id: BlockId) void {
-        self.call_fn(self.ctx, block_id);
-    }
-
-    pub fn deinitBlock(self: *const JitHost, block_id: BlockId) void {
-        self.deinit_block_fn(self.ctx, block_id);
-    }
-};

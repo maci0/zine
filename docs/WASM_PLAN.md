@@ -318,7 +318,7 @@ a browser runtime).
 - [x] Prologue/epilogue (load/store registers + EFLAGS)
 - [x] mem_base translation (guest VA → WASM linear address)
 - [x] Control flow detection (stop at branches, let interpreter handle)
-- [x] JitHost interface + WASM guest implementation
+- [x] WASM guest host bindings over `jit_compile`/`jit_call`
 - [x] zine-host skeleton (wasmer C API)
 - [x] Benchmark mode 8 (zine-host + JIT)
 - [x] Implement zine-host wasmer C API integration (WASI + JIT host in `src/host_main.zig`; end-to-end via `zine-host --jit`)

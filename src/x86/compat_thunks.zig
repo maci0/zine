@@ -262,14 +262,11 @@ pub fn dispatchFromSignal(uctx: *@import("../platform/native.zig").ucontext_t, t
 
 /// Saved state for returning from compat mode calls. Supports nesting
 /// (e.g. DllMain -> _initterm -> callCompat32 for each init function).
+/// The callee-saved registers are not held here: the asm block pushes and
+/// pops them on the stack, so only the two addresses it takes by name and the
+/// returned value live in the struct.
 const SavedState = struct {
     rsp: u64,
-    rbp: u64,
-    rbx: u64,
-    r12: u64,
-    r13: u64,
-    r14: u64,
-    r15: u64,
     rip: u64,
     result: u32,
 };

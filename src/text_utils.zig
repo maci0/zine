@@ -51,23 +51,6 @@ pub fn wideToUtf8(wide: []const u16, out: []u8) []const u8 {
     return out[0..n];
 }
 
-/// `wideToUtf8` into freshly allocated memory. Caller owns the result.
-pub fn wideToUtf8Alloc(allocator: std.mem.Allocator, wide: []const u16) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer out.deinit(allocator);
-    // One UTF-16 unit yields at most three UTF-8 bytes (U+FFFD is three).
-    try out.ensureTotalCapacity(allocator, wide.len * 3);
-    var i: usize = 0;
-    while (i < wide.len) {
-        const step = nextCodepoint(wide, i);
-        i = step.next;
-        var buf: [4]u8 = undefined;
-        const written = std.unicode.utf8Encode(step.cp, &buf) catch break;
-        try out.appendSlice(allocator, buf[0..written]);
-    }
-    return out.toOwnedSlice(allocator);
-}
-
 /// Encode one code point as UTF-16 (1 or 2 code units, surrogate pair).
 /// Surrogate code points never reach here: `nextCodepoint` replaces them.
 fn encodeUtf16(cp: u21, out: *[2]u16) usize {
@@ -163,16 +146,6 @@ test "wideToUtf8 stops on a code point boundary" {
     const written = wideToUtf8(&wide, &out);
     try testing.expectEqual(@as(usize, 510), written.len);
     _ = try std.unicode.Utf8View.init(written);
-}
-
-test "wideToUtf8Alloc matches the fixed-size path" {
-    const allocator = testing.allocator;
-    const wide = [_]u16{ 'x', 0xD83D, 0xDE00, 0xD800, 'y' };
-    var buf: [16]u8 = undefined;
-    const inline_text = wideToUtf8(&wide, &buf);
-    const owned = try wideToUtf8Alloc(allocator, &wide);
-    defer allocator.free(owned);
-    try testing.expectEqualStrings(inline_text, owned);
 }
 
 test "utf8ToWide encodes astral characters as surrogate pairs" {
