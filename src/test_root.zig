@@ -16,6 +16,7 @@ comptime {
 
     // JIT compiler tests
     _ = @import("jit/compiler.zig");
+    _ = @import("jit/host.zig");
 
     // Loader tests
     _ = @import("loader/menu_parser.zig");

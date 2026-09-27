@@ -123,6 +123,21 @@ fn jitCall(args: [*c]const c.wasm_val_vec_t, results: [*c]c.wasm_val_vec_t) call
     return null;
 }
 
+/// jit_reset_blocks()
+/// Releases every compiled block and resets the id counter, so a long
+/// session does not exhaust the fixed block table after a cache flush.
+fn jitResetBlocks(_: [*c]const c.wasm_val_vec_t, _: [*c]c.wasm_val_vec_t) callconv(.c) ?*c.wasm_trap_t {
+    var i: usize = 0;
+    while (i < @as(usize, @intCast(jit_block_count))) : (i += 1) {
+        if (jit_instances[i]) |instance| c.wasm_instance_delete(instance);
+        jit_instances[i] = null;
+        if (jit_modules[i]) |module| c.wasm_module_delete(module);
+        jit_modules[i] = null;
+    }
+    jit_block_count = 0;
+    return null;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -349,6 +364,17 @@ pub fn main(init: std.process.Init) !void {
     defer c.wasm_functype_delete(call_functype);
     const call_func = c.wasm_func_new(store, call_functype, &jitCall);
 
+    // jit_reset_blocks: () -> ()
+    const reset_functype = blk: {
+        var params: c.wasm_valtype_vec_t = undefined;
+        c.wasm_valtype_vec_new_empty(&params);
+        var results: c.wasm_valtype_vec_t = undefined;
+        c.wasm_valtype_vec_new_empty(&results);
+        break :blk c.wasm_functype_new(&params, &results);
+    };
+    defer c.wasm_functype_delete(reset_functype);
+    const reset_func = c.wasm_func_new(store, reset_functype, &jitResetBlocks);
+
     // Build imports array matching the module's import list.
     // wasi_get_imports FAILS on modules with non-WASI imports (it tries to
     // resolve every import, including our custom "jit" ones), so use
@@ -409,6 +435,8 @@ pub fn main(init: std.process.Init) !void {
                 wasi_imports.data[i] = c.wasm_func_as_extern(compile_func);
             } else if (std.mem.eql(u8, field_slice, "jit_call")) {
                 wasi_imports.data[i] = c.wasm_func_as_extern(call_func);
+            } else if (std.mem.eql(u8, field_slice, "jit_reset_blocks")) {
+                wasi_imports.data[i] = c.wasm_func_as_extern(reset_func);
             }
         }
     }

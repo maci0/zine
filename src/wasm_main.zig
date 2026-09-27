@@ -916,6 +916,7 @@ const build_options = @import("build_options");
 
 var global_jit_ptr: ?*jit_compiler.JitCompiler = null;
 var global_block_index_ptr: ?*jit_compiler.BlockIndex = null;
+var global_jit_host_ptr: ?*jit_host_mod.JitHost = null;
 
 fn flushJitCache() callconv(.c) void {
     if (global_block_index_ptr) |index| {
@@ -923,6 +924,13 @@ fn flushJitCache() callconv(.c) void {
     }
     if (global_jit_ptr) |j| {
         @memset(&j.block_cache_keys, jit_compiler.EMPTY_KEY);
+    }
+    // Every block id handed out so far is now unreferenced, so release them.
+    // The host hands ids out of a fixed table; without this a session that
+    // flushes (self-modifying code) or recompiles enough blocks would see
+    // compile start failing and never recover.
+    if (global_jit_host_ptr) |h| {
+        h.resetAll();
     }
 }
 
@@ -967,10 +975,12 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: 
     // Register SMC invalidation hook globally
     global_jit_ptr = &jit;
     global_block_index_ptr = &block_index;
+    global_jit_host_ptr = &jit_host;
     stub_common.smc_invalidate_cache = flushJitCache;
     defer {
         global_jit_ptr = null;
         global_block_index_ptr = null;
+        global_jit_host_ptr = null;
         stub_common.smc_invalidate_cache = null;
     }
 

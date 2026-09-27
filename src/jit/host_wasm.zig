@@ -10,12 +10,16 @@
 //!   jit_call(block_id)
 //!     Instantiates and calls the compiled module's "run" export.
 //!     CPU state is transferred via JitCpuState at a known address.
+//!   jit_reset_blocks()
+//!     Releases every compiled block and makes the ids reusable. The guest
+//!     calls it when the block cache is flushed.
 
 const host = @import("host.zig");
 
 // Extern imports — resolved by the host at instantiation time.
 extern "jit" fn jit_compile(wasm_ptr: u32, wasm_len: u32) i32;
 extern "jit" fn jit_call(block_id: i32) void;
+extern "jit" fn jit_reset_blocks() void;
 
 /// Hands a compiled WASM block to the host, or null when the host rejects it.
 pub fn compile(wasm_bytes: []const u8) ?host.BlockId {
@@ -29,4 +33,21 @@ pub fn compile(wasm_bytes: []const u8) ?host.BlockId {
 /// Runs a block previously accepted by `compile`.
 pub fn call(block_id: host.BlockId) void {
     jit_call(@intCast(block_id));
+}
+
+fn resetAll(_: *anyopaque) void {
+    jit_reset_blocks();
+}
+
+// Singleton context (stateless — all state lives on the host side).
+var ctx: u8 = 0;
+
+/// Returns a JitHost backed by WASM extern imports.
+pub fn wasmJitHost() host.JitHost {
+    return .{
+        .compile_fn = &compile,
+        .call_fn = &call,
+        .reset_all_fn = &resetAll,
+        .ctx = @ptrCast(&ctx),
+    };
 }
