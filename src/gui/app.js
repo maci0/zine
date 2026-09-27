@@ -627,7 +627,7 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
         if (bsType === 7) {
             // BS_GROUPBOX
             return fieldset({style: absPos + ' border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); margin:0; padding:4px;'},
-                legend({style: 'font-size:11px; padding:0 4px; color:black;'}, item.text)
+                legend({style: 'font-size:11px; padding:0 4px; color:var(--sys-text);'}, item.text)
             );
         }
         if (bsType === 2 || bsType === 3) {
@@ -679,7 +679,7 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
 
     // ListBox
     if (cls === 'ListBox') {
-        return div({class: 'win2k-listbox', style: absPos + ' overflow-y:auto; border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); background:white;', "data-id": item.id});
+        return div({class: 'win2k-listbox', style: absPos, "data-id": item.id});
     }
 
     // ComboBox
@@ -726,13 +726,13 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
 
     // msctls_updown32
     if (cls === 'msctls_updown32') {
-        return div({"data-id": item.id, class: 'win2k-updown', style: absPos + ' display:flex; align-items:center; justify-content:center; border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); background:#fff;'},
+        return div({"data-id": item.id, class: 'win2k-updown', style: absPos + ' display:flex; align-items:center; justify-content:center; border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); background:var(--sys-window);'},
             span({class: 'win2k-updown-val', style: 'font-size:11px;'}, '0'));
     }
 
     // SysDateTimePick32
     if (cls === 'SysDateTimePick32') {
-        return div({"data-id": item.id, class: 'win2k-dtp', style: absPos + ' display:flex; align-items:center; justify-content:center; border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); background:#fff;'},
+        return div({"data-id": item.id, class: 'win2k-dtp', style: absPos + ' display:flex; align-items:center; justify-content:center; border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); background:var(--sys-window);'},
             span({style: 'font-size:11px;'}, item.text || '2000-01-01'));
     }
 
@@ -1937,10 +1937,16 @@ function connect() {
                     desktop.parentNode.replaceChild(newDesktop, desktop);
                     desktopItems = msg.items || [];
                     desktopItemsLoaded = true;
-                    const folderSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><path d="M2 6h12l2 3h14v19H2z" fill="#FEC64F" stroke="#996515" stroke-width="0.5"/><path d="M2 9h28v16H2z" fill="#FEC64F"/></svg>`;
-                    const docSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><path d="M6 2h14l6 6v22H6z" fill="#fff" stroke="#888" stroke-width="0.8"/><path d="M20 2l6 6h-6z" fill="#ccc" stroke="#888" stroke-width="0.5"/><line x1="10" y1="14" x2="22" y2="14" stroke="#999" stroke-width="0.8"/><line x1="10" y1="17" x2="22" y2="17" stroke="#999" stroke-width="0.8"/><line x1="10" y1="20" x2="18" y2="20" stroke="#999" stroke-width="0.8"/></svg>`;
-                    const exeSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><rect x="4" y="2" width="24" height="28" rx="2" fill="#ddd" stroke="#666" stroke-width="0.8"/><rect x="7" y="5" width="18" height="12" fill="#000080"/><rect x="9" y="8" width="4" height="2" fill="#0f0"/><rect x="15" y="8" width="6" height="2" fill="#0ff"/><rect x="9" y="11" width="8" height="2" fill="#ff0"/><rect x="8" y="20" width="7" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/><rect x="17" y="20" width="7" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/><rect x="8" y="25" width="16" height="3" rx="1" fill="#c0c0c0" stroke="#888" stroke-width="0.5"/></svg>`;
-                    const gbSvg = `<svg viewBox="0 0 32 32" width="32" height="32"><rect x="6" y="1" width="20" height="30" rx="3" fill="#c0b8a0" stroke="#888" stroke-width="0.8"/><rect x="9" y="4" width="14" height="12" rx="1" fill="#8bac0f" stroke="#666" stroke-width="0.5"/><circle cx="22" cy="21" r="3" fill="#a00050"/><circle cx="18" cy="24" r="2" fill="#a00050"/><rect x="9" y="21" width="5" height="1.5" rx="0.5" fill="#444"/><rect x="10.5" y="19.5" width="1.5" height="5" rx="0.5" fill="#444"/></svg>`;
+                    // The desktop shows the same small icons the file dialog and
+                    // the Places bar use, so a folder looks like one folder.
+                    const iconSrc = item => {
+                        if (item.icon) return 'data:image/x-icon;base64,' + item.icon;
+                        if (item.is_dir) return 'assets/folder.svg';
+                        const ext = (item.ext || '').toLowerCase();
+                        if (ext === 'exe') return 'assets/exe.svg';
+                        if (ext === 'gb' || ext === 'gbc' || ext === 'mgb') return 'assets/gb.svg';
+                        return 'assets/file.svg';
+                    };
 
                     let selectedIcon = null;
                     (msg.items || []).forEach(item => {
@@ -1950,20 +1956,12 @@ function connect() {
                         iconEl.tabIndex = 0;
 
                         const imgContainer = document.createElement('div');
-                        if (item.icon) {
-                            const img = document.createElement('img');
-                            img.src = 'data:image/x-icon;base64,' + item.icon;
-                            img.width = 32; img.height = 32;
-                            img.style.imageRendering = 'pixelated';
-                            imgContainer.appendChild(img);
-                        } else if (item.is_dir) {
-                            imgContainer.innerHTML = folderSvg;
-                        } else {
-                            const ext = (item.ext || '').toLowerCase();
-                            if (ext === 'exe') imgContainer.innerHTML = exeSvg;
-                            else if (ext === 'gb' || ext === 'gbc' || ext === 'mgb') imgContainer.innerHTML = gbSvg;
-                            else imgContainer.innerHTML = docSvg;
-                        }
+                        const img = document.createElement('img');
+                        img.src = iconSrc(item);
+                        img.alt = '';
+                        img.width = 32; img.height = 32;
+                        img.style.imageRendering = 'pixelated';
+                        imgContainer.appendChild(img);
                         iconEl.appendChild(imgContainer);
 
                         const lbl = document.createElement('div');

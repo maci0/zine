@@ -1,0 +1,12 @@
+<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges">
+  <!-- Game Boy cartridge, the shape Zine is usually pointed at. Surface
+       colors follow the sys tokens in win2k.css. -->
+  <rect x="6" y="1" width="20" height="30" fill="#808080" stroke="#404040" stroke-width="1"/>
+  <path d="M7 2h18v1H7z" fill="#D4D0C8"/>
+  <rect x="9" y="4" width="14" height="12" fill="#8BAC0F" stroke="#404040" stroke-width="1"/>
+  <rect x="9" y="17" width="5" height="4" fill="#404040"/>
+  <rect x="11" y="19" width="1" height="9" fill="#404040"/>
+  <rect x="9" y="27" width="5" height="1" fill="#404040"/>
+  <circle cx="21" cy="21" r="3" fill="#A00050"/>
+  <circle cx="17" cy="25" r="2" fill="#A00050"/>
+</svg>

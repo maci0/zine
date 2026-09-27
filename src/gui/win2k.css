@@ -615,18 +615,24 @@ canvas {
     -webkit-user-drag: none;
 }
 
+/* Host status line: the connection and API errors it reports have no
+   window of their own, so it wears the tooltip surface rather than
+   floating text on the desktop, where white on --sys-desktop lands near
+   5:1 and any tint of it below. */
 #status {
     position: absolute;
     top: 4px;
     right: 8px;
-    color: white;
+    background-color: var(--sys-info);
+    color: var(--sys-info-text);
+    border: 1px solid var(--sys-frame);
+    padding: 1px 4px;
     font-size: 10px;
     z-index: 100;
 }
 
-/* Connection and API error text over the desktop background */
 #status.error {
-    color: #FFB0B0;
+    color: var(--sys-error);
 }
 
 /* ===================================================================
