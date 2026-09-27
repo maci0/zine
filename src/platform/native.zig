@@ -186,10 +186,14 @@ pub fn munmap(slice: []align(4096) u8) void {
 // Process
 // -------------------------------------------------------------------------
 
-/// Returns the process ID of the current process.
+/// See `platform.guest_process_id`. The host's real pid is deliberately not
+/// reported: it changes on every run, so a guest that writes it to output
+/// could not replay byte-for-byte under a virtual clock.
+pub const guest_process_id: u32 = 4;
+
+/// Returns the process ID the guest sees.
 pub fn getProcessId() u32 {
-    // Linux-specific — no cross-platform Zig std equivalent
-    return @intCast(std.os.linux.getpid());
+    return guest_process_id;
 }
 
 /// Terminates the current process with the given exit code.

@@ -63,7 +63,13 @@ pub const spawnThread = backend.spawnThread;
 // Process
 // -------------------------------------------------------------------------
 
-/// Returns the current process ID.
+/// Process ID the guest sees, from `GetCurrentProcessId`. The guest runs
+/// inside the emulator process, so there is no host pid to report: the host's
+/// differs on every run, so a guest writing it to a file or a log could not be
+/// replayed from a seed. Every backend reports the same value, so a native and
+/// a wasm run of the same guest agree.
+pub const guest_process_id = backend.guest_process_id;
+/// Returns the process ID the guest sees (`guest_process_id`).
 pub const getProcessId = backend.getProcessId;
 /// Exits the current process with the specified status code.
 pub const exitProcess = backend.exitProcess;

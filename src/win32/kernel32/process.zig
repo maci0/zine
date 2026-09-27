@@ -553,12 +553,18 @@ pub fn GetCurrentProcess() callconv(w32cc.WINAPI) usize {
     return 0xFFFFFFFF; // Pseudo-handle for current process
 }
 
+/// Implementation status: Fully implemented
+///
+/// The emulator process, not a spawned one: a guest that writes the id to a
+/// file or a log gets the same bytes on every run, which a host pid could not
+/// deliver.
 pub fn GetCurrentProcessId() callconv(w32cc.WINAPI) u32 {
     return platform.getProcessId();
 }
 
+/// Implementation status: Fully implemented
 pub fn GetCurrentThreadId() callconv(w32cc.WINAPI) u32 {
-    return @intCast(std.Thread.getCurrentId());
+    return currentGuestThreadId();
 }
 
 /// Implementation status: Partially implemented
@@ -1094,6 +1100,28 @@ pub fn GetEnvironmentStringsW() callconv(w32cc.WINAPI) ?*anyopaque {
 const ThreadStartFn = *const fn (usize) callconv(w32cc.WINAPI) u32;
 var next_thread_handle: usize = 0xA0010001;
 
+/// Thread id the main thread reports. It owns no registry slot, and Windows
+/// starts user-mode thread ids at 2, which the first CreateThread handle also
+/// avoids.
+pub const main_thread_id: u32 = 2;
+
+/// Guest-visible id of a registry slot, the same value CreateThread writes
+/// through `lpThreadId`.
+fn guestThreadId(handle: usize) u32 {
+    return @truncate(handle & 0xFFFF);
+}
+
+/// Thread id of the calling thread, from the registry slot it runs in.
+fn currentGuestThreadId() u32 {
+    if (comptime platform.is_native) {
+        const host_id = std.Thread.getCurrentId();
+        for (&thread_registry) |*ti| {
+            if (ti.handle != 0 and ti.isRunning() and ti.hostThreadId() == host_id) return guestThreadId(ti.handle);
+        }
+    }
+    return main_thread_id;
+}
+
 // --- Thread Handle Registry ---
 // Tracks guest threads for lifecycle management (WaitForSingleObject, ExitThread).
 const MAX_GUEST_THREADS = 32;
@@ -1419,7 +1447,7 @@ pub fn CreateThread(lpThreadAttributes: usize, dwStackSize: usize, lpStartAddres
     };
 
     if (lpThreadId != 0) {
-        @as(*u32, @ptrFromInt(lpThreadId)).* = @intCast(handle & 0xFFFF);
+        @as(*u32, @ptrFromInt(lpThreadId)).* = guestThreadId(handle);
     }
 
     if (comptime platform.is_native) {
@@ -1823,6 +1851,25 @@ test "closeChildProcHandle frees reaped slots only" {
     // Live children keep their slot so they can still be waited on.
     try std.testing.expect(closeChildProcHandle(h_live));
     try std.testing.expect(getChildProc(h_live) != null);
+}
+
+test "guest process and thread ids do not depend on the host" {
+    // The host pid and pthread ids change on every run; the ids the guest
+    // reads must not, or a replay of the same seed produces other bytes.
+    try std.testing.expectEqual(platform.guest_process_id, GetCurrentProcessId());
+    try std.testing.expectEqual(main_thread_id, GetCurrentThreadId());
+
+    const saved_registry = thread_registry;
+    defer thread_registry = saved_registry;
+    for (&thread_registry) |*ti| ti.* = .{};
+
+    // A claimed slot reports the id CreateThread wrote through lpThreadId,
+    // not the host thread id that happens to be running it.
+    var owned_id: u32 = 0;
+    const ti = claimThreadInfo(0xA0010001).?;
+    ti.setHostThreadId(std.Thread.getCurrentId());
+    owned_id = GetCurrentThreadId();
+    try std.testing.expectEqual(@as(u32, 0x0001), owned_id);
 }
 
 test "thread registry recycles finished slots" {

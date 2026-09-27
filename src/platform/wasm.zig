@@ -90,9 +90,12 @@ pub fn munmap(slice: []align(4096) u8) void {
     std.heap.page_allocator.free(slice);
 }
 
-/// Returns the process ID of the current process.
+/// See `platform.guest_process_id`.
+pub const guest_process_id: u32 = 4;
+
+/// Returns the process ID the guest sees.
 pub fn getProcessId() u32 {
-    return 1;
+    return guest_process_id;
 }
 
 /// Terminates the current process with the given exit code.

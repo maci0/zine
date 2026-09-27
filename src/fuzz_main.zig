@@ -16,6 +16,7 @@
 const std = @import("std");
 const fuzz_options = @import("fuzz_options");
 const mutation = @import("fuzz/mutation.zig");
+const seed_source = @import("fuzz/seed.zig");
 const bat_fuzz = @import("fuzz/bat.zig");
 const dialog_fuzz = @import("fuzz/dialog.zig");
 const icon_fuzz = @import("fuzz/icon.zig");
@@ -25,11 +26,6 @@ const pe_fuzz = @import("fuzz/pe.zig");
 
 /// Where failing inputs are written, relative to the working directory.
 const crash_dir = "zig-out/fuzz";
-
-/// Mutation seed used when `ZINE_FUZZ_SEED` is unset. A fixed value, not a
-/// hash of a constant string: the printed seed is what a failing run is
-/// replayed from, so it has to be readable and settable.
-const default_seed: u64 = 0x5eed_f022_1ab7_5c0d;
 
 const Target = struct {
     name: []const u8,
@@ -71,7 +67,7 @@ pub fn main(init: std.process.Init) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     var buffer: [mutation.max_input_len]u8 = undefined;
-    const seed = try mutationSeed(init.environ_map);
+    const seed = try seed_source.fromEnv(init.environ_map.get("ZINE_FUZZ_SEED"));
     var prng = std.Random.DefaultPrng.init(seed);
     const rand = prng.random();
     std.debug.print("fuzz: seed 0x{x}\n", .{seed});
@@ -105,15 +101,6 @@ pub fn main(init: std.process.Init) !void {
         }
         std.debug.print("fuzz: {s}: {d} inputs, {d} failures\n", .{ target.name, executed, failures });
     }
-}
-
-/// The mutation stream's only entropy source. `ZINE_FUZZ_SEED` selects it so a
-/// run can be repeated exactly; an unparsable value is rejected rather than
-/// silently falling back, which would replay a different stream than the one
-/// that failed.
-fn mutationSeed(env: *const std.process.Environ.Map) !u64 {
-    const text = env.get("ZINE_FUZZ_SEED") orelse return default_seed;
-    return std.fmt.parseInt(u64, text, 0) catch error.InvalidFuzzSeed;
 }
 
 fn report(

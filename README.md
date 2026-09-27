@@ -578,11 +578,15 @@ ZINE_VIRTUAL_CLOCK_NS=1700000000000000000 ./zig-out/bin/zine.x86_64 drive_c/myap
 
 Emulator instrumentation (log timestamps, the profiler) always reads the host
 clock, so simulated time never distorts the measurements of the run itself.
-`ZINE_CLOCK_STEP_NS` without `ZINE_VIRTUAL_CLOCK_NS` exits with status 2, as
-does a negative or malformed value for either variable. The clock covers time
-only: file contents, network results, and OS thread interleaving still come
-from the host, so a replay is byte-for-byte reproducible only for a guest whose
-behavior does not depend on them.
+The identifiers the guest reads are emulated too: `GetCurrentProcessId` and
+`GetCurrentThreadId` report a fixed process id and a per-thread id taken from
+the thread registry in creation order, never the host's pid or pthread ids,
+which differ on every run and on every backend. `ZINE_CLOCK_STEP_NS` without
+`ZINE_VIRTUAL_CLOCK_NS` exits with status 2, as does a negative or malformed
+value for either variable. The clock covers time only: file contents, network
+results, and OS thread interleaving still come from the host, so a replay is
+byte-for-byte reproducible only for a guest whose behavior does not depend on
+them.
 
 `ZINE_CWD` is how a WASI runtime tells the build where the guest should run,
 since WASI has no `realpath`. It must be an absolute POSIX path; a relative or
@@ -709,7 +713,9 @@ there reaches CI without a second copy. `ZINE_FUZZ_SECONDS` sets the seconds
 each fuzz target runs (10 locally, 60 in CI). `ZINE_FUZZ_SEED` selects the
 mutation stream's seed, which the driver also prints on startup and on every
 failure together with the case index, so a failing input can be regenerated;
-a malformed value exits rather than running a different stream.
+a malformed value exits rather than running a different stream. The unit tests
+replay the mutation sweep from the same default seed, so an input the driver
+blames is one the test gate re-derives.
 
 For the edit-test loop, use `zig build test -Dtest-filter=<substring>` above;
 `-Darch` does not change the host target of unit tests. Run

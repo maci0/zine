@@ -8,6 +8,7 @@
 const std = @import("std");
 const testing = std.testing;
 const mutation = @import("mutation.zig");
+const seed_source = @import("seed.zig");
 const bat_fuzz = @import("bat.zig");
 const dialog_fuzz = @import("dialog.zig");
 const icon_fuzz = @import("icon.zig");
@@ -23,7 +24,9 @@ fn replay(
     seeds: []const []const u8,
     comptime run: fn (std.mem.Allocator, []u8) anyerror!void,
 ) !void {
-    var prng = std.Random.DefaultPrng.init(0x5EED_F0_0D);
+    // The same seed `zig build fuzz` streams from (seed.default), so an input
+    // the driver blamed is one of the inputs this sweep derives.
+    var prng = std.Random.DefaultPrng.init(seed_source.default);
     const rand = prng.random();
     var buffer: [mutation.max_input_len]u8 = undefined;
 

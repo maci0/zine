@@ -317,6 +317,7 @@ On native targets, Zine installs a `SIGSEGV`/`SIGFPE`/`SIGILL` handler that impl
 | **trace.zig** | [`src/trace.zig`](../src/trace.zig) | Conditional debug printing. Activated by `--trace`, `--trace-api`, `--trace-insn` flags or `ZINE_TRACE`/`ZINE_TRACE_INSN` environment variables. |
 | **profiler.zig** | [`src/profiler.zig`](../src/profiler.zig) | Lightweight profiling: EIP heat map (per-4KB page), opcode frequency table, and stub call counters. Activated by `--profile` flag or `ZINE_PROFILE` environment variable. |
 | **path_utils.zig** | [`src/path_utils.zig`](../src/path_utils.zig) | Converts between POSIX and Win32 paths (`drive_c/... ↔ C:\...`). |
+| **platform.zig** | [`src/platform.zig`](../src/platform.zig) | Native and WASM backends for memory, threading, and process services. `guest_process_id` is the fixed id `GetCurrentProcessId` reports on every backend, so guest output does not carry the host's pid. |
 
 ---
 
