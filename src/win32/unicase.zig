@@ -130,8 +130,89 @@ pub fn foldKey(c: u16) u16 {
     return toLower(c);
 }
 
+// --- Locale-sensitive case mapping ---
+//
+// The mappings above are the Unicode default ones, which Turkish and Azerbaijani
+// override for the letter I: 'I' lowercases to dotless 0x131 rather than 'i', and
+// 'i' uppercases to dotted 0x130 rather than 'I'. LCMapString and CompareString
+// take a locale for exactly this reason, so the mapping is selected by the
+// caller's locale rather than fixed.
+
+// LANG_TR and LANG_AZ share the dotted/dotless I rules.
+const LANG_TURKISH: u16 = 0x041F;
+const LANG_AZERBAIJANI: u16 = 0x042C;
+
+// The primary language ID of an LCID, with LOCALE_USER_DEFAULT (0x0400) and
+// LOCALE_NAME_DEFAULT (0x1000) resolving to the emulated en-US locale.
+pub const LANG_ENGLISH_US: u16 = 0x0409;
+const LANG_NEUTRAL: u16 = 0x0400;
+const LOCALE_NAME_DEFAULT: u32 = 0x1000;
+
+fn usesDotlessI(lcid: u32) bool {
+    const lang: u16 = switch (lcid) {
+        LANG_NEUTRAL, LOCALE_NAME_DEFAULT => LANG_ENGLISH_US,
+        else => @truncate(lcid),
+    };
+    return lang == LANG_TURKISH or lang == LANG_AZERBAIJANI;
+}
+
+/// Lowercase mapping as `locale` (an LCID) requires. A Turkish or Azerbaijani
+/// locale maps 'I' to dotless 0x131 and 0x130 to 'i'; every other locale uses
+/// the Unicode default mapping.
+pub fn toLowerForLocale(c: u16, lcid: u32) u16 {
+    if (!usesDotlessI(lcid)) return toLower(c);
+    if (c == 'I') return 0x131;
+    if (c == 0x130) return 'i';
+    return toLower(c);
+}
+
+/// Uppercase mapping as `locale` (an LCID) requires. A Turkish or Azerbaijani
+/// locale maps 'i' to dotted 0x130 and 0x131 to 'I'; every other locale uses
+/// the Unicode default mapping.
+pub fn toUpperForLocale(c: u16, lcid: u32) u16 {
+    if (!usesDotlessI(lcid)) return toUpper(c);
+    if (c == 'i') return 0x130;
+    if (c == 0x131) return 'I';
+    return toUpper(c);
+}
+
+/// Case-insensitive comparison key for one UTF-16 code unit under `locale`.
+/// Comparing lowercase forms is the stable direction; see `foldKey`.
+pub fn foldKeyForLocale(c: u16, lcid: u32) u16 {
+    return toLowerForLocale(c, lcid);
+}
+
+/// Primary language IDs reachable by locale name, for the languages whose
+/// case mapping differs from the Unicode default. Every other locale name
+/// resolves to the emulated default, whose mapping is the default one.
+const NamedLanguage = struct { name: []const u8, lcid: u16 };
+const named_languages = [_]NamedLanguage{
+    .{ .name = "tr", .lcid = LANG_TURKISH },
+    .{ .name = "az", .lcid = LANG_AZERBAIJANI },
+};
+
+/// The LCID for a BCP-47 or POSIX locale name ("tr-TR", "tr_TR", "tr"),
+/// comparing language subtags case-insensitively as BCP-47 requires. Names
+/// whose language has no special case mapping return the emulated default.
+pub fn lcidFromLocaleName(name: []const u8) u32 {
+    const lang = name[0..@min(name.len, langSubtagLen(name))];
+    for (named_languages) |entry| {
+        if (std.ascii.eqlIgnoreCase(lang, entry.name)) return entry.lcid;
+    }
+    return LANG_ENGLISH_US;
+}
+
+/// Length of the language subtag: everything before the first "-" or "_".
+fn langSubtagLen(name: []const u8) usize {
+    for (name, 0..) |c, i| {
+        if (c == '-' or c == '_') return i;
+    }
+    return name.len;
+}
+
 /// Lowercase one CP1252 byte, mapping the byte through the ANSI code page so
 /// accented Latin characters fold the way the wide comparison folds them.
+/// CP1252 has no 0x130 or 0x131, so this mapping is the same in every locale.
 pub fn toLowerAnsiByte(b: u8) u8 {
     const folded = toLower(@as(u16, @intCast(ansi.byteToCodepoint(b))));
     return ansi.codepointToByte(folded) orelse b;
@@ -215,4 +296,41 @@ test "CP1252 byte mapping matches the wide mapping" {
     try testing.expectEqual(@as(u8, 'A'), toUpperAnsiByte('a'));
     // 0x81 has no CP1252 character, so it must survive the round trip.
     try testing.expectEqual(@as(u8, 0x81), toLowerAnsiByte(0x81));
+}
+
+test "non-Turkish locales keep the Unicode default I mapping" {
+    for ([_]u32{ LANG_ENGLISH_US, 0x0407, 0x040C, LANG_NEUTRAL, LOCALE_NAME_DEFAULT }) |lcid| {
+        try testing.expectEqual(@as(u16, 'i'), toLowerForLocale('I', lcid));
+        try testing.expectEqual(@as(u16, 'I'), toUpperForLocale('i', lcid));
+        try testing.expectEqual(@as(u16, 'i'), foldKeyForLocale('I', lcid));
+    }
+}
+
+test "Turkish and Azerbaijani locales map I to dotless and i to dotted" {
+    for ([_]u32{ 0x041F, 0x042C }) |lcid| {
+        try testing.expectEqual(@as(u16, 0x131), toLowerForLocale('I', lcid));
+        try testing.expectEqual(@as(u16, 'i'), toLowerForLocale(0x130, lcid));
+        try testing.expectEqual(@as(u16, 0x130), toUpperForLocale('i', lcid));
+        try testing.expectEqual(@as(u16, 'I'), toUpperForLocale(0x131, lcid));
+    }
+    // Folding 'I' to 0x131 and 0x131 to 0x131 makes a dotted and an undotted I
+    // compare equal in a Turkish locale, as NORM_IGNORECASE requires.
+    try testing.expectEqual(foldKeyForLocale('I', 0x041F), foldKeyForLocale(0x131, 0x041F));
+    // Under the default mapping they do not, which is the bug this fixes.
+    try testing.expect(foldKey('I') != foldKey(0x131));
+}
+
+test "the Turkish mapping leaves every other letter alone" {
+    for ([_]u32{ 0x041F, 0x042C }) |lcid| {
+        const ranges = [_][2]u16{ .{ 0x41, 0x5A }, .{ 0x61, 0x7A }, .{ 0xC0, 0xFF }, .{ 0x100, 0x17E }, .{ 0x400, 0x52F } };
+        for (ranges) |r| {
+            var c: u32 = r[0];
+            while (c <= r[1]) : (c += 1) {
+                const cp: u16 = @intCast(c);
+                if (cp == 'I' or cp == 'i' or cp == 0x130 or cp == 0x131) continue;
+                try testing.expectEqual(toLower(cp), toLowerForLocale(cp, lcid));
+                try testing.expectEqual(toUpper(cp), toUpperForLocale(cp, lcid));
+            }
+        }
+    }
 }

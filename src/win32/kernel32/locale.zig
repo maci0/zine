@@ -1,6 +1,11 @@
 const std = @import("std");
 const x86_memory = @import("../../x86/memory.zig");
 const trace = @import("../../trace.zig");
+const unicase = @import("../unicase.zig");
+
+/// The locale Zine emulates. Every locale-answering stub reports it, so it is
+/// named once here rather than spelled as 1033, 0x0409 and "0409" at each use.
+const default_lcid: u32 = 0x0409;
 
 /// Retrieves information about any valid installed or available code page.
 /// Implementation status: Partially implemented
@@ -131,7 +136,6 @@ pub fn WideCharToMultiByte(CodePage: u32, dwFlags: u32, lpWideCharStr_ptr: usize
 }
 
 const ansi = @import("../ansi.zig");
-const unicase = @import("../unicase.zig");
 const kernel32_error = @import("error.zig");
 
 const kernel32_mem = @import("mem.zig");
@@ -292,6 +296,8 @@ const LCMAP_LOWERCASE: u32 = 0x00000100;
 
 /// Implementation status: Partially implemented
 pub fn LCMapStringA(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, lpDestStr: usize, cchDest: i32) callconv(w32cc.WINAPI) i32 {
+    // CP1252 encodes neither 0x130 nor 0x131, so the byte mapping has no
+    // locale-dependent case to apply and `Locale` selects nothing here.
     _ = Locale;
     if (trace.enable_tracing) trace.print("KERNEL32: LCMapStringA(flags=0x{X})\n", .{dwMapFlags});
 
@@ -342,8 +348,7 @@ fn countForMap(cchSrc: i32, text_len_excl_nul: usize) MappedLen {
 /// Maps one Unicode character string to another.
 /// Implementation status: Partially implemented
 pub fn LCMapStringW(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, lpDestStr: usize, cchDest: i32) callconv(w32cc.WINAPI) i32 {
-    _ = Locale;
-    if (trace.enable_tracing) trace.print("KERNEL32: LCMapStringW(flags=0x{X})\n", .{dwMapFlags});
+    if (trace.enable_tracing) trace.print("KERNEL32: LCMapStringW(flags=0x{X}, locale={x})\n", .{ dwMapFlags, Locale });
 
     if (lpSrcStr == 0) return 0;
     const counted = countForMap(cchSrc, if (cchSrc < 0) trace.c_span_w(lpSrcStr).len else 0);
@@ -357,9 +362,9 @@ pub fn LCMapStringW(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, 
     for (0..copy_len) |i| {
         const ch = src[i];
         if ((dwMapFlags & LCMAP_UPPERCASE) != 0) {
-            dst[i] = unicase.toUpper(ch);
+            dst[i] = unicase.toUpperForLocale(ch, Locale);
         } else if ((dwMapFlags & LCMAP_LOWERCASE) != 0) {
-            dst[i] = unicase.toLower(ch);
+            dst[i] = unicase.toLowerForLocale(ch, Locale);
         } else {
             dst[i] = ch;
         }
@@ -370,6 +375,7 @@ pub fn LCMapStringW(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, 
 /// Compares two character strings, for a specified locale.
 /// Implementation status: Partially implemented
 pub fn CompareStringA(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1: i32, lpString2: usize, cchCount2: i32) callconv(w32cc.WINAPI) i32 {
+    // CP1252 has no 0x130 or 0x131, so the byte folding is locale-independent.
     _ = Locale;
     const s1 = if (lpString1 != 0) trace.c_span(lpString1) else "";
     const s2 = if (lpString2 != 0) trace.c_span(lpString2) else "";
@@ -401,8 +407,7 @@ pub fn CompareStringA(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1:
 /// Compares two Unicode character strings.
 /// Implementation status: Partially implemented
 pub fn CompareStringW(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1: i32, lpString2: usize, cchCount2: i32) callconv(w32cc.WINAPI) i32 {
-    _ = Locale;
-    if (trace.enable_tracing) trace.print("KERNEL32: CompareStringW(flags={x})\n", .{dwCmpFlags});
+    if (trace.enable_tracing) trace.print("KERNEL32: CompareStringW(flags={x}, locale={x})\n", .{ dwCmpFlags, Locale });
 
     const s1 = if (lpString1 != 0) @as([*]const u16, @ptrFromInt(lpString1)) else @as([*]const u16, @ptrFromInt(lpString1));
     const s2 = if (lpString2 != 0) @as([*]const u16, @ptrFromInt(lpString2)) else @as([*]const u16, @ptrFromInt(lpString2));
@@ -418,8 +423,8 @@ pub fn CompareStringW(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1:
         var c1 = s1[i];
         var c2 = s2[i];
         if (ignore_case) {
-            c1 = unicase.foldKey(c1);
-            c2 = unicase.foldKey(c2);
+            c1 = unicase.foldKeyForLocale(c1, Locale);
+            c2 = unicase.foldKeyForLocale(c2, Locale);
         }
         if (c1 < c2) return 1; // CSTR_LESS_THAN
         if (c1 > c2) return 3; // CSTR_GREATER_THAN
@@ -432,13 +437,13 @@ pub fn CompareStringW(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1:
 /// Returns the locale identifier for the system default locale.
 /// Implementation status: Partially implemented
 pub fn GetSystemDefaultLCID() callconv(w32cc.WINAPI) u32 {
-    return 1033; // English (US)
+    return default_lcid;
 }
 
 /// Returns the locale identifier for the user default locale.
 /// Implementation status: Partially implemented
 pub fn GetUserDefaultLCID() callconv(w32cc.WINAPI) u32 {
-    return 0x0409; // English (US)
+    return default_lcid;
 }
 
 /// Determines whether a locale identifier is valid.
@@ -508,6 +513,10 @@ pub fn LCMapStringEx(lpLocaleName: usize, dwMapFlags: u32, lpSrcStr: usize, cchS
 
     if (lpSrcStr == 0) return 0;
 
+    // A null locale name means the system default, the locale every other
+    // stub here reports.
+    const lcid = if (lpLocaleName == 0) default_lcid else unicase.lcidFromLocaleName(trace.c_span(lpLocaleName));
+
     const counted = countForMap(cchSrc, if (cchSrc < 0) trace.c_span_w(lpSrcStr).len else 0);
 
     // If output buffer is 0, return required size
@@ -520,9 +529,9 @@ pub fn LCMapStringEx(lpLocaleName: usize, dwMapFlags: u32, lpSrcStr: usize, cchS
     for (0..copy_len) |i| {
         const ch = src[i];
         if ((dwMapFlags & LCMAP_UPPERCASE) != 0) {
-            dst[i] = unicase.toUpper(ch);
+            dst[i] = unicase.toUpperForLocale(ch, lcid);
         } else if ((dwMapFlags & LCMAP_LOWERCASE) != 0) {
-            dst[i] = unicase.toLower(ch);
+            dst[i] = unicase.toLowerForLocale(ch, lcid);
         } else {
             dst[i] = ch;
         }
@@ -535,7 +544,7 @@ pub fn LCMapStringEx(lpLocaleName: usize, dwMapFlags: u32, lpSrcStr: usize, cchS
 /// this table so the two cannot drift apart.
 fn localeInfoValue(LCType: u32) ?[]const u8 {
     return switch (LCType & 0xFFFF) { // mask off flags
-        0x0001 => "0409", // LOCALE_ILANGUAGE
+        0x0001 => "0409", // LOCALE_ILANGUAGE, the primary language ID of default_lcid
         0x0002 => "English (United States)", // LOCALE_SLANGUAGE
         0x0003 => "ENU", // LOCALE_SABBREVLANGNAME
         0x000B => "1252", // LOCALE_IDEFAULTANSICODEPAGE
@@ -661,7 +670,7 @@ pub fn GetLocaleInfoW(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) c
 /// Retrieves the locale identifier for the current thread.
 /// Implementation status: Partially implemented
 pub fn GetThreadLocale() callconv(w32cc.WINAPI) u32 {
-    return 1033; // en-US
+    return default_lcid;
 }
 
 const kernel32_time = @import("time.zig");
@@ -865,7 +874,7 @@ pub fn lstrcmpiA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 
 /// Returns the language identifier of the user default locale.
 /// Implementation status: Partially implemented
 pub fn GetUserDefaultLangID() callconv(w32cc.WINAPI) u16 {
-    return 0x0409; // English (US)
+    return default_lcid;
 }
 
 // --- Wide string (W) lstr* functions ---
@@ -1097,6 +1106,80 @@ test "LCMapStringEx maps case and reports Win32 lengths" {
     // A counted source reports the terminator, a NUL-terminated one does not.
     try testing.expectEqual(@as(i32, 6), LCMapStringEx(0, 0, src_va, 6, 0, 0, 0, 0, 0));
     try testing.expectEqual(@as(i32, 5), LCMapStringEx(0, 0, src_va, -1, 0, 0, 0, 0, 0));
+}
+
+const LANG_TR: u32 = 0x041F;
+
+/// Map `text` with LCMapStringW under `locale` and return what it wrote.
+fn mapWide(text: []const u16, locale: u32, flags: u32, out: []u16) ![]const u16 {
+    const n = LCMapStringW(locale, flags, @intFromPtr(text.ptr), @intCast(text.len), @intFromPtr(out.ptr), @intCast(out.len));
+    if (n <= 0) return error.LCMapStringWFailed;
+    return out[0..@intCast(n)];
+}
+
+test "LCMapStringW lowercases I to dotless in a Turkish locale" {
+    const src = [_]u16{ 'I', 'S', 'T', 'A', 'N', 'B', 'U', 'L' };
+    var out: [16]u16 = undefined;
+
+    try testing.expectEqualSlices(u16, &[_]u16{ 0x131, 's', 't', 'a', 'n', 'b', 'u', 'l' }, try mapWide(&src, LANG_TR, LCMAP_LOWERCASE, &out));
+
+    // Every other locale keeps the Unicode default mapping.
+    try testing.expectEqualSlices(u16, &[_]u16{ 'i', 's', 't', 'a', 'n', 'b', 'u', 'l' }, try mapWide(&src, default_lcid, LCMAP_LOWERCASE, &out));
+    try testing.expectEqualSlices(u16, &[_]u16{ 'i', 's', 't', 'a', 'n', 'b', 'u', 'l' }, try mapWide(&src, 0x0400, LCMAP_LOWERCASE, &out)); // LOCALE_USER_DEFAULT
+    try testing.expectEqualSlices(u16, &[_]u16{ 'i', 's', 't', 'a', 'n', 'b', 'u', 'l' }, try mapWide(&src, 0, LCMAP_LOWERCASE, &out));
+}
+
+test "LCMapStringW uppercases i to dotted in a Turkish locale" {
+    const src = [_]u16{ 'i', 'z', 'm', 'i', 'r' };
+    var out: [16]u16 = undefined;
+
+    try testing.expectEqualSlices(u16, &[_]u16{ 0x130, 'Z', 'M', 0x130, 'R' }, try mapWide(&src, LANG_TR, LCMAP_UPPERCASE, &out));
+    try testing.expectEqualSlices(u16, &[_]u16{ 'I', 'Z', 'M', 'I', 'R' }, try mapWide(&src, default_lcid, LCMAP_UPPERCASE, &out));
+}
+
+test "CompareStringW folds I and dotless i together only in Turkish" {
+    var plain = [_:0]u16{ 'I', 'Z', 'I', 'R' };
+    var dotless = [_:0]u16{ 'I', 'Z', 0x131, 'R' };
+    var dotted = [_:0]u16{ 0x130, 'Z', 0x130, 'R' };
+    var lower = [_:0]u16{ 'i', 'z', 'i', 'r' };
+    const p = @intFromPtr(&plain);
+    const l = @intFromPtr(&dotless);
+    const d = @intFromPtr(&dotted);
+    const lo = @intFromPtr(&lower);
+    const NORM_IGNORECASE: u32 = 0x00000001;
+
+    // Turkish treats I and dotless i as cases of one letter, so NORM_IGNORECASE
+    // folds them together; the Unicode default mapping keeps them apart.
+    try testing.expectEqual(@as(i32, 2), CompareStringW(LANG_TR, NORM_IGNORECASE, p, -1, l, -1));
+    try testing.expect(CompareStringW(default_lcid, NORM_IGNORECASE, p, -1, l, -1) != 2);
+
+    // Turkish equally folds a dotted I onto a plain i, and still tells a
+    // dotted I apart from a dotless one: they are different letters.
+    try testing.expectEqual(@as(i32, 2), CompareStringW(LANG_TR, NORM_IGNORECASE, d, -1, lo, -1));
+    try testing.expect(CompareStringW(LANG_TR, NORM_IGNORECASE, d, -1, l, -1) != 2);
+    try testing.expect(CompareStringW(LANG_TR, NORM_IGNORECASE, p, -1, d, -1) != 2);
+}
+
+test "LCMapStringEx resolves the locale name it is given" {
+    var src = [_:0]u16{ 'I', 'R', 'A', 'N' };
+    const src_va = @intFromPtr(&src);
+    var dst: [8]u16 = undefined;
+    const name = "tr-TR";
+
+    const n = LCMapStringEx(@intFromPtr(name), LCMAP_LOWERCASE, src_va, -1, @intFromPtr(&dst), dst.len, 0, 0, 0);
+    try testing.expectEqualSlices(u16, &[_]u16{ 0x131, 'r', 'a', 'n' }, dst[0..@intCast(n)]);
+
+    // A null locale name means the system default, not the guest's language.
+    const en = LCMapStringEx(0, LCMAP_LOWERCASE, src_va, -1, @intFromPtr(&dst), dst.len, 0, 0, 0);
+    try testing.expectEqualSlices(u16, &[_]u16{ 'i', 'r', 'a', 'n' }, dst[0..@intCast(en)]);
+}
+
+test "an unknown locale name falls back to the default mapping" {
+    try testing.expectEqual(@as(u32, default_lcid), unicase.lcidFromLocaleName("de-DE"));
+    try testing.expectEqual(@as(u32, default_lcid), unicase.lcidFromLocaleName(""));
+    try testing.expectEqual(@as(u32, LANG_TR), unicase.lcidFromLocaleName("tr"));
+    try testing.expectEqual(@as(u32, LANG_TR), unicase.lcidFromLocaleName("tr_TR"));
+    try testing.expectEqual(@as(u32, LANG_TR), unicase.lcidFromLocaleName("TR-tr"));
 }
 
 test "GetLocaleInfoW returns the same locale data as GetLocaleInfoA" {

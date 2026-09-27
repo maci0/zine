@@ -491,7 +491,7 @@ zine/
 │   │   ├── civil_time.zig    # Gregorian/UTC calendar arithmetic
 │   │   ├── host_io.zig      # I/O abstraction layer (native/WASM)
 │   │   ├── ansi.zig         # CP1252 (ANSI code page) conversion and UTF-8 truncation
-│   │   ├── unicase.zig      # Case mapping tables for the API stubs
+│   │   ├── unicase.zig      # Case mapping tables, locale-sensitive where the language differs
 │   │   ├── ordinals.zig     # Ordinal-to-name mapping
 │   │   ├── kernel32.zig, kernel32/   # Process, memory, file I/O, sync, time
 │   │   ├── msvcrt.zig, msvcrt/       # C runtime (io, math, mem, string, process)

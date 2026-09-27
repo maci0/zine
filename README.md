@@ -116,6 +116,15 @@ release, not a 0.2.1 patch.
 - Case-insensitive path fallback folds case per code point, so a guest opening
   `CAFÉ.TXT` finds `café.txt` on disk. Names that are not valid UTF-8 keep the
   previous byte comparison, since the host filesystem accepts arbitrary bytes.
+- `LCMapStringW`, `LCMapStringEx` and `CompareStringW` honor the locale they
+  are given for the letter I, which Turkish and Azerbaijani case differently:
+  `I` lowercases to dotless `ı` and `i` uppercases to dotted `İ`. They
+  previously discarded the locale and used the Unicode default mapping, so
+  Turkish text was folded and sorted as if it were English, and `İ` and `ı`
+  never compared equal under `NORM_IGNORECASE`. `LCMapStringEx` now reads its
+  `lpLocaleName` (`tr-TR`, `tr_TR`, `tr`); a null or unrecognized name uses
+  the emulated default locale, as before. The ANSI (`A`) entry points are
+  unchanged, because CP1252 encodes neither `İ` nor `ı`.
 - Bitmap and pixel-buffer sizes are computed in 64 bits and rejected past a
   documented cap, so `CreateCompatibleBitmap` or `CreateDIBSection` with a
   guest-supplied dimension whose `width * height * bpp` passes 4 GB returns
