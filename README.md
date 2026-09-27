@@ -85,6 +85,10 @@ retroactively.
 
 #### Fixed
 
+- `strtoul` and `atoi` report a bare `0` (or `00`) as a complete conversion.
+  With radix `0` the leading octal digit was consumed but not counted as parsed,
+  so `end` stayed at the start of the string. Callers that loop on `*end` to
+  advance past a parsed number now advance past the digit.
 - Web UI `error` frames are parseable again. A rejection that names a field
   (`resize`, `color_selected`, a missing `type`) embedded its quotes unescaped,
   so the browser dropped the frame and the reason never reached the status bar.

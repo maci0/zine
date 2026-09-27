@@ -194,6 +194,9 @@ pub fn strtoul(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) u32 {
     } else if (str[i] == '+') i += 1;
 
     var r = radix;
+    // A "0x" prefix alone converts nothing; a leading "0" is a complete octal
+    // digit, so "0" and "00" must count as parsed and advance end_ptr past it.
+    var parsed = false;
     if (r == 0) {
         if (str[i] == '0' and (str[i + 1] == 'x' or str[i + 1] == 'X')) {
             r = 16;
@@ -201,11 +204,11 @@ pub fn strtoul(str_ptr: usize, end_ptr: usize, radix: i32) callconv(.c) u32 {
         } else if (str[i] == '0') {
             r = 8;
             i += 1;
+            parsed = true;
         } else r = 10;
     } else if (r == 16 and str[i] == '0' and (str[i + 1] == 'x' or str[i + 1] == 'X')) i += 2;
 
     var val: u32 = 0;
-    var parsed = false;
     while (str[i] != 0) : (i += 1) {
         const digit = std.fmt.charToDigit(str[i], @intCast(r)) catch break;
         val = val * @as(u32, @intCast(r)) + @as(u32, digit);
@@ -684,4 +687,491 @@ pub fn strtok(str: ?[*:0]u8, delim: ?[*:0]const u8) callconv(.c) ?[*:0]u8 {
     }
 
     return @ptrCast(s.ptr + start);
+}
+
+// --- narrow string copy/concat ---
+
+test "strcpy and strcat keep the terminator and the return value" {
+    var buf: [16]u8 = undefined;
+    const dest: [*]u8 = @ptrCast(&buf);
+
+    try std.testing.expectEqual(dest, strcpy(dest, "hello"));
+    try std.testing.expectEqualStrings("hello", std.mem.span(@as([*:0]u8, @ptrCast(&buf))));
+
+    try std.testing.expectEqual(dest, strcat(dest, " world"));
+    try std.testing.expectEqualStrings("hello world", std.mem.span(@as([*:0]u8, @ptrCast(&buf))));
+}
+
+test "strncpy pads with NUL and truncates without one" {
+    var buf: [8]u8 = @splat(0xAB);
+    const dest: [*]u8 = @ptrCast(&buf);
+
+    // Source shorter than count: the remainder is zero-filled.
+    _ = strncpy(dest, "ab", 6);
+    try std.testing.expectEqualSlices(u8, "ab\x00\x00\x00\x00", buf[0..6]);
+
+    // Source longer than count: exactly count bytes land, no terminator.
+    _ = strncpy(dest, "abcdef", 3);
+    try std.testing.expectEqualSlices(u8, "abc\x00", buf[0..4]);
+
+    // count == 0 touches nothing.
+    const untouched: [8]u8 = @splat(0x5A);
+    buf = untouched;
+    _ = strncpy(dest, "xyz", 0);
+    try std.testing.expectEqualSlices(u8, &untouched, &buf);
+}
+
+test "strncat appends at most count bytes" {
+    var buf: [16]u8 = undefined;
+    @memcpy(buf[0..3], "ab\x00");
+    _ = strncat(@ptrCast(&buf), "cdef", 2);
+    try std.testing.expectEqualStrings("abcd", std.mem.span(@as([*:0]u8, @ptrCast(&buf))));
+
+    // A count past the source end stops at the source's NUL, not at count.
+    _ = strncat(@ptrCast(&buf), "gh", 9);
+    try std.testing.expectEqualStrings("abcdgh", std.mem.span(@as([*:0]u8, @ptrCast(&buf))));
+}
+
+test "strlen measures the span up to the first NUL" {
+    var buf: [8]u8 = undefined;
+    @memcpy(buf[0..4], "abc\x00");
+    buf[4] = 'X'; // must not be counted
+    try std.testing.expectEqual(@as(usize, 3), strlen(@ptrCast(&buf)));
+    try std.testing.expectEqual(@as(usize, 0), strlen(""));
+}
+
+// --- narrow comparison ---
+
+test "strcmp sign and magnitude follow the first differing byte" {
+    try std.testing.expect(strcmp("abc", "abc") == 0);
+    try std.testing.expect(strcmp("abc", "abd") < 0);
+    try std.testing.expect(strcmp("abd", "abc") > 0);
+    // A prefix sorts before the longer string.
+    try std.testing.expect(strcmp("ab", "abc") < 0);
+    try std.testing.expect(strcmp("abc", "ab") > 0);
+    try std.testing.expectEqual(@as(i32, 'a' - 'A'), strcmp("a", "A"));
+    try std.testing.expectEqual(@as(i32, 'a' - 'b'), strcmp("a", "b"));
+}
+
+test "strncmp stops at count and treats count 0 as equal" {
+    try std.testing.expect(strncmp("abcdef", "abcxyz", 3) == 0);
+    try std.testing.expect(strncmp("abcdef", "abcxyz", 4) < 0);
+    try std.testing.expect(strncmp("abc", "ab", 2) == 0);
+    // Comparing up to the shorter string's NUL still reports a difference.
+    try std.testing.expect(strncmp("abc", "ab", 5) > 0);
+    try std.testing.expect(strncmp("anything", "different", 0) == 0);
+}
+
+test "stricmp folds case and still orders by length" {
+    try std.testing.expect(stricmp("Hello", "hELLO") == 0);
+    try std.testing.expect(stricmp("abc", "abd") < 0);
+    try std.testing.expect(stricmp("ab", "ABC") < 0);
+    try std.testing.expect(stricmp("ABC", "ab") > 0);
+    try std.testing.expectEqual(@as(i32, 'a' - 'b'), stricmp("A", "b"));
+}
+
+test "strnicmp folds case within count and orders by length past it" {
+    try std.testing.expect(strnicmp("Hello", "hELLOxyz", 5) == 0);
+    try std.testing.expect(strnicmp("Hello", "hELLOxyz", 6) < 0);
+    try std.testing.expect(strnicmp("ab", "ABC", 5) < 0);
+    try std.testing.expect(strnicmp("ABC", "ab", 5) > 0);
+    try std.testing.expect(strnicmp("same", "diff", 0) == 0);
+}
+
+test "mbsicmp folds case like stricmp" {
+    try std.testing.expect(mbsicmp("Hello", "hELLO") == 0);
+    try std.testing.expect(mbsicmp("ab", "ABC") < 0);
+    try std.testing.expect(mbsicmp("ABC", "ab") > 0);
+    try std.testing.expectEqual(@as(i32, 'a' - 'b'), mbsicmp("A", "b"));
+}
+
+// --- narrow search ---
+
+test "strchr finds the first and last occurrence and the terminator" {
+    try std.testing.expectEqual(@as(usize, 1), @intFromPtr(strchr("abcabc", 'b').?) - @intFromPtr("abcabc"));
+    const r = strrchr("abcabc", 'b');
+    try std.testing.expectEqual(@as(usize, 4), @intFromPtr(r.?) - @intFromPtr("abcabc"));
+    // Searching for NUL yields the terminator, not a null pointer.
+    try std.testing.expectEqual(@as(usize, 6), @intFromPtr(strchr("abcdef", 0).?) - @intFromPtr("abcdef"));
+    try std.testing.expectEqual(@as(usize, 6), @intFromPtr(strrchr("abcdef", 0).?) - @intFromPtr("abcdef"));
+    try std.testing.expect(strchr("abcdef", 'z') == null);
+    try std.testing.expect(strrchr("abcdef", 'z') == null);
+}
+
+test "strstr returns the haystack for an empty needle and null when absent" {
+    var hay = "abcabc".*;
+    try std.testing.expectEqual(@intFromPtr(&hay), @intFromPtr(strstr(&hay, "").?));
+    try std.testing.expectEqual(@as(usize, 0), @intFromPtr(strstr(&hay, "abc").?) - @intFromPtr(&hay));
+    try std.testing.expectEqual(@as(usize, 2), @intFromPtr(strstr(&hay, "cab").?) - @intFromPtr(&hay));
+    try std.testing.expect(strstr("abcabc", "abd") == null);
+    // A needle longer than the haystack cannot match.
+    try std.testing.expect(strstr("ab", "abc") == null);
+}
+
+test "strpbrk and strcspn use the first byte present in the reject set" {
+    const s = "hello world";
+    try std.testing.expectEqual(@as(usize, 4), @intFromPtr(strpbrk(s, "ow").?) - @intFromPtr(s));
+    try std.testing.expect(strpbrk(s, "xyz") == null);
+
+    try std.testing.expectEqual(@as(usize, 4), strcspn(s, "ow"));
+    try std.testing.expectEqual(@as(usize, 11), strcspn(s, "xyz"));
+    try std.testing.expectEqual(@as(usize, 0), strcspn(s, "h"));
+}
+
+test "strdup copies the span and terminates it" {
+    const dup = strdup("hello").?;
+    try std.testing.expectEqualStrings("hello", std.mem.span(dup));
+    // The copy is independent of the source buffer.
+    var src: [5]u8 = "hello".*;
+    try std.testing.expect(dup != @as([*]u8, @ptrCast(&src)));
+}
+
+test "strlwr and strupr return the same pointer and leave non-letters alone" {
+    var buf: [8]u8 = "MiXeD9\x00\x00".*;
+    const p: [*:0]u8 = @ptrCast(&buf);
+    try std.testing.expectEqual(@intFromPtr(p), @intFromPtr(strlwr(p).?));
+    try std.testing.expectEqualStrings("mixed9", std.mem.span(p));
+    try std.testing.expectEqual(@intFromPtr(p), @intFromPtr(strupr(p).?));
+    try std.testing.expectEqualStrings("MIXED9", std.mem.span(p));
+
+    try std.testing.expect(strlwr(null) == null);
+    try std.testing.expect(strupr(null) == null);
+}
+
+// --- numeric parsing ---
+
+test "itoa formats decimal and hex and rejects other radices" {
+    var buf: [33]u8 = undefined;
+    try std.testing.expectEqualStrings("-42", std.mem.span(@as([*:0]u8, @ptrCast(itoa(-42, @ptrCast(&buf), 10)))));
+    try std.testing.expectEqualStrings("ff", std.mem.span(@as([*:0]u8, @ptrCast(itoa(255, @ptrCast(&buf), 16)))));
+    buf[1] = 'X';
+    _ = itoa(5, @ptrCast(&buf), 8);
+    try std.testing.expectEqual(@as(u8, 0), buf[0]);
+}
+
+test "strtoul honours the radix, sign, and 0x prefix" {
+    const check = struct {
+        fn parse(text: [*:0]const u8, radix: i32) !struct { val: u32, end: u32 } {
+            var end: u32 = 0xDEAD_BEEF;
+            const val = strtoul(@intFromPtr(text), @intFromPtr(&end), radix);
+            return .{ .val = val, .end = end };
+        }
+    }.parse;
+
+    const dec = try check("  42xyz", 10);
+    try std.testing.expectEqual(@as(u32, 42), dec.val);
+    try std.testing.expectEqual(@as(u32, 4), dec.end - @intFromPtr("  42xyz"));
+
+    const hex = try check("0x1F", 16);
+    try std.testing.expectEqual(@as(u32, 0x1F), hex.val);
+    try std.testing.expectEqual(@as(u32, 4), hex.end - @intFromPtr("0x1F"));
+
+    // radix 16 also tolerates the prefix when asked explicitly.
+    const hex2 = try check("0x10", 16);
+    try std.testing.expectEqual(@as(u32, 0x10), hex2.val);
+
+    // A leading '-' is folded into the two's complement result.
+    const neg = try check("-1", 10);
+    try std.testing.expectEqual(@as(u32, 0xFFFF_FFFF), neg.val);
+
+    const plus = try check("+7", 10);
+    try std.testing.expectEqual(@as(u32, 7), plus.val);
+}
+
+test "strtoul infers the radix from the prefix when radix is 0" {
+    const check = struct {
+        fn parse(text: [*:0]const u8) !struct { val: u32, end: u32 } {
+            var end: u32 = 0xDEAD_BEEF;
+            const val = strtoul(@intFromPtr(text), @intFromPtr(&end), 0);
+            return .{ .val = val, .end = end };
+        }
+    }.parse;
+
+    const octal = try check("0755");
+    try std.testing.expectEqual(@as(u32, 493), octal.val); // 0755 octal
+    try std.testing.expectEqual(@as(u32, 4), octal.end - @intFromPtr("0755"));
+
+    const auto_hex = try check("0x20");
+    try std.testing.expectEqual(@as(u32, 0x20), auto_hex.val);
+    try std.testing.expectEqual(@as(u32, 4), auto_hex.end - @intFromPtr("0x20"));
+
+    const decimal = try check("12");
+    try std.testing.expectEqual(@as(u32, 12), decimal.val);
+
+    // A lone "0" is a complete conversion of one digit, not an empty one.
+    const zero = try check("0");
+    try std.testing.expectEqual(@as(u32, 0), zero.val);
+    try std.testing.expectEqual(@as(u32, 1), zero.end - @intFromPtr("0"));
+}
+
+test "strtoul reports an unparsable string by leaving end at the start" {
+    var end: u32 = 0xDEAD_BEEF;
+    const text = "  nope";
+    try std.testing.expectEqual(@as(u32, 0), strtoul(@intFromPtr(text), @intFromPtr(&end), 10));
+    try std.testing.expectEqual(@intFromPtr(text), @as(usize, end));
+
+    // Digits before a non-digit are still consumed.
+    try std.testing.expectEqual(@as(u32, 12), strtoul(@intFromPtr("12!"), 0, 10));
+    try std.testing.expectEqual(@as(u32, 0), strtoul(0, 0, 10));
+}
+
+test "strtol and atoi share strtoul's parsing with a signed result" {
+    try std.testing.expectEqual(@as(i32, -42), strtol(@intFromPtr("-42"), 0, 10));
+    try std.testing.expectEqual(@as(i32, 0x7FFFFFFF), strtol(@intFromPtr("2147483647"), 0, 10));
+    try std.testing.expectEqual(@as(i32, 123), atoi(@intFromPtr("  123")));
+    try std.testing.expectEqual(@as(i32, -7), atoi(@intFromPtr("-7")));
+    try std.testing.expectEqual(@as(i32, 0), atoi(@intFromPtr("junk")));
+    try std.testing.expectEqual(@as(i32, 0), atoi(0));
+}
+
+test "atof parses a float and yields zero for junk" {
+    try std.testing.expectApproxEqAbs(@as(f64, 3.5), atof("3.5"), 1e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, -0.25), atof("-0.25"), 1e-12);
+    try std.testing.expectEqual(@as(f64, 0.0), atof("not a number"));
+}
+
+// --- wide strings ---
+
+/// Widens an ASCII literal into a NUL-terminated u16 array for the wide stubs.
+fn wide(comptime text: []const u8) [text.len + 1]u16 {
+    comptime var out: [text.len + 1]u16 = undefined;
+    inline for (text, 0..) |c, i| out[i] = c;
+    out[text.len] = 0;
+    return out;
+}
+
+test "wcslen, wcscpy, wcsncpy, and wcscat round trip wide text" {
+    var buf: [16]u16 = undefined;
+    const dst: [*]u16 = @ptrCast(&buf);
+
+    var src = wide("wide");
+    try std.testing.expectEqual(dst, wcscpy(dst, &src));
+    try std.testing.expectEqual(@as(usize, 4), wcslen(dst));
+    try std.testing.expectEqualSlices(u16, &src, buf[0..5]);
+
+    // A source longer than count leaves the unit at count untouched, C style:
+    // wcsncpy only guarantees a terminator when the source fits.
+    var long_src = wide("abcdef");
+    _ = wcsncpy(dst, &long_src, 3);
+    try std.testing.expectEqualSlices(u16, &.{ 'a', 'b', 'c' }, buf[0..3]);
+    try std.testing.expectEqual(@as(u16, 'e'), buf[3]);
+
+    // A source shorter than count is NUL-padded out to count.
+    var short_src = wide("ab");
+    _ = wcsncpy(dst, &short_src, 5);
+    try std.testing.expectEqualSlices(u16, &.{ 'a', 'b', 0, 0, 0 }, buf[0..5]);
+    try std.testing.expectEqual(@as(usize, 2), wcslen(dst));
+
+    var tail = wide("cat");
+    try std.testing.expectEqual(dst, wcscat(dst, &tail));
+    try std.testing.expectEqualSlices(u16, &.{ 'a', 'b', 'c', 'a', 't', 0 }, buf[0..6]);
+    try std.testing.expectEqual(@as(usize, 5), wcslen(dst));
+}
+
+test "wcsupr uppercases ASCII in place" {
+    var buf: [8]u16 = .{ 'M', 'i', 'X', 'e', 'D', '9', 0, 0 };
+    const p: [*]u16 = @ptrCast(&buf);
+    try std.testing.expectEqual(@intFromPtr(p), @intFromPtr(wcsupr(p)));
+    try std.testing.expectEqualSlices(u16, &.{ 'M', 'I', 'X', 'E', 'D', '9', 0 }, buf[0..7]);
+}
+
+test "wcs family comparisons fold case only below 256" {
+    var a = wide("abc");
+    var a2 = wide("abc");
+    var abd = wide("abd");
+    var prefix = wide("ab");
+    var mixed = wide("Hello");
+    var folded = wide("hELLO");
+    var longer = wide("hELLOxyz");
+
+    try std.testing.expect(wcscmp(&a, &a2) == 0);
+    try std.testing.expect(wcscmp(&a, &abd) < 0);
+    try std.testing.expect(wcscmp(&prefix, &a) < 0);
+    try std.testing.expectEqual(@as(i32, 'a' - 'A'), wcscmp(&.{ 'a', 0 }, &.{ 'A', 0 }));
+
+    try std.testing.expect(wcsncmp(&a, &abd, 2) == 0);
+    try std.testing.expect(wcsncmp(&a, &abd, 3) < 0);
+    try std.testing.expect(wcsncmp(&a, &abd, 0) == 0);
+
+    try std.testing.expect(wcsicmp(&mixed, &folded) == 0);
+    try std.testing.expect(wcsicmp(&prefix, &folded) < 0);
+    try std.testing.expectEqual(@as(i32, 'a' - 'b'), wcsicmp(&.{ 'A', 0 }, &.{ 'b', 0 }));
+    // Code units above 255 are compared as-is, never folded.
+    const high_a = [_]u16{ 0x0410, 0 };
+    const high_b = [_]u16{ 0x0411, 0 };
+    try std.testing.expect(wcsicmp(&high_a, &high_b) < 0);
+
+    try std.testing.expect(wcsnicmp(&mixed, &longer, 5) == 0);
+    try std.testing.expect(wcsnicmp(&mixed, &longer, 6) < 0);
+    try std.testing.expect(wcsnicmp(&prefix, &folded, 5) < 0);
+    try std.testing.expect(wcsnicmp(&prefix, &folded, 0) == 0);
+}
+
+test "wcschr, wcsrchr, and wcsstr search by code unit" {
+    var buf = wide("abcabc");
+    const s: [*]const u16 = @ptrCast(&buf);
+    // Pointer arithmetic yields bytes, so each code unit counts twice.
+    const unit = @sizeOf(u16);
+    try std.testing.expectEqual(@as(usize, 1 * unit), @intFromPtr(wcschr(s, 'b').?) - @intFromPtr(s));
+    try std.testing.expectEqual(@as(usize, 4 * unit), @intFromPtr(wcsrchr(s, 'b').?) - @intFromPtr(s));
+    try std.testing.expectEqual(@as(usize, 6 * unit), @intFromPtr(wcschr(s, 0).?) - @intFromPtr(s));
+    try std.testing.expectEqual(@as(usize, 6 * unit), @intFromPtr(wcsrchr(s, 0).?) - @intFromPtr(s));
+    try std.testing.expect(wcschr(s, 'z') == null);
+    try std.testing.expect(wcsrchr(s, 'z') == null);
+
+    var empty = wide("");
+    try std.testing.expectEqual(@intFromPtr(s), @intFromPtr(wcsstr(s, &empty).?));
+    var needle = wide("cab");
+    try std.testing.expectEqual(@as(usize, 2 * unit), @intFromPtr(wcsstr(s, &needle).?) - @intFromPtr(s));
+    var absent = wide("abd");
+    try std.testing.expect(wcsstr(s, &absent) == null);
+    var short_hay = wide("ab");
+    var longer_needle = wide("abc");
+    try std.testing.expect(wcsstr(&short_hay, &longer_needle) == null);
+}
+
+test "wtoi and wcstol parse decimal and hexadecimal text" {
+    var padded = wide("  123");
+    var neg = wide("-7");
+    var trailing = wide("12abc");
+    var junk = wide("abc");
+    try std.testing.expectEqual(@as(i32, 123), wtoi(&padded));
+    try std.testing.expectEqual(@as(i32, -7), wtoi(&neg));
+    try std.testing.expectEqual(@as(i32, 12), wtoi(&trailing));
+    try std.testing.expectEqual(@as(i32, 0), wtoi(&junk));
+
+    var hex = wide("0x1F");
+    var end: u32 = 0xDEAD_BEEF;
+    try std.testing.expectEqual(@as(i32, 0x1F), wcstol(&hex, @intFromPtr(&end), 0));
+    // end is a u32 guest VA, so compare in u32: 4 u16 = 8 bytes past the start.
+    try std.testing.expectEqual(@as(u32, 8), end - @as(u32, @truncate(@intFromPtr(&hex))));
+
+    var dec = wide("-42");
+    try std.testing.expectEqual(@as(i32, -42), wcstol(&dec, 0, 10));
+    try std.testing.expectEqual(@as(i32, 0), wcstol(&junk, 0, 10));
+}
+
+test "wcsdup copies the wide span and terminates it" {
+    var src = wide("wide");
+    const dup = wcsdup(&src).?;
+    try std.testing.expectEqual(@as(usize, 4), wcslen(dup));
+    try std.testing.expectEqualSlices(u16, &src, dup[0..5]);
+    try std.testing.expect(dup != @as([*]u16, @ptrCast(&src)));
+}
+
+// --- character classification ---
+
+test "isalpha and friends classify digits, letters, and punctuation" {
+    init_pctype();
+    inline for (.{ '0', '5', '9' }) |c| {
+        try std.testing.expect(isdigit(c) != 0);
+        try std.testing.expect(isxdigit(c) != 0);
+        try std.testing.expect(isalnum(c) != 0);
+        try std.testing.expectEqual(@as(i32, 0), isalpha(c));
+        try std.testing.expectEqual(@as(i32, 0), isupper(c));
+        try std.testing.expectEqual(@as(i32, 0), islower(c));
+    }
+    inline for (.{ 'A', 'M', 'Z' }) |c| {
+        try std.testing.expect(isalpha(c) != 0);
+        try std.testing.expect(isupper(c) != 0);
+        try std.testing.expect(isalnum(c) != 0);
+        try std.testing.expectEqual(@as(i32, 0), islower(c));
+    }
+    inline for (.{ 'a', 'm', 'z' }) |c| {
+        try std.testing.expect(isalpha(c) != 0);
+        try std.testing.expect(islower(c) != 0);
+        try std.testing.expect(isalnum(c) != 0);
+        try std.testing.expectEqual(@as(i32, 0), isupper(c));
+    }
+    inline for (.{ ' ', '\t', '\n' }) |c| {
+        try std.testing.expect(isspace(c) != 0);
+        try std.testing.expectEqual(@as(i32, 0), isalnum(c));
+    }
+    inline for (.{ '!', '+', '/' }) |c| {
+        try std.testing.expect(ispunct(c) != 0);
+        try std.testing.expect(isprint(c) != 0);
+        try std.testing.expectEqual(@as(i32, 0), isalnum(c));
+    }
+    inline for (.{ 'a', 'F', '9' }) |c| try std.testing.expect(isxdigit(c) != 0);
+    // Control characters are the only non-printing non-space characters.
+    try std.testing.expect(iscntrl(0x01) != 0);
+    try std.testing.expectEqual(@as(i32, 0), iscntrl('a'));
+}
+
+test "classification rejects codes outside the 0..255 table and EOF" {
+    init_pctype();
+    inline for (.{ isalpha, isalnum, isdigit, isupper, islower, isspace, isxdigit, isprint, ispunct, iscntrl }) |f| {
+        try std.testing.expectEqual(@as(i32, 0), f(-1));
+        try std.testing.expectEqual(@as(i32, 0), f(256));
+        try std.testing.expectEqual(@as(i32, 0), f(0x10000));
+    }
+    try std.testing.expectEqual(@as(i32, 0), isctype(256, 0xFFFF));
+    try std.testing.expectEqual(@as(i32, 0), iswctype(256, 0xFFFF));
+}
+
+test "isctype and iswctype consult the mask the caller passes" {
+    init_pctype();
+    try std.testing.expectEqual(@as(i32, 1), isctype('0', 0x0004)); // _DIGIT
+    try std.testing.expectEqual(@as(i32, 0), isctype('0', 0x0002)); // _LOWER
+    try std.testing.expectEqual(@as(i32, 1), iswctype('A', 0x0001)); // _UPPER
+    try std.testing.expectEqual(@as(i32, 0), iswctype('A', 0x0002));
+}
+
+test "tolower, toupper, and their wide twins are identity past 255" {
+    try std.testing.expectEqual(@as(i32, 'a'), tolower('A'));
+    try std.testing.expectEqual(@as(i32, 'a'), tolower('a'));
+    try std.testing.expectEqual(@as(i32, '5'), tolower('5'));
+    try std.testing.expectEqual(@as(i32, 'A'), toupper('a'));
+    try std.testing.expectEqual(@as(i32, 0x0410), toupper(0x0410));
+    try std.testing.expectEqual(@as(i32, 'A'), towupper('a'));
+    try std.testing.expectEqual(@as(i32, 'a'), towlower('A'));
+    try std.testing.expectEqual(@as(i32, 0x0410), towlower(0x0410));
+}
+
+test "ismbcspace accepts only the six whitespace code points" {
+    inline for (.{ ' ', '\t', '\n', '\r', 0x0B, 0x0C }) |c| try std.testing.expectEqual(@as(i32, 1), ismbcspace(c));
+    inline for (.{ 'a', '0', 0x00, 0x0D + 1, 0x20 + 1 }) |c| try std.testing.expectEqual(@as(i32, 0), ismbcspace(c));
+}
+
+test "mbsinc, mbccpy, mbclen, and mbsdec step one byte at a time" {
+    var buf: [4]u8 = "ab\x00\x00".*;
+    const s: [*]const u8 = @ptrCast(&buf);
+    try std.testing.expectEqual(@as(usize, 1), @intFromPtr(mbsinc(s).?) - @intFromPtr(s));
+    // A NUL or absent pointer ends the walk instead of advancing.
+    try std.testing.expect(mbsinc(@as(?[*]const u8, @ptrCast(&buf[2]))) == null);
+    try std.testing.expect(mbsinc(null) == null);
+
+    var dst: [2]u8 = undefined;
+    mbccpy(&dst, s);
+    try std.testing.expectEqualSlices(u8, s[0..1], dst[0..1]);
+
+    try std.testing.expectEqual(@as(usize, 0), mbclen(0));
+    try std.testing.expectEqual(@as(usize, 1), mbclen(@intFromPtr(&s)));
+
+    try std.testing.expectEqual(@as(usize, 0), @intFromPtr(mbsdec(s, @ptrCast(&buf[1])).?) - @intFromPtr(s));
+    // Decrementing at or before the start is rejected rather than underflowing.
+    try std.testing.expect(mbsdec(s, s) == null);
+    try std.testing.expect(mbsdec(s, null) == null);
+    try std.testing.expect(mbsdec(null, @ptrCast(&buf[1])) == null);
+}
+
+test "strtok splits on delimiters and continues from saved state" {
+    var buf: [5]u8 = "a,,bc".*;
+    const s: [*:0]u8 = @ptrCast(&buf);
+    const d = ",";
+
+    try std.testing.expectEqualStrings("a", std.mem.span(strtok(s, d).?));
+    try std.testing.expectEqualStrings("bc", std.mem.span(strtok(null, d).?));
+    try std.testing.expect(strtok(null, d) == null);
+
+    // Leading and trailing delimiters produce no empty tokens.
+    var buf2: [5]u8 = ",,x,,".*;
+    const s2: [*:0]u8 = @ptrCast(&buf2);
+    try std.testing.expectEqualStrings("x", std.mem.span(strtok(s2, ",").?));
+    try std.testing.expect(strtok(null, ",") == null);
+
+    // Without a delimiter set the state is left alone and null is returned.
+    var buf3: [4]u8 = .{ 'a', 'b', 0, 0 };
+    try std.testing.expect(strtok(@ptrCast(&buf3), null) == null);
+    try std.testing.expect(strtok(null, null) == null);
 }
