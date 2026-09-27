@@ -276,8 +276,7 @@ pub const TEB = extern struct {
 };
 
 /// Implementation status: Partially implemented
-pub fn initTEB(allocator: std.mem.Allocator) !*TEB {
-    _ = allocator; // PEB/params now use raw_alloc for 32-bit address range
+pub fn initTEB() !*TEB {
     // On x86_64, TEB must be in low 4GB because guest code reads it via
     // FS-relative 32-bit pointers. Use platform.mmap which sets MAP_32BIT.
     // On x86, page_allocator is fine (everything is 32-bit).

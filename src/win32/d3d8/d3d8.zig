@@ -374,9 +374,6 @@ fn fillD3D8Caps(pCaps: usize) void {
     // 204: PixelShaderVersion (4)
     // 208: MaxPixelShaderValue (4, float)
 
-    const w = @as(*align(1) u32, @ptrFromInt(pCaps));
-    _ = w; // suppressed — using inline writes
-
     @as(*align(1) u32, @ptrFromInt(pCaps + 0)).* = w32.D3DDEVTYPE_HAL; // DeviceType
     @as(*align(1) u32, @ptrFromInt(pCaps + 4)).* = 0; // AdapterOrdinal
     @as(*align(1) u32, @ptrFromInt(pCaps + 8)).* = 0x00020000; // Caps: D3DCAPS_READ_SCANLINE

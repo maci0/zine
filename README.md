@@ -8,7 +8,7 @@ No Windows installation, no Wine.
 ## What works
 
 - Full MSVC 6.0 toolchain: CL.EXE, LINK.EXE, RC.EXE, NMAKE.EXE, and 8 more utilities run to completion
-- 431 unit tests pass (2 skipped, 433 total) on the host with `zig build test`; the gate in
+- 436 unit tests pass (2 skipped, 438 total) on the host with `zig build test`; the gate in
   `tests/check.sh` adds the CLI suites on native x86 and x86_64
 - 158/128 integration checks on native/WASM, 20 FLTK smoke tests (these need guest
   binaries and are not part of `tests/check.sh`)

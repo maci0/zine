@@ -602,7 +602,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // --- Initialize TEB/PEB ---
-    const thread_env = try teb.initTEB(allocator);
+    const thread_env = try teb.initTEB();
 
     // On WASM, setupFS is a no-op (interpreter uses cpu.fs_base directly)
     try teb.setupFS(thread_env);

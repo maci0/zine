@@ -27,6 +27,20 @@ fn appendDigit(val: usize, digit: u8) usize {
     return std.math.add(usize, scaled, digit) catch std.math.maxInt(usize);
 }
 
+/// Pads `text` on the left to `width` with `pad_char`, copies it into `buf`,
+/// and returns the new write offset. The NUL terminator slot is left free.
+fn emitPadded(buf: [*]u8, oi: usize, max: usize, width: usize, pad_char: u8, text: []const u8) usize {
+    var o = oi;
+    var w = width;
+    while (text.len < w and o < max - 1) : (w -= 1) {
+        buf[o] = pad_char;
+        o += 1;
+    }
+    const n = @min(text.len, max - 1 - o);
+    @memcpy(buf[o .. o + n], text[0..n]);
+    return o + n;
+}
+
 /// Internal helper for vsnprintf implementation.
 /// Implementation status: Partially implemented
 pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: usize) usize {
@@ -81,70 +95,28 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
                 if (args[ai] >= 0x10000) {
                     const s = @as([*:0]const u8, @ptrFromInt(trace.addr(args[ai])));
                     const len = std.mem.indexOfScalar(u8, s[0..4096], 0) orelse 0;
-
-                    while (len < width and oi < max - 1) : (width -= 1) {
-                        buf[oi] = pad_char;
-                        oi += 1;
-                    }
-
-                    var si: usize = 0;
-                    while (s[si] != 0 and oi < max - 1) {
-                        buf[oi] = s[si];
-                        oi += 1;
-                        si += 1;
-                    }
+                    oi = emitPadded(buf, oi, max, width, pad_char, s[0..len]);
                 }
                 ai += 1;
             } else if (c == 'd' or c == 'i') {
                 const v = @as(i32, @bitCast(@as(u32, @truncate(args[ai]))));
                 ai += 1;
                 var nb: [32]u8 = undefined;
-                const ns = std.fmt.bufPrint(&nb, "{d}", .{v}) catch "";
-
-                const len = ns.len;
-                while (len < width and oi < max - 1) : (width -= 1) {
-                    buf[oi] = pad_char;
-                    oi += 1;
-                }
-
-                const copy_len = @min(ns.len, max - 1 - oi);
-                @memcpy(buf[oi .. oi + copy_len], ns[0..copy_len]);
-                oi += copy_len;
+                oi = emitPadded(buf, oi, max, width, pad_char, std.fmt.bufPrint(&nb, "{d}", .{v}) catch "");
             } else if (c == 'x' or c == 'X') {
                 const v = args[ai];
                 ai += 1;
                 var nb: [32]u8 = undefined;
-                var ns: []u8 = "";
-                if (c == 'x') {
-                    ns = std.fmt.bufPrint(&nb, "{x}", .{v}) catch "";
-                } else {
-                    ns = std.fmt.bufPrint(&nb, "{X}", .{v}) catch "";
-                }
-
-                const len = ns.len;
-                while (len < width and oi < max - 1) : (width -= 1) {
-                    buf[oi] = pad_char;
-                    oi += 1;
-                }
-
-                const copy_len = @min(ns.len, max - 1 - oi);
-                @memcpy(buf[oi .. oi + copy_len], ns[0..copy_len]);
-                oi += copy_len;
+                const ns = if (c == 'x')
+                    std.fmt.bufPrint(&nb, "{x}", .{v}) catch ""
+                else
+                    std.fmt.bufPrint(&nb, "{X}", .{v}) catch "";
+                oi = emitPadded(buf, oi, max, width, pad_char, ns);
             } else if (c == 'u') {
                 const v = @as(u32, @truncate(args[ai]));
                 ai += 1;
                 var nb: [32]u8 = undefined;
-                const ns = std.fmt.bufPrint(&nb, "{d}", .{v}) catch "";
-
-                const len = ns.len;
-                while (len < width and oi < max - 1) : (width -= 1) {
-                    buf[oi] = pad_char;
-                    oi += 1;
-                }
-
-                const copy_len = @min(ns.len, max - 1 - oi);
-                @memcpy(buf[oi .. oi + copy_len], ns[0..copy_len]);
-                oi += copy_len;
+                oi = emitPadded(buf, oi, max, width, pad_char, std.fmt.bufPrint(&nb, "{d}", .{v}) catch "");
             } else if (c == 'c') {
                 if (oi < max - 1) {
                     buf[oi] = @as(u8, @truncate(args[ai]));

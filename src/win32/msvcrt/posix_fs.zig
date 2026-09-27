@@ -197,53 +197,40 @@ fn fsAccess(path: []const u8) bool {
 }
 
 fn fsCreateFile(path: []const u8, flags: std.Io.File.CreateFlags) !std.Io.File {
-    if (comptime builtin.target.os.tag == .linux) return fsCreateFileLinux(path, flags);
-    if (std.fs.path.isAbsolute(path)) {
-        if (comptime @import("builtin").os.tag != .wasi) {
-            return std.Io.Dir.createFileAbsolute(runtime.io(), path, flags);
-        }
-        if (path_utils.resolveWasiPath(path)) |resolved| {
-            return resolved.dir.createFile(runtime.io(), resolved.rel_path, flags);
-        }
-        return error.FileNotFound;
-    }
-
-    // Relative path: the WASI cwd (fd 3) may be "/" rather than the real cwd
-    // (zine-host preopens "/" first), so try every preopened dir.
-    if (comptime @import("builtin").os.tag == .wasi) {
-        var fd2: std.os.wasi.fd_t = 3;
-        while (true) : (fd2 += 1) {
-            var prestat: std.os.wasi.prestat_t = undefined;
-            switch (std.os.wasi.fd_prestat_get(fd2, &prestat)) {
-                .SUCCESS => {},
-                else => break,
-            }
-            const dir = std.Io.Dir{ .handle = fd2 };
-            if (dir.createFile(runtime.io(), path, flags)) |f| return f else |_| {}
-        }
-        return error.FileNotFound;
-    }
-
-    return std.Io.Dir.cwd().createFile(runtime.io(), path, flags) catch {
-        return error.FileNotFound;
-    };
+    return fsFile(true, path, flags);
 }
 
 fn fsOpenFile(path: []const u8, flags: std.Io.File.OpenFlags) !std.Io.File {
-    if (comptime builtin.target.os.tag == .linux) return fsOpenFileLinux(path, flags);
+    return fsFile(false, path, flags);
+}
+
+/// `create` selects the create or the open half of the std.Io.Dir API; path
+/// resolution is identical for both.
+fn fsFile(
+    comptime create: bool,
+    path: []const u8,
+    flags: if (create) std.Io.File.CreateFlags else std.Io.File.OpenFlags,
+) !std.Io.File {
+    const io = runtime.io();
+    if (comptime builtin.target.os.tag == .linux) {
+        if (create) return fsCreateFileLinux(path, flags);
+        return fsOpenFileLinux(path, flags);
+    }
     if (std.fs.path.isAbsolute(path)) {
-        if (comptime @import("builtin").os.tag != .wasi) {
-            return std.Io.Dir.openFileAbsolute(runtime.io(), path, flags);
+        if (comptime builtin.target.os.tag != .wasi) {
+            if (create) return std.Io.Dir.createFileAbsolute(io, path, flags);
+            return std.Io.Dir.openFileAbsolute(io, path, flags);
         }
         if (path_utils.resolveWasiPath(path)) |resolved| {
-            return resolved.dir.openFile(runtime.io(), resolved.rel_path, flags);
+            if (create) return resolved.dir.createFile(io, resolved.rel_path, flags);
+            return resolved.dir.openFile(io, resolved.rel_path, flags);
         }
         return error.FileNotFound;
     }
 
     // Relative path: the WASI cwd (fd 3) may be "/" rather than the real cwd
     // (zine-host preopens "/" first), so try every preopened dir.
-    if (comptime @import("builtin").os.tag == .wasi) {
+    if (comptime builtin.target.os.tag == .wasi) {
         var fd2: std.os.wasi.fd_t = 3;
         while (true) : (fd2 += 1) {
             var prestat: std.os.wasi.prestat_t = undefined;
@@ -252,14 +239,14 @@ fn fsOpenFile(path: []const u8, flags: std.Io.File.OpenFlags) !std.Io.File {
                 else => break,
             }
             const dir = std.Io.Dir{ .handle = fd2 };
-            if (dir.openFile(runtime.io(), path, flags)) |f| return f else |_| {}
+            const result = if (create) dir.createFile(io, path, flags) else dir.openFile(io, path, flags);
+            if (result) |f| return f else |_| {}
         }
         return error.FileNotFound;
     }
 
-    return std.Io.Dir.cwd().openFile(runtime.io(), path, flags) catch {
-        return error.FileNotFound;
-    };
+    const result = if (create) std.Io.Dir.cwd().createFile(io, path, flags) else std.Io.Dir.cwd().openFile(io, path, flags);
+    return result catch return error.FileNotFound;
 }
 
 fn tryLower(path: []const u8, buf: []u8) ?[]const u8 {

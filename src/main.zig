@@ -547,7 +547,7 @@ pub fn main(init: std.process.Init) !void {
     stubs_msvcrt.global_env_initialized = true;
 
     // Initialize TEB/PEB
-    const thread_env = try teb.initTEB(allocator);
+    const thread_env = try teb.initTEB();
     teb.teb_base_addr = @intFromPtr(thread_env);
 
     // On x86_64, set very wide stack bounds to cover all MAP_32BIT allocations.
