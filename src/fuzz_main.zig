@@ -1,5 +1,5 @@
-//! In-process fuzzer driver for the untrusted-input parsers and the PE
-//! string-table walk.
+//! In-process fuzzer driver for the untrusted-input parsers, the batch
+//! interpreter, and the PE string-table walk.
 //!
 //! Lives at the src/ root so the harness modules under fuzz/ can reach the
 //! parsers with relative imports, the same reason test_root.zig sits here.
@@ -16,6 +16,7 @@
 const std = @import("std");
 const fuzz_options = @import("fuzz_options");
 const mutation = @import("fuzz/mutation.zig");
+const bat_fuzz = @import("fuzz/bat.zig");
 const dialog_fuzz = @import("fuzz/dialog.zig");
 const icon_fuzz = @import("fuzz/icon.zig");
 const loadstring_fuzz = @import("fuzz/loadstring.zig");
@@ -42,6 +43,7 @@ const targets = [_]Target{
     .{ .name = "icon", .seeds = &icon_fuzz.seeds, .run = icon_fuzz.harness },
     .{ .name = "pe", .seeds = &pe_fuzz.seeds, .run = pe_fuzz.harness },
     .{ .name = "loadstring", .seeds = &loadstring_fuzz.seeds, .run = loadstring_fuzz.harness },
+    .{ .name = "bat", .seeds = &bat_fuzz.seeds, .run = bat_fuzz.harness },
 };
 
 pub fn main(init: std.process.Init) !void {

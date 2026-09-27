@@ -197,7 +197,8 @@ exists because nothing is persisted.
   reads (`src/loader/loader.zig:427`, `src/loader/loader.zig:466`).
 - Tampering: the resource parsers are the least exercised loader surface even
   with harnesses. They are covered by mutation fuzzing
-  (`src/fuzz/menu.zig`, `src/fuzz/dialog.zig`, `src/fuzz/icon.zig`) replayed
+  (`src/fuzz/menu.zig`, `src/fuzz/dialog.zig`, `src/fuzz/icon.zig`,
+  `src/fuzz/bat.zig` for the batch scripts an operator loads) replayed
   from the seed corpus in `zig build test` (`src/fuzz/replay.zig`,
   `src/test_root.zig:31`), but a harness only reaches what its driver
   constructs.
@@ -364,7 +365,7 @@ fix and the same standard applies to every remaining name read, including
 | Home path redaction | `src/log.zig:103`, `src/log.zig:137` | the account name and home-relative paths reaching stderr and CI logs | file contents, and any path outside the home directory |
 | Child table cap | `src/win32/kernel32/process.zig:715`, `src/win32/kernel32/process.zig:957` | unbounded child spawning | the actions of the 16 children that do spawn |
 | Loader bounds checks | `src/loader/module.zig:220`, `src/loader/module.zig:275`, `src/loader/loader.zig:427`, `src/loader/loader.zig:438`, `src/loader/loader.zig:466`, `src/loader/module.zig:359` | host memory corruption and unbounded reads from crafted sections, BSS ranges, relocations, import descriptors, names, and thunks | the resource parsers' output contract, which rests on fuzzing rather than validation |
-| Fuzz harnesses for the untrusted parsers | `src/fuzz/pe.zig`, `src/fuzz/menu.zig`, `src/fuzz/dialog.zig`, `src/fuzz/icon.zig`, `src/fuzz/loadstring.zig`, `src/fuzz/mutation.zig`, `src/fuzz/replay.zig`, `build.zig:588` | host crashes on malformed PE headers, resources, and string tables | logic defects that parse correctly but mean the wrong thing |
+| Fuzz harnesses for the untrusted parsers | `src/fuzz/pe.zig`, `src/fuzz/menu.zig`, `src/fuzz/dialog.zig`, `src/fuzz/icon.zig`, `src/fuzz/loadstring.zig`, `src/fuzz/bat.zig`, `src/fuzz/mutation.zig`, `src/fuzz/replay.zig`, `build.zig:588` | host crashes on malformed PE headers, resources, string tables, and batch scripts | logic defects that parse correctly but mean the wrong thing |
 | Typed stub signatures | `src/loader/env.zig` | pointer-width confusion at the call boundary | legacy stubs still taking guest pointers as integers |
 
 Unmitigated, ranked: host filesystem reach from the guest (1), unauthenticated

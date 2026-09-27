@@ -8,6 +8,7 @@
 const std = @import("std");
 const testing = std.testing;
 const mutation = @import("mutation.zig");
+const bat_fuzz = @import("bat.zig");
 const dialog_fuzz = @import("dialog.zig");
 const icon_fuzz = @import("icon.zig");
 const loadstring_fuzz = @import("loadstring.zig");
@@ -54,6 +55,10 @@ test "fuzz: pe seeds and mutations hold the parser contract" {
 
 test "fuzz: loadstring seeds and mutations hold the parser contract" {
     try replay(&loadstring_fuzz.seeds, loadstring_fuzz.harness);
+}
+
+test "fuzz: bat seeds and mutations hold the interpreter contract" {
+    try replay(&bat_fuzz.seeds, bat_fuzz.harness);
 }
 
 test "loadstring: a well-formed string table yields its strings" {

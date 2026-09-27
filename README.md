@@ -185,6 +185,11 @@ release, not a 0.2.1 patch.
   requests for them with 404 and the page loaded unstyled and inert. A digested
   URL now resolves to the bytes this build embedded, and one no build produced
   stays a 404.
+- The batch interpreter treats a NUL byte in a `.bat`/`.cmd` file as the end
+  of that line, the way the C string the line becomes would, and a line whose
+  first token is an empty quoted string runs nothing instead of handing an
+  empty program name to the launcher. A fuzz harness covers both
+  (`src/fuzz/bat.zig`).
 - `ctime` prints the day of month space-padded to two columns and the clock
   fields without a sign, so the epoch reads `Thu Jan  1 00:00:00 1970` instead
   of `Thu Jan +1 +0:+0:+0 1970`.
@@ -606,7 +611,8 @@ zig build test-cli -Dhost       # also checks zine-host; requires Wasmer headers
 ### Fuzzing the PE parsers
 
 `zig build fuzz` mutates the seed corpora of the menu, dialog, icon, and PE
-header parsers and feeds every input to the parser under Zig's safety checks.
+header parsers, the string-table walk, and the batch script interpreter, and
+feeds every input to the parser under Zig's safety checks.
 A failing input is written to `zig-out/fuzz/<target>-<n>.bin`; minimize it, fix
 the cause, and add its bytes to the `seeds` array of that target's harness in
 `src/fuzz/`.

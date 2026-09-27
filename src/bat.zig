@@ -138,7 +138,9 @@ pub const BatEnv = struct {
     /// or null when the file defines no runnable command. This is a simplified
     /// interpreter that handles SET and CALL. Reporting a bad path is the
     /// caller's job, so an unreadable file is returned as an error.
-    pub fn parseFile(self: *BatEnv, bat_path: []const u8, args: [][]const u8) !?[][]const u8 {
+    /// The error set is spelled out because `parseFile` and `runScript`
+    /// call each other through CALL, which an inferred set cannot resolve.
+    pub fn parseFile(self: *BatEnv, bat_path: []const u8, args: [][]const u8) anyerror!?[][]const u8 {
         var open_path = bat_path;
         if (open_path.len >= 2 and open_path[1] == ':' and std.ascii.isAlphabetic(open_path[0])) {
             open_path = open_path[2..];
@@ -164,13 +166,28 @@ pub const BatEnv = struct {
         defer self.allocator.free(win_parent_dir);
         std.mem.replaceScalar(u8, win_parent_dir, '/', '\\');
 
-        var line_it = std.mem.splitScalar(u8, file_content, '\n');
-
         const win_parent_dir_c = try std.fmt.allocPrint(self.allocator, "C:{s}", .{win_parent_dir});
         defer self.allocator.free(win_parent_dir_c);
 
+        return self.runScript(file_content, win_parent_dir_c, args);
+    }
+
+    /// Interprets a batch script already in memory, which is what
+    /// `parseFile` hands over after reading the file and resolving `%~dp0`.
+    /// Kept separate so the interpreter is reachable without touching the
+    /// filesystem: the fuzz harness under `src/fuzz` drives this entry point.
+    /// `script_dir` is the Windows-style, drive-prefixed directory `%~dp0`
+    /// expands to. The returned argument list is owned by the caller.
+    pub fn runScript(self: *BatEnv, script: []const u8, script_dir: []const u8, args: [][]const u8) anyerror!?[][]const u8 {
+        var line_it = std.mem.splitScalar(u8, script, '\n');
+
         while (line_it.next()) |raw_line| {
-            const line = std.mem.trim(u8, raw_line, " \r\t");
+            // The command line leaves this function as C strings, so a line
+            // ends at its first NUL, the way the string handed to the
+            // launcher would. Carrying the rest of the line on would put a
+            // NUL inside an argument and silently truncate it.
+            const unterminated = std.mem.trim(u8, raw_line, " \r\t");
+            const line = unterminated[0 .. std.mem.indexOfScalar(u8, unterminated, 0) orelse unterminated.len];
             if (line.len == 0) continue;
 
             if (std.ascii.startsWithIgnoreCase(line, "@echo ")) continue;
@@ -178,7 +195,7 @@ pub const BatEnv = struct {
             if (std.ascii.startsWithIgnoreCase(line, "echo.")) continue;
             if (std.ascii.startsWithIgnoreCase(line, "rem ") or std.ascii.startsWithIgnoreCase(line, "rem")) continue;
 
-            const expanded = try self.expand(line, args, win_parent_dir_c);
+            const expanded = try self.expand(line, args, script_dir);
             defer self.allocator.free(expanded);
 
             var cmd_line = expanded;
@@ -247,6 +264,7 @@ pub const BatEnv = struct {
             // Unrecognized command — treat as the final executable invocation.
             // Split by whitespace with basic quote stripping.
             var final_args: std.ArrayList([]const u8) = .empty;
+            defer final_args.deinit(self.allocator);
             var it = std.mem.tokenizeAny(u8, cmd_line, " \t");
             while (it.next()) |token| {
                 if (token.len > 0 and token[0] == '"' and token[token.len - 1] == '"' and token.len >= 2) {
@@ -254,6 +272,13 @@ pub const BatEnv = struct {
                 } else {
                     try final_args.append(self.allocator, try self.allocator.dupe(u8, token));
                 }
+            }
+            // A quoted empty first token names no program, so the line runs
+            // nothing and the next candidate line is still the one to run.
+            if (final_args.items.len > 0 and final_args.items[0].len == 0) {
+                for (final_args.items) |arg| self.allocator.free(arg);
+                final_args.clearRetainingCapacity();
+                continue;
             }
             if (final_args.items.len > 0) {
                 return try final_args.toOwnedSlice(self.allocator);
@@ -468,6 +493,37 @@ test "parseFile: empty expansion of if/call lines does not crash" {
     };
 
     try testing.expect(final_args != null);
+    try testing.expectEqual(@as(usize, 1), final_args.?.len);
+    try testing.expectEqualStrings("final_target.exe", final_args.?[0]);
+}
+
+test "runScript: a NUL ends the line, as the C string it becomes would" {
+    var bat = testBatEnv();
+    defer bat.deinit();
+
+    // The NUL would otherwise reach the argv, where it truncates the
+    // argument; ending the line instead drops the rest of it.
+    const final_args = try bat.runScript("cl.exe /nolog\x00o", "C:\\bat", &.{});
+    defer if (final_args) |args| {
+        for (args) |arg| testing.allocator.free(arg);
+        testing.allocator.free(args);
+    };
+
+    try testing.expectEqual(@as(usize, 2), final_args.?.len);
+    try testing.expectEqualStrings("cl.exe", final_args.?[0]);
+    try testing.expectEqualStrings("/nolog", final_args.?[1]);
+}
+
+test "runScript: a quoted empty program name runs nothing" {
+    var bat = testBatEnv();
+    defer bat.deinit();
+
+    const final_args = try bat.runScript("\"\"" ++ "\r\nfinal_target.exe\r\n", "C:\\bat", &.{});
+    defer if (final_args) |args| {
+        for (args) |arg| testing.allocator.free(arg);
+        testing.allocator.free(args);
+    };
+
     try testing.expectEqual(@as(usize, 1), final_args.?.len);
     try testing.expectEqualStrings("final_target.exe", final_args.?[0]);
 }

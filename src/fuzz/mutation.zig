@@ -12,9 +12,11 @@ const boundary_bytes = [_]u8{ 0x00, 0x01, 0x04, 0x08, 0x10, 0x40, 0x7F, 0x80, 0x
 
 /// Apply one structural mutation to `input` (mutated in place) and return the
 /// new length. Mirrors what a coverage-guided fuzzer does to a seed: bit
-/// flips, boundary values, insertions, deletions, and truncation.
+/// flips, boundary values, insertions, deletions, and truncation. An empty
+/// input has nothing to write into and is returned unchanged, at length 0.
 pub fn apply(rand: std.Random, input: []u8) usize {
-    var len = @max(input.len, 1);
+    if (input.len == 0) return 0;
+    var len = input.len;
     switch (rand.intRangeLessThan(u8, 0, 6)) {
         0 => { // flip one bit
             const at = rand.intRangeLessThan(usize, 0, len);
