@@ -242,10 +242,18 @@ pub fn CreateDIBSection(hdc: usize, pbmi: usize, usage: u32, ppvBits: usize, hSe
         const bi_height_raw = bmi.biHeight;
         bitcount = bmi.biBitCount;
         w = if (bi_width > 0) @intCast(bi_width) else 1;
-        h = @intCast(if (bi_height_raw > 0) bi_height_raw else -bi_height_raw);
+        // Negating INT32_MIN in i32 traps, and the geometry products wrap in
+        // u32, so the whole computation runs in u64 and a height that does not
+        // fit u32 is refused rather than wrapped.
+        const height: u64 = if (bi_height_raw > 0) @intCast(bi_height_raw) else @intCast(-@as(i64, bi_height_raw));
+        if (height > std.math.maxInt(u32)) {
+            @as(*usize, @ptrFromInt(ppvBits)).* = 0;
+            return 0; // GDI_ERROR
+        }
+        h = @intCast(height);
         const bpp: u32 = if (bitcount > 0) @as(u32, bitcount) / 8 else 4;
-        const row_stride = ((w * bpp + 3) / 4) * 4;
-        buf_size = row_stride * h;
+        const row_stride = (@as(u64, w) * bpp + 3) / 4 * 4;
+        buf_size = @intCast(@min(row_stride * height, @as(u64, std.math.maxInt(usize))));
         if (trace.enable_tracing) trace.print("GDI32: CreateDIBSection({d}x{d} @ {d}bpp, {d} bytes)\n", .{ w, h, bitcount, buf_size });
     } else {
         if (trace.enable_tracing) trace.print("GDI32: CreateDIBSection(no BITMAPINFO)\n", .{});

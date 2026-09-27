@@ -370,7 +370,9 @@ pub const Module = struct {
         const opt_header = &self.parser.getNtHeaders().OptionalHeader;
         const export_dir_rva = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
 
-        if (export_dir_rva == 0 or export_dir_rva + @sizeOf(pe.IMAGE_EXPORT_DIRECTORY) > self.mapped_memory.len) return null;
+        // The RVAs are u32 and the addition would wrap in that width, so the
+        // bound is checked in u64 like the rest of the image checks.
+        if (export_dir_rva == 0 or @as(u64, export_dir_rva) + @sizeOf(pe.IMAGE_EXPORT_DIRECTORY) > self.mapped_memory.len) return null;
 
         const export_dir_size = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
         const export_dir = @as(*align(1) pe.IMAGE_EXPORT_DIRECTORY, @ptrCast(&self.mapped_memory[export_dir_rva]));
@@ -406,7 +408,7 @@ pub const Module = struct {
                 const func_rva = funcs[ordinal];
 
                 // Check for forwarded exports: if func_rva points inside the export directory, it's a forwarder
-                if (func_rva >= export_dir_rva and func_rva < export_dir_rva + export_dir_size) {
+                if (func_rva >= export_dir_rva and @as(u64, func_rva) < @as(u64, export_dir_rva) + export_dir_size) {
                     const forwarder = self.stringAt(func_rva) orelse return null;
                     log.warn("Forwarded export {s} -> {s}", .{ name, forwarder });
                     // Forwarded export (not yet implemented)

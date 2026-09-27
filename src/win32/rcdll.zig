@@ -938,12 +938,24 @@ fn compileResources(arg_list: []const []const u8) i32 {
 
     if (trace.enable_tracing) trace.print("RCDLL: parsed {d} icons\n", .{icon_count});
 
-    var out_buf: [8192]u8 = undefined;
+    // Upper bound on the .res image: 16 string blocks of 16 slots (a slot is a
+    // WORD length plus 128 UTF-16 chars), 8 dialogs, 8 menus and 4 icons, each
+    // behind a 32-byte resource header. The .rc file is guest-supplied, so the
+    // buffer is sized from the counts the parser can hold rather than a fixed
+    // stack array the emitters would run past.
+    const string_block_bytes = 16 * (2 + 128 * 2) + 4;
+    const out_capacity = 16 * (32 + string_block_bytes) +
+        8 * (32 + 4096) +
+        8 * (32 + 2048) +
+        4 * (32 + 32 + 32 + 4096);
+    const out_alloc = std.heap.page_allocator.alloc(u8, out_capacity) catch return 1;
+    defer std.heap.page_allocator.free(out_alloc);
+    const out_buf = out_alloc;
     var ob: usize = 0;
 
     for (0..block_count) |bi| {
         // Build the string data: 16 slots, each WORD len + chars.
-        var data_buf: [1024]u8 = undefined;
+        var data_buf: [string_block_bytes]u8 = undefined;
         var db: usize = 0;
         var data_size: u32 = 0;
         for (0..16) |slot| {

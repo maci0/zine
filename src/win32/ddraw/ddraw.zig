@@ -4,6 +4,7 @@
 //! as well as surface and clipper management. It uses the renderer
 //! abstraction for pixel presentation.
 
+const std = @import("std");
 const env = @import("../../loader/env.zig");
 const x86_memory = @import("../../x86/memory.zig");
 const trace = @import("../../trace.zig");
@@ -197,6 +198,26 @@ fn getOrAllocSurfaceBuffer(this_addr: usize) ?[*]u8 {
     return null;
 }
 
+/// Length of the buffer `getOrAllocSurfaceBuffer` handed out for a surface.
+/// The declared surface dimensions do not bound it: a surface can be created
+/// larger than the viewport, while every buffer is viewport-sized.
+fn getSurfaceBufSize(this_addr: usize) usize {
+    for (0..sbuf_count) |i| {
+        if (sbuf_keys[i] == this_addr) return sbuf_sizes[i];
+    }
+    return 0;
+}
+
+/// Length of a surface buffer identified by its pointer, for the paths that
+/// hold the buffer rather than the surface it belongs to. A pointer that is
+/// not one of ours is the display surface's own buffer.
+fn getBufLenByPtr(buf: [*]u8) usize {
+    for (0..sbuf_count) |i| {
+        if (sbuf_ptrs[i] != null and @intFromPtr(sbuf_ptrs[i].?) == @intFromPtr(buf)) return sbuf_sizes[i];
+    }
+    return display_surface.buffer.len;
+}
+
 /// IDirectDrawSurface::BltFast — fast blt from source surface to (dwX,dwY) on this surface.
 /// Implementation status: Partially implemented (supports clipping and bpp conversion)
 fn surface_BltFast(this: *IDirectDrawSurface, dwX: u32, dwY: u32, lpDDSrcSurface_raw: usize, lpSrcRect: usize, dwTrans: u32) callconv(w32cc.WINAPI) i32 {
@@ -233,18 +254,24 @@ fn surface_BltFast(this: *IDirectDrawSurface, dwX: u32, dwY: u32, lpDDSrcSurface
 
     const bpp: u32 = if (display_surface.bpp == 16) 2 else 4;
 
-    // Copy pixels
-    const copy_w = @min(src_w, if (dst_w > dwX) dst_w - dwX else 0);
-    const copy_h = @min(src_h, if (dst_h > dwY) dst_h - dwY else 0);
+    // Copy pixels. The rect is guest-supplied, so the copy is clipped to what
+    // the source surface holds and to the end of both buffers: a rect past
+    // either surface would otherwise read (and, through Flip, publish) memory
+    // that is not the source's.
+    const copy_w = @min(src_w, @min(if (dst_w > dwX) dst_w - dwX else 0, if (src_dims.w > src_left) src_dims.w - src_left else 0));
+    const copy_h = @min(src_h, @min(if (dst_h > dwY) dst_h - dwY else 0, if (src_dims.h > src_top) src_dims.h - src_top else 0));
 
-    const src_pitch = src_dims.w * bpp;
-    const dst_pitch = dst_w * bpp;
+    const src_pitch: u64 = @as(u64, src_dims.w) * bpp;
+    const dst_pitch: u64 = @as(u64, dst_w) * bpp;
+    const src_size = getSurfaceBufSize(lpDDSrcSurface_raw);
+    const dst_size = getSurfaceBufSize(@intFromPtr(this));
 
     for (0..copy_h) |y| {
-        const src_off = (src_top + @as(u32, @intCast(y))) * src_pitch + src_left * bpp;
-        const dst_off = (dwY + @as(u32, @intCast(y))) * dst_pitch + dwX * bpp;
-        const row_bytes = copy_w * bpp;
-        @memcpy(dst_buf[dst_off .. dst_off + row_bytes], src_buf[src_off .. src_off + row_bytes]);
+        const src_off = (@as(u64, src_top + @as(u32, @intCast(y))) * src_pitch + @as(u64, src_left) * bpp);
+        const dst_off = (@as(u64, dwY + @as(u32, @intCast(y))) * dst_pitch + @as(u64, dwX) * bpp);
+        const row_bytes = @as(u64, copy_w) * bpp;
+        if (src_off + row_bytes > src_size or dst_off + row_bytes > dst_size) break;
+        @memcpy(dst_buf[@intCast(dst_off)..@intCast(dst_off + row_bytes)], src_buf[@intCast(src_off)..@intCast(src_off + row_bytes)]);
     }
 
     return w32.DD_OK;
@@ -727,7 +754,8 @@ fn surface_Blt(this: *IDirectDrawSurface, lpDestRect: usize, lpDDSrcSurface_raw:
         const src_buf = getOrAllocSurfaceBuffer(lpDDSrcSurface_raw) orelse display_surface.buffer.ptr;
         const src_surf: *IDirectDrawSurface = @ptrFromInt(lpDDSrcSurface_raw);
         const src_dims = getSurfaceDims(src_surf);
-        pushSurfaceFrameFrom(src_buf, src_dims.w, src_dims.h);
+        const src_len = getBufLenByPtr(src_buf);
+        pushSurfaceFrameFrom(src_buf, src_dims.w, src_dims.h, src_len);
     } else {
         // Blt between offscreen surfaces — just copy pixels, don't present
         const src_buf = getOrAllocSurfaceBuffer(lpDDSrcSurface_raw) orelse return w32.DD_OK;
@@ -735,8 +763,16 @@ fn surface_Blt(this: *IDirectDrawSurface, lpDestRect: usize, lpDDSrcSurface_raw:
         const src_surf: *IDirectDrawSurface = @ptrFromInt(lpDDSrcSurface_raw);
         const src_dims = getSurfaceDims(src_surf);
         const bpp: u32 = if (display_surface.bpp == 16) 2 else 4;
-        const size = @as(usize, src_dims.w) * @as(usize, src_dims.h) * bpp;
-        @memcpy(dst_buf[0..size], src_buf[0..size]);
+        // The buffers are viewport-sized; a surface can declare more pixels
+        // than that, so the copy stops at the shorter of the two.
+        const size = @min(
+            @as(u64, src_dims.w) * src_dims.h * bpp,
+            @min(
+                @as(u64, getSurfaceBufSize(lpDDSrcSurface_raw)),
+                @as(u64, getSurfaceBufSize(@intFromPtr(this))),
+            ),
+        );
+        @memcpy(dst_buf[0..@intCast(size)], src_buf[0..@intCast(size)]);
     }
 
     return w32.DD_OK;
@@ -744,12 +780,22 @@ fn surface_Blt(this: *IDirectDrawSurface, lpDestRect: usize, lpDDSrcSurface_raw:
 
 /// Push frame from a specific source buffer (used for Blt to primary).
 /// Supports nearest-neighbor scaling when source dims differ from viewport.
-fn pushSurfaceFrameFrom(src: [*]u8, w: u32, h: u32) void {
+fn pushSurfaceFrameFrom(src: [*]u8, declared_w: u32, declared_h: u32, src_len: usize) void {
     const vw = renderer.global_width;
     const vh = renderer.global_height;
 
     if (renderer.global_framebuf.len < vw * vh * 4) return;
-    if (w == 0 or h == 0) return;
+    if (declared_w == 0 or declared_h == 0) return;
+    // The declared surface size can exceed the buffer behind it; shrink the
+    // rows and then the height until the read fits, so the frame never
+    // publishes memory past the surface.
+    const bpp: u32 = if (display_surface.bpp == 16) 2 else 4;
+    const fit_w = @min(declared_w, @as(u32, @intCast(@min(src_len / bpp, @as(usize, std.math.maxInt(u32))))));
+    if (fit_w == 0) return;
+    const fit_h = @min(declared_h, @as(u32, @intCast(src_len / (@as(usize, fit_w) * bpp))));
+    if (fit_h == 0) return;
+    const w = fit_w;
+    const h = fit_h;
 
     if (w == vw and h == vh) {
         // Fast path: source matches viewport — direct pixel copy
@@ -898,7 +944,7 @@ fn surface_Flip(this: *IDirectDrawSurface, lpDDSurfaceTargetOverride: usize, dwF
     }
 
     if (src_buf) |buf| {
-        pushSurfaceFrameFrom(buf, renderer.global_width, renderer.global_height);
+        pushSurfaceFrameFrom(buf, renderer.global_width, renderer.global_height, getBufLenByPtr(buf));
     } else {
         display_surface.pushFrame();
     }

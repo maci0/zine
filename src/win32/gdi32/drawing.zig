@@ -20,7 +20,7 @@ pub fn BitBlt(hdcDest: usize, x: i32, y: i32, cx: i32, cy: i32, hdcSrc: usize, x
 
     const dest_dib = gdi32.getDcDib(hdcDest);
     const dest_buf = if (dest_dib) |dib|
-        @as([*]u8, @ptrFromInt(dib.buffer))[0 .. dib.width * dib.height * 4]
+        @as([*]u8, @ptrFromInt(dib.buffer))[0..gdi32.dibPixelLen(dib)]
     else
         renderer.global_framebuf;
 
@@ -155,7 +155,7 @@ pub fn StretchBlt(hdcDest: usize, xDest: i32, yDest: i32, wDest: i32, hDest: i32
 
     const dest_dib = gdi32.getDcDib(hdcDest);
     const dest_buf = if (dest_dib) |dib|
-        @as([*]u8, @ptrFromInt(dib.buffer))[0 .. dib.width * dib.height * 4]
+        @as([*]u8, @ptrFromInt(dib.buffer))[0..gdi32.dibPixelLen(dib)]
     else
         renderer.global_framebuf;
     const dest_w = if (dest_dib) |dib| dib.width else renderer.global_width;
@@ -279,7 +279,7 @@ pub fn blitDIBToBufferAt(lpBits: usize, lpbmi: usize, dest_buf: []u8, dest_w: u3
     const bottom_up = bi_height_raw > 0;
 
     // If cLines is provided, the buffer only contains that many scan lines.
-    const h: u32 = if (cLines) |cl| cl else @intCast(if (bottom_up) bi_height_raw else -bi_height_raw);
+    const h: u32 = if (cLines) |cl| cl else @intCast(@abs(@as(i64, bi_height_raw)));
 
     if (w == 0 or h == 0 or blitW == 0 or blitH == 0) return;
 
@@ -290,23 +290,23 @@ pub fn blitDIBToBufferAt(lpBits: usize, lpbmi: usize, dest_buf: []u8, dest_w: u3
     // Palette follows immediately after BITMAPINFOHEADER (each entry is 4 bytes: B,G,R,reserved)
     const palette_ptr = @as([*]const u8, @ptrFromInt(lpbmi + hdr.biSize));
 
-    // Calculate row stride (rows padded to 4-byte boundaries)
-    const row_stride: u32 = switch (bi_bitcount) {
-        4 => ((w + 7) / 8 * 4 + 3) / 4 * 4, // 4bpp: (w/2) rounded up, padded to 4
-        8 => ((w + 3) / 4) * 4,
-        24 => ((w * 3 + 3) / 4) * 4,
-        32 => w * 4,
+    // Calculate row stride (rows padded to 4-byte boundaries). The width is
+    // guest-supplied, so the products run in u64: a wrapped stride would point
+    // the row walk at unrelated memory instead of the caller's bits.
+    const row_stride_wide: u64 = switch (bi_bitcount) {
+        4 => ((@as(u64, w) + 7) / 8 * 4 + 3) / 4 * 4, // 4bpp: (w/2) rounded up, padded to 4
+        8 => ((@as(u64, w) + 3) / 4) * 4,
+        24 => ((@as(u64, w) * 3 + 3) / 4) * 4,
+        32 => @as(u64, w) * 4,
         else => {
             if (trace.enable_tracing) trace.print("GDI32: blitDIB unsupported bpp={d}\n", .{bi_bitcount});
             return;
         },
     };
-
     // For 4bpp, row stride is actually: ((w * 4 + 31) / 32) * 4 = ((w+7)/2) & ~3
-    const actual_row_stride: u32 = if (bi_bitcount == 4)
-        (((w * 4 + 31) / 32) * 4)
-    else
-        row_stride;
+    const actual_stride_wide: u64 = if (bi_bitcount == 4) ((@as(u64, w) * 4 + 31) / 32) * 4 else row_stride_wide;
+    if (actual_stride_wide > std.math.maxInt(usize) or actual_stride_wide > std.math.maxInt(u32)) return;
+    const actual_row_stride: u32 = @intCast(actual_stride_wide);
 
     if (bi_bitcount == 4 and trace.enable_tracing) {
         trace.print("GDI32: 4bpp blit, first 4 colors: [{X:0>2}{X:0>2}{X:0>2}, {X:0>2}{X:0>2}{X:0>2}, {X:0>2}{X:0>2}{X:0>2}, {X:0>2}{X:0>2}{X:0>2}]\n", .{ palette_ptr[2], palette_ptr[1], palette_ptr[0], palette_ptr[6], palette_ptr[5], palette_ptr[4], palette_ptr[10], palette_ptr[9], palette_ptr[8], palette_ptr[14], palette_ptr[13], palette_ptr[12] });
@@ -421,7 +421,7 @@ pub fn StretchDIBits(hdc: usize, xDest: i32, yDest: i32, DestWidth: i32, DestHei
 
     const dest_dib = gdi32.getDcDib(hdc);
     const dest_buf = if (dest_dib) |dib|
-        @as([*]u8, @ptrFromInt(dib.buffer))[0 .. dib.width * dib.height * 4]
+        @as([*]u8, @ptrFromInt(dib.buffer))[0..gdi32.dibPixelLen(dib)]
     else
         renderer.global_framebuf;
 
@@ -524,7 +524,7 @@ pub const FramebufferInfo = struct {
 pub fn getFramebufferForDc(hdc: usize) ?FramebufferInfo {
     if (gdi32.getDcDib(hdc)) |dib| {
         return FramebufferInfo{
-            .buf = @as([*]u8, @ptrFromInt(dib.buffer))[0 .. dib.width * dib.height * 4],
+            .buf = @as([*]u8, @ptrFromInt(dib.buffer))[0..gdi32.dibPixelLen(dib)],
             .w = dib.width,
             .h = dib.height,
             .is_screen = false,
@@ -694,7 +694,7 @@ pub fn SetDIBitsToDevice(hdc: usize, xDest: i32, yDest: i32, w: u32, h: u32, xSr
 
     const dest_dib = gdi32.getDcDib(hdc);
     const dest_buf = if (dest_dib) |dib|
-        @as([*]u8, @ptrFromInt(dib.buffer))[0 .. dib.width * dib.height * 4]
+        @as([*]u8, @ptrFromInt(dib.buffer))[0..gdi32.dibPixelLen(dib)]
     else
         renderer.global_framebuf;
 

@@ -114,6 +114,26 @@ release, not a 0.2.1 patch.
 
 #### Security fixes
 
+- Guest-controlled lengths and counts stay inside the buffers they name.
+  `FormatMessageA` with `FORMAT_MESSAGE_ALLOCATE_BUFFER` allocates the length of
+  the message it is formatting instead of a fixed 256 bytes, so a long source
+  string no longer overruns the allocation. GDI32 blits are bounded by the
+  DIB's own allocation rather than by `width * height * 4`, which a DIB narrower
+  than 32 bits per pixel overstates, and `CreateDIBSection` and
+  `SetDIBitsToDevice` compute their geometry in 64-bit, so a `biHeight` of
+  `INT32_MIN` or a wrapping width fails the call instead of trapping or
+  advertising a bitmap larger than its buffer. DirectDraw clips `Blt`, `BltFast`
+  and `Flip` to the surface buffer, so a source rectangle or a surface
+  declaration larger than the viewport no longer copies, reads or publishes
+  memory past the surface.
+- The `.res` writer sizes its output from the resource counts the parser can
+  hold. A `.rc` file with many long strings, dialogs, menus or icons wrote past
+  the fixed stack buffers instead of producing a resource file.
+- `SizeofResource` stops its resource-directory scan at the end of the mapped
+  image, and the export-directory bounds in the module loader and the import
+  name lookup are checked in 64-bit. A module whose directory sizes or RVAs wrap
+  the 32-bit addition no longer reads past its own mapping.
+
 - The linked native executables are checked for a static link and a
   non-executable stack, in a `hardening` gate step and in CI. The other usual
   controls are absent by design and stay absent: the images load at a fixed

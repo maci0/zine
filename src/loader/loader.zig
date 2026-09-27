@@ -498,12 +498,12 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
                     x86_thunks.registerUnresolvedImport(@intCast(@intFromPtr(first_thunk)), dll_name, ord_str);
                 }
             } else {
-                if (orig_thunk.u1.AddressOfData + @sizeOf(pe.IMAGE_IMPORT_BY_NAME) >= mod.mapped_memory.len) {
+                if (@as(u64, orig_thunk.u1.AddressOfData) + @sizeOf(pe.IMAGE_IMPORT_BY_NAME) >= mod.mapped_memory.len) {
                     log.warn("loader: {s}: import name RVA 0x{X} for {s} out of bounds, skipping", .{ mod.name, orig_thunk.u1.AddressOfData, dll_name });
                     first_thunk.* = 0;
                     continue;
                 }
-                const func_name = mod.stringAt(orig_thunk.u1.AddressOfData + @sizeOf(pe.IMAGE_IMPORT_BY_NAME)) orelse {
+                const func_name = mod.stringAt(@intCast(orig_thunk.u1.AddressOfData + @sizeOf(pe.IMAGE_IMPORT_BY_NAME))) orelse {
                     log.warn("loader: {s}: unterminated import name RVA 0x{X} for {s}, skipping", .{ mod.name, orig_thunk.u1.AddressOfData, dll_name });
                     first_thunk.* = 0;
                     continue;

@@ -4,6 +4,7 @@
 //! and maintains global state for GDI objects (bitmaps, brushes, pens)
 //! and device contexts.
 
+const std = @import("std");
 const env = @import("../loader/env.zig");
 
 const object = @import("gdi32/object.zig");
@@ -177,6 +178,19 @@ pub fn findDib(handle: usize) ?*const DibInfo {
         }
     }
     return null;
+}
+
+/// Bytes a blit may touch in this DIB's pixel buffer. A registered bitmap
+/// allocated by zine carries its exact length, and a DIB narrower than 32 bits
+/// per pixel stores fewer bytes than `width * height * 4` claims, so the
+/// allocation is the bound. A caller-registered buffer (no recorded length) is
+/// a 32bpp scratch of the declared size.
+pub fn dibPixelLen(dib: *const DibInfo) usize {
+    // u128 for the product: guest dimensions close to u32 max would wrap u64.
+    const declared: u128 = @as(u128, dib.width) * dib.height * 4;
+    const ceiling: u128 = std.math.maxInt(usize);
+    const by_allocation: u128 = if (dib.alloc_len == 0) declared else @min(declared, @as(u128, dib.alloc_len));
+    return @intCast(@min(by_allocation, ceiling));
 }
 
 /// Tracks active GDI Device Contexts (DCs).
@@ -472,4 +486,36 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "CreateICA", dc.CreateDCA);
     try environment.addBuiltinExportComptime(m, "CopyEnhMetaFileA", stub.stub_args(2));
     try environment.addBuiltinExportComptime(m, "AbortDoc", stub.stub_args(1));
+}
+
+test "a blit is bounded by the DIB's allocation, not its declared 4bpp size" {
+    // 24bpp 256x256: three bytes per pixel, so the allocation is 196608 while
+    // width * height * 4 would claim 262144.
+    try std.testing.expectEqual(@as(usize, 256 * 256 * 3), dibPixelLen(&.{
+        .handle = 1,
+        .buffer = 0,
+        .width = 256,
+        .height = 256,
+        .bpp = 24,
+        .alloc_len = 256 * 256 * 3,
+        .owned = true,
+    }));
+    // A caller-registered buffer records no length and is 32bpp scratch.
+    try std.testing.expectEqual(@as(usize, 2 * 2 * 4), dibPixelLen(&.{
+        .handle = 1,
+        .buffer = 0,
+        .width = 2,
+        .height = 2,
+        .bpp = 32,
+    }));
+    // Dimensions whose product overflows the address space saturate instead
+    // of wrapping to a small bound.
+    try std.testing.expectEqual(std.math.maxInt(usize), dibPixelLen(&.{
+        .handle = 1,
+        .buffer = 0,
+        .width = std.math.maxInt(u32),
+        .height = std.math.maxInt(u32),
+        .bpp = 32,
+        .alloc_len = 0,
+    }));
 }

@@ -171,7 +171,10 @@ pub fn FormatMessageA(dwFlags: u32, lpSource: ?*anyopaque, dwMessageId: u32, dwL
     }
 
     if ((dwFlags & FORMAT_MESSAGE_ALLOCATE_BUFFER) != 0) {
-        const ptr = kernel32_mem.raw_alloc(256);
+        // The buffer must hold the message the caller supplied: with
+        // FROM_STRING its length is theirs, so the allocation follows msg.len
+        // instead of a fixed size that a long string would overrun.
+        const ptr = kernel32_mem.raw_alloc(msg.len);
         if (ptr) |p| {
             const out_buf = @as([*]u8, @ptrCast(p));
             @memcpy(out_buf[0..msg.len], msg);

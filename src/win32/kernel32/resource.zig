@@ -92,11 +92,17 @@ pub fn stub_SizeofResource(hModule: usize, hResInfo: usize) callconv(w32cc.WINAP
                     const opt_header = &m.*.parser.getNtHeaders().OptionalHeader;
                     const res_dir_rva = opt_header.DataDirectory[@import("../../pe.zig").IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
                     if (res_dir_rva == 0) return 0;
-                    // Scan all potential data entries in the resource directory
-                    const res_end = res_dir_rva + opt_header.DataDirectory[@import("../../pe.zig").IMAGE_DIRECTORY_ENTRY_RESOURCE].Size;
-                    var pos = res_dir_rva;
+                    // Scan all potential data entries in the resource directory.
+                    // The directory size comes from the PE, so the scan stops at
+                    // the end of the image: a Size that runs past the mapping
+                    // would walk off it.
+                    const res_end = @min(
+                        @as(u64, res_dir_rva) + opt_header.DataDirectory[@import("../../pe.zig").IMAGE_DIRECTORY_ENTRY_RESOURCE].Size,
+                        m.*.mapped_memory.len,
+                    );
+                    var pos: u64 = res_dir_rva;
                     while (pos + @sizeOf(pe_res.IMAGE_RESOURCE_DATA_ENTRY) <= res_end) : (pos += 4) {
-                        const de = @as(*align(1) const pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(&m.*.mapped_memory[pos]));
+                        const de = @as(*align(1) const pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(&m.*.mapped_memory[@intCast(pos)]));
                         if (de.OffsetToData == offset and de.Size > 0 and de.Size < m.*.mapped_memory.len) {
                             return de.Size;
                         }
