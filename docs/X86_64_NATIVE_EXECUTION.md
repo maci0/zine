@@ -33,8 +33,8 @@ This fails because `CS` remains `0x33`. We need a mechanism to switch `CS` to `0
 
 ### 1. 32-bit Addressable Memory (`mmap`)
 All allocations for the guest (the PE image, its heap, its stack) *must* reside in the lower 4GB of the address space so that 32-bit pointers can reference them.
-- **Current State**: `platform.mmap` uses `MAP_FIXED_NOREPLACE`, which attempts to map the PE at its preferred address (e.g., `0x00400000`), which often succeeds. However, anonymous maps or non-fixed allocations may end up in high memory.
-- **Missing**: We need to use `MAP_32BIT` on x86_64 Linux for any guest memory allocations (like the guest stack and heap).
+- **Current State**: `platform.mmap` uses `MAP_FIXED_NOREPLACE`, which attempts to map the PE at its preferred address (e.g., `0x00400000`), which often succeeds. It also sets `MAP_32BIT` on x86_64 Linux for every non-fixed allocation, so anonymous guest maps land in the low 4GB; fixed-address mappings skip the flag because the address is already known.
+- **Missing**: Nothing for the low-4GB requirement itself. The remaining work is auditing call sites that still assume 32-bit host pointers.
 
 ### 2. A 32-bit Compatible Stack
 The native 64-bit Zine host stack is allocated by Linux in high memory (e.g., `0x7FFFFFF...`). A 32-bit program's `ESP` cannot point there.
@@ -94,26 +94,26 @@ mechanism from the WASM/interpreter path. This avoids complex GDT manipulation a
 | `src/x86/compat_thunks.zig` | **NEW** — 256KB thunk pool (MAP_32BIT), signal dispatcher, iretq entry trampoline |
 | `src/platform/native.zig` | INT 0xFE detection at top of SIGSEGV handler |
 | `src/loader/loader.zig` | `patchImport` x86_64 branch — allocates INT 0xFE stubs in compat pool |
-| `src/x86/thunks.zig` | `ImportEntry.addr` widened to `usize`, added `getEntry()` |
-| `src/main.zig` | Initializes compat pool, allocates 1MB guest stack, uses `iretq` to enter PE |
+| `src/x86/thunks.zig` | `ThunkEntry.native_addr` widened to `usize`, added `getEntry()` |
+| `src/main.zig` | Initializes compat pool, allocates a 16MB guest stack, uses `iretq` to enter PE |
 | `src/win32/teb.zig` | TEB allocated via `platform.mmap` (MAP_32BIT) on x86_64 |
 
 ### Checklist
 
 #### Sub-4GB Memory Management
-- [x] `platform.mmap` uses `MAP_32BIT` on x86_64 — all guest mmaps land in low 4GB (`native.zig:82`)
+- [x] `platform.mmap` uses `MAP_32BIT` on x86_64 — every non-fixed guest mmap lands in the low 4GB (`src/platform/native.zig:132`; fixed mappings skip the flag)
 - [x] `teb.zig` allocates TEB via `platform.mmap` on x86_64 (ensures < 4GB)
-- [x] PEB/ProcessParameters allocated via `kernel32/mem.zig:raw_alloc` (uses platform.mmap)
+- [x] PEB/ProcessParameters allocated via `win32/shared.zig:raw_alloc` (uses platform.mmap)
 
 #### Thunking & Stubs
 - [x] `compat_thunks.zig` — 256KB executable pool in low 4GB for `INT 0xFE` stubs
 - [x] `allocThunk(thunk_id)` — writes `CD FE + u32` and returns 32-bit address for IAT
 - [x] `allocData(src, size)` — copies data exports into pool for 32-bit guest access
 - [x] `loader.zig:patchImport` — x86_64 branch registers native thunks and allocates compat stubs
-- [x] `thunks.zig` — `ImportEntry.addr` widened to `usize`, `registerNativeImport` takes `usize`
+- [x] `thunks.zig` — `ThunkEntry.native_addr` widened to `usize`, `registerNativeThunk` takes `usize`
 
 #### Bootstrapping & Mode Transition
-- [x] 1MB guest stack allocated via `platform.mmap` (MAP_32BIT)
+- [x] 16MB guest stack allocated via `platform.mmap` (MAP_FIXED at `0x05000000`)
 - [x] Exit stub pushed as return address on guest stack
 - [x] `iretq` trampoline switches CS=0x23, SS=0x2B to enter 32-bit compat mode
 - [x] `main.zig` — entry point and `_InvokeCompilerPass@12` both use compat mode on x86_64
@@ -138,7 +138,7 @@ If we want to extend Zine to execute 64-bit Windows applications natively on a 6
 The most significant hurdle is the difference between the **Windows x64 calling convention** and the **System V AMD64 ABI** (used by Linux and Zig natively).
 - **Windows x64**: Arguments in `RCX`, `RDX`, `R8`, `R9`. Float arguments in `XMM0-XMM3`. Caller-allocated 32-byte shadow space on the stack. Registers `RBX`, `RBP`, `RDI`, `RSI`, `R12-R15` are non-volatile (callee-saved).
 - **System V**: Arguments in `RDI`, `RSI`, `RDX`, `RCX`, `R8`, `R9`. No default shadow space. Registers `RBX`, `RBP`, `R12-R15` are non-volatile.
-- **Missing**: When a 64-bit Windows PE calls a Zine stub function (e.g., `kernel32.GetTickCount`), it uses the Windows x64 convention. Because Zine is compiled with `callconv(.c)` on Linux, it expects the System V convention. We either need to compile the Zine Win32 stubs using the Windows calling convention (Zig supports `callconv(.Win64)`), or we need a trampoline layer for *every* stub that rearranges the registers before jumping to the actual implementation. Using `callconv(.Win64)` for the stubs is the most correct approach, but it will require updating the `Environment` function pointer typedefs.
+- **Missing**: Zine's stubs already declare `callconv(w32cc.WINAPI)`, which `src/win32/calling_convention.zig` maps to `.winapi` (= Win64) on x86_64, so the convention itself is handled. What remains is auditing `loader/env.zig`'s function-pointer typedefs and every stub for hardcoded 32-bit types, and ensuring Zig allocates the 32-byte shadow space when a Win64 stub calls back into native code (callbacks in the GUI and event loops).
 
 ### 3. SEH Exception Handling (64-bit)
 On 32-bit Windows, SEH uses a dynamic linked list stored in `FS:0`. On 64-bit Windows, SEH is fundamentally different.

@@ -24,9 +24,6 @@ RCDLL raw-syscall file IO).
 
 ## WASM
 
-- [ ] **WASI single-threaded timers** — the timer thread is native-only; WASI
-      builds (wasmtime/wasmer/zine-host) don't fire WM_TIMER (single-threaded
-      runtime). The timer suite section is skipped on WASM for this reason.
 - [ ] **JIT instruction coverage** — the JIT executes straight-line blocks
       end-to-end via zine-host, but blocks containing untranslated opcodes
       fall back to the interpreter. Broaden the translator (SSE, x87, string
@@ -41,11 +38,9 @@ RCDLL raw-syscall file IO).
 ## MSVCRT / stdio
 
 `fflush`/`_flushall`/`setvbuf`/`_fcloseall`/`freopen` are implemented
-(2026-08-08 slice). The remaining stdio gap is the pre-existing wasmtime
-text-mode `fgets`/`fread` read-back issue: kernel32 file I/O (used by the CLI
-tools) works, but msvcrt `fopen("r")` + buffered read returns empty on
-wasmtime (the CRT's text-mode loop reads past the ReadFile byte count into
-garbage/zeros). Not covered by the suite (tests use append-write).
+(2026-08-08 slice). No remaining stdio gap: `fopen("r")` + `fgets` read-back
+goes through `host_io` a byte at a time, and the STD suite section asserts the
+written lines on every mode, so a wasmtime regression fails the suite.
 
 ## Long-term / infra (not GUI-blocking)
 

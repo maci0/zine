@@ -21,7 +21,7 @@ Contains constants and enums defining the binary structure of WASM.
 Provides binary serialization utilities required for generating a standard `.wasm` module.
 - **`Buffer`**: A wrapper around `std.ArrayListUnmanaged(u8)` to accumulate bytecode reliably.
 - **LEB128 Encoders**: Functions to encode unsigned (`appendUleb128`) and signed (`appendIleb128`) integers, which WebAssembly uses for most immediate values.
-- **`WasmModule`**: Manages the construction of the final WASM binary by tracking distinct sections (Type, Func, Export, Code) and writing them out with proper sizes.
+- **`WasmModule`**: Manages the construction of the final WASM binary by tracking distinct sections (Type, Import, Func, Export, Code) and writing them out with proper sizes. Every emitted module imports its memory from `"env"`, so the Import section is load-bearing, not optional.
 
 ### 3. Translation Helpers (`translate.zig`)
 Factored-out primitives used by the compiler for instruction translation:
@@ -54,6 +54,10 @@ WebAssembly executes on a stack machine, but standard blocks and functions decla
 | 13 | DF (Direction Flag) |
 | 14 | PF (Parity Flag) |
 | 15 | mem_base (memory base address for guest loads/stores) |
+| 16 | FS segment base (TEB) |
+| 17, 18 | Scratch (ALU operands for CF/OF computation) |
+
+19 locals total (`LOCAL_COUNT` in `translate.zig`).
 
 ### Control Flow
 `JitCompiler.compile` stops before branches, calls, returns, loops, and interrupts. Its epilogue saves EIP at the first uncompiled instruction; `runWithJitHost` then lets the interpreter execute that instruction. Translation helpers for control flow exist, but the block compiler does not reach them (commit `33d57d5`, tested by `jit compiler stops at control flow` in `src/jit/compiler.zig`). `CMOVcc` remains inside compiled blocks and uses `if`/`end`. Cross-block trace linking remains planned.
@@ -66,7 +70,7 @@ A crucial component of any dynamic recompiler is avoiding re-translating the sam
 The interpreter uses a 1024-entry hash-indexed **instruction decode cache** (`decode_cache.zig`) that maps guest EIP addresses to previously decoded `Instruction` structs. Each entry is validated by the EIP tag, the fetch length, and every fetched byte (up to `MAX_CODE_BYTES`, 16), which provides self-modifying code detection — if code is modified, the comparison fails on the next lookup, causing a cache miss and re-decode from the modified bytes.
 
 ### JIT Block Caching Strategy (Partial)
-1. **Instruction Pointer Mapping (implemented):** `compiler.zig` tracks attempted compilation in fixed 4096-entry arrays (`JitCompiler.block_cache_keys`/`block_cache_vals`, suppressing recompilation of a block already emitted). `runWithJitHost` in `wasm_main.zig` maps guest EIP to a host block ID with `JitCompiler.BlockIndex`, a 4096-entry direct-mapped table that also stores the x86 bytes each block was compiled from. Both index by `eip & 4095` and check the full EIP tag; collisions replace the previous entry. These replaced unbounded hash maps in commit `a76c8eb`.
+1. **Instruction Pointer Mapping (implemented):** `compiler.zig` tracks attempted compilation in fixed 4096-entry arrays (`JitCompiler.block_cache_keys`/`block_cache_vals`, suppressing recompilation of a block already emitted). `runWithJitHost` in `wasm_main.zig` maps guest EIP to a host block ID with `BlockIndex` (`compiler.zig`), a top-level 4096-entry direct-mapped struct that also stores the x86 bytes each block was compiled from. Both index by `eip & 4095` and check the full EIP tag; collisions replace the previous entry. These replaced unbounded hash maps in commit `a76c8eb`.
 2. **Cache Invalidation (implemented, byte-validated):** See [Handling Self-Modifying Code](#handling-self-modifying-code-smc).
 3. **Trace Linking (planned):** Frequently executed blocks that jump to other known blocks could be linked without returning to the interpreter.
 
@@ -77,7 +81,7 @@ Self-Modifying Code is historically the hardest problem for x86 recompilers (esp
 Current state:
 
 1. **Interpreter decode cache**: each entry is validated by its EIP tag, the fetch length, and every fetched byte, so a write to cached code causes a mismatch and a re-decode on the next fetch. This covers the interpreter path.
-2. **JIT block index**: `JitCompiler.BlockIndex` (`compiler.zig`) maps guest EIP to the host block ID and keeps the exact x86 bytes the block was compiled from (up to the 256-byte scan window). A hit requires those bytes to still be at the EIP, so code patched in place, or a region unmapped and remapped at the same address, misses and recompiles instead of executing the earlier translation. `JitCompiler.invalidateEip` drops the companion "already compiled" mark so a stale mark cannot suppress that recompile.
+2. **JIT block index**: `BlockIndex` (`compiler.zig`) maps guest EIP to the host block ID and keeps the exact x86 bytes the block was compiled from (up to the 256-byte scan window). A hit requires those bytes to still be at the EIP, so code patched in place, or a region unmapped and remapped at the same address, misses and recompiles instead of executing the earlier translation. `JitCompiler.invalidateEip` drops the companion "already compiled" mark so a stale mark cannot suppress that recompile.
 3. **Coarse flush hook**: guest calls that make code executable again — `VirtualProtect` raising an EXECUTE protection tier and `FlushInstructionCache` — invoke `stub_common.smc_invalidate_cache` (registered as `flushJitCache` in `wasm_main.zig`), which clears the block index and the compile marks in one step. Byte validation makes this a fast path, not the correctness mechanism: a guest that writes to its own code without either call still recompiles on the next visit to that EIP. What remains unimplemented is avoiding the recompile: marking translated pages read-only and intercepting writes to re-translate in place.
 
 Planned design (only the fine-grained parts remain unimplemented; the byte-validated index and the coarse whole-cache flush described above ship today):
@@ -142,7 +146,7 @@ The final phase lifts the JIT from compiling one-off instruction structures into
 ### 5. JIT Host Interface (`host.zig` / `host_wasm.zig`)
 Manages CPU state transfer between the interpreter and JIT-compiled blocks:
 - **`JitCpuState`**: A 64-byte struct in linear memory containing all 8 GPRs, EIP, packed EFLAGS, an execution status code, `mem_base` (guest VA → linear memory offset adjustment), and the FS segment base — used to pass state between the host and compiled WASM modules.
-- **`host.zig`**: Defines the `JitCpuState` struct, its field offsets, the status codes, and the `JitHost` interface. State transfer is written inline by the callers (`wasm_main.zig` for the host runtime, `runner.zig` for the compile-only loop), not by shared helpers.
+- **`host.zig`**: Defines the `JitCpuState` struct, its field offsets, the status codes, the `BlockId` alias, and the `JitHost` compile/call/deinit interface. State transfer is written inline by the callers (`wasm_main.zig` for the host runtime, `runner.zig` for the compile-only loop), not by shared helpers.
 - **`host_wasm.zig`**: WASM-side imports for `jit_compile` and `jit_call` that communicate with the host runtime (wasmer/wasmtime) to compile and execute JIT blocks.
 
 ## Usage

@@ -162,7 +162,7 @@ On WASM and x86_64, Win32 API calls can't be dispatched by jumping to native fun
 
 [`src/win32/`](../src/win32/)
 
-Zine implements 37 DLL stub modules that provide Win32 API compatibility (36 always registered, plus 1 WASM-only). Each module exports a `register()` function that adds its exports to the `Environment`. Unresolved functions fall back to `not_implemented`, which prints a diagnostic and exits.
+Zine implements 37 DLL stub modules that provide Win32 API compatibility: 35 registered on every target, plus `mspdb60` (WASM only) and `rcdll` (registered everywhere because the real RCDLL.DLL fails to compile DIALOG templates on native). Each module exports a `register()` function that adds its exports to the `Environment`. Unresolved functions fall back to `not_implemented`, which prints a diagnostic and exits.
 
 | Category | Stubs |
 |----------|-------|
@@ -401,7 +401,7 @@ The build system includes a `test` step that runs embedded unit tests in the x86
 zig build test
 ```
 
-Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, `decode_cache.zig`, `execute.zig`, `sse.zig`, `thunks.zig`, `jit/compiler.zig`, `loader/menu_parser.zig`, `loader/module.zig`, `loader/loader.zig`, `profiler.zig`, `path_utils.zig`, `bat.zig`, `pe.zig`, `runner.zig`, `win32/ansi.zig`, `win32/user32.zig`, `win32/civil_time.zig`, `win32/kernel32/{time,file,sync,process}.zig`, `win32/msvcrt/{io,time}.zig`, `win32/ntdll/ntapi.zig`, `win32/advapi32/{services,security}.zig`, `win32/gdi32/{drawing,object,dc}.zig`.
+Tested modules (see `src/test_root.zig` for the authoritative list): `x86/{flags,memory,fpu,cpu,decoder,decode_cache,execute,sse,thunks}.zig`, `jit/compiler.zig`, `loader/{menu_parser,module,registry,loader}.zig`, `fuzz/replay.zig`, `profiler.zig`, `config.zig`, `log.zig`, `path_utils.zig`, `bat.zig`, `pe.zig`, `runner.zig`, `gui/web_ui.zig`, and the `win32/` modules listed there.
 
 ---
 
@@ -409,7 +409,7 @@ Tested modules: `flags.zig`, `memory.zig`, `fpu.zig`, `cpu.zig`, `decoder.zig`, 
 
 ```
 zine/
-├── build.zig               # Build configuration (x86, x86_64, wasm32)
+├── build.zig               # Build configuration (x86, x86_64, wasm32, wasm64)
 ├── build.zig.zon            # Zig package manifest
 ├── docs/                    # Documentation
 │   ├── ARCHITECTURE.md      # This file
@@ -425,6 +425,7 @@ zine/
 │   ├── TODO.md              # Remaining work / task tracking
 │   ├── WASM_PLAN.md         # WASM porting plan
 │   ├── WEBGPU_TRANSLATION.md # DirectDraw/D3D → WebGPU translation guide
+│   ├── WEB_UI_PROTOCOL.md   # Web UI HTTP routes and WebSocket messages
 │   └── X86_64_NATIVE_EXECUTION.md # x86_64 native execution notes
 ├── drive_c/                 # Virtual C: drive for guest apps
 ├── src/
@@ -478,6 +479,7 @@ zine/
 │   │   ├── teb.zig          # Thread Environment Block (TEB/PEB/TIB)
 │   │   ├── constants.zig    # Shared Win32 constant definitions
 │   │   ├── calling_convention.zig # WINAPI calling convention abstraction
+│   │   ├── civil_time.zig    # Gregorian/UTC calendar arithmetic
 │   │   ├── host_io.zig      # I/O abstraction layer (native/WASM)
 │   │   ├── ansi.zig         # CP1252 (ANSI code page) conversion and UTF-8 truncation
 │   │   ├── ordinals.zig     # Ordinal-to-name mapping
@@ -505,8 +507,8 @@ zine/
 │   │   ├── rpcrt4.zig                # RPC runtime (UUID generation)
 │   │   ├── imagehlp.zig              # Symbol demangling
 │   │   ├── mfc42.zig                 # MFC ordinal stubs
-│   │   ├── mspdb60.zig               # MRE/PDB stubs (WASM)
-│   │   ├── rcdll.zig                 # Resource compiler stubs (WASM)
+│   │   ├── mspdb60.zig               # MRE/PDB stubs (WASM only)
+│   │   ├── rcdll.zig                 # Resource compiler stubs (STRINGTABLE + DIALOG)
 │   │   ├── imm32.zig, version.zig, winspool.zig, setupapi.zig
 │   │   ├── shlwapi.zig, msvcp60.zig, mpr.zig
 │   │   └── nddeapi.zig, cards.zig, icmp.zig, vdmdbg.zig, mag_hook.zig

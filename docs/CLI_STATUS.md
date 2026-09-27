@@ -11,7 +11,7 @@ This document tracks our progress attempting to run the MSVC CLI utilities liste
 | :--- | :--- | :--- |
 | `CL.EXE` | 🟢 Fully Working | Properly boots `C1.DLL`, parses C source, invokes `C2.DLL`, and spawns `LINK.EXE` to generate a valid executable. |
 | `LINK.EXE` | 🟢 Fully Working | Correctly acts as Linker, Dumper, and Lib Manager. |
-| `RC.EXE` | 🟢 Fully Working | Natively preprocesses `.rc` files using wide strings (`_wfsopen` via `swprintf`/`fopen`), outputs `.res`. |
+| `RC.EXE` | 🟢 Fully Working | Natively preprocesses `.rc` through raw `posix_fs`/`host_io` calls (no `std.Io` TLS) and writes the `.res`. |
 | `DUMPBIN.EXE` | 🟢 Fully Working | Properly parses arguments and delegates to `LINK.EXE`. |
 | `LIB.EXE` | 🟢 Fully Working | Successfully delegates to `LINK.EXE -lib`. |
 | `CVPACK.EXE` | 🟢 Fully Working | Properly parses arguments and prints help usage. |
@@ -25,11 +25,11 @@ This document tracks our progress attempting to run the MSVC CLI utilities liste
 | `MAKEHM.EXE` | 🟢 Fully Working | Properly runs and prints usage after implementing `_EH_prolog` and basic `MFC42.DLL` dummy stubs. |
 | `MRBC.EXE` | 🔴 Unsupported | 16-bit NE executable (OS/2 / Win16). |
 | `UUIDGEN.EXE` | 🟢 Fully Working | Stubbed out `RPCRT4.dll` UUID generators. |
-| `PSTAT.EXE` | 🟢 Fully Working | Properly dumps mock system, process, and module information via `ntdll.dll`. |
-| `MAPSYM.EXE` | 🟢 Fully Working | Properly parses arguments and prints help usage. |
+| `PSTAT.EXE` | ⚪ Unverified | Runs on the generic `ntdll.dll` stubs; no dedicated check in `tests/test_msvc_cli.sh`. |
+| `MAPSYM.EXE` | ⚪ Unverified | No check in `tests/test_msvc_cli.sh` and no MAPSYM-specific source. |
 | `MC.EXE` | 🟢 Fully Working | Properly parses arguments and prints help usage. |
 | `MIDL.EXE` | 🟢 Fully Working | Prints version and catches missing source arguments. |
-| `MKTYPLIB.EXE` | 🟢 Fully Working | Properly parses arguments and prints help usage. |
+| `MKTYPLIB.EXE` | ⚪ Unverified | No check in `tests/test_msvc_cli.sh` and no MKTYPLIB-specific source. |
 | `PLIST.EXE` | 🟢 Fully Working | Properly loads and initializes, exiting cleanly. |
 | `PREP.EXE` | 🟢 Fully Working | Properly parses arguments and prints help usage. |
 | `PROFILE.EXE` | 🟢 Fully Working | Properly loads and initializes, exiting cleanly. |

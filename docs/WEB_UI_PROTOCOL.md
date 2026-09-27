@@ -20,10 +20,12 @@ reference client is `src/gui/app.js`.
 The query string is stripped before routing, so `/ws?cache=1` reaches the
 WebSocket endpoint and `/app.js?v=2` serves the asset.
 
-`/ws` is an exact path. A browser handshake must carry an `Origin` of
-`http://127.0.0.1:1995`, `http://localhost:1995`, or `http://[::1]:1995`;
-any other origin gets 403. A client that sends no `Origin` (curl, the test
-scripts) is allowed.
+`/ws` is an exact path. With the default bind address a browser handshake must
+carry an `Origin` of `http://127.0.0.1:1995`, `http://localhost:1995`, or
+`http://[::1]:1995`; any other origin gets 403. `ZINE_WEB_HOST` and
+`ZINE_WEB_PORT` change the bind address and the allowed origin together, and
+the `localhost` / `::1` aliases are accepted only for a loopback bind
+address. A client that sends no `Origin` (curl, the test scripts) is allowed.
 
 Every non-file response uses the same body: a plain-text reason with
 `Content-Type: text/plain; charset=utf-8`. There is no JSON error envelope on
@@ -67,14 +69,14 @@ sides may then send text messages at any time.
 | `menu` | `menu` |
 | `check_menu_item`, `enable_menu_item` | `id`, `checked` / `enabled` |
 | `set_title` | `text` |
-| `set_window_pos` | `x`, `y`, `width`, `height`, ... |
-| `set_statusbar_text`, `set_statusbar_parts` | status bar text and part bounds |
+| `set_window_pos` | `cx`, `cy` (window origin), `clientW`, `clientH` (client area) |
+| `set_statusbar_text`, `set_statusbar_parts` | status bar text; `set_statusbar_parts` carries only `count` |
 | `set_clipboard` | `text` |
 | `set_volume` | `volume` (0-100) |
 | `audio_format` | `sampleRate`, `channels`, `bitsPerSample` |
 | `directory_listing` | answer to `browse_directory` |
 | `desktop_icons`, `set_icon` | desktop icon geometry |
-| `open_file_dialog`, `open_find_dialog`, `open_font_dialog`, `open_page_setup_dialog`, `open_print_dialog`, `show_page_setup_dialog`, `show_print_dialog`, `show_color_dialog`, `show_context_menu`, `message_box` | dialog requests |
+| `open_file_dialog`, `open_find_dialog`, `open_font_dialog`, `open_print_dialog`, `show_page_setup_dialog`, `show_print_dialog`, `show_color_dialog`, `show_context_menu`, `message_box` | dialog requests |
 | `show_controls`, `add_control`, `set_control_checked`, `set_control_color`, `set_listbox_items`, `update_control_range`, `update_control_text`, `update_control_value` | guest control state |
 | `show_edit_control`, `set_edit_text`, `set_edit_font`, `resize_edit_control`, `edit_setsel`, `edit_replacesel`, `edit_scrollcaret`, `edit_undo` | guest edit control state |
 | `close_dialog`, `custom_dialog` | dialog lifecycle |

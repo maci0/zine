@@ -80,7 +80,8 @@ fn safeMilliTs() i64 {
 
 /// Spawn the WM_TIMER dispatcher thread on first SetTimer. It wakes every
 /// 10ms, posts WM_TIMER for expired timers, and needs no guest interaction.
-/// No-op on WASI (single-threaded; the TIMER suite runs are skipped there).
+/// No-op on WASI, which has no threads; the message pump still expires timers
+/// there when the guest pumps messages, so WM_TIMER is delivered either way.
 fn ensureTimerThread() void {
     if (comptime @import("builtin").os.tag == .wasi) return;
     if (timer_thread_started) return;

@@ -149,7 +149,7 @@ The thunk handler in `env.zig` is responsible for translating ALL pointer parame
 
 ```zig
 // src/loader/env.zig — comptime thunk handler (WASM and x86_64 compat)
-// `GuestWord` is u32 for PE32, u64 for PE64.
+// `GuestWord` is u32 for PE32; a u64 form for PE64 is not defined yet (Phase 4).
 fn castArg(comptime T: type, val: GuestWord, cpu: *Cpu) T {
     return switch (@typeInfo(T)) {
         // Pointers: translate guest VA → host address
@@ -174,7 +174,7 @@ fn translateGuestAddr(val: GuestWord, cpu: *Cpu) usize {
 }
 ```
 
-This generalizes to PE64: `GuestWord` becomes `u64`, `base_addr` becomes `u64`, and the offset arithmetic uses 64-bit values. On WASM32+PE64, the result is truncated to 32-bit (must fit in 4GB). On WASM64+PE64, no truncation.
+Generalizing to PE64 is deferred: the handler is hardcoded to `u32` today, and Phase 4 lists the `GuestWord` alias and 64-bit `base_addr` as prerequisites. On WASM32+PE64 the result would have to be truncated to 32 bits; on WASM64+PE64 it would not.
 
 **The key insight**: Because stub functions use **pointer types** (not `usize`) for pointer parameters, `castArg` can distinguish pointers from integers at comptime and translate only pointers. There's no ambiguity. No double-translation. No manual `trace.addr()`.
 
@@ -319,7 +319,7 @@ This keeps the stub pure while handling the WASM special case at the registratio
 | exe dir | POSIX dirname | `posixToWin32` | Win32 (`Z:\...\Bin\`) |
 | CWD | POSIX (`/home/user/work`) | `posixToWin32` | Win32 (`Z:\home\user\work`) |
 
-**Owner**: `main.zig` / `wasm_main.zig` at startup. Done once.
+**Owner**: `main.zig` / `host_main.zig` / `wasm_main.zig` at startup. Done once.
 
 ### Boundary 2: Loader -> Guest Memory (WASM only)
 
@@ -453,7 +453,7 @@ as separate APIs (`FindFirstFileA`/`FindNextFileA` keep their own handle pool in
 - [x] Implement `host_io.deleteFile(win32_path: []const u8) bool`
 - [ ] Implement `host_io.findFirst` / `findNext` (superseded: find-handle pool lives in `kernel32/file.zig`)
 - [x] Migrate `_access` to use `host_io.access` (`msvcrt/file.zig`)
-- [x] Migrate `fopen` file opens to `host_io.open` (`msvcrt/file.zig`)
+- [ ] Migrate `fopen` (`msvcrt/io.zig`) to `host_io.open` (still uses `posix_fs.open`)
 - [ ] Migrate `CreateFileA` fully to `host_io.open` (currently uses `host_io.fileFromFd`/`statFile` around raw fds)
 - [x] Migrate `_getcwd` to use `host_io.getCwd` (`msvcrt/path.zig`)
 - [ ] Migrate `_fullpath` to use `host_io.getFullPath` (used by `kernel32/path.zig` GetFullPathNameA instead)
@@ -528,6 +528,7 @@ an exception to the target design.
 **Sub-phase 2d: Convert remaining DLL stubs** [PARTIAL — several groups still contain `trace.addr()`]
 - [ ] `advapi32/registry.zig` (6 sites remain); `advapi32/security.zig`, `advapi32/services.zig` clean
 - [ ] `user32/message.zig` (27 sites), `user32/dialog.zig` (4) remain; `user32/window.zig`, `user32/resource.zig` clean
+- [ ] `kernel32/locale.zig` (12 sites), `kernel32/path.zig` (9), `kernel32/mem.zig` (6) remain
 - [ ] `gdi32/drawing.zig` (2 sites remain); `gdi32/object.zig` clean
 - [ ] `rpcrt4.zig` (4 sites), `ole32/com.zig` (1 site), `comdlg32/dialogs.zig` (11 sites) remain; `shell32.zig` clean
 - [ ] Register the remaining raw exports through the comptime thunk handler. `msvcrt.zig` (`_EH_prolog`, `_setjmp3`, `longjmp`, `_ftol`) and `ntdll.zig` (`_chkstk`, `_allmul`, `_alldiv`) still go through `addBuiltinExport`, which sets `param_bytes = 0` and no `thunk_handler`.
@@ -631,7 +632,7 @@ The original lcall-based sketch below is kept for reference:
 - [ ] ThunkDispatcher reads 32-bit args, calls 64-bit Zig stubs
 - [ ] Return value truncated to 32-bit for EAX
 - [ ] 64→32 mode switch back via `lret` to resume guest code
-- [x] Allocate guest stack/heap with MAP_32BIT
+- [x] Allocate guest stack (16MB, MAP_FIXED at `0x05000000`) and heap (MAP_32BIT) in the low 4GB
 - [x] Test with a 32-bit PE on x86_64 Linux (full CLI suite green via signal-based dispatch)
 
 ### Phase 6: Real Windows DLL compilation [DONE]
@@ -643,7 +644,7 @@ Goal: ALL stubs compile as standalone Windows DLLs.
 **Build commands**:
 - `zig build -Ddll=true` — build all 36 DLLs
 - `zig build -Ddll=msvcrt` — build a single DLL
-- `zig build -Dexternal-stubs=true` — slim binary (4.8 MB vs 10.5 MB) that loads DLLs from disk
+- `zig build -Dexternal-stubs=true` — slim binary that loads the stub DLLs from disk instead of embedding them
 
 **What was done**:
 - [x] DLL sources in `src/dll/`, using `@import("win32")` named module from `src/win32_dll_api.zig`

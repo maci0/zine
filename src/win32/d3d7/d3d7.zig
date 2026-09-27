@@ -61,7 +61,7 @@ const IDirect3D3Vtbl = extern struct {
 };
 
 // ===== IDirect3DDevice3 =====
-// 42 methods — see dx_headers/VTABLES.md for the reference
+// 42 methods — see docs/DX_VTABLES.md for the reference
 
 pub const IDirect3DDevice3 = extern struct {
     lpVtbl: *const IDirect3DDevice3Vtbl,
@@ -115,7 +115,7 @@ const IDirect3DDevice3Vtbl = extern struct {
 };
 
 // ===== IDirect3DViewport3 =====
-// 21 methods — see dx_headers/VTABLES.md
+// 21 methods — see docs/DX_VTABLES.md
 
 pub const IDirect3DViewport3 = extern struct {
     lpVtbl: *const IDirect3DViewport3Vtbl,
@@ -471,7 +471,7 @@ fn d3d3_EnumDevices(this: *IDirect3D7, lpEnumDevicesCallback: usize, lpUserArg: 
 
         // D3DDEVICEDESC (old-style) = 252 bytes (0xFC)
         // IMPORTANT: D3DPRIMCAPS is 56 bytes (14 DWORDs), NOT 48!
-        // Layout verified from Wine d3dcaps.h — see dx_headers/VTABLES.md
+        // Layout verified from Wine d3dcaps.h — see docs/DX_VTABLES.md
         var hw_desc: [252]u8 = [_]u8{0} ** 252;
         var hel_desc: [252]u8 = [_]u8{0} ** 252;
 

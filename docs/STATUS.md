@@ -39,8 +39,9 @@ through a host runtime instead of the interpreter:
 - `zine-host zine.wasm32.wasm -- --jit ./app.exe` runs the app with JIT
   execution; the interpreter handles control-flow instructions and any
   untranslated opcodes, so JIT and interpreter interleave per basic block.
-- Blocks are compiled on first encounter, cached in a 4096-entry ring, and
-  re-executed on subsequent visits (loops become hot blocks).
+- Blocks are compiled on first encounter, cached in a 4096-entry
+  direct-mapped table (`eip & 4095`, source bytes revalidated on every hit),
+  and re-executed on subsequent visits (loops become hot blocks).
 - Block-entry detection uses the interpreter's linear continuation: a branch
   target that differs from `eip + insn_len` is a block entry.
 - State transfers through `JitCpuState` in WASM linear memory (GPRs, EIP,
@@ -91,13 +92,14 @@ each Win32 message/control op is implemented once and rendered by both.
   `Fl::copy` both receive real guest clipboard writes).
 - **Window icon** — RT_ICON + RT_GROUP_ICON extraction (`loader/icon_parser.zig`),
   base64-encoded, shown in titlebar/taskbar/favicon.
-- **File dialogs** — GetOpenFileNameA (web file upload via WS / FLTK native
-  `Fl_Native_File_Chooser`), populates OPENFILENAMEA fields.
+- **File dialogs** — GetOpenFileNameA and GetSaveFileNameA (web file upload via
+  WS / FLTK native `Fl_Native_File_Chooser`), populating OPENFILENAMEA fields.
 - **Keyboard** — TranslateMessage → WM_CHAR (US layout, Shift handled),
   GetKeyboardState/GetKeyState from renderer state.
 - **Mouse** — clicks, moves, capture, and `WM_MOUSEWHEEL`.
-- **Timers** — SetTimer/KillTimer with a real WM_TIMER dispatch thread
-  (WASI builds are single-threaded; timer thread is native-only).
+- **Timers** — SetTimer/KillTimer with a background WM_TIMER dispatcher thread
+  on native; WASI has no threads, so expiry is checked inline by the message
+  pump and WM_TIMER is still delivered there.
 - **Edit controls** — WM_CHAR insertion into the control buffer, WM_GETTEXT /
   GetWindowText read-back (edit + main-window title), EM_SETSEL/EM_GETSEL/
   EM_REPLACESEL/EM_LIMITTEXT/EM_SETREADONLY + WM_COPY.
@@ -172,8 +174,8 @@ Suite GUI sections (all compile via CL, link, and run cleanly):
 `TAB`, `CLR`, `LV`, `TREE`, `HDR`, `CC`, `CF`, `RICH`, `GWT`, `PD`, `FT`,
 `PS`, `UDT`, `MTA` (the `CC` color-chooser, `CF` font-chooser, `PD`
 print-chooser, `FT` find-dialog and `PS` page-setup checks are driven by
-Python WebSocket clients: `ws_cc.py` / `ws_cf.py` / `ws_pd.py` / `ws_ft.py` /
-`ws_ps.py`).
+Python WebSocket clients the suite writes to its own workdir: `ws_cc.py` /
+`ws_cf.py` / `ws_pd.py` / `ws_ft.py` / `ws_ps.py`).
 
 ## Native x86_64 compat chain (native64 mode)
 
@@ -211,11 +213,11 @@ whole CLI suite (158/0), including LINK.EXE (ReadSymbolTable) and LIB.EXE
 - **Win32 API layers** — KERNEL32, MSVCRT, USER32, GDI32, NTDLL, COMDLG32,
   ADVAPI32 (registry via `registry.toml`), SHELL32, COMCTL32, SHLWAPI,
   DDRAW/D3D7, D3D8, DSOUND, DINPUT(8), WINMM, WS2_32/WSOCK32, OLEAUT32, MSS32,
-  MFC42 (dummy), IMAGEHLP, RPCRT4, and ~40 other DLLs (stub or implemented).
-  See `ARCHITECTURE.md` for the module map.
+  MFC42 (dummy), IMAGEHLP, RPCRT4, and ~14 other stub or implemented DLL
+  modules. See `ARCHITECTURE.md` for the module map.
 - **MSVC CLI toolchain** — CL, LINK, RC (incl. `NAME ICON "file.ico"` →
   RT_ICON + RT_GROUP_ICON), CVTRES, DUMPBIN, LIB, NMAKE, UNDNAME, EDITBIN,
-  PSTAT, MIDL, MC, and more; `.bat`/`.cmd` wrappers (VCVARS32.BAT) parsed
+  MIDL, MC, and more; `.bat`/`.cmd` wrappers (VCVARS32.BAT) parsed
   natively. See `CLI_STATUS.md`.
 - **PE loading** — imports/relocations, resource trees (dialogs, menus, icons,
   string tables, version), delayed loads, DLL mode (35+ stub DLLs as real
@@ -233,12 +235,12 @@ These are the open items; see [`TODO.md`](TODO.md) for the prioritized list.
   `zine-host --jit`), but blocks with instructions the translator doesn't yet
   handle fall back to the interpreter. Expanding instruction coverage and
   hot-block pre-warming are the main remaining JIT slices.
-- **WASI single-threaded timers** — WM_TIMER only fires on native builds (the
-  timer thread is native-only); WASI builds are single-threaded.
-- **wasmtime text-mode stdio** — msvcrt `fopen("r")` + buffered read returns
-  empty on wasmtime (the CRT text-mode loop reads past the ReadFile byte
-  count); kernel32 file I/O used by the CLI tools works, so the suite is
-  unaffected.
+- **WASI timer delivery** — there is no dispatcher thread on WASI (the runtime
+  is single-threaded), so a timer fires when the guest pumps messages. The
+  TIMER suite section still runs there and fails on a missing marker.
+- **wasmtime text-mode stdio** — no longer a gap: `fopen("r")` + `fgets`
+  read-back is a byte-at-a-time `host_io` translate, and the STD suite section
+  asserts it on every mode, wasmtime included.
 - **zine-host CLI toolchain** — CL.EXE reaches the C1.DLL spawn under
   zine-host but the child spawn fails (pre-existing zine-host spawn/file gap,
   unrelated to JIT).

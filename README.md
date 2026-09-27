@@ -9,9 +9,11 @@ No Windows installation, no Wine.
 - Full MSVC 6.0 toolchain: CL.EXE, LINK.EXE, RC.EXE, NMAKE.EXE, and 8 more utilities run to completion
 - 288 unit tests pass (2 skipped) on the host with `zig build test`; the gate in
   `tests/check.sh` adds the CLI suites on native x86 and x86_64
+- 158/128 integration checks on native/WASM, 20 FLTK smoke tests (these need guest
+  binaries and are not part of `tests/check.sh`)
 - x86 interpreter with SSE/SSE2, x87 FPU, SEH, TLS
 - PE loader with import resolution, relocations, resource parsing (dialogs, menus, icons, string tables)
-- 35+ Win32 DLL stubs: kernel32, user32, gdi32, advapi32, shell32, ws2_32, comctl32, ole32, msvcrt, and more
+- 37 Win32 DLL stub modules: kernel32, user32, gdi32, advapi32, shell32, ws2_32, comctl32, ole32, msvcrt, and more
 - x86-to-WASM JIT compiler (basic block level, interleaves with interpreter)
 - Web GUI with Win2K-style desktop, or native FLTK window
 - Virtual filesystem rooted at `drive_c/` (guest `Z:\` and absolute POSIX paths still reach the host filesystem; see `docs/THREAT_MODEL.md`)
@@ -364,7 +366,7 @@ to list build steps and options.
 src/
   x86/         x86 interpreter (decoder, executor, FPU, SSE, thunks)
   loader/      PE loader, import resolution, resource parsers
-  win32/       Win32 API stubs (100+ files across 35+ DLLs)
+  win32/       Win32 API stubs (37 DLL modules)
   jit/         x86-to-WASM basic block JIT compiler
   gui/         Web UI (HTTP server + JS frontend) and FLTK native backend
   platform/    Linux/WASM platform abstraction
@@ -372,6 +374,6 @@ src/
   wasm_main.zig  WASM entry point
 ```
 
-~65K lines of Zig.
+~68K lines of Zig.
 
 See `docs/` for detailed design notes on memory layout, JIT strategy, native execution, and Win32 API coverage. `docs/THREAT_MODEL.md` records the attack surface, trust boundaries, and known gaps. The web UI's HTTP routes and WebSocket message types are specified in [`docs/WEB_UI_PROTOCOL.md`](docs/WEB_UI_PROTOCOL.md).
