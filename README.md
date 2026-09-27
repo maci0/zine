@@ -607,7 +607,7 @@ checking log-level validation.
 
 Run from the repository root on x86_64 Linux with 32-bit executable support.
 Besides Zig 0.16.0, the CI checks require Bash, Git, ShellCheck, `sed`, `cmp`,
-`grep`, and GNU coreutils (including `timeout`, `find` and `sort -z`). Zig
+`grep`, `diff`, and GNU coreutils (including `timeout`, `find` and `sort`). Zig
 fetches the pinned TOML dependency on the first build; no Windows fixtures,
 GUI libraries, or WASM runtime are needed for these checks. The gate exports
 `LC_ALL=C` and `TZ=UTC` so its own output, and the sort order inside it, do

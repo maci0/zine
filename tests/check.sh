@@ -23,7 +23,7 @@ export LC_ALL=C TZ=UTC
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-required=(zig shellcheck git timeout cmp grep sed mktemp find sort cp)
+required=(zig shellcheck git timeout cmp diff grep sed mktemp find sort cp basename)
 missing=()
 for cmd in "${required[@]}"; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")

@@ -46,20 +46,21 @@ embeds. Pass `-Doptimize=Debug` when stepping through code.
 in the same order, as the `static-analysis` job in `.github/workflows/ci.yml`:
 `zig fmt --check`, shellcheck over every tracked script, a warning-free
 `zig cc` compile of every tracked C source, a warning-free compile of the C++
-FLTK bridge, all four architecture builds, the
-unit tests, and both native `test-cli` runs. If you add a check,
+FLTK bridge, all four architecture builds, the external-stub DLL and
+`-Dexternal-stubs` builds, the byte-identical rebuild, the unit tests, both
+native `test-cli` runs, and the fuzz budget. If you add a check,
 add it in both places or local runs stop predicting CI.
 
 Each check is a named step, and `bash tests/check.sh <step> [step...]` runs
 just those, still in gate order: `fmt`, `check_shell`, `check_c`, `check_cxx`,
 `build`, `build-x86_64`, `build-wasm32`, `build-wasm64`, `dll`, `external-stubs`,
-`test`, `test-cli`, `test-cli-x86_64`, `fuzz`. `bash tests/check.sh --list`
-prints the names, and `bash tests/check.sh test build` runs those two in gate
-order. The three helper steps (shellcheck, the C compile and the C++ compile)
-are the ones CI calls this script for, so the commands and the `git ls-files`
-lists live in one place. An unknown name fails with the list of known steps. The
-pre-pull-request run is the bare `bash tests/check.sh`, which runs all of
-them.
+`reproducible`, `test`, `test-cli`, `test-cli-x86_64`, `fuzz`.
+`bash tests/check.sh --list` prints the names, and
+`bash tests/check.sh test build` runs those two in gate
+order. Every CI step calls this script by name, so the commands and the
+`git ls-files` lists live in one place. An unknown name fails with the list of
+known steps. The pre-pull-request run is the bare `bash tests/check.sh`, which
+runs all of them.
 
 `ZINE_FUZZ_SECONDS` sets the seconds each fuzz target runs (10 by default).
 CI sets it to 60, which is why that step passes the budget as an environment
