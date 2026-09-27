@@ -24,16 +24,8 @@ pub const DDSD_PIXELFORMAT: u32 = 0x00001000;
 /// DDPIXELFORMAT dwFlags: Surface contains RGB data.
 pub const DDPF_RGB: u32 = 0x00000040;
 
-/// DDSCAPS dwCaps: Surface is the primary surface.
-pub const DDSCAPS_PRIMARYSURFACE: u32 = 0x00000200;
-/// DDSCAPS dwCaps: Surface is part of a flipping chain.
-pub const DDSCAPS_FLIP: u32 = 0x00000010;
-/// DDSCAPS dwCaps: Complex surface.
-pub const DDSCAPS_COMPLEX: u32 = 0x00000008;
 /// DDSCAPS dwCaps: Offscreen plain surface.
 pub const DDSCAPS_OFFSCREENPLAIN: u32 = 0x00000040;
-/// DDSCAPS dwCaps: Surface is a back buffer.
-pub const DDSCAPS_BACKBUFFER: u32 = 0x00000004;
 
 // ============================================================
 // DirectDraw Struct Definitions (32-bit layout)
@@ -347,8 +339,6 @@ pub const DESKTOPHORZRES: i32 = 118;
 // Common Dialog flags (OPENFILENAME)
 // ============================================================
 
-/// Do not change the current directory.
-pub const OFN_NOCHANGEDIR: u32 = 0x00000008;
 /// Enable hook function.
 pub const OFN_ENABLEHOOK: u32 = 0x00000020;
 
@@ -710,8 +700,6 @@ pub const INVALID_HANDLE_VALUE: usize = 0xFFFFFFFF;
 pub const INVALID_FILE_ATTRIBUTES: u32 = 0xFFFFFFFF;
 /// Invalid file size.
 pub const INVALID_FILE_SIZE: u32 = 0xFFFFFFFF;
-/// Invalid set file pointer result.
-pub const INVALID_SET_FILE_POINTER: u32 = 0xFFFFFFFF;
 
 /// File attribute: Normal.
 pub const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
@@ -722,13 +710,6 @@ pub const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
 pub const FILE_TYPE_DISK: u32 = 1;
 /// File type: Character.
 pub const FILE_TYPE_CHAR: u32 = 2;
-
-/// File pointer: Beginning.
-pub const FILE_BEGIN: u32 = 0;
-/// File pointer: Current.
-pub const FILE_CURRENT: u32 = 1;
-/// File pointer: End.
-pub const FILE_END: u32 = 2;
 
 /// Create disposition: Create new.
 pub const CREATE_NEW: u32 = 1;

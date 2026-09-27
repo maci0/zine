@@ -35,14 +35,6 @@ pub const JitCpuState = extern struct {
     _pad: [3]u32 = .{0} ** 3,
 
     // Field offsets for WASM code generation (used by compiler.zig prologue/epilogue)
-    pub const OFF_EAX: u32 = 0;
-    pub const OFF_ECX: u32 = 4;
-    pub const OFF_EDX: u32 = 8;
-    pub const OFF_EBX: u32 = 12;
-    pub const OFF_ESP: u32 = 16;
-    pub const OFF_EBP: u32 = 20;
-    pub const OFF_ESI: u32 = 24;
-    pub const OFF_EDI: u32 = 28;
     pub const OFF_EIP: u32 = 32;
     pub const OFF_EFLAGS: u32 = 36;
     pub const OFF_STATUS: u32 = 40;

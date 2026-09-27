@@ -78,8 +78,6 @@ pub const WSOCK32 = struct {
     pub const gethostname = ordStr(57);
     pub const WSAStartup = ordStr(115);
     pub const WSACleanup = ordStr(116);
-    pub const WSAGetLastError = ordStr(111);
-    pub const WSASetLastError = ordStr(112);
 };
 
 // -----------------------------------------------------------------------
@@ -87,7 +85,6 @@ pub const WSOCK32 = struct {
 // -----------------------------------------------------------------------
 pub const OLEAUT32 = struct {
     pub const SysAllocString = ordStr(2);
-    pub const SysReAllocString = ordStr(3);
     pub const SysFreeString = ordStr(6);
     pub const SysAllocStringLen = ordStr(4);
     pub const SysAllocStringByteLen = ordStr(7);
@@ -110,16 +107,7 @@ pub const COMCTL32 = struct {
     pub const TrackMouseEvent_13 = ordStr(13); // old ordinal
     pub const CreateUpDownControl_14 = ordStr(14);
     pub const CreateStatusWindowA_15 = ordStr(15);
-    pub const CreateUpDownControl = ordStr(16);
     pub const InitCommonControls = ordStr(17);
-    pub const ImageList_Add = ordStr(66);
-    pub const ImageList_Create = ordStr(73);
-    pub const ImageList_Destroy = ordStr(76);
-    pub const ImageList_GetImageCount = ordStr(91);
-    pub const TrackMouseEvent = ordStr(96);
-    pub const ImageList_ReplaceIcon = ordStr(112);
-    pub const ImageList_SetBkColor = ordStr(113);
-    pub const InitCommonControlsEx = ordStr(345);
 };
 
 // -----------------------------------------------------------------------
@@ -128,12 +116,8 @@ pub const COMCTL32 = struct {
 pub const SHELL32 = struct {
     pub const RunFileDlg = ordStr(61);
     pub const SHFreeNameMappings = ordStr(100);
-    pub const SHGetPathFromIDListA = ordStr(162);
     pub const SHBrowseForFolder = ordStr(180);
-    pub const Shell_NotifyIconA = ordStr(240);
-    pub const SHGetFileInfoA = ordStr(254);
     pub const SHGetSpecialFolderPathA = ordStr(258);
-    pub const SHBrowseForFolderA = ordStr(520);
 };
 
 // -----------------------------------------------------------------------

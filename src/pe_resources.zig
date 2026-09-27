@@ -42,8 +42,6 @@ pub const IMAGE_RESOURCE_DATA_ENTRY = extern struct {
     Reserved: u32,
 };
 
-/// Hardware-dependent cursor resource.
-pub const RT_CURSOR = 1;
 /// Bitmap resource.
 pub const RT_BITMAP = 2;
 /// Hardware-dependent icon resource.
@@ -54,36 +52,8 @@ pub const RT_MENU = 4;
 pub const RT_DIALOG = 5;
 /// String-table entry.
 pub const RT_STRING = 6;
-/// Font directory resource.
-pub const RT_FONTDIR = 7;
-/// Font resource.
-pub const RT_FONT = 8;
-/// Accelerator table.
-pub const RT_ACCELERATOR = 9;
-/// Application-defined resource (raw data).
-pub const RT_RCDATA = 10;
-/// Message-table entry.
-pub const RT_MESSAGETABLE = 11;
-/// Hardware-independent cursor resource.
-pub const RT_GROUP_CURSOR = 12;
 /// Hardware-independent icon resource.
 pub const RT_GROUP_ICON = 14;
-/// Version resource.
-pub const RT_VERSION = 16;
-/// Dialog include.
-pub const RT_DLGINCLUDE = 17;
-/// Plug and Play resource.
-pub const RT_PLUGPLAY = 19;
-/// VXD.
-pub const RT_VXD = 20;
-/// Animated cursor.
-pub const RT_ANICURSOR = 21;
-/// Animated icon.
-pub const RT_ANIICON = 22;
-/// HTML resource.
-pub const RT_HTML = 23;
-/// Side-by-side assembly manifest.
-pub const RT_MANIFEST = 24;
 
 /// Menu item template header.
 pub const MENUITEMTEMPLATEHEADER = extern struct {
