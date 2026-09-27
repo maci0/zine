@@ -532,17 +532,6 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                     } else {
                         sendError(&ws, "text_sync requires a string field \"text\"");
                     }
-                } else if (std.mem.eql(u8, type_val.string, "clipboard_sync")) {
-                    // Browser clipboard → backend clipboard buffer
-                    if (jsonStr(root.object, "text")) |text| {
-                        if (text.len > max_sync_text_len) {
-                            sendError(&ws, "Clipboard payload exceeds maximum size");
-                            continue;
-                        }
-                        renderer.setClipboardFromSlice(text);
-                    } else {
-                        sendError(&ws, "clipboard_sync requires a string field \"text\"");
-                    }
                 } else if (std.mem.eql(u8, type_val.string, "color_selected")) {
                     // Color dialog result: { color: 0xRRGGBB } (-1 = cancel)
                     if (jsonInt(root.object, "color")) |color| {

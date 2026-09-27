@@ -110,7 +110,6 @@ connection stays open either way.
 | `context_menu_select` | `id` (integer, required; 0 dismisses the menu) |
 | `cancel_dialog` | none |
 | `text_sync` | `text` (string, required, at most 65536 bytes) |
-| `clipboard_sync` | `text` (string, required, at most 65536 bytes) |
 | `set_volume` | `volume` (integer percent, clamped to 0-100) |
 
 ### Paths
