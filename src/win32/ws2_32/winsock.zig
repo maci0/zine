@@ -12,6 +12,10 @@ const linux = std.os.linux;
 const INVALID_SOCKET: usize = @as(usize, @bitCast(@as(isize, -1)));
 const SOCKET_ERROR: i32 = -1;
 
+/// Win32 FD_SETSIZE: the capacity of the fd_array inside an fd_set. Also the
+/// per-set ceiling `select` applies to a caller-supplied fd_count.
+const fd_setsize: u32 = 64;
+
 /// 0.16 removed std.posix wrappers for sockets; use raw syscalls + local errno check.
 inline fn sys_ok(ret: usize) !usize {
     const s: isize = @bitCast(ret);
@@ -395,22 +399,26 @@ fn timevalToNs(tv_sec: i32, tv_usec: i32) u64 {
     return @as(u64, @intCast(ms)) * std.time.ns_per_ms;
 }
 
+/// Read a guest fd_set's fd_count, capped at FD_SETSIZE. The count comes from
+/// guest memory, so a set claiming more entries than the fd_array can hold
+/// would otherwise be walked past the end of the caller's buffer.
+fn clampFdCount(set: usize) u32 {
+    const count = @as(*const u32, @ptrFromInt(set)).*;
+    return @min(count, fd_setsize);
+}
+
 /// Implementation status: Partially implemented
 pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, timeout: usize) callconv(w32cc.WINAPI) i32 {
     _ = nfds;
     if (comptime platform.is_native) {
-        // Win32 fd_set layout: { u32 fd_count; SOCKET fd_array[64]; }
+        // Win32 fd_set layout: { u32 fd_count; SOCKET fd_array[fd_setsize]; }
         // We translate to poll() since Win32 and POSIX fd_set layouts differ.
-        const WinFdSet = extern struct {
-            fd_count: u32,
-            // fd_array follows immediately, each entry is a u32 SOCKET handle
-        };
 
         // Count total fds across all sets
         var total: usize = 0;
-        if (readfds != 0) total += @as(*const WinFdSet, @ptrFromInt(readfds)).fd_count;
-        if (writefds != 0) total += @as(*const WinFdSet, @ptrFromInt(writefds)).fd_count;
-        if (exceptfds != 0) total += @as(*const WinFdSet, @ptrFromInt(exceptfds)).fd_count;
+        if (readfds != 0) total += clampFdCount(readfds);
+        if (writefds != 0) total += clampFdCount(writefds);
+        if (exceptfds != 0) total += clampFdCount(exceptfds);
 
         if (total == 0) {
             // No fds — just sleep for timeout duration if given
@@ -422,18 +430,17 @@ pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, time
             return 0;
         }
 
-        // Build poll fd array on stack (max 192 entries = 3 × FD_SETSIZE)
-        var pollfds: [192]std.posix.pollfd = undefined;
+        // Build poll fd array on stack (max 3 × FD_SETSIZE entries)
+        var pollfds: [3 * fd_setsize]std.posix.pollfd = undefined;
         var n_poll: usize = 0;
         var read_count: u32 = 0;
         var write_count: u32 = 0;
         var except_count: u32 = 0;
 
         if (readfds != 0) {
-            const fds = @as(*const WinFdSet, @ptrFromInt(readfds));
-            read_count = fds.fd_count;
+            read_count = clampFdCount(readfds);
             const arr = @as([*]const u32, @ptrFromInt(readfds + 4));
-            for (0..fds.fd_count) |i| {
+            for (0..read_count) |i| {
                 if (n_poll >= pollfds.len) break;
                 pollfds[n_poll] = .{
                     .fd = @intCast(@as(isize, @bitCast(@as(usize, arr[i])))),
@@ -444,10 +451,9 @@ pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, time
             }
         }
         if (writefds != 0) {
-            const fds = @as(*const WinFdSet, @ptrFromInt(writefds));
-            write_count = fds.fd_count;
+            write_count = clampFdCount(writefds);
             const arr = @as([*]const u32, @ptrFromInt(writefds + 4));
-            for (0..fds.fd_count) |i| {
+            for (0..write_count) |i| {
                 if (n_poll >= pollfds.len) break;
                 pollfds[n_poll] = .{
                     .fd = @intCast(@as(isize, @bitCast(@as(usize, arr[i])))),
@@ -458,10 +464,9 @@ pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, time
             }
         }
         if (exceptfds != 0) {
-            const fds = @as(*const WinFdSet, @ptrFromInt(exceptfds));
-            except_count = fds.fd_count;
+            except_count = clampFdCount(exceptfds);
             const arr = @as([*]const u32, @ptrFromInt(exceptfds + 4));
-            for (0..fds.fd_count) |i| {
+            for (0..except_count) |i| {
                 if (n_poll >= pollfds.len) break;
                 pollfds[n_poll] = .{
                     .fd = @intCast(@as(isize, @bitCast(@as(usize, arr[i])))),
@@ -489,7 +494,6 @@ pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, time
         var result_count: i32 = 0;
 
         if (readfds != 0) {
-            const out = @as(*WinFdSet, @ptrFromInt(readfds));
             const arr = @as([*]u32, @ptrFromInt(readfds + 4));
             var out_count: u32 = 0;
             for (0..read_count) |i| {
@@ -500,10 +504,9 @@ pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, time
                 }
                 poll_idx += 1;
             }
-            out.fd_count = out_count;
+            @as(*u32, @ptrFromInt(readfds)).* = out_count;
         }
         if (writefds != 0) {
-            const out = @as(*WinFdSet, @ptrFromInt(writefds));
             const arr = @as([*]u32, @ptrFromInt(writefds + 4));
             var out_count: u32 = 0;
             for (0..write_count) |i| {
@@ -514,10 +517,9 @@ pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, time
                 }
                 poll_idx += 1;
             }
-            out.fd_count = out_count;
+            @as(*u32, @ptrFromInt(writefds)).* = out_count;
         }
         if (exceptfds != 0) {
-            const out = @as(*WinFdSet, @ptrFromInt(exceptfds));
             const arr = @as([*]u32, @ptrFromInt(exceptfds + 4));
             var out_count: u32 = 0;
             for (0..except_count) |i| {
@@ -528,7 +530,7 @@ pub fn select(nfds: i32, readfds: usize, writefds: usize, exceptfds: usize, time
                 }
                 poll_idx += 1;
             }
-            out.fd_count = out_count;
+            @as(*u32, @ptrFromInt(exceptfds)).* = out_count;
         }
 
         _ = n_ready;
@@ -890,6 +892,28 @@ fn translateSockOpt(level: u32, optname: i32) u32 {
 // -------------------------------------------------------------------------
 
 const testing = std.testing;
+
+test "a guest fd_set cannot claim more entries than the fd_array holds" {
+    // A caller-supplied fd_count is the loop bound over fd_array; an
+    // unbounded one walks off the end of the caller's buffer.
+    const set = try testing.allocator.alignedAlloc(u8, .@"4", 4 + 4 * fd_setsize);
+    defer testing.allocator.free(set);
+    @memset(set, 0);
+    const count_ptr: *align(4) u32 = @ptrCast(set.ptr);
+    const arr: [*]u32 = @ptrCast(set[4..]);
+
+    for ([_]u32{ 0, 1, fd_setsize }) |count| {
+        count_ptr.* = count;
+        try testing.expectEqual(count, clampFdCount(@intFromPtr(set.ptr)));
+    }
+    for ([_]u32{ fd_setsize + 1, 4096, std.math.maxInt(u32) }) |count| {
+        count_ptr.* = count;
+        try testing.expectEqual(fd_setsize, clampFdCount(@intFromPtr(set.ptr)));
+    }
+    // The clamp has to cover the whole read, not just the first element.
+    for (0..fd_setsize) |i| arr[i] = 3;
+    try testing.expectEqual(@as(u32, 3), arr[fd_setsize - 1]);
+}
 
 test "select timeout rounds microseconds up to whole milliseconds" {
     // poll(2) takes milliseconds: truncating here would turn a sub-millisecond
