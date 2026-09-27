@@ -353,7 +353,7 @@ exists because nothing is persisted.
   foreign browser origin (`src/config.zig:86`), but a non-browser client omits
   the header entirely and is allowed (`src/gui/web_ui.zig:437`).
 - The check is not authentication; the README states this correctly
-  (README.md:424, 0.2.0 security notes).
+  (README.md:509, 0.2.0 security notes).
 
 ### Operator configuration
 
@@ -436,8 +436,8 @@ warning, the HTTP 403 for foreign `Origin` headers, the statement that the
 `Origin` check is not authentication, the honest note that path normalization
 is not a guest sandbox, and the home and identity redaction all match the code
 (`src/main.zig:101`, `src/gui/web_ui.zig:471`, `src/gui/web_ui.zig:437`,
-`src/log.zig:137`, `src/log.zig:208`; README.md:424, README.md:417,
-README.md:585). One README claim was corrected in this pass: the `304` repeats
+`src/log.zig:137`, `src/log.zig:208`; README.md:509, README.md:502,
+README.md:648). One README claim was corrected in this pass: the `304` repeats
 `X-Content-Type-Options`, `X-Frame-Options`, and `Referrer-Policy` but not
 `Content-Security-Policy` (`src/gui/web_ui.zig:1055`, `src/gui/web_ui.zig:1079`).
 
@@ -548,5 +548,5 @@ Note only; no infrastructure is proposed here.
 - Documented path from a reported vulnerability to a shipped fix: none. No
   file in the repository describes reporting, triage, or disclosure; the closest
   is the release procedure in `CONTRIBUTING.md:122`. The release notes carry
-  security items under "Security fixes and migration" (README.md:115), which is
+  security items under "Security fixes and migration" (README.md:495), which is
   a record of past fixes, not a process.

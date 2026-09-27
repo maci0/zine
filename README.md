@@ -461,6 +461,14 @@ release, not a 0.2.1 patch.
   are taken under their locks, so a second GUI thread or a web command cannot
   read a half-rewritten keyboard map, lose a mouse delta, or race the cached
   dialog JSON.
+- The Win32 thread registry, the sync-object table, the `GetProcAddress` cache,
+  the command line, and the child-process table are read and written under
+  their own locks, and a child slot stays reserved across the host `spawn` that
+  the mutex cannot cover. A guest with two threads calling `CreateProcess`,
+  `GetProcAddress`, `GetCommandLineA`, or waiting on a synchronization object
+  no longer has two calls claim the same slot, read a half-published thread or
+  object entry, or receive a command line pointer that a racing thread has
+  already freed.
 
 ### 0.2.0 (2026-09-18)
 
