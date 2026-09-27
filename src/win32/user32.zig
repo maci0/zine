@@ -851,19 +851,24 @@ fn handleKeyEvent(vk_code: usize, is_down: bool) void {
     const renderer = @import("../gui/renderer.zig");
     const dinput = @import("dinput/dinput.zig");
     const vk: u8 = @intCast(vk_code & 0xFF);
+
+    // Store the key and read the Alt bit as one step: a GUI thread handling
+    // Alt concurrently would otherwise let this event classify itself from a
+    // keyboard map the other thread was in the middle of rewriting.
+    renderer.input_mutex.lock();
     renderer.keyboard_state[vk] = if (is_down) 0x80 else 0;
+    // Alt key (VK_MENU=0x12) held → use WM_SYSKEYDOWN/WM_SYSKEYUP (0x0104/0x0105)
+    // Alt key itself also gets WM_SYSKEYDOWN
+    const alt_held = (renderer.keyboard_state[0x12] & 0x80) != 0;
+    renderer.input_mutex.unlock();
+    const is_alt_key = (vk == 0x12);
+    const is_sys = alt_held or is_alt_key;
 
     // Push into DirectInput keyboard event buffer (VK → DIK scancode)
     const scancode = dinput.vkToDIK(vk_code);
     if (scancode != 0) {
         dinput.pushKeyEvent(scancode, is_down);
     }
-
-    // Alt key (VK_MENU=0x12) held → use WM_SYSKEYDOWN/WM_SYSKEYUP (0x0104/0x0105)
-    // Alt key itself also gets WM_SYSKEYDOWN
-    const alt_held = (renderer.keyboard_state[0x12] & 0x80) != 0;
-    const is_alt_key = (vk == 0x12);
-    const is_sys = alt_held or is_alt_key;
 
     const msg_id: u32 = if (is_sys)
         (if (is_down) w32.WM_SYSKEYDOWN else w32.WM_SYSKEYUP)
@@ -898,49 +903,52 @@ fn handleMouseEvent(msg_id: u32, x: i32, y: i32) void {
     const rend = @import("../gui/renderer.zig");
     const dinput = @import("dinput/dinput.zig");
 
-    // Compute movement deltas for DirectInput
+    // Accumulate position, deltas and button state under the input lock so
+    // two GUI threads reporting the same pointer cannot lose a delta. The
+    // DirectInput events are recorded here and replayed after the lock is
+    // dropped, so dinput's own buffer is never touched with it held.
+    rend.input_mutex.lock();
     const dx = x - rend.last_mouse_x;
     const dy = y - rend.last_mouse_y;
-
-    // Accumulate for GetDeviceState
     rend.mouse_dx += dx;
     rend.mouse_dy += dy;
-
-    // Push deltas into DirectInput mouse event buffer for GetDeviceData
-    if (dx != 0) dinput.pushMouseEvent(0, @bitCast(dx)); // DIMOFS_X = 0
-    if (dy != 0) dinput.pushMouseEvent(4, @bitCast(dy)); // DIMOFS_Y = 4
-
     rend.last_mouse_x = x;
     rend.last_mouse_y = y;
 
-    // Track button state for DirectInput mouse (0x80 = pressed)
-    switch (msg_id) {
-        w32.WM_LBUTTONDOWN => {
+    // Button state for DirectInput mouse (0x80 = pressed), paired with the
+    // DIMOFS offset to report.
+    const button: ?struct { offset: u8, pressed: u8 } = switch (msg_id) {
+        w32.WM_LBUTTONDOWN => blk: {
             rend.mouse_buttons[0] = 0x80;
-            dinput.pushMouseEvent(12, 0x80); // DIMOFS_BUTTON0
+            break :blk .{ .offset = 12, .pressed = 0x80 };
         },
-        w32.WM_LBUTTONUP => {
+        w32.WM_LBUTTONUP => blk: {
             rend.mouse_buttons[0] = 0;
-            dinput.pushMouseEvent(12, 0x00); // DIMOFS_BUTTON0
+            break :blk .{ .offset = 12, .pressed = 0x00 };
         },
-        w32.WM_RBUTTONDOWN => {
+        w32.WM_RBUTTONDOWN => blk: {
             rend.mouse_buttons[1] = 0x80;
-            dinput.pushMouseEvent(13, 0x80); // DIMOFS_BUTTON1
+            break :blk .{ .offset = 13, .pressed = 0x80 };
         },
-        w32.WM_RBUTTONUP => {
+        w32.WM_RBUTTONUP => blk: {
             rend.mouse_buttons[1] = 0;
-            dinput.pushMouseEvent(13, 0x00); // DIMOFS_BUTTON1
+            break :blk .{ .offset = 13, .pressed = 0x00 };
         },
-        w32.WM_MBUTTONDOWN => {
+        w32.WM_MBUTTONDOWN => blk: {
             rend.mouse_buttons[2] = 0x80;
-            dinput.pushMouseEvent(14, 0x80); // DIMOFS_BUTTON2
+            break :blk .{ .offset = 14, .pressed = 0x80 };
         },
-        w32.WM_MBUTTONUP => {
+        w32.WM_MBUTTONUP => blk: {
             rend.mouse_buttons[2] = 0;
-            dinput.pushMouseEvent(14, 0x00); // DIMOFS_BUTTON2
+            break :blk .{ .offset = 14, .pressed = 0x00 };
         },
-        else => {},
-    }
+        else => null,
+    };
+    rend.input_mutex.unlock();
+
+    if (dx != 0) dinput.pushMouseEvent(0, @bitCast(dx)); // DIMOFS_X = 0
+    if (dy != 0) dinput.pushMouseEvent(4, @bitCast(dy)); // DIMOFS_Y = 4
+    if (button) |b| dinput.pushMouseEvent(b.offset, b.pressed);
 
     // lParam = MAKELPARAM(x, y) = (y << 16) | (x & 0xFFFF)
     const lx: u32 = @as(u32, @bitCast(x)) & 0xFFFF;

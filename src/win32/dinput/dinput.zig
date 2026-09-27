@@ -370,6 +370,9 @@ fn device_GetDeviceState_mouse(cbData: u32, lpvData: usize) i32 {
     const renderer = @import("../../gui/renderer.zig");
     if (cbData >= @sizeOf(DIMOUSESTATE)) {
         const mouse = @as(*DIMOUSESTATE, @ptrFromInt(lpvData));
+        // Read and clear as one step: a GUI thread accumulating a delta
+        // between the two would have it overwritten by the reset below.
+        renderer.input_mutex.lock();
         mouse.lX = renderer.mouse_dx;
         mouse.lY = renderer.mouse_dy;
         mouse.lZ = renderer.mouse_dz;
@@ -378,6 +381,7 @@ fn device_GetDeviceState_mouse(cbData: u32, lpvData: usize) i32 {
         renderer.mouse_dx = 0;
         renderer.mouse_dy = 0;
         renderer.mouse_dz = 0;
+        renderer.input_mutex.unlock();
     } else {
         @memset(@as([*]u8, @ptrFromInt(lpvData))[0..cbData], 0);
     }

@@ -96,6 +96,16 @@ pub var resolution_set: bool = false; // True once setResolution is called with 
 
 // --- Input State (written by backend, read by stubs) ---
 
+/// Guards every field in this section. The writers are the GUI backend
+/// threads (one per web client, plus the FLTK thread) and the readers are the
+/// guest thread inside the GetKeyboardState / GetCursorPos / DirectInput
+/// stubs. Without it the 256-byte `keyboard_state` copy can be read half
+/// updated, and `mouse_dx` / `mouse_dy`, which DirectInput reads and clears in
+/// two steps, silently swallow a delta that arrives in between. Every
+/// critical section that takes this lock is a few arithmetic ops or a memcpy:
+/// no socket writes, no guest calls, so the spinlock never waits on I/O.
+pub var input_mutex: runtime.Mutex = .{};
+
 /// Current state of the keyboard (256 keys).
 pub var keyboard_state: [256]u8 = [_]u8{0} ** 256;
 /// Last recorded X coordinate of the mouse.
@@ -1098,9 +1108,16 @@ pub fn openPageSetupDialog(left: i32, top: i32, right: i32, bottom: i32, paper_w
 
 /// Closes the currently active dialog.
 pub fn closeDialog() void {
-    cache_mutex.lock();
-    defer cache_mutex.unlock();
-    active_dialog = null;
+    // Drop the cached dialog under the lock, then send outside it.
+    // cache_mutex guards the cached_*_json fields and is a plain spinlock;
+    // web_ui.pushMessage takes its own registry lock and then blocks on a
+    // socket write, so sending while holding cache_mutex would stall every
+    // other cache writer (the guest thread) behind one slow client.
+    {
+        cache_mutex.lock();
+        defer cache_mutex.unlock();
+        active_dialog = null;
+    }
     switch (active_backend) {
         .web_ui => web_ui.pushMessage("{\"type\":\"close_dialog\"}"),
         .fltk => fltk_ui.closeDialog(),

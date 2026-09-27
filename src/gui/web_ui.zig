@@ -125,6 +125,58 @@ pub fn pushAudio(data: []const u8) void {
     }
 }
 
+/// Copies one cached JSON string out from under `renderer.cache_mutex` into
+/// the caller-owned `allocator`. The guest thread free-and-replaces these
+/// strings, so a copy is what keeps a client from observing freed memory; the
+/// copy also gets the send out of the spinlock's critical section.
+fn copyCached(allocator: std.mem.Allocator, field: *const ?[]const u8) ?[]const u8 {
+    renderer.cache_mutex.lock();
+    defer renderer.cache_mutex.unlock();
+    const json = field.* orelse return null;
+    return allocator.dupe(u8, json) catch null;
+}
+
+/// Replays the guest thread's cached UI state to a client that just
+/// connected. Each field is copied under `cache_mutex` and sent after the
+/// lock is released: a `pushMessage` blocks on a socket write, and
+/// `cache_mutex` is a plain spinlock the guest thread also needs to refill
+/// these strings, so sending under it would stall the emulator on one slow
+/// browser.
+fn replayCachedState(allocator: std.mem.Allocator) void {
+    inline for (.{
+        &renderer.last_resolution_json,
+        &renderer.dynamic_menu_json,
+        &renderer.icon_json,
+        &renderer.desktop_icons_json,
+        &renderer.active_dialog,
+        &renderer.last_window_pos_json,
+        &renderer.last_title_json,
+        &renderer.last_edit_control_json,
+        &renderer.last_audio_format_json,
+        &renderer.last_controls_json,
+        &renderer.last_color_dialog_json,
+    }) |field| {
+        if (copyCached(allocator, field)) |json| pushMessage(json);
+    }
+
+    // The replay list is capped, so one lock for the whole batch costs less
+    // than one per entry and still leaves the sends outside the critical
+    // section.
+    var updates: std.ArrayListUnmanaged([]const u8) = .empty;
+    renderer.cache_mutex.lock();
+    for (renderer.cached_control_text_updates.items) |owned| {
+        const copy = allocator.dupe(u8, owned) catch continue;
+        updates.append(allocator, copy) catch {
+            // The arena is out of room; drop this entry rather than send a
+            // truncated message.
+            continue;
+        };
+    }
+    renderer.cache_mutex.unlock();
+
+    for (updates.items) |json| pushMessage(json);
+}
+
 fn serverLoop() void {
     const io = runtime.io();
     const web = config.web_server;
@@ -317,29 +369,12 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
         clients.append(g_allocator, stream) catch {};
         clients_mutex.unlock();
 
-        // Push initial state to reconnecting client. Hold cache_mutex across
-        // the burst: the guest thread frees-and-replaces these cached strings,
-        // so reading them unlocked could observe freed memory. Scoped block so
-        // the lock is released before this thread settles into its read loop.
-        // Frame first: it can block on socket writes (up to 4 MiB), so keep
-        // it outside the cache_mutex critical section below.
+        // Replay the guest's cached state to the new client. Each value is
+        // copied out from under cache_mutex and sent after the lock is
+        // dropped, because a socket write can block and cache_mutex is a
+        // spinlock the guest thread needs.
         pushFrame();
-        {
-            renderer.cache_mutex.lock();
-            defer renderer.cache_mutex.unlock();
-            if (renderer.last_resolution_json) |json| pushMessage(json);
-            if (renderer.dynamic_menu_json) |json| pushMessage(json);
-            if (renderer.icon_json) |json| pushMessage(json);
-            if (renderer.desktop_icons_json) |json| pushMessage(json);
-            if (renderer.active_dialog) |json| pushMessage(json);
-            if (renderer.last_window_pos_json) |json| pushMessage(json);
-            if (renderer.last_title_json) |json| pushMessage(json);
-            if (renderer.last_edit_control_json) |json| pushMessage(json);
-            if (renderer.last_audio_format_json) |json| pushMessage(json);
-            if (renderer.last_controls_json) |json| pushMessage(json);
-            if (renderer.last_color_dialog_json) |json| pushMessage(json);
-            for (renderer.cached_control_text_updates.items) |json| pushMessage(json);
-        }
+        replayCachedState(allocator);
 
         // Read loop for incoming messages
         while (true) {

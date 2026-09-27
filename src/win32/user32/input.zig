@@ -5,14 +5,18 @@ const w32cc = @import("../calling_convention.zig");
 
 pub fn GetKeyboardState(lpKeyState: usize) callconv(w32cc.WINAPI) i32 {
     if (lpKeyState != 0) {
+        renderer.input_mutex.lock();
         @memcpy(@as([*]u8, @ptrFromInt(lpKeyState))[0..256], &renderer.keyboard_state);
+        renderer.input_mutex.unlock();
     }
     return 1;
 }
 
 pub fn GetKeyState(nVirtKey: i32) callconv(w32cc.WINAPI) i16 {
     const vk: u8 = @intCast(@as(u32, @bitCast(nVirtKey)) & 0xFF);
+    renderer.input_mutex.lock();
     const state = renderer.keyboard_state[vk];
+    renderer.input_mutex.unlock();
     if (state != 0) return @bitCast(@as(u16, 0x8000));
     return 0;
 }
@@ -25,8 +29,10 @@ pub fn stub_SetCursor(hCursor: usize) callconv(w32cc.WINAPI) usize {
 pub fn GetCursorPos(lpPoint: usize) callconv(w32cc.WINAPI) i32 {
     if (lpPoint != 0) {
         const pt = @as(*w32.POINT, @ptrFromInt(lpPoint));
+        renderer.input_mutex.lock();
         pt.x = renderer.last_mouse_x;
         pt.y = renderer.last_mouse_y;
+        renderer.input_mutex.unlock();
     }
     return 1;
 }
@@ -62,7 +68,12 @@ pub const TimerEntry = struct {
 
 pub var timers: [16]TimerEntry = [_]TimerEntry{.{ .hwnd = 0, .id = 0, .elapse_ms = 0, .callback = 0, .last_fire = 0, .active = false }} ** 16;
 var timers_mutex: runtime.Mutex = .{};
-var timer_thread_started: bool = false;
+/// `ensureTimerThread` is a lazy thread spawn. Only the guest thread calls
+/// SetTimer today, but the flag gates a one-shot `std.Thread.spawn`, so a
+/// second caller would spawn a duplicate dispatcher and both would post
+/// WM_TIMER for the same slots. Claim it with a cmpxchg so the spawn happens
+/// exactly once regardless of which thread gets there first.
+var timer_thread_started: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 /// Io-free millisecond timestamp (safe on the guest thread inside the signal
 /// dispatch context — runtime.milliTimestamp uses std.Io which reads TLS).
@@ -84,14 +95,14 @@ fn safeMilliTs() i64 {
 /// there when the guest pumps messages, so WM_TIMER is delivered either way.
 fn ensureTimerThread() void {
     if (comptime @import("builtin").os.tag == .wasi) return;
-    if (timer_thread_started) return;
-    timer_thread_started = true;
+    if (timer_thread_started.cmpxchgStrong(false, true, .acquire, .monotonic) != null) return;
     // This runs inside the SetTimer stub (compat-mode SIGSEGV dispatch), where
     // FS points at the guest TEB. pthread_create → calloc reads per-thread
     // libc state via %fs, so temporarily restore the host TLS for the spawn.
     const platform = @import("../../platform.zig");
     const saved_fs = platform.useHostFs();
     const thread = std.Thread.spawn(.{}, timerThread, .{}) catch {
+        timer_thread_started.store(false, .release);
         platform.restoreFs(saved_fs);
         return;
     };
@@ -131,6 +142,14 @@ pub fn SetTimer(hWnd: usize, nIDEvent: usize, uElapse: u32, lpTimerFunc: usize) 
     if (trace.enable_tracing) trace.print("USER32: SetTimer(hwnd={x}, id={d}, elapse={d}ms)\n", .{ hWnd, nIDEvent, uElapse });
     ensureTimerThread();
 
+    // The slot scan and the store are one critical section. timerThread walks
+    // the same array under timers_mutex every 10ms and rewrites last_fire, so
+    // scanning unlocked both raced on the entries and let the thread observe a
+    // half-written TimerEntry (new id paired with the old hwnd) and post a
+    // WM_TIMER carrying a mix of two timers' identity.
+    timers_mutex.lock();
+    defer timers_mutex.unlock();
+
     // Find existing timer with same id or a free slot
     var slot: ?usize = null;
     for (&timers, 0..) |*t, i| {
@@ -149,7 +168,6 @@ pub fn SetTimer(hWnd: usize, nIDEvent: usize, uElapse: u32, lpTimerFunc: usize) 
     }
 
     if (slot) |s| {
-        timers_mutex.lock();
         timers[s] = .{
             .hwnd = hWnd,
             .id = nIDEvent,
@@ -158,7 +176,6 @@ pub fn SetTimer(hWnd: usize, nIDEvent: usize, uElapse: u32, lpTimerFunc: usize) 
             .last_fire = safeMilliTs(),
             .active = true,
         };
-        timers_mutex.unlock();
     }
     return nIDEvent;
 }
@@ -206,7 +223,9 @@ pub fn stub_GetCaretBlinkTime() callconv(w32cc.WINAPI) u32 {
 
 pub fn SetKeyboardState(lpKeyState: usize) callconv(w32cc.WINAPI) i32 {
     if (lpKeyState != 0) {
+        renderer.input_mutex.lock();
         @memcpy(&renderer.keyboard_state, @as([*]const u8, @ptrFromInt(lpKeyState))[0..256]);
+        renderer.input_mutex.unlock();
     }
     return 1;
 }
