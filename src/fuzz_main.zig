@@ -25,6 +25,11 @@ const pe_fuzz = @import("fuzz/pe.zig");
 /// Where failing inputs are written, relative to the working directory.
 const crash_dir = "zig-out/fuzz";
 
+/// Mutation seed used when `ZINE_FUZZ_SEED` is unset. A fixed value, not a
+/// hash of a constant string: the printed seed is what a failing run is
+/// replayed from, so it has to be readable and settable.
+const default_seed: u64 = 0x5eed_f022_1ab7_5c0d;
+
 const Target = struct {
     name: []const u8,
     seeds: []const []const u8,
@@ -64,8 +69,10 @@ pub fn main(init: std.process.Init) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     var buffer: [mutation.max_input_len]u8 = undefined;
-    var prng = std.Random.DefaultPrng.init(std.hash.Wyhash.hash(0, crash_dir));
+    const seed = try mutationSeed(init.environ_map);
+    var prng = std.Random.DefaultPrng.init(seed);
     const rand = prng.random();
+    std.debug.print("fuzz: seed 0x{x}\n", .{seed});
 
     for (targets) |target| {
         // Each target gets its own window so the first one cannot use up the
@@ -74,7 +81,7 @@ pub fn main(init: std.process.Init) !void {
             @as(i128, fuzz_options.fuzz_seconds) * std.time.ns_per_s;
         var cases = try gpa.alloc([]const u8, target.seeds.len + extra.items.len);
         defer gpa.free(cases);
-        for (target.seeds, 0..) |seed, i| cases[i] = seed;
+        for (target.seeds, 0..) |case_bytes, i| cases[i] = case_bytes;
         for (extra.items, 0..) |item, i| cases[target.seeds.len + i] = item;
 
         var executed: u64 = 0;
@@ -83,14 +90,14 @@ pub fn main(init: std.process.Init) !void {
             for (cases) |case| {
                 const input = mutation.loadSeed(&buffer, case);
                 _ = arena_state.reset(.retain_capacity);
-                report(target, input, &failures, io, arena_state.allocator());
+                report(target, input, executed, seed, &failures, io, arena_state.allocator());
                 executed += 1;
             }
-            for (cases) |seed| {
-                const input = mutation.loadSeed(&buffer, seed);
+            for (cases) |case_bytes| {
+                const input = mutation.loadSeed(&buffer, case_bytes);
                 const len = mutation.apply(rand, input);
                 _ = arena_state.reset(.retain_capacity);
-                report(target, input[0..len], &failures, io, arena_state.allocator());
+                report(target, input[0..len], executed, seed, &failures, io, arena_state.allocator());
                 executed += 1;
             }
         }
@@ -98,9 +105,20 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
+/// The mutation stream's only entropy source. `ZINE_FUZZ_SEED` selects it so a
+/// run can be repeated exactly; an unparsable value is rejected rather than
+/// silently falling back, which would replay a different stream than the one
+/// that failed.
+fn mutationSeed(env: *const std.process.Environ.Map) !u64 {
+    const text = env.get("ZINE_FUZZ_SEED") orelse return default_seed;
+    return std.fmt.parseInt(u64, text, 0) catch error.InvalidFuzzSeed;
+}
+
 fn report(
     target: Target,
     input: []u8,
+    case_index: u64,
+    seed: u64,
     failures: *u64,
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -110,7 +128,11 @@ fn report(
         // The failure itself is already counted and printed; a crash file is
         // best effort, and nothing after this line can report its absence.
         saveCrash(io, target.name, input, failures.*) catch {};
-        std.debug.print("fuzz: {s} failed on {d} bytes: {t}\n", .{ target.name, input.len, err });
+        // The case index and the seed locate the input in the stream: the seed
+        // replays the mutations, the index says which one failed. The time
+        // budget decides how far the stream runs, so the index, not the wall
+        // clock, is what a replay matches on.
+        std.debug.print("fuzz: {s} failed on case {d} with seed 0x{x} ({d} bytes): {t}\n", .{ target.name, case_index, seed, input.len, err });
     };
 }
 

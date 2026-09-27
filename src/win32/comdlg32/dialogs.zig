@@ -135,7 +135,7 @@ fn commonFileDialogA(lpofn_ptr: usize, is_save: bool) i32 {
     renderer.on_cancel_dialog = &handleCancelDialog;
 
     while (!fileDialogDone()) {
-        @import("../../platform.zig").sleep(10 * 1000 * 1000); // 10ms
+        @import("../../runtime.zig").pauseOrAdvance(10 * std.time.ns_per_ms);
     }
 
     renderer.on_file_uploaded = prev_file_cb;
@@ -255,7 +255,7 @@ fn commonFileDialogW(lpofn_ptr: usize, is_save: bool) i32 {
     renderer.on_cancel_dialog = &handleCancelDialog;
 
     while (!fileDialogDone()) {
-        @import("../../platform.zig").sleep(10 * 1000 * 1000); // 10ms
+        @import("../../runtime.zig").pauseOrAdvance(10 * std.time.ns_per_ms);
     }
 
     renderer.on_file_uploaded = prev_file_cb;
@@ -386,7 +386,7 @@ pub fn ChooseColorA(lpcc_ptr: usize) callconv(w32cc.WINAPI) i32 {
     renderer.on_cancel_dialog = &handleCancelDialog;
 
     while (!colorDialogDone()) {
-        @import("../../platform.zig").sleep(10 * 1000 * 1000); // 10ms
+        @import("../../runtime.zig").pauseOrAdvance(10 * std.time.ns_per_ms);
     }
 
     renderer.on_color_selected = prev_color_cb;
@@ -507,7 +507,7 @@ fn commonChooseFont(lpcf_ptr: usize, wide: bool) i32 {
     renderer.on_cancel_dialog = &handleCancelDialog;
 
     while (!fontDialogDone()) {
-        @import("../../platform.zig").sleep(10 * 1000 * 1000); // 10ms
+        @import("../../runtime.zig").pauseOrAdvance(10 * std.time.ns_per_ms);
     }
 
     renderer.on_font_chosen = prev_font_cb;
@@ -619,7 +619,7 @@ fn commonPrintDlg(lppd_ptr: usize, wide: bool) i32 {
     renderer.on_cancel_dialog = &handleCancelDialog;
 
     while (!printDialogDone()) {
-        @import("../../platform.zig").sleep(10 * 1000 * 1000); // 10ms
+        @import("../../runtime.zig").pauseOrAdvance(10 * std.time.ns_per_ms);
     }
 
     renderer.on_print_chosen = prev_print_cb;
@@ -939,7 +939,7 @@ fn commonPageSetupDlg(lppsd_ptr: usize, wide: bool) i32 {
     renderer.on_cancel_dialog = &handleCancelDialog;
 
     while (!pageSetupDialogDone()) {
-        @import("../../platform.zig").sleep(10 * 1000 * 1000); // 10ms
+        @import("../../runtime.zig").pauseOrAdvance(10 * std.time.ns_per_ms);
     }
 
     renderer.on_page_setup_chosen = prev_cb;

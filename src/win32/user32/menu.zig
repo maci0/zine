@@ -264,7 +264,9 @@ pub fn TrackPopupMenu(hMenu: usize, uFlags: u32, x: i32, y: i32, nReserved: i32,
     // Atomic load: the flag is stored from FLTK/web backend threads; a plain
     // bool could be hoisted out of this loop by the optimizer.
     while (!renderer.context_menu_chosen.load(.acquire)) {
-        platform.sleep(10 * std.time.ns_per_ms);
+        // Simulated time under a virtual clock: the guest's timeline advances
+        // by the wait, not by how long the host needed to answer.
+        @import("../../runtime.zig").pauseOrAdvance(10 * std.time.ns_per_ms);
     }
     const chosen = renderer.context_menu_result.load(.acquire);
     if (trace.enable_tracing) trace.print("USER32: TrackPopupMenu -> {d}\n", .{chosen});

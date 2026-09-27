@@ -310,7 +310,7 @@ On native targets, Zine installs a `SIGSEGV`/`SIGFPE`/`SIGILL` handler that impl
 | Module | Path | Purpose |
 |--------|------|---------|
 | **runner.zig** | [`src/runner.zig`](../src/runner.zig) | Shared PE loading and execution pipeline used by both native and WASM entry points. Handles stub registration, search path setup, import resolution, basic block scanning, and the JIT execution loop. |
-| **runtime.zig** | [`src/runtime.zig`](../src/runtime.zig) | Process-global singletons (`std.Io`, allocator, environment, main-exe dir) for code that cannot take parameters: Win32 stubs called from guest code, signal handlers, and thunks. Also the seam the guest's time passes through: `installVirtualClock` swaps the wall and monotonic readings for a fixed cursor (`ZINE_VIRTUAL_CLOCK_NS`), `advanceVirtualClock` charges a guest wait to it instead of blocking the host, and `hostMonoNanoTimestamp` keeps emulator instrumentation on the real clock. |
+| **runtime.zig** | [`src/runtime.zig`](../src/runtime.zig) | Process-global singletons (`std.Io`, allocator, environment, main-exe dir) for code that cannot take parameters: Win32 stubs called from guest code, signal handlers, and thunks. Also the seam the guest's time passes through: `installVirtualClock` swaps the wall and monotonic readings for a fixed cursor (`ZINE_VIRTUAL_CLOCK_NS`), `pauseOrAdvance` charges a guest wait or a host-waiting poll to that cursor instead of blocking the host, and `hostMonoNanoTimestamp` keeps emulator instrumentation on the real clock. |
 | **bat.zig** | [`src/bat.zig`](../src/bat.zig) | Parses `.bat`/`.cmd` launcher scripts, expands `%VARIABLE%` references, and extracts the final command to execute. |
 | **log.zig** | [`src/log.zig`](../src/log.zig) | Structured diagnostic logging with colored level prefixes (`[FATAL]`, `[ERROR]`, `[WARN]`, `[INFO]`, `[TRACE]`). Auto-detects TTY for color; respects `NO_COLOR` env var. Redacts the host home directory (`HOME`/`USERPROFILE`) from every record, and `redactEnvValue` withholds the value of the identity variables (`USER`, `USERNAME`, `LOGNAME`, `EMAIL`) from environment traces. |
 | **config.zig** | [`src/config.zig`](../src/config.zig) | Runtime configuration read from `ZINE_*` environment variables at startup. Validates each value before use and exits with status 2 on a rejected one. Owns the web UI bind address (`ZINE_WEB_HOST`, `ZINE_WEB_PORT`), the URL printed at startup, the CSP `connect-src` origin, and the WebSocket origin allowlist. Also parses the guest clock settings (`ZINE_VIRTUAL_CLOCK_NS`, `ZINE_CLOCK_STEP_NS`) that `main` hands to `runtime.installVirtualClock`. |
@@ -437,7 +437,7 @@ zine/
 │   ├── wasm_main.zig        # WASM entry point
 │   ├── host_main.zig        # zine-host entry point (wasmer wrapper with JIT)
 │   ├── test_root.zig        # Unified test root (imports all tested modules)
-│   ├── fuzz_main.zig        # Fuzz target entry point (zig build fuzz)
+│   ├── fuzz_main.zig        # Fuzz target entry point (zig build fuzz), mutation stream seeded by ZINE_FUZZ_SEED
 │   ├── win32_dll_api.zig    # Public API surface for standalone DLL builds
 │   ├── runner.zig           # Shared PE loading and execution pipeline
 │   ├── pe.zig               # PE format structures and parser

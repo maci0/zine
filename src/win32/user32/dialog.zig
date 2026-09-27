@@ -189,8 +189,10 @@ fn modalMessageLoop(dlgproc: usize) void {
         }
 
         if (!got_message) {
-            // Sleep briefly to avoid busy-waiting
-            @import("../../platform.zig").sleep(1 * std.time.ns_per_ms);
+            // Avoid busy-waiting; the wait is simulated time under a virtual
+            // clock, so a modal dialog advances the guest's timeline the same
+            // way on every replay.
+            @import("../../runtime.zig").pauseOrAdvance(1 * std.time.ns_per_ms);
         }
     }
 }

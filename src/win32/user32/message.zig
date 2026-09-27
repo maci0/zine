@@ -302,9 +302,15 @@ pub fn DispatchMessageA(lpMsg: *user32.MSG) callconv(w32cc.WINAPI) isize {
     return 0;
 }
 
+/// How long GetMessageA waits between empty queue polls. Charged to the
+/// virtual clock under simulation, so the loop's cost is simulated time.
+const idle_poll_ns: u64 = std.time.ns_per_ms;
+/// Idle time after which an empty GetMessageA returns a synthetic WM_PAINT.
+const paint_interval_ns: u64 = 16 * idle_poll_ns;
+
 pub fn GetMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: GetMessageA called\n", .{});
-    var spin_count: u32 = 0;
+    var waited_ns: u64 = 0;
     while (true) {
         const result = PeekMessageA(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, w32.PM_REMOVE);
         if (result != 0) {
@@ -323,12 +329,14 @@ pub fn GetMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFilt
             return result;
         }
 
-        spin_count += 1;
-        // After spinning for ~16ms (16 iterations of 1ms sleep), generate a synthetic
-        // WM_PAINT to keep the game's main message loop alive. Many games expect
-        // GetMessage to return periodically even when no real messages are pending.
-        if (spin_count >= 16) {
-            spin_count = 0;
+        // After an idle period of paint_interval_ns, generate a synthetic
+        // WM_PAINT to keep the game's main message loop alive. Many games
+        // expect GetMessage to return periodically even when no real messages
+        // are pending. The wait is charged to the virtual clock when one is
+        // installed, so a replay reaches the synthetic paint after the same
+        // guest time and not after the same number of host iterations.
+        if (waited_ns >= paint_interval_ns) {
+            waited_ns = 0;
             {
                 const msg = lpMsg;
                 msg.hwnd = @intCast(user32.global_hwnd);
@@ -345,7 +353,8 @@ pub fn GetMessageA(lpMsg: *user32.MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFilt
         // Flush any pending screen updates while idle
         const rend = @import("../../gui/renderer.zig");
         rend.flushScreenIfDirty();
-        @import("../../platform.zig").sleep(1 * 1000 * 1000); // 1ms
+        runtime.pauseOrAdvance(idle_poll_ns);
+        waited_ns += idle_poll_ns;
     }
 }
 
@@ -1746,7 +1755,7 @@ pub fn SendMessageTimeoutA(hWnd: usize, Msg: u32, wParam: usize, lParam: isize, 
 /// burning 100% CPU in the Delphi message loop.
 pub fn WaitMessage() callconv(w32cc.WINAPI) i32 {
     const ns: u64 = 10 * 1000000; // 10ms
-    if (!runtime.advanceVirtualClock(ns)) @import("../../platform.zig").sleep(ns);
+    runtime.pauseOrAdvance(ns);
     return 1; // TRUE = success
 }
 
@@ -1766,7 +1775,7 @@ pub fn stub_MsgWaitForMultipleObjects(nCount: u32, pHandles: usize, fWaitAll: i3
     if (dwMilliseconds > 0 and dwMilliseconds != 0xFFFFFFFF) {
         const ms = @min(dwMilliseconds, 50);
         const ns = @as(u64, ms) * 1000000;
-        if (!runtime.advanceVirtualClock(ns)) @import("../../platform.zig").sleep(ns);
+        runtime.pauseOrAdvance(ns);
     }
     return nCount;
 }

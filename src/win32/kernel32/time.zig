@@ -152,7 +152,7 @@ pub fn Sleep(dwMilliseconds: u32) callconv(w32cc.WINAPI) void {
         const ns = @as(u64, dwMilliseconds) * std.time.ns_per_ms;
         // Under a virtual clock the wait costs simulated time only, so a
         // replay reaches the same clock values without spending real time.
-        if (!runtime.advanceVirtualClock(ns)) @import("../../platform.zig").sleep(ns);
+        runtime.pauseOrAdvance(ns);
     } else {
         platform.yield();
     }

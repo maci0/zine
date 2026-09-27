@@ -116,7 +116,6 @@ fn ensureTimerThread() void {
 }
 
 fn timerThread() void {
-    const builtin = @import("builtin");
     while (true) {
         const now = safeMilliTs();
         timers_mutex.lock();
@@ -138,14 +137,7 @@ fn timerThread() void {
         // Under a virtual clock each pass advances simulated time instead of
         // sleeping, so WM_TIMER fires after a count of passes that does not
         // depend on how fast the host is.
-        if (!@import("../../runtime.zig").advanceVirtualClock(10 * std.time.ns_per_ms)) {
-            if (comptime builtin.os.tag == .linux) {
-                var req = std.os.linux.timespec{ .sec = 0, .nsec = 10 * std.time.ns_per_ms };
-                _ = std.os.linux.nanosleep(&req, null);
-            } else {
-                @import("../../platform.zig").sleep(10 * std.time.ns_per_ms);
-            }
-        }
+        @import("../../runtime.zig").pauseOrAdvance(10 * std.time.ns_per_ms);
     }
 }
 

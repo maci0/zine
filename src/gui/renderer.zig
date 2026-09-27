@@ -150,6 +150,8 @@ var g_allocator: std.mem.Allocator = undefined;
 /// True once renderer.init() ran. Console apps keep the .none backend and never
 /// call init(), so g_allocator stays undefined — cache paths must skip it.
 var g_allocator_ready: bool = false;
+/// Milliseconds between two pushed frames.
+const frame_interval_ms: i64 = 16;
 var last_frame_time: ?i64 = null;
 
 // --- Frame Batching ---
@@ -356,8 +358,10 @@ pub fn pushFrame() void {
     const current_time = runtime.monoMilliTimestamp();
     if (last_frame_time) |last_time| {
         const diff = current_time - last_time;
-        if (diff < 16) {
-            @import("../platform.zig").sleep(@as(u64, @intCast(16 - diff)) * 1000 * 1000);
+        if (diff < frame_interval_ms) {
+            // Under a virtual clock the remainder is simulated time, so a
+            // replay paces its frames on the same timeline the guest sees.
+            runtime.pauseOrAdvance(@as(u64, @intCast(frame_interval_ms - diff)) * std.time.ns_per_ms);
         }
     }
     last_frame_time = runtime.monoMilliTimestamp();

@@ -188,8 +188,7 @@ pub fn SleepEx(dwMilliseconds: u32, bAlertable: i32) callconv(w32cc.WINAPI) u32 
     _ = bAlertable;
     if (dwMilliseconds > 0) {
         const sleep_ns: u64 = @min(@as(u64, dwMilliseconds) * 1_000_000, 100_000_000); // Cap at 100ms
-        if (!@import("../../runtime.zig").advanceVirtualClock(sleep_ns))
-            @import("../../platform.zig").sleep(sleep_ns);
+        @import("../../runtime.zig").pauseOrAdvance(sleep_ns);
     }
     return 0;
 }

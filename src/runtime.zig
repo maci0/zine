@@ -146,6 +146,17 @@ pub fn advanceVirtualClock(ns: u64) bool {
     return true;
 }
 
+/// Blocks for `ns` on the host clock, or charges the duration to the virtual
+/// clock when one is installed. Every guest-visible wait goes through here, so
+/// a simulated run spends no real time and its clock moves by exactly the
+/// duration the guest asked for.
+pub fn pauseOrAdvance(ns: u64) void {
+    if (advanceVirtualClock(ns)) return;
+    // Imported here: platform sleeps without touching std.Io, which reads
+    // per-thread TLS and is unsafe inside the compat-mode dispatch handler.
+    @import("platform.zig").sleep(ns);
+}
+
 /// Reads and advances the virtual clock; null when the host clocks are in use.
 fn virtualNow() ?i128 {
     virtual_clock_mutex.lock();
@@ -272,6 +283,17 @@ test "virtual clock: waits are charged to it and never to the host clock" {
     // A virtual second moved the guest clock by a second, so a host clock
     // still tracking real time cannot differ from it by nearly that much.
     try testing.expectEqual(@as(i128, std.time.ns_per_s + 1), nanoTimestamp());
+    try testing.expect(@abs(hostMonoNanoTimestamp() - host_before) < std.time.ns_per_s);
+}
+
+test "pauseOrAdvance: a simulated wait charges the virtual clock and no host time" {
+    var clock = VirtualClock{ .now_ns = 0, .step_ns = 0 };
+    installVirtualClock(&clock);
+    defer useHostClock();
+
+    const host_before = hostMonoNanoTimestamp();
+    for (0..8) |_| pauseOrAdvance(5 * std.time.ns_per_ms);
+    try testing.expectEqual(@as(i128, 40 * std.time.ns_per_ms), clock.now_ns);
     try testing.expect(@abs(hostMonoNanoTimestamp() - host_before) < std.time.ns_per_s);
 }
 

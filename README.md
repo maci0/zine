@@ -455,9 +455,11 @@ warning and restricts the accepted WebSocket origins to that address.
 rest, with a cursor that starts at the given number of nanoseconds since the
 Unix epoch and advances by `ZINE_CLOCK_STEP_NS` on every read. A guest wait
 (`Sleep`, `SleepEx`, `WaitForSingleObject`, `select`, a Win32 timer) advances
-that cursor by the duration it asked for instead of blocking the host, so a
-replay reaches the same clock values without spending the run's worth of real
-time in sleeps:
+that cursor by the duration it asked for instead of blocking the host, as does
+a host-waiting poll (the empty `GetMessage` queue, a modal dialog or file
+dialog awaiting the frontend, the context menu, frame pacing), so a replay
+reaches the same clock values without spending the run's worth of real time in
+sleeps:
 
 ```sh
 ZINE_VIRTUAL_CLOCK_NS=1700000000000000000 ./zig-out/bin/zine.x86_64 drive_c/myapp/app.exe
@@ -582,7 +584,10 @@ Named steps run in gate order, whatever order you pass them in. The
 `static-analysis` job in `.github/workflows/ci.yml` runs each of them through
 this script, and the script is where each one's command lives; a step added
 there reaches CI without a second copy. `ZINE_FUZZ_SECONDS` sets the seconds
-each fuzz target runs (10 locally, 60 in CI).
+each fuzz target runs (10 locally, 60 in CI). `ZINE_FUZZ_SEED` selects the
+mutation stream's seed, which the driver also prints on startup and on every
+failure together with the case index, so a failing input can be regenerated;
+a malformed value exits rather than running a different stream.
 
 For the edit-test loop, use `zig build test -Dtest-filter=<substring>` above;
 `-Darch` does not change the host target of unit tests. Run

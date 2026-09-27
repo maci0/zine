@@ -119,8 +119,7 @@ fn mmTimerThread(idx: usize) void {
     while (timer.active.load(.acquire)) {
         // A virtual clock advances simulated time instead of sleeping, which
         // fixes the number of callbacks a replay produces.
-        if (!@import("../../runtime.zig").advanceVirtualClock(delay_ns))
-            @import("../../platform.zig").sleep(delay_ns);
+        @import("../../runtime.zig").pauseOrAdvance(delay_ns);
         if (!timer.active.load(.acquire)) break;
 
         if (timer.callback != 0) {
