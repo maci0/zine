@@ -32,7 +32,7 @@ comptime {
     @export(&string.strtoul, .{ .name = "strtoul" });
     @export(&string.strtol, .{ .name = "strtol" });
     @export(&string.atoi, .{ .name = "atoi" });
-    @export(&misc.strupr, .{ .name = "_strupr" });
+    @export(&string.strupr, .{ .name = "_strupr" });
 
     // Wide string
     @export(&string.wcslen, .{ .name = "wcslen" });
@@ -47,6 +47,7 @@ comptime {
     @export(&string.wcsrchr, .{ .name = "wcsrchr" });
     @export(&string.wcsstr, .{ .name = "wcsstr" });
     @export(&string.wcsupr, .{ .name = "_wcsupr" });
+    @export(&string.wcslwr, .{ .name = "_wcslwr" });
     @export(&string.wcsdup, .{ .name = "_wcsdup" });
     @export(&string.wtoi, .{ .name = "_wtoi" });
     @export(&string.wcstol, .{ .name = "wcstol" });

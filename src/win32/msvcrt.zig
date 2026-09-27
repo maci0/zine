@@ -338,7 +338,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinDataExport(m, "_mbctype", exportAddr(g_base, process.g_mbctype_array, &msvcrt_mbctype), @sizeOf(@TypeOf(msvcrt_mbctype)));
     try environment.addBuiltinExportComptime(m, "_mbslwr", string.strlwr);
     try environment.addBuiltinExportComptime(m, "_mbsupr", string.strupr);
-    try environment.addBuiltinExportComptime(m, "_strupr", misc.strupr);
+    try environment.addBuiltinExportComptime(m, "_strupr", string.strupr);
     try environment.addBuiltinExportComptime(m, "_setmbcp", misc.stub_ignore_i32);
     try environment.addBuiltinExportComptime(m, "_getmbcp", misc.stub_ignore_i32);
 
@@ -404,7 +404,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptimeVA(m, "swscanf", fmt.swscanf, 2);
     try environment.addBuiltinExportComptime(m, "wcsstr", string.wcsstr);
     try environment.addBuiltinExportComptime(m, "_vsnwprintf", fmt.vsnwprintf);
-    try environment.addBuiltinExportComptime(m, "_wcslwr", misc.stub_ignore_ptr);
+    try environment.addBuiltinExportComptime(m, "_wcslwr", string.wcslwr);
     try environment.addBuiltinExportComptime(m, "_getdcwd", path.getcwd);
     try environment.addBuiltinExportComptime(m, "_itow", string.itoa);
     try environment.addBuiltinExportComptime(m, "wcstok", misc.stub_ignore_ptr);

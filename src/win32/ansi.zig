@@ -75,14 +75,24 @@ pub fn fromUtf8(utf8: []const u8, out: []u8) []const u8 {
     return out[0..n];
 }
 
+/// The bytes a wide-to-ANSI conversion produced, and whether any code point
+/// needed the default character. `WideCharToMultiByte` reports the second part
+/// through lpUsedDefaultChar, so the conversion that fills the buffer is the
+/// one that answers it.
+pub const AnsiResult = struct {
+    bytes: []const u8,
+    used_default: bool,
+};
+
 /// Encode a UTF-16 string into `out` as CP1252, the width a wide `W` API
 /// string would have in its narrow form. Surrogate pairs are combined first,
 /// so a character outside the BMP encodes as the default character per code
 /// point rather than as two broken halves; a surrogate pair the code page
-/// cannot represent likewise becomes one default character. Returns the
-/// written prefix of `out`.
-pub fn wideToAnsi(wide: []const u16, out: []u8) []const u8 {
+/// cannot represent likewise becomes one default character. Reports whether
+/// any character had no representation in the code page.
+pub fn wideToAnsiReport(wide: []const u16, out: []u8) AnsiResult {
     var n: usize = 0;
+    var used_default = false;
     var i: usize = 0;
     while (i < wide.len) {
         var cp: u21 = wide[i];
@@ -98,10 +108,19 @@ pub fn wideToAnsi(wide: []const u16, out: []u8) []const u8 {
             cp = 0xFFFD;
         }
         if (n >= out.len) break;
-        out[n] = codepointToByte(cp) orelse default_char;
+        if (codepointToByte(cp)) |b| {
+            out[n] = b;
+        } else {
+            used_default = true;
+            out[n] = default_char;
+        }
         n += 1;
     }
-    return out[0..n];
+    return .{ .bytes = out[0..n], .used_default = used_default };
+}
+
+pub fn wideToAnsi(wide: []const u16, out: []u8) []const u8 {
+    return wideToAnsiReport(wide, out).bytes;
 }
 
 test "cp1252 round trip for the 0x80..0x9F range" {
@@ -173,4 +192,15 @@ test "wideToAnsi stops when out is full" {
     var out: [2]u8 = undefined;
     const text = [_:0]u16{ 'a', 'b', 'c' };
     try std.testing.expectEqualStrings("ab", wideToAnsi(&text, &out));
+}
+
+test "wideToAnsiReport reports the default character only when one was used" {
+    var out: [8]u8 = undefined;
+    const representable = [_:0]u16{ 'c', 0x00E9, 0x20AC };
+    try std.testing.expectEqualStrings("c\xE9\x80", wideToAnsiReport(&representable, &out).bytes);
+    try std.testing.expect(!wideToAnsiReport(&representable, &out).used_default);
+
+    const unrepresentable = [_:0]u16{0x4F60};
+    try std.testing.expectEqualStrings("?", wideToAnsiReport(&unrepresentable, &out).bytes);
+    try std.testing.expect(wideToAnsiReport(&unrepresentable, &out).used_default);
 }

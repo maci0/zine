@@ -119,16 +119,15 @@ pub fn WideCharToMultiByte(CodePage: u32, dwFlags: u32, lpWideCharStr_ptr: usize
     if (lpMultiByteStr_ptr < 0x10000) return @intCast(len);
 
     const mb_str = @as([*]u8, @ptrFromInt(trace.addr(lpMultiByteStr_ptr)));
+    // CP1252 is single-byte, so the output can never exceed the code units
+    // read: a surrogate pair is one character that takes one byte. Reading
+    // one unit past a pair at the buffer limit is therefore safe, and the
+    // pair must be joined before conversion or it becomes two default
+    // characters and the returned count is one too high.
     const limit = @min(len, @as(usize, @intCast(cbMultiByte)));
-    var used_default = false;
-    for (0..limit) |i| {
-        mb_str[i] = ansi.codepointToByte(wc_str[i]) orelse blk: {
-            used_default = true;
-            break :blk ansi.default_char;
-        };
-    }
-    if (lpUsedDefaultChar) |used| used.* = @intFromBool(used_default);
-    return @intCast(limit);
+    const result = ansi.wideToAnsiReport(wc_str[0..limit], mb_str[0..limit]);
+    if (lpUsedDefaultChar) |used| used.* = @intFromBool(result.used_default);
+    return @intCast(result.bytes.len);
 }
 
 const ansi = @import("../ansi.zig");
@@ -1113,6 +1112,27 @@ test "GetLocaleInfoW returns the same locale data as GetLocaleInfoA" {
     // answer "1252" for every query.
     try testing.expectEqualStrings("0409", localeInfoValue(LCType_ILANGUAGE) orelse return error.TestUnexpectedResult);
     try testing.expectEqualStrings("1252", localeInfoValue(LCType_IDEFAULTANSICODEPAGE) orelse return error.TestUnexpectedResult);
+}
+
+test "WideCharToMultiByte joins a surrogate pair into one default character" {
+    // U+1F600 has no CP1252 form: it is one character, so it is one '?' and
+    // the returned count counts characters, not UTF-16 code units.
+    var src = [_:0]u16{ 0xD83D, 0xDE00, 'a', 0x00E9 };
+    var dst: [8]u8 = undefined;
+    var used_default: i32 = 0;
+    const n = WideCharToMultiByte(0, 0, @intFromPtr(&src), -1, @intFromPtr(&dst), dst.len, null, &used_default);
+    try testing.expectEqual(@as(i32, 4), n);
+    try testing.expectEqualSlices(u8, &.{ '?', 'a', 0xE9, 0 }, dst[0..4]);
+    try testing.expectEqual(@as(i32, 1), used_default);
+
+    // Latin-1 text needs no default character.
+    const plain = [_:0]u16{ 'c', 0x00E9, 0x20AC };
+    var plain_dst: [8]u8 = undefined;
+    used_default = 0;
+    const m = WideCharToMultiByte(0, 0, @intFromPtr(&plain), -1, @intFromPtr(&plain_dst), plain_dst.len, null, &used_default);
+    try testing.expectEqual(@as(i32, 4), m);
+    try testing.expectEqualSlices(u8, &.{ 'c', 0xE9, 0x80, 0 }, plain_dst[0..4]);
+    try testing.expectEqual(@as(i32, 0), used_default);
 }
 
 test "GetLocaleInfo rejects an unknown LCType on both widths" {

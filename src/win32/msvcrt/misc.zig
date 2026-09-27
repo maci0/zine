@@ -2,9 +2,10 @@ const std = @import("std");
 const x86_memory = @import("../../x86/memory.zig");
 const trace = @import("../../trace.zig");
 const msvcrt = @import("../msvcrt.zig");
+const ansi = @import("../ansi.zig");
 
 /// Miscellaneous MSVCRT stubs: rand/srand, qsort, bsearch, errno,
-/// setlocale, _strupr, abs, and generic no-op/ignore stubs.
+/// setlocale, abs, and generic no-op/ignore stubs.
 /// Implementation status: Partially implemented
 pub fn log_call(comptime name: []const u8) void {
     if (trace.enable_tracing) trace.print("MSVCRT: {s}\n", .{name});
@@ -189,18 +190,12 @@ pub fn setlocale(category: i32, locale: ?[*:0]const u8) callconv(.c) ?[*:0]const
     return @ptrCast(&setlocale_buf);
 }
 
-/// Implementation status: Partially implemented
-pub fn strupr(s: [*]u8) callconv(.c) [*]u8 {
-    var i: usize = 0;
-    while (s[i] != 0 and i < 0x100000) : (i += 1) {
-        if (s[i] >= 'a' and s[i] <= 'z') s[i] -= 32;
-    }
-    return s;
-}
-
-/// Converts a multibyte character to a wide character (ANSI/ASCII subset).
-/// c1.dll uses this to encode wide string literals — a no-op returning 0 made
-/// every `L"..."` literal decode as an empty/garbage string in the .obj.
+/// Converts a multibyte character to a wide character in the ANSI code page
+/// GetACP reports (CP1252), the same conversion MultiByteToWideChar does. A
+/// byte in the 0x80..0x9F range decodes to its CP1252 character, so the euro
+/// sign in a `L"..."` literal becomes U+20AC rather than a C1 control. c1.dll
+/// uses this to encode wide string literals: a no-op returning 0 made every
+/// `L"..."` literal decode as an empty/garbage string in the .obj.
 ///
 /// Returns the number of bytes consumed (1 for single-byte), 0 for the null
 /// character, -1 on invalid input. With `s == NULL`, reports whether the
@@ -218,7 +213,7 @@ pub fn mbtowc(pwc: ?[*]u16, s: ?[*]const u8, n: usize) callconv(.c) i32 {
         if (pwc) |wc| wc[0] = 0;
         return 0;
     }
-    if (pwc) |wc| wc[0] = ch;
+    if (pwc) |wc| wc[0] = @intCast(ansi.byteToCodepoint(ch));
     return 1;
 }
 
@@ -234,3 +229,26 @@ pub fn stub_noop0() callconv(.c) void {}
 pub fn stub_noop1(_: usize) callconv(.c) void {}
 /// Implementation status: Stub
 pub fn stub_noop3(_: usize, _: usize, _: usize) callconv(.c) void {}
+
+const testing = std.testing;
+
+test "mbtowc decodes the ANSI code page, not the raw byte" {
+    var wc: u16 = 0;
+    const out: ?[*]u16 = @ptrCast(&wc);
+    // 0x80 is the euro sign in CP1252 and U+0080 in Latin-1; the guest's wide
+    // strings come from the code page GetACP reports, not from Latin-1.
+    try testing.expectEqual(@as(i32, 1), mbtowc(out, "\x80", 1));
+    try testing.expectEqual(@as(u16, 0x20AC), wc);
+
+    // A Latin-1 letter is its own code point in CP1252.
+    try testing.expectEqual(@as(i32, 1), mbtowc(out, "\xE9", 1));
+    try testing.expectEqual(@as(u16, 0x00E9), wc);
+
+    // The null character terminates the string and is written as U+0000.
+    try testing.expectEqual(@as(i32, 0), mbtowc(out, "\x00", 1));
+    try testing.expectEqual(@as(u16, 0), wc);
+
+    // No string means no shift state; an empty request is invalid.
+    try testing.expectEqual(@as(i32, 0), mbtowc(null, null, 0));
+    try testing.expectEqual(@as(i32, -1), mbtowc(out, "x", 0));
+}

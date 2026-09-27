@@ -256,10 +256,21 @@ pub fn wcslen(str: [*]const u16) callconv(.c) usize {
     return std.mem.indexOfScalar(u16, str[0..65536], 0) orelse 0;
 }
 
+/// _wcsupr. Case mapping is the same one towupper applies, so a string
+/// uppercased here compares equal to one uppercased there.
 pub fn wcsupr(str: [*]u16) callconv(.c) [*]u16 {
     const len = std.mem.indexOfScalar(u16, str[0..65536], 0) orelse 0;
     for (str[0..len]) |*ch| {
-        if (ch.* >= 'a' and ch.* <= 'z') ch.* -= 32;
+        ch.* = unicase.toUpper(ch.*);
+    }
+    return str;
+}
+
+/// _wcslwr
+pub fn wcslwr(str: [*]u16) callconv(.c) [*]u16 {
+    const len = std.mem.indexOfScalar(u16, str[0..65536], 0) orelse 0;
+    for (str[0..len]) |*ch| {
+        ch.* = unicase.toLower(ch.*);
     }
     return str;
 }
@@ -662,12 +673,13 @@ pub fn atof(str: [*:0]const u8) callconv(.c) f64 {
     return std.fmt.parseFloat(f64, std.mem.span(str)) catch 0.0;
 }
 
-/// _strlwr
+/// _strlwr. Folds CP1252 bytes through the same mapping tolower applies, so
+/// a string lowercased here matches the same string compared by stricmp.
 pub fn strlwr(str: ?[*:0]u8) callconv(.c) ?[*:0]u8 {
     if (str) |s_ptr| {
         const s = std.mem.span(s_ptr);
         for (s) |*c| {
-            if (c.* >= 'A' and c.* <= 'Z') c.* += 32;
+            c.* = unicase.toLowerAnsiByte(c.*);
         }
         return s_ptr;
     }
@@ -679,7 +691,7 @@ pub fn strupr(str: ?[*:0]u8) callconv(.c) ?[*:0]u8 {
     if (str) |s_ptr| {
         const s = std.mem.span(s_ptr);
         for (s) |*c| {
-            if (c.* >= 'a' and c.* <= 'z') c.* -= 32;
+            c.* = unicase.toUpperAnsiByte(c.*);
         }
         return s_ptr;
     }
@@ -1026,6 +1038,46 @@ test "wcsupr uppercases ASCII in place" {
     const p: [*]u16 = @ptrCast(&buf);
     try std.testing.expectEqual(@intFromPtr(p), @intFromPtr(wcsupr(p)));
     try std.testing.expectEqualSlices(u16, &.{ 'M', 'I', 'X', 'E', 'D', '9', 0 }, buf[0..7]);
+}
+
+test "wcsupr and wcslwr fold the same characters towupper and towlower do" {
+    // A guest that normalizes with the wide APIs must not be left with the
+    // string unchanged: 0x00E9 (e acute) and 0x0430 (Cyrillic a) both fold.
+    var buf: [8]u16 = .{ 0x00E9, 0x0430, 'a', '9', 0, 0, 0, 0 };
+    const p: [*]u16 = @ptrCast(&buf);
+    try std.testing.expectEqual(@intFromPtr(p), @intFromPtr(wcslwr(p)));
+    try std.testing.expectEqualSlices(u16, &.{ 0x00E9, 0x0430, 'a', '9', 0 }, buf[0..5]);
+
+    try std.testing.expectEqual(@intFromPtr(p), @intFromPtr(wcsupr(p)));
+    try std.testing.expectEqualSlices(u16, &.{ 0x00C9, 0x0410, 'A', '9', 0 }, buf[0..5]);
+
+    // A surrogate pair is outside the simple mapping and is left alone.
+    var astral: [4]u16 = .{ 0xD83D, 0xDE00, 0, 0 };
+    const ap: [*]u16 = @ptrCast(&astral);
+    _ = wcsupr(ap);
+    _ = wcslwr(ap);
+    try std.testing.expectEqualSlices(u16, &.{ 0xD83D, 0xDE00, 0 }, astral[0..3]);
+}
+
+test "strlwr and strupr fold CP1252 the way tolower and toupper do" {
+    // "É" is 0xC9 in CP1252. ASCII-only folding left it uppercase, so a
+    // string normalized with _strlwr did not match under _stricmp.
+    var buf: [4]u8 = "CAF\xC9".*;
+    const p: [*:0]u8 = @ptrCast(&buf);
+    try std.testing.expectEqual(@intFromPtr(p), @intFromPtr(strlwr(p).?));
+    try std.testing.expectEqualSlices(u8, &.{ 'c', 'a', 'f', 0xE9 }, buf[0..4]);
+    try std.testing.expectEqual(@as(i32, 0), stricmp(@ptrCast(&buf), "caf\xE9"));
+
+    try std.testing.expectEqual(@intFromPtr(p), @intFromPtr(strupr(p).?));
+    try std.testing.expectEqualSlices(u8, &.{ 'C', 'A', 'F', 0xC9 }, buf[0..4]);
+    try std.testing.expectEqual(@as(i32, 0), stricmp(@ptrCast(&buf), "CAF\xC9"));
+
+    // The euro sign has no simple case mapping and survives both directions.
+    var euro: [4]u8 = .{ 0x80, 0, 0, 0 };
+    const ep: [*:0]u8 = @ptrCast(&euro);
+    _ = strlwr(ep);
+    _ = strupr(ep);
+    try std.testing.expectEqualSlices(u8, &.{ 0x80, 0 }, euro[0..2]);
 }
 
 test "wcs family comparisons fold case only below 256" {
