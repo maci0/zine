@@ -5,6 +5,8 @@
 //! buffer). It handles bounds-checked reading, writing, and guest heap
 //! allocation.
 
+const builtin = @import("builtin");
+
 /// Process-wide guest memory instance. Set at startup by wasm_main; null on
 /// native builds (guest addresses are then host addresses). Lives here with
 /// the GuestMemory type it points to, so low-level utilities such as trace
@@ -93,6 +95,11 @@ pub const GuestMemory = struct {
         return self.base[a];
     }
 
+    /// True when the host is little-endian, so an unaligned multi-byte load
+    /// from the guest buffer already holds the little-endian value. Guest
+    /// memory is always little-endian regardless of the host.
+    const host_is_little = builtin.cpu.arch.endian() == .little;
+
     /// Reads a 16-bit little-endian value from guest memory at `addr`.
     pub inline fn read16(self: *const GuestMemory, addr: u32) u16 {
         if (self.native_linear) {
@@ -101,6 +108,9 @@ pub const GuestMemory = struct {
         }
         const a = self.translate(addr);
         if (self.base.len < 2 or a > self.base.len - 2) return 0;
+        if (comptime host_is_little) {
+            return @as(*align(1) const u16, @ptrCast(self.base.ptr + a)).*;
+        }
         return @as(u16, self.base[a]) | (@as(u16, self.base[a + 1]) << 8);
     }
 
@@ -112,6 +122,9 @@ pub const GuestMemory = struct {
         }
         const a = self.translate(addr);
         if (self.base.len < 4 or a > self.base.len - 4) return 0;
+        if (comptime host_is_little) {
+            return @as(*align(1) const u32, @ptrCast(self.base.ptr + a)).*;
+        }
         return @as(u32, self.base[a]) |
             (@as(u32, self.base[a + 1]) << 8) |
             (@as(u32, self.base[a + 2]) << 16) |
@@ -141,6 +154,10 @@ pub const GuestMemory = struct {
         if (self.isWriteProtected(addr)) return;
         const a = self.translate(addr);
         if (self.base.len < 2 or a > self.base.len - 2) return;
+        if (comptime host_is_little) {
+            @as(*align(1) u16, @ptrCast(self.base.ptr + a)).* = val;
+            return;
+        }
         self.base[a] = @truncate(val);
         self.base[a + 1] = @truncate(val >> 8);
     }
@@ -154,6 +171,10 @@ pub const GuestMemory = struct {
         if (self.isWriteProtected(addr)) return;
         const a = self.translate(addr);
         if (self.base.len < 4 or a > self.base.len - 4) return;
+        if (comptime host_is_little) {
+            @as(*align(1) u32, @ptrCast(self.base.ptr + a)).* = val;
+            return;
+        }
         self.base[a] = @truncate(val);
         self.base[a + 1] = @truncate(val >> 8);
         self.base[a + 2] = @truncate(val >> 16);
@@ -326,6 +347,34 @@ test "guest memory: out of bounds returns zero/no-ops" {
     try testing.expectEqual(@as(u8, 0), mem.read8(100));
     try testing.expectEqual(@as(u32, 0), mem.read32(100));
     mem.write32(100, 0xDEAD); // should not crash
+}
+
+test "guest memory: unaligned multi-byte access matches little-endian layout" {
+    // Guest operands are unaligned freely; the fast path loads them natively,
+    // so every offset in the range must still produce the same bytes.
+    var buf: [16]u8 = .{0} ** 16;
+    var mem = GuestMemory{ .base = &buf };
+    // 0..8 so the widest access (8 bytes) stays inside the buffer at every
+    // offset, aligned and unaligned alike.
+    for (0..9) |i| {
+        const off: u32 = @intCast(i);
+        mem.write32(off, 0xDEADBEEF);
+        try testing.expectEqual(@as(u8, 0xEF), buf[off]);
+        try testing.expectEqual(@as(u8, 0xBE), buf[off + 1]);
+        try testing.expectEqual(@as(u8, 0xAD), buf[off + 2]);
+        try testing.expectEqual(@as(u8, 0xDE), buf[off + 3]);
+        try testing.expectEqual(@as(u32, 0xDEADBEEF), mem.read32(off));
+
+        mem.write16(off, 0xBEEF);
+        try testing.expectEqual(@as(u8, 0xEF), buf[off]);
+        try testing.expectEqual(@as(u8, 0xBE), buf[off + 1]);
+        try testing.expectEqual(@as(u16, 0xBEEF), mem.read16(off));
+
+        mem.write64(off, 0xDEADBEEFCAFEBABE);
+        try testing.expectEqual(@as(u64, 0xDEADBEEFCAFEBABE), mem.read64(off));
+        try testing.expectEqual(@as(u32, 0xCAFEBABE), mem.read32(off));
+        try testing.expectEqual(@as(u32, 0xDEADBEEF), mem.read32(off + 4));
+    }
 }
 
 test "guest memory: non-zero base_addr translation" {

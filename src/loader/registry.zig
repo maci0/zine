@@ -304,20 +304,20 @@ pub const Registry = struct {
                             var real_dir = openDirPortable(real_path, .{ .iterate = true }) catch continue;
 
                             var it = real_dir.iterate();
+                            const real_name_exe = try std.fmt.allocPrint(self.allocator, "{s}.exe", .{name});
+                            defer self.allocator.free(real_name_exe);
+                            const real_name_dll = try std.fmt.allocPrint(self.allocator, "{s}.dll", .{name});
+                            defer self.allocator.free(real_name_dll);
                             while (it.next(runtime.io()) catch null) |entry| {
                                 if (std.ascii.eqlIgnoreCase(entry.name, name)) {
                                     file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
                                     break;
                                 }
-                                const name_exe = std.fmt.allocPrint(self.allocator, "{s}.exe", .{name}) catch continue;
-                                defer self.allocator.free(name_exe);
-                                if (std.ascii.eqlIgnoreCase(entry.name, name_exe)) {
+                                if (std.ascii.eqlIgnoreCase(entry.name, real_name_exe)) {
                                     file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
                                     break;
                                 }
-                                const name_dll = std.fmt.allocPrint(self.allocator, "{s}.dll", .{name}) catch continue;
-                                defer self.allocator.free(name_dll);
-                                if (std.ascii.eqlIgnoreCase(entry.name, name_dll)) {
+                                if (std.ascii.eqlIgnoreCase(entry.name, real_name_dll)) {
                                     file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
                                     break;
                                 }
@@ -330,23 +330,24 @@ pub const Registry = struct {
                     defer dir.close(runtime.io());
 
                     var it = dir.iterate();
+                    // Built once per directory, not once per entry: the
+                    // extension variants are compared against every name the
+                    // directory holds.
+                    const name_exe = try std.fmt.allocPrint(self.allocator, "{s}.exe", .{name});
+                    defer self.allocator.free(name_exe);
+                    const name_dll = try std.fmt.allocPrint(self.allocator, "{s}.dll", .{name});
+                    defer self.allocator.free(name_dll);
                     while (it.next(runtime.io()) catch null) |entry| {
                         if (std.ascii.eqlIgnoreCase(entry.name, name)) {
                             file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
                             break;
                         }
 
-                        // Check if name + .exe matches
-                        const name_exe = std.fmt.allocPrint(self.allocator, "{s}.exe", .{name}) catch continue;
-                        defer self.allocator.free(name_exe);
                         if (std.ascii.eqlIgnoreCase(entry.name, name_exe)) {
                             file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
                             break;
                         }
 
-                        // Check if name + .dll matches
-                        const name_dll = std.fmt.allocPrint(self.allocator, "{s}.dll", .{name}) catch continue;
-                        defer self.allocator.free(name_dll);
                         if (std.ascii.eqlIgnoreCase(entry.name, name_dll)) {
                             file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
                             log.info("Found match for {s} -> {s}", .{ name, file_path.? });

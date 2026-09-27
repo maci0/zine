@@ -222,9 +222,9 @@ fn contentTypeForPath(req_path: []const u8) ?[]const u8 {
     return null;
 }
 
-/// Upper bound on one text_sync or clipboard_sync payload. The guest edit
-/// control and the clipboard are both page-sized; anything larger is a client
-/// bug and is rejected before it reaches the cached strings.
+/// Upper bound on one text_sync payload. The guest edit control is
+/// page-sized; anything larger is a client bug and is rejected before it
+/// reaches the cached strings.
 const max_sync_text_len = 65536;
 
 // A message field is either present with the right JSON type or it is not:
