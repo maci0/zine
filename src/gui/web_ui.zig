@@ -1198,26 +1198,11 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
     if (staticContentNotModified(req, etag)) {
         // A 304 has to describe the representation it revalidated, so a
         // client that negotiated gzip sees the same Content-Encoding it would
-        // have seen on the 200.
-        var not_modified_headers: [7]std.http.Header = undefined;
-        not_modified_headers[0] = .{ .name = "etag", .value = etag };
-        not_modified_headers[1] = .{ .name = "cache-control", .value = cache_control };
-        not_modified_headers[2] = .{ .name = "vary", .value = "Accept-Encoding" };
-        // The 304 repeats the security headers so a client that revalidates
-        // cannot end up with a revalidated response that lacks them.
-        not_modified_headers[3] = .{ .name = "x-content-type-options", .value = "nosniff" };
-        not_modified_headers[4] = .{ .name = "x-frame-options", .value = "DENY" };
-        not_modified_headers[5] = .{ .name = "referrer-policy", .value = "no-referrer" };
-        const not_modified_count: usize = 6 + @as(usize, @intFromBool(compressed != null));
-        if (compressed != null) {
-            not_modified_headers[6] = .{ .name = "content-encoding", .value = "gzip" };
-        }
-        try req.respond("", .{
-            .status = .not_modified,
-            .keep_alive = false,
-            .transfer_encoding = .none,
-            .extra_headers = not_modified_headers[0..not_modified_count],
-        });
+        // have seen on the 200. It also has to leave the connection open:
+        // Request.respond can omit content-length only by forcing the
+        // connection closed, and that would cost a new handshake for the next
+        // asset on the page.
+        try respondNotModified(req, etag, cache_control, compressed != null);
         return;
     }
 
@@ -1237,6 +1222,29 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
         .{ .name = "content-encoding", .value = "gzip" },
     };
     try req.respond(body, .{ .keep_alive = true, .extra_headers = response_headers[0 .. response_headers.len - @intFromBool(compressed == null)] });
+}
+
+/// Writes a 304 without `content-length` and without closing the connection.
+/// `Request.respond` can leave content-length off a bodyless response only by
+/// taking `transfer_encoding = .none`, which also marks the connection for
+/// closing, so every revalidated asset would cost a fresh handshake. Reached
+/// for GET and HEAD, which carry no request body, so the reader is ready for
+/// the next head. The security headers are repeated so a client that treats
+/// the 304 as a full header replacement does not drop them.
+fn respondNotModified(req: *std.http.Server.Request, etag: []const u8, cache_control: []const u8, compressed: bool) !void {
+    const keep_alive = req.head.keep_alive;
+    req.server.reader.state = if (keep_alive) .ready else .closing;
+    const out = req.server.out;
+    try out.writeAll("HTTP/1.1 304 Not Modified\r\n");
+    try out.writeAll("etag: ");
+    try out.writeAll(etag);
+    try out.writeAll("\r\ncache-control: ");
+    try out.writeAll(cache_control);
+    try out.writeAll("\r\nx-content-type-options: nosniff\r\nx-frame-options: DENY\r\nreferrer-policy: no-referrer\r\nvary: Accept-Encoding\r\n");
+    if (compressed) try out.writeAll("content-encoding: gzip\r\n");
+    if (!keep_alive) try out.writeAll("connection: close\r\n");
+    try out.writeAll("\r\n");
+    try out.flush();
 }
 
 test "the error envelope stays parseable when the message names a field" {
@@ -1567,7 +1575,7 @@ test "static asset responses carry an etag and 304 on a matching If-None-Match" 
     const etag_start = (std.mem.indexOf(u8, response, "\r\netag: ") orelse return error.TestUnexpectedResult) + "\r\netag: ".len;
     const etag_end = std.mem.indexOfPos(u8, response, etag_start, "\r\n") orelse return error.TestUnexpectedResult;
     const etag = response[etag_start..etag_end];
-    const conditional = try std.fmt.allocPrint(std.testing.allocator, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nIf-None-Match: {s}\r\n\r\n", .{etag});
+    const conditional = try std.fmt.allocPrint(std.testing.allocator, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nIf-None-Match: {s}\r\n\r\nGET /win2k.css HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", .{etag});
     defer std.testing.allocator.free(conditional);
     var conditional_input = std.Io.Reader.fixed(conditional);
     var conditional_output: std.Io.Writer.Allocating = .init(std.testing.allocator);
@@ -1582,6 +1590,10 @@ test "static asset responses carry an etag and 304 on a matching If-None-Match" 
     try std.testing.expect(std.mem.indexOf(u8, revalidated, etag) != null);
     try std.testing.expect(std.mem.indexOf(u8, revalidated, "\r\ncache-control: private, no-cache\r\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, revalidated, "\r\ncontent-length:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, revalidated, "\r\nconnection: close\r\n") == null);
+    try std.testing.expect(std.mem.indexOf(u8, revalidated, "\r\nx-content-type-options: nosniff\r\n") != null);
+    const next_req = try conditional_server.receiveHead();
+    try std.testing.expectEqualStrings("/win2k.css", next_req.head.target);
     var changed_input = std.Io.Reader.fixed(conditional);
     var changed_output: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer changed_output.deinit();

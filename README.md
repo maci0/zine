@@ -444,6 +444,7 @@ release, not a 0.2.1 patch.
   visible result.
 - The web UI serves the document, stylesheet, and both scripts over one
   keep-alive connection instead of closing the socket after every asset.
+  A revalidated asset answers `304` on that same connection.
 - A web UI script that fails to load reports it in the status bar instead of
   leaving the page on "Connecting..." with no working interface.
 - Guest input no longer aborts the runtime through arithmetic traps: `sscanf`
