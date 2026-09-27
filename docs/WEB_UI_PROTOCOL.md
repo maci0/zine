@@ -42,10 +42,17 @@ Assets carrying a build-time gzip variant (see `precompressedContent` in
 negotiates gzip. `Vary: Accept-Encoding` is always sent, and the ETag covers
 the representation actually sent, so a client that revalidates with
 `If-None-Match` gets a 304 only for the encoding it asked for. A 304 repeats
-`ETag`, `Cache-Control: private, no-cache`, `Vary`, and
-`Content-Encoding: gzip` when the revalidated representation was compressed.
+`ETag`, `Cache-Control: private, no-cache`, `Vary`, the security headers
+described below, and `Content-Encoding: gzip` when the revalidated
+representation was compressed.
 `Cache-Control: private, no-cache`
 forces revalidation, so an edited asset is picked up on the next load.
+
+Every asset response, including a 304, carries `X-Content-Type-Options:
+nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and a
+`Content-Security-Policy` of `default-src 'self'` with the WebSocket URL
+allowed in `connect-src`, plus `object-src 'none'; base-uri 'none';
+frame-ancestors 'none'`.
 
 Assets over 10 MiB are refused with 413.
 
@@ -99,7 +106,7 @@ connection stays open either way.
 | `keydown`, `keyup` | `key` (string, required; a `KeyboardEvent.code` with no Win32 equivalent is ignored, not an error) |
 | `mousedown`, `mouseup`, `mousemove` | `x`, `y` (integers, required), `button` (integer, default 0) |
 | `wheel` | `delta` (integer, required) |
-| `resize` | `clientW`, `clientH` (integers, required, both positive), `sizeType` (integer, default 0, negatives clamped to 0) |
+| `resize` | `clientW`, `clientH` (integers, required, both positive), `sizeType` (integer, default 0, negatives clamped to 0, refused with an `error` frame when it does not fit the host's `usize`) |
 | `close` | none |
 | `open_file` | `filename` (string, required), `dir` (string, default `Desktop`) |
 | `browse_directory` | `path` (string, required) |
@@ -109,7 +116,7 @@ connection stays open either way.
 | `print_chosen` | `from`, `to` (integers, required), `copies` (integer, default 1) |
 | `page_setup_chosen` | `left`, `top` (integers, required), `right`, `bottom`, `paperW`, `paperH`, `orientation` (integers, default 0/0/8500/11000/0) |
 | `color_selected` | `color` (integer, required; `0x000000` to `0xFFFFFF`, a negative value means cancel) |
-| `listbox_select` | `id`, `index` (integers, required) |
+| `listbox_select` | `id` (integer, required, u32 range), `index` (integer, required, i32 range; a value outside either range is refused with an `error` frame) |
 | `context_menu_select` | `id` (integer, required; 0 dismisses the menu) |
 | `cancel_dialog` | none |
 | `text_sync` | `text` (string, required, at most 65536 bytes) |

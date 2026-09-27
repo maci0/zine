@@ -30,7 +30,9 @@ build.
 
 Changes after the last tag are listed under **Unreleased** below. The package
 version, `--version`, and `build.zig.zon` stay at the last released number until
-a release moves all three together; a released version is never edited
+a release moves all three together, and a release is finished with a
+`v<version>` tag on that commit, so every later release has one. A released
+version is never edited
 retroactively. The Unreleased set carries breaking changes, so it is a **0.3.0**
 release, not a 0.2.1 patch.
 
@@ -74,7 +76,48 @@ release, not a 0.2.1 patch.
   on the WebSocket side. Routes and message types are specified in
   [`docs/WEB_UI_PROTOCOL.md`](docs/WEB_UI_PROTOCOL.md).
 
-#### Fixes
+#### Security fixes
+
+- The host home directory is redacted from every diagnostic before it reaches
+  stderr, so a trace pasted into a bug report no longer carries the local
+  account name. A run whose environment has neither `HOME` nor `USERPROFILE`
+  records paths unchanged.
+- An environment variable whose value is the operator's identity (`USER`,
+  `USERNAME`, `LOGNAME`, `EMAIL`) is traced as `<redacted>`, so a guest that
+  reads `USER` does not write the account name into the trace. Every other
+  variable, including `HOME` and the path variables, is recorded unchanged.
+- `SetClipboardData` traces the size of a CF_TEXT transfer, not the text. The
+  clipboard carries whatever the user last copied, which is rarely what a bug
+  report needs.
+- Web UI file uploads resolve strictly inside `drive_c/` rather than through
+  prefix matching, so a crafted directory or file name cannot retarget the
+  write.
+- Every web UI asset response carries `Referrer-Policy: no-referrer`, and the
+  content security policy adds `object-src 'none'; base-uri 'none';
+  frame-ancestors 'none'`. A `304 Not Modified` repeats the security headers
+  alongside the `ETag`, so a revalidated response is no weaker than the `200`
+  it replaces. Proxies or frontends that rewrite these headers still need to
+  keep them.
+
+#### Added
+
+- `ZINE_WEB_HOST` (default `127.0.0.1`) and `ZINE_WEB_PORT` (default `1995`)
+  for the native web UI, and `ZINE_CWD` for the WASI guest working directory.
+- `ZINE_VIRTUAL_CLOCK_NS` and `ZINE_CLOCK_STEP_NS` drive the guest clock from a
+  fixed start instead of the host clocks, so two runs of the same guest that
+  issue the same calls in the same order see the same time values.
+- `tests/check.sh` and `CONTRIBUTING.md` describing the single pre-PR gate.
+- `docs/THREAT_MODEL.md`, a risk ranking of the host process.
+- A transfer budget for the four precompressed web UI assets, checked by
+  `zig build test`, so the bytes a visitor downloads cannot grow unnoticed.
+- Named gate steps in `tests/check.sh`: `bash tests/check.sh --list` prints
+  them and `bash tests/check.sh <name>` runs one, so a single check no longer
+  means running the whole gate.
+- `zine --quiet` (`-q`) raises the log level to `warn` for one run, on native and
+  WASI, so a chatty environment can be quieted without rewriting
+  `ZINE_LOG_LEVEL`.
+
+#### Fixed
 
 - The web UI's font dialog applies the chosen face, size, and style again. The
   OK button ran its handler instead of registering it, so the dialog never
@@ -98,9 +141,10 @@ release, not a 0.2.1 patch.
   resolves to a different file with the same name. Loading a second `foo.dll`
   from another directory now fails with `ModuleAlreadyLoaded` instead of
   handing the guest the first image under the second's name.
-
-#### Fixes
-
+- A `resize` `sizeType` and a `listbox_select` `id`/`index` outside the range
+  the callbacks take are refused with an error frame instead of being narrowed,
+  which on a 32-bit host (wasm32) trapped and took the emulator down. Frontends
+  send values inside those ranges.
 - `IDirectDrawSurface::Release` and `IDirectSoundBuffer::Release` now return
   the surface pixel buffer and sound buffer to the emulator, and the freed
   slots are reused. A guest that creates and releases surfaces or sound
@@ -113,44 +157,9 @@ release, not a 0.2.1 patch.
 - On WASI, `_spawnvp` no longer strands the child process environment and its
   128 MB child address space after each child exits. A guest that spawns
   helpers repeatedly no longer exhausts module memory.
-
-#### Security fixes
-
-- The host home directory is redacted from every diagnostic before it reaches
-  stderr, so a trace pasted into a bug report no longer carries the local
-  account name. A run whose environment has neither `HOME` nor `USERPROFILE`
-  records paths unchanged.
-- An environment variable whose value is the operator's identity (`USER`,
-  `USERNAME`, `LOGNAME`, `EMAIL`) is traced as `<redacted>`, so a guest that
-  reads `USER` does not write the account name into the trace. Every other
-  variable, including `HOME` and the path variables, is recorded unchanged.
-- `SetClipboardData` traces the size of a CF_TEXT transfer, not the text. The
-  clipboard carries whatever the user last copied, which is rarely what a bug
-  report needs.
-- Web UI file uploads resolve strictly inside `drive_c/` rather than through
-  prefix matching, so a crafted directory or file name cannot retarget the
-  write.
-
-#### Added
-
-- `ZINE_WEB_HOST` (default `127.0.0.1`) and `ZINE_WEB_PORT` (default `1995`)
-  for the native web UI, and `ZINE_CWD` for the WASI guest working directory.
-- `ZINE_VIRTUAL_CLOCK_NS` and `ZINE_CLOCK_STEP_NS` drive the guest clock from a
-  fixed start instead of the host clocks, so two runs of the same guest that
-  issue the same calls in the same order see the same time values.
-- `tests/check.sh` and `CONTRIBUTING.md` describing the single pre-PR gate.
-- `docs/THREAT_MODEL.md`, a risk ranking of the host process.
-- A transfer budget for the four precompressed web UI assets, checked by
-  `zig build test`, so the bytes a visitor downloads cannot grow unnoticed.
-- Named gate steps in `tests/check.sh`: `bash tests/check.sh --list` prints
-  them and `bash tests/check.sh <name>` runs one, so a single check no longer
-  means running the whole gate.
-- `zine --quiet` (`-q`) raises the log level to `warn` for one run, on native and
-  WASI, so a chatty environment can be quieted without rewriting
-  `ZINE_LOG_LEVEL`.
-
-#### Fixed
-
+- A WASI spawn whose child path does not fit next to the main executable's
+  directory fails with a logged error instead of being joined past the end of
+  the destination buffer.
 - `strtoul` and `atoi` report a bare `0` (or `00`) as a complete conversion.
   With radix `0` the leading octal digit was consumed but not counted as parsed,
   so `end` stayed at the start of the string. Callers that loop on `*end` to

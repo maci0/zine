@@ -96,19 +96,24 @@ if those two disagree, and releases cut both together.
 
 ## Releases
 
-A release is three things changed together: `.version` in `build.zig.zon`,
+A release is four things changed together: `.version` in `build.zig.zon`,
 `pub const string` in `src/version.zig` (which `--version` prints on native,
-WASI, and `zine-host`), and the release notes in the README's "Releases and
-upgrades" section. The `comptime` check in `build.zig` fails the build when the
-first two disagree, so a half-applied bump cannot ship.
+WASI, and `zine-host`), the release notes in the README's "Releases and
+upgrades" section, and a `v<version>` tag on the release commit. The `comptime`
+check in `build.zig` fails the build when the first two disagree, so a
+half-applied bump cannot ship. The tag is what makes the notes immutable: past
+that point the heading is read-only history, and a mistake is corrected by a
+later release, not by editing the old one.
 
 Until then, user-facing changes accumulate under the README's `### Unreleased`
 heading, grouped by impact: breaking changes with the migration step first,
-then security fixes, added, and fixed. A commit that changes behavior a guest or
+then security fixes, added, and fixed, in that order, with a single heading per
+group. A commit that changes behavior a guest or
 a host operator can observe belongs in one of those groups, however small.
 When the version is cut, rename that heading to `### <version> (<date>)` and
 start a fresh empty `### Unreleased` above it. Never edit the notes of a version
-that has already been published.
+that has already been published, and never move a published tag: 0.2.0 shipped
+without one, so the README tells a reader how to identify it without a tag.
 
 `0.x` means no compatibility promise between versions: the guest ABI, the CLI
 flags, the environment variables, and the virtual filesystem behavior can all
