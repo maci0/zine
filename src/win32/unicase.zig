@@ -38,7 +38,8 @@ const pair_blocks = [_]PairBlock{
 };
 
 /// Code points whose case partner sits outside their block, so pairedCase
-/// must leave them alone: y diaeresis (0x00FF/0x0178) and yo (0x04C1/0x04C2).
+/// must leave them alone: y diaeresis (0x0178, whose partner 0x00FF is handled
+/// in toUpper/toLower), Eng (0x014A) and yo (0x04C1/0x04C2).
 const unpaired = [_]u16{ 0x014A, 0x0178, 0x04C1, 0x04C2 };
 
 fn pairedCase(c: u16) ?u16 {

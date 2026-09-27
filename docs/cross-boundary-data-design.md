@@ -444,7 +444,8 @@ as separate APIs (`FindFirstFileA`/`FindNextFileA` keep their own handle pool in
 
 - [x] Implement `host_io.open(win32_path: []const u8, flags: u32, mode: u32) i32`
   - On Windows: pass-through to `CreateFileA` / `_open`
-  - On Linux/WASM: `win32ToPosix()` then `posix_open()`
+  - On Linux/WASM: `posix_fs.open`, which converts with `path_utils.toHostPath` and
+    retries case-insensitively
   - Includes case-insensitive filename retry
 - [x] Implement `host_io.access(win32_path: []const u8, mode: i32) i32`
   - Same conversion pattern
@@ -748,7 +749,7 @@ baseline.
 
 | File:Line | Function | What it does | Fix |
 |-----------|----------|-------------|-----|
-| `kernel32/mem.zig:13` | `getGuestMemory()` | Returns guest_memory for VirtualAlloc | Move to registration wrapper |
+| `kernel32/mem.zig:11` | `guest_memory()` | Returns guest_memory for VirtualAlloc | Move to registration wrapper |
 | `kernel32/file.zig:236` | `MapViewOfFileEx` | Allocates from guest heap | Move to registration wrapper |
 | `kernel32/process.zig:107` | `loadDllIntoGuest` | Copies DLL to guest memory | Already wrapper-only code |
 | `msvcrt/misc.zig:103` | `errno()` | Allocates guest errno slot | Move to guest_statics init |

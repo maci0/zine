@@ -152,7 +152,7 @@ Status: reference for the `src/win32/ddraw/` and `src/win32/d3d7/` vtable layout
 | 1 | 0x04 | AddRef |
 | 2 | 0x08 | Release |
 | 3 | 0x0C | AddAttachedSurface |
-| 4 | 0x10 | AddOverlayDirtyRect |
+| 4 | 0x10 | AddOverlay |
 | 5 | 0x14 | Blt |
 | 6 | 0x18 | BltBatch |
 | 7 | 0x1C | BltFast |

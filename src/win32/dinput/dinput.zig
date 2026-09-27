@@ -273,7 +273,8 @@ fn dinput_EnumDevices(_: *IDirectInput, _: u32, lpCallback: usize, pvRef: usize,
     if (lpCallback != 0) {
         var inst: [300]u8 = undefined;
         @memset(&inst, 0);
-        @as(*u32, @ptrCast(@alignCast(&inst[0]))).* = 260; // dwSize = sizeof(DIDEVICEINSTANCEA)
+        // Only the header fields exist, so dwSize is the modeled struct size, not sizeof(DIDEVICEINSTANCEA).
+        @as(*u32, @ptrCast(@alignCast(&inst[0]))).* = 260;
         const cb = @as(*const fn (usize, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(lpCallback));
         _ = cb(@intFromPtr(&inst), pvRef);
     }

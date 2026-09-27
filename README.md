@@ -1,13 +1,14 @@
 # Zine
 
-A Win32 PE interpreter that runs 32-bit Windows executables on Linux and in the browser. Software x86 CPU, PE loader, Win32 API compatibility layer, and GUI backends (native FLTK + browser via WASM). Targets Win98/Win2K era applications and games.
+A Win32 PE interpreter that runs 32-bit Windows executables on Linux and in the browser. Software x86 CPU, PE loader, Win32 API compatibility layer, and GUI backends (native FLTK, and a web UI served by the
+native process). Targets Win98/Win2K era applications and games.
 
 No Windows installation, no Wine.
 
 ## What works
 
 - Full MSVC 6.0 toolchain: CL.EXE, LINK.EXE, RC.EXE, NMAKE.EXE, and 8 more utilities run to completion
-- 426 unit tests pass (2 skipped, 428 total) on the host with `zig build test`; the gate in
+- 431 unit tests pass (2 skipped, 433 total) on the host with `zig build test`; the gate in
   `tests/check.sh` adds the CLI suites on native x86 and x86_64
 - 158/128 integration checks on native/WASM, 20 FLTK smoke tests (these need guest
   binaries and are not part of `tests/check.sh`)

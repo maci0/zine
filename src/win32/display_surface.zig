@@ -39,9 +39,10 @@ pub inline fn unpack32To32(src: [*]const u8, si: usize, di: usize) void {
     renderer.global_framebuf[di * 4 + 3] = 255; // A
 }
 
-/// Convert `buffer` to BGRA in global_framebuf and push frame.
-/// Handles both 16bpp RGB565 and 32bpp BGRA based on current display mode.
-/// Implementation status: Partially implemented (supports direct copy from `buffer`)
+/// Convert the module-level `buffer` to BGRA in global_framebuf and push frame.
+/// Handles both 16bpp RGB565 and 32bpp BGRA based on current display mode. Both
+/// paths unpack per pixel; there is no direct-copy fast path.
+/// Implementation status: Fully implemented
 pub fn pushFrame() void {
     const vw = renderer.global_width;
     const vh = renderer.global_height;

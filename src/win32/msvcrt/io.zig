@@ -147,7 +147,9 @@ pub fn initPioinfo() void {
     pioinfo[0] = @intFromPtr(&ioinfo_table0);
 }
 
-/// Total available file handles.
+/// MSVCRT _nhandle. The handle table below holds only max_files entries, so
+/// this over-reports: a guest that sizes its fd array from it works, but can
+/// never reach EMFILE here.
 pub var nhandle: i32 = 256;
 
 const max_files = 64;

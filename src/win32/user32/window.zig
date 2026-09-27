@@ -142,12 +142,12 @@ pub fn RegisterClassA(wc_ptr: ?*const w32.WNDCLASSA) callconv(w32cc.WINAPI) u16 
     return 0x1234; // Dummy ATOM
 }
 
-/// Converts a null-terminated UTF-16 string to a UTF-8 slice in a static
-/// buffer, decoding surrogate pairs. The buffer holds bytes, so a string
-/// longer than its capacity is cut on a code point boundary rather than
-/// mid-sequence. The returned slice is valid until the next call.
 var wide_conv_buf: [1024]u8 = undefined;
 
+/// Converts a null-terminated UTF-16 string to a UTF-8 slice in wide_conv_buf,
+/// decoding surrogate pairs. The buffer holds bytes, so a string longer than
+/// its capacity is cut on a code point boundary rather than mid-sequence. The
+/// returned slice is valid until the next call.
 pub fn wideToUtf8(ptr: usize) []const u8 {
     if (ptr == 0) return "";
     return text_utils.wideToUtf8(trace.c_span_w(ptr), &wide_conv_buf);

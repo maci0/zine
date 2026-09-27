@@ -45,7 +45,7 @@ pub fn IsDBCSLeadByte(testChar: u8) callconv(w32cc.WINAPI) i32 {
 /// --- Conversion functions ---
 /// Both directions convert the ANSI code page reported by GetACP (CP1252):
 /// a single byte maps to one code point, so a surrogate pair in the wide
-/// string has no representation and encodes to the default character.
+/// string has no representation and encodes to `ansi.default_char` ('?').
 /// Implementation status: Fully implemented
 pub fn MultiByteToWideChar(CodePage: u32, dwFlags: u32, lpMultiByteStr_ptr: usize, cbMultiByte: i32, lpWideCharStr_ptr: usize, cchWideChar: i32) callconv(w32cc.WINAPI) i32 {
     _ = dwFlags;
@@ -93,7 +93,11 @@ pub fn MultiByteToWideChar(CodePage: u32, dwFlags: u32, lpMultiByteStr_ptr: usiz
 }
 
 /// Maps a UTF-16 (wide character) string to a character string.
-/// Implementation status: Fully implemented
+/// Implementation status: Partially implemented. lpDefaultChar is ignored
+/// (unmappable code points always become ansi.default_char), the output is
+/// never NUL-terminated, and a buffer too small for the whole string is
+/// silently truncated and reported as a success, where Win32 sets
+/// ERROR_INSUFFICIENT_BUFFER.
 pub fn WideCharToMultiByte(CodePage: u32, dwFlags: u32, lpWideCharStr_ptr: usize, cchWideChar: i32, lpMultiByteStr_ptr: usize, cbMultiByte: i32, lpDefaultChar: ?*const u8, lpUsedDefaultChar: ?*i32) callconv(w32cc.WINAPI) i32 {
     _ = dwFlags;
     _ = lpDefaultChar;
