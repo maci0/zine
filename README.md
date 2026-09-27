@@ -254,8 +254,8 @@ release, not a 0.2.1 patch.
   fixed start instead of the host clocks, so two runs of the same guest that
   issue the same calls in the same order see the same time values.
 - `tests/check.sh` and `CONTRIBUTING.md` describing the single pre-PR gate.
-- A `reproducible` step in that gate: it builds the x86 executable twice, the
-  second time from a copy of the sources at a different path, and requires
+- A `reproducible` step in that gate: it builds both native executables twice,
+  the second time from a copy of the sources at a different path, and requires
   every installed file to be byte-identical. CI runs it after the four
   architecture builds, so a build that starts recording the checkout
   directory, the host or the clock in the artifact fails the gate instead of
@@ -596,8 +596,8 @@ default; add `-Doptimize=Debug` for a debugging loop. Every build except
 `-Doptimize=Debug` strips debug info: unstripped DWARF records the checkout
 directory and the toolchain's lib path, so the same source would produce a
 different binary on every machine. The remaining output is path-independent:
-the `reproducible` gate step builds the x86 executable twice from copies of
-the tree at different paths and requires the installed files to match byte
+the `reproducible` gate step builds both native executables twice from copies
+of the tree at different paths and requires the installed files to match byte
 for byte.
 
 ```sh

@@ -244,27 +244,59 @@ fuzz() {
     zig build fuzz -Dfuzz-seconds="${ZINE_FUZZ_SECONDS:-10}" --summary all
 }
 
-# Byte-for-byte reproducibility of a shipped artifact. The x86 executable is
-# built twice into two install prefixes, the second run starting from a copy
+# Two install trees of the same target must be identical. A file one build
+# emits and the other does not is as much a difference as a differing byte, so
+# the file lists are compared first and then each file's bytes, with cmp, which
+# stops at the first difference and names the file.
+compare_installs() {
+    local a=$1 b=$2 scratch=$3 label=$4 rel
+    if [[ ! -d "$a" || ! -d "$b" ]]; then
+        printf 'not reproducible (%s): %s or %s was never installed\n' "$label" "$a" "$b" >&2
+        return 1
+    fi
+    (cd "$a" && find . -type f | sort) >"$scratch/list-a"
+    (cd "$b" && find . -type f | sort) >"$scratch/list-b"
+    if ! cmp -s "$scratch/list-a" "$scratch/list-b"; then
+        printf 'not reproducible (%s): the two installs hold different files\n' "$label" >&2
+        diff "$scratch/list-a" "$scratch/list-b" >&2 || true
+        return 1
+    fi
+    while IFS= read -r rel; do
+        if ! cmp -s "$a/$rel" "$b/$rel"; then
+            printf 'not reproducible (%s): %s differs between two builds of one source tree\n' "$label" "$rel" >&2
+            return 1
+        fi
+    done <"$scratch/list-a"
+    printf 'reproducible (%s): every installed file is byte-identical across builds\n' "$label"
+}
+
+# Byte-for-byte reproducibility of a shipped artifact. Both native executables
+# are built twice into two install prefixes, the second run starting from a copy
 # of the tree at a different path, so anything the compiler records about the
 # checkout directory or the toolchain's own lib path shows up as a byte
 # difference rather than as a report the maintainers have to take on trust.
+# The two native targets are the shipped ELF artifacts; the wasm ones carry no
+# DWARF, so there is nothing left in them for a path to leak into.
 #
 # The second build is cold: the copy carries only what reaches the compiler, so
 # it has no .zig-cache of its own and recompiles from scratch. That is the point,
 # not the cost. A warm cache would prove only that Zig's cache is stable, not
-# that the artifacts are. The source copy is made into a temporary directory
-# and removed on the way out; nothing is written inside the work tree. The two
-# installs are compared with cmp, which stops at the first differing byte and
-# names the file.
+# that the artifacts are. The source copy is made under the gitignored
+# .scratch/ directory and removed on the way out, so the step writes inside the
+# project and not into whatever TMPDIR happens to be (on many hosts that is a
+# tmpfs, and two full install trees plus a cold cache do not belong in RAM).
 reproducible() {
     local scratch a b
-    scratch=$(mktemp -d)
+    mkdir -p .scratch
+    # Absolute: the copy below builds from inside the copied tree, and a
+    # relative prefix would name a directory that does not exist there.
+    scratch="$PWD/$(mktemp -d .scratch/reproducible.XXXXXX)"
     # shellcheck disable=SC2064  # expand $scratch now, not at trap time
     trap "rm -rf '$scratch'" EXIT
     a="$scratch/out-a"
     b="$scratch/out-b"
     zig build -p "$a" --summary all
+    zig build -Darch=x86_64 -p "$a-64" --summary all
     mkdir -p "$scratch/tree"
     # -a keeps the copy's timestamps, and only src/ plus the two build files
     # reach the compiler; the rest of the checkout is not an input. zig-pkg
@@ -273,24 +305,9 @@ reproducible() {
     cp -a src build.zig build.zig.zon "$scratch/tree/"
     if [[ -d zig-pkg ]]; then cp -a zig-pkg "$scratch/tree/"; fi
     (cd "$scratch/tree" && zig build -p "$b" --summary all)
-    # The two install trees must hold the same set of files as well as the same
-    # bytes: a file one build emits and the other does not is just as much a
-    # difference, and comparing only the first tree's files would miss it.
-    local rel
-    (cd "$a" && find . -type f | sort) >"$scratch/list-a"
-    (cd "$b" && find . -type f | sort) >"$scratch/list-b"
-    if ! cmp -s "$scratch/list-a" "$scratch/list-b"; then
-        printf 'not reproducible: the two installs hold different files\n' >&2
-        diff "$scratch/list-a" "$scratch/list-b" >&2 || true
-        return 1
-    fi
-    while IFS= read -r rel; do
-        if ! cmp -s "$a/$rel" "$b/$rel"; then
-            printf 'not reproducible: %s differs between two builds of one source tree\n' "$rel" >&2
-            return 1
-        fi
-    done <"$scratch/list-a"
-    printf 'reproducible: every installed file is byte-identical across builds\n'
+    (cd "$scratch/tree" && zig build -Darch=x86_64 -p "$b-64" --summary all)
+    compare_installs "$a" "$b" "$scratch" x86
+    compare_installs "$a-64" "$b-64" "$scratch" x86_64
 }
 
 # No argument means the whole gate. Named steps always run in gate order, so
