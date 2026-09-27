@@ -1,5 +1,9 @@
 # Zine Memory Layout (WASM)
 
+> **Status: current.** The region sizes below were checked against the constants
+> in `src/wasm_main.zig` on 2026-09-27. This file is the canonical description of
+> the WASM combined buffer; other documents link here rather than restating it.
+
 This document describes how guest x86 memory is laid out within the WebAssembly linear memory when running in WASM mode.
 
 ## Overview

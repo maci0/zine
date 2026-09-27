@@ -9,13 +9,19 @@ since; see the note in [`STATUS.md`](STATUS.md).
 
 ## GUI (web + FLTK backends)
 
-No remaining items — the common-dialog set (Open/Save, Color, Font, Print,
-Page Setup, Find/Replace), the standard + common controls (Button, Static,
-Edit, RichEdit, ListBox, ComboBox, Tab, ListView, TreeView, Header, StatusBar,
-Progress, UpDown, Trackbar, DateTimePicker), menus, dialogs, clipboard,
-icons, timers, input, focus and window-text APIs are all implemented in both
-backends and covered by the suite (`--native` 158/0, `--wasmtime` 128/0) plus
-`tests/fltk_smoke.sh` (FLTK 20/0 under Xvfb).
+No remaining items except FLTK audio playback — the common-dialog set
+(Open/Save, Color, Font, Print, Page Setup, Find/Replace), the standard +
+common controls (Button, Static, Edit, RichEdit, ListBox, ComboBox, Tab,
+ListView, TreeView, Header, StatusBar, Progress, UpDown, Trackbar,
+DateTimePicker), menus, dialogs, clipboard, icons, timers, input, focus and
+window-text APIs are all implemented in both backends and covered by the suite
+(`--native` 158/0, `--wasmtime` 128/0) plus `tests/fltk_smoke.sh` (FLTK 20/0
+under Xvfb).
+
+- [ ] **FLTK audio playback** — `setAudioFormat` and `pushAudio` in
+      `src/gui/fltk_ui.zig` are no-ops; the web backend plays PCM. Needs an
+      audio library FLTK does not carry (see the Audio row in
+      [`FLTK_PLAN.md`](FLTK_PLAN.md)).
 
 ## native64 (x86_64 compat)
 

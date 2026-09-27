@@ -1,5 +1,11 @@
 # FLTK GUI Backend: Renderer Abstraction & Native Pipeline
 
+> **Status: Phases 1, 2, 4, and 5 complete; Phase 3 (widget mapping) complete
+> except FLTK audio playback, which is a no-op stub.** Checked against
+> `src/gui/` on 2026-09-27; the bridge-coverage table below carries its own
+> 2026-08 date. Current state lives in [`STATUS.md`](STATUS.md) and
+> [`TODO.md`](TODO.md).
+
 ## Goal
 
 Create a native GUI alternative to the WebSocket-based web UI by:

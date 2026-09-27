@@ -500,7 +500,7 @@ zine/
 │   │   ├── ddraw.zig, ddraw/         # DirectDraw COM vtable emulation
 │   │   ├── dsound.zig, dsound/       # DirectSound COM vtable stubs
 │   │   ├── d3d8.zig, d3d8/           # Direct3D 8 COM vtable stubs
-│   │   ├── d3d7/d3d7.zig, rasterizer.zig, state.zig # Direct3D 3/7 interfaces (via ddraw) + software rasterizer
+│   │   ├── d3d7/d3d7.zig, d3d7/rasterizer.zig, d3d7/state.zig # Direct3D 3/7 interfaces (via ddraw) + software rasterizer
 │   │   ├── display_surface.zig          # Primary surface + display mode shared by ddraw and d3d7
 │   │   ├── dinput.zig, dinput/       # DirectInput COM vtable stubs
 │   │   ├── dinput8.zig               # DirectInput8 stubs

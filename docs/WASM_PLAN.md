@@ -25,7 +25,7 @@ level, which is what CheerpX does with Linux syscalls but one layer higher.
 | .rsrc write protection | ✅ Complete |
 | In-process child PE execution (`_spawnvp`) | ✅ Complete |
 | TEB/PEB initialization for WASM | ✅ Complete |
-| Win32 stub registration for WASM | ✅ Complete (36+ DLLs) |
+| Win32 stub registration for WASM | ✅ Complete (37 stub modules; 36 on every target plus `mspdb60`, WASM only) |
 | x87 FPU instructions | ⚠️ Partial |
 | SSE/SSE2 instructions | ⚠️ Partial (`src/x86/sse.zig`) |
 | x86-to-WASM JIT compiler | ✅ Working (`src/jit/`; blocks execute end-to-end via a host runtime) |
@@ -82,7 +82,7 @@ DUMPBIN-exports.
 │  │  │  - In-process child PE execution        │  │  │
 │  │  └──────────────┬──────────────────────────┘  │  │
 │  │  ┌──────────────▼──────────────────────────┐  │  │
-│  │  │  Win32 API Stubs (36+ DLLs)             │  │  │
+│  │  │  Win32 API Stubs (37 modules)            │  │  │
 │  │  │  kernel32, user32, gdi32, msvcrt, ...   │  │  │
 │  │  │  (platform-agnostic via platform layer) │  │  │
 │  │  └─────────────────────────────────────────┘  │  │
@@ -145,22 +145,8 @@ See [JIT usage](JIT.md#usage) for compile-only mode and the
 
 ### Memory Layout (WASM Combined Buffer)
 
-```
-base_addr (PE ImageBase or buffer host address for child PEs)
-     │
-     ▼
-     ┌──────────────────────┐
-     │ PE image (SizeOfImage)│ ← Sections copied; BSS zeroed; .rsrc write-protected
-     │ .text, .data, .rdata │
-     │ Import Address Table │ ← Patched with INT 0xFE thunk addresses
-     ├──────────────────────┤
-     │ Stack (64 KB)        │ ← ESP starts near the top
-     ├──────────────────────┤
-      │ Thunks (32 KB)       │ ← CD FE + 4-byte thunk ID stubs
-      ├──────────────────────┤
-      │ Heap (512 MB)        │ ← Guest heap for malloc/VirtualAlloc/HeapAlloc
-      └──────────────────────┘
-```
+The combined buffer's regions, their sizes, and the guest-to-host address
+translation are specified in [`MEMORY_LAYOUT.md`](MEMORY_LAYOUT.md).
 
 Child PEs (loaded by `_spawnvp`) get their own combined buffer. Relocatable PEs
 use `base_addr = @intFromPtr(child_buf.ptr)`; fixed-base PEs use the PE's preferred

@@ -198,7 +198,11 @@ pub fn register(environment: *Environment) !void {
 
 The core change: **stop using `usize` for pointer parameters**. Use actual pointer types.
 
-### Before (current, broken on WASM without workarounds):
+### Before (pre-migration, broken on WASM without workarounds):
+`splitpath` has since been converted to the form below, so this snippet no
+longer matches `msvcrt/path.zig`. See [Phase 2](#phase-2-convert-stub-signatures-from-usize-to-pointer-types-partial)
+for which files still look like this.
+
 ```zig
 pub fn splitpath(path_ptr: usize, drive: usize, dir: usize, fname: usize, ext: usize) callconv(.c) void {
     const path = trace.c_span(path_ptr);                    // manual translation

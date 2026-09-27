@@ -227,7 +227,8 @@ whole CLI suite (158/0), including LINK.EXE (ReadSymbolTable) and LIB.EXE
   MIDL, MC, and more; `.bat`/`.cmd` wrappers (VCVARS32.BAT) parsed
   natively. See `CLI_STATUS.md`.
 - **PE loading** — imports/relocations, resource trees (dialogs, menus, icons,
-  string tables, version), DLL mode (35+ stub DLLs as real Windows DLLs).
+  string tables, version), DLL mode (36 stub DLLs built as real Windows DLLs by
+  `zig build -Ddll=all`).
 - **x86 core** — interpreter with decode cache, SSE/SSE2, x87 FPU, JIT
   x86→WASM compiler with end-to-end host execution (see the JIT section
   above).
