@@ -162,6 +162,23 @@ canvas                      { cursor: none; }
 
     /* Scrollbar */
     --sys-scrollbar:    #D4D0C8;  /* Scrollbar                                RGB 212,208,200 */
+
+    /* ===== Typography (NONCLIENTMETRICS lfMessageFont at 96 DPI) ===== */
+
+    --font-ui:   'MS Sans Serif', 'Microsoft Sans Serif', 'Tahoma', 'Segoe UI', sans-serif;
+    --font-mono: 'Lucida Console', 'Consolas', 'Courier New', monospace;
+
+    /* ===== Surfaces outside the GetSysColor set =====
+     * Paint used by controls whose fill is not a system color:
+     * the common dialog Places Bar, the Start menu banner (the active
+     * caption gradient rotated for vertical text), the calendar today
+     * marker, and the visited hyperlink state.
+     */
+
+    --sys-places-bar:    linear-gradient(to bottom, #7B98BF, #6585B2 30%, #5A7AAA);
+    --sys-banner:        linear-gradient(to top, var(--sys-title), var(--sys-title) 70%, var(--sys-title-grad));
+    --sys-today:         #FF0000;  /* month calendar current-date marker       */
+    --sys-visit-link:    #551A8B;  /* followed hyperlink                       */
 }
 
 /* ===== Base ===== */
@@ -169,7 +186,7 @@ canvas                      { cursor: none; }
 body {
     background-color: var(--sys-desktop);
     color: var(--sys-text);
-    font-family: 'MS Sans Serif', 'Microsoft Sans Serif', 'Tahoma', 'Segoe UI', sans-serif;
+    font-family: var(--font-ui);
     font-size: 11px;
     margin: 0;
     overflow: hidden;
@@ -384,7 +401,7 @@ body {
 }
 
 .popup-item.disabled {
-    color: var(--sys-gray-text, #808080);
+    color: var(--sys-gray-text);
     pointer-events: none;
 }
 
@@ -534,7 +551,7 @@ body {
 canvas {
     display: block;
     image-rendering: pixelated;
-    background-color: #000000;
+    background-color: var(--sys-text);
 }
 
 .canvas-inset {
@@ -552,7 +569,7 @@ canvas {
     height: 100%;
     background-color: var(--sys-window);
     color: var(--sys-window-text);
-    font-family: 'Lucida Console', 'Consolas', 'Courier New', monospace;
+    font-family: var(--font-mono);
     font-size: 13px;
     border: none;
     outline: none;
@@ -1618,7 +1635,7 @@ select.win2k-edit:disabled {
 
 .comdlg-body {
     padding: 6px 8px 8px;
-    font-family: 'MS Sans Serif', 'Microsoft Sans Serif', 'Tahoma', sans-serif;
+    font-family: var(--font-ui);
     font-size: 11px;
     min-width: 440px;
 }
@@ -1703,7 +1720,7 @@ select.win2k-edit:disabled {
 .comdlg-places-bar {
     width: 80px;
     min-width: 80px;
-    background: linear-gradient(to bottom, #7B98BF, #6585B2 30%, #5A7AAA);
+    background: var(--sys-places-bar);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1722,7 +1739,7 @@ select.win2k-edit:disabled {
     gap: 1px;
     padding: 4px 2px 3px;
     width: 72px;
-    color: #FFFFFF;
+    color: var(--sys-hilight);
     font-size: 8px;
     text-align: center;
     border: 1px solid transparent;
@@ -2053,10 +2070,10 @@ select.win2k-edit:disabled {
  * Static Frame Controls  (SS_BLACKFRAME, SS_GRAYFRAME, etc.)
  * =================================================================== */
 
-.win2k-static-blackframe   { border: 1px solid #000000; }
+.win2k-static-blackframe   { border: 1px solid var(--sys-frame); }
 .win2k-static-grayframe    { border: 1px solid var(--sys-shadow); }
 .win2k-static-whiteframe   { border: 1px solid var(--sys-hilight); }
-.win2k-static-blackrect    { background-color: #000000; }
+.win2k-static-blackrect    { background-color: var(--sys-text); }
 .win2k-static-grayrect     { background-color: var(--sys-shadow); }
 .win2k-static-whiterect    { background-color: var(--sys-hilight); }
 
@@ -2215,7 +2232,7 @@ select.win2k-edit:disabled {
 }
 
 .win2k-monthcal-day.today {
-    border: 1px solid #FF0000;
+    border: 1px solid var(--sys-today);
 }
 
 .win2k-monthcal-today {
@@ -2311,7 +2328,7 @@ select.win2k-edit:disabled {
 }
 
 .win2k-link:visited {
-    color: #551A8B;
+    color: var(--sys-visit-link);
 }
 
 /* ===================================================================
@@ -2440,7 +2457,7 @@ select.win2k-edit:disabled {
     font-weight: bold;
     color: var(--sys-window-text);
     margin-bottom: 12px;
-    font-family: 'Verdana', sans-serif;
+    font-family: var(--font-ui);
 }
 
 .win2k-wizard-buttons {
@@ -2517,7 +2534,7 @@ select.win2k-edit:disabled {
 
 .win2k-startmenu-banner {
     width: 25px;
-    background: linear-gradient(to top, #0A246A, #0A246A 70%, #A6CAF0);
+    background: var(--sys-banner);
     display: flex;
     align-items: flex-end;
     padding: 4px 2px;
@@ -2630,7 +2647,7 @@ select.win2k-edit:disabled {
     left: 0;
     right: 0;
     bottom: 28px; /* Leave room for taskbar */
-    background-color: #3A6EA5; /* Classic Win2k teal */
+    background-color: var(--sys-desktop);
     z-index: 0;
     overflow: hidden;
     display: grid;
@@ -2672,7 +2689,7 @@ select.win2k-edit:disabled {
 
 .win2k-desktop-icon-label {
     font-size: 11px;
-    color: #FFFFFF;
+    color: var(--sys-hilight);
     text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
     text-align: center;
     max-width: 70px;

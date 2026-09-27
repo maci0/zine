@@ -1,0 +1,12 @@
+<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges">
+  <!-- Raised window in the Win2K bevel model. Colors must match the sys
+       tokens in win2k.css: face, hilight, dk-shadow, active caption and
+       its gradient. -->
+  <rect width="16" height="16" fill="#D4D0C8"/>
+  <path d="M0 0h16v1H0zM0 0h1v16H0z" fill="#FFFFFF"/>
+  <path d="M0 15h16v1H0zM15 0h1v16h-1z" fill="#404040"/>
+  <rect x="1" y="1" width="14" height="4" fill="#0A246A"/>
+  <rect x="1" y="1" width="14" height="1" fill="#A6CAF0"/>
+  <rect x="2" y="2" width="6" height="2" fill="#FFFFFF"/>
+  <rect x="1" y="5" width="14" height="1" fill="#808080"/>
+</svg>
