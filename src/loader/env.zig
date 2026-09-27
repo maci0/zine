@@ -41,6 +41,11 @@ pub const BuiltinExport = struct {
 pub const BuiltinModule = struct {
     /// Handle to the fake PE header page for this module.
     handle: usize,
+    /// The same page as `handle`, retained so deinit can release it.
+    header: []align(4096) u8,
+    /// True when `header` came from platform.mmap and must be munmap'd
+    /// rather than freed through the allocator.
+    handle_is_mapped: bool,
     /// Mapping from function name to export metadata.
     exports: std.StringHashMap(BuiltinExport),
 };
@@ -69,6 +74,11 @@ pub const Environment = struct {
         while (it.next()) |entry| {
             var val = entry.value_ptr.*;
             val.exports.deinit();
+            if (val.handle_is_mapped) {
+                platform.munmap(val.header);
+            } else {
+                self.allocator.free(val.header);
+            }
             self.allocator.free(entry.key_ptr.*);
         }
         self.builtins.deinit();
@@ -89,10 +99,10 @@ pub const Environment = struct {
         // Allocate a page for the fake PE header.
         // On x86_64, this must be in low 4GB because guest code receives
         // the address as a module handle (HMODULE) in 32-bit registers.
-        const header = if (comptime platform.is_x86_64)
+        const header: []align(4096) u8 = if (comptime platform.is_x86_64)
             try platform.mmap(null, 4096, false, -1, 0, false, false)
         else
-            try self.allocator.alloc(u8, 4096);
+            try self.allocator.alignedAlloc(u8, .fromByteUnits(4096), 4096);
         @memset(header, 0);
 
         // Minimal MZ/PE header
@@ -105,6 +115,8 @@ pub const Environment = struct {
 
         const new_builtin = BuiltinModule{
             .handle = @intFromPtr(header.ptr),
+            .header = header,
+            .handle_is_mapped = comptime platform.is_x86_64,
             .exports = std.StringHashMap(BuiltinExport).init(self.allocator),
         };
         try self.builtins.put(try self.allocator.dupe(u8, lower_dll), new_builtin);

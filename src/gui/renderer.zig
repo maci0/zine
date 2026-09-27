@@ -738,6 +738,7 @@ pub fn showDialog(json: []const u8) void {
 pub fn showControls(json: []const u8) void {
     // Rewrite the type field from "custom_dialog" to "show_controls"
     var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(g_allocator);
     buf.appendSlice(g_allocator, "{\"type\":\"show_controls\",") catch return;
     // Skip past the original type field: {"type": "custom_dialog",
     if (std.mem.indexOf(u8, json, ",")) |comma_pos| {
@@ -753,7 +754,6 @@ pub fn showControls(json: []const u8) void {
         .fltk => fltk_ui.showControls(buf.items),
         .none => {},
     }
-    buf.deinit(g_allocator);
 }
 
 /// Add a single child control to the in-place controls container.

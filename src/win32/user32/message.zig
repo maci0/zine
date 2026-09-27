@@ -880,6 +880,7 @@ fn listBoxStateOf(hwnd: usize) *ListBoxState {
     for (listbox_states[0..listbox_state_count]) |*st| {
         if (st.hwnd == hwnd) return st;
     }
+    if (listbox_state_count >= listbox_states.len) return &listbox_states[0];
     const st = &listbox_states[listbox_state_count];
     listbox_state_count += 1;
     st.* = .{ .hwnd = hwnd, .used = true };
@@ -1286,6 +1287,7 @@ fn progressStateOf(hwnd: usize) *ProgressState {
     for (progress_states[0..progress_state_count]) |*st| {
         if (st.hwnd == hwnd) return st;
     }
+    if (progress_state_count >= progress_states.len) return &progress_states[0];
     const st = &progress_states[progress_state_count];
     progress_state_count += 1;
     st.* = .{ .hwnd = hwnd, .min = 0, .max = 100, .pos = 0 };
@@ -1593,6 +1595,49 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
 }
 
 // --- UpDown / Trackbar shared {pos,min,max} state ---
+/// Drop the per-HWND state a destroyed window owned. Without this the fixed
+/// tables are append-only, so an app that creates controls in a loop
+/// (listbox, progress bar, up-down, date-time picker) exhausts them.
+pub fn releaseControlState(hwnd: usize) void {
+    {
+        var i: usize = 0;
+        while (i < listbox_state_count) : (i += 1) {
+            if (listbox_states[i].hwnd != hwnd) continue;
+            listbox_state_count -= 1;
+            if (i != listbox_state_count) listbox_states[i] = listbox_states[listbox_state_count];
+            break;
+        }
+    }
+    {
+        var i: usize = 0;
+        while (i < progress_state_count) : (i += 1) {
+            if (progress_states[i].hwnd != hwnd) continue;
+            progress_state_count -= 1;
+            if (i != progress_state_count) progress_states[i] = progress_states[progress_state_count];
+            break;
+        }
+    }
+    {
+        var i: usize = 0;
+        while (i < updown_state_count) : (i += 1) {
+            if (updown_states[i].hwnd != hwnd) continue;
+            updown_state_count -= 1;
+            if (i != updown_state_count) updown_states[i] = updown_states[updown_state_count];
+            break;
+        }
+    }
+    var d: usize = 0;
+    while (d < dtp_state_count) : (d += 1) {
+        if (dtp_hwnds[d] != hwnd) continue;
+        dtp_state_count -= 1;
+        if (d != dtp_state_count) {
+            dtp_hwnds[d] = dtp_hwnds[dtp_state_count];
+            dtp_states[d] = dtp_states[dtp_state_count];
+        }
+        break;
+    }
+}
+
 const UpDownState = struct { hwnd: usize, pos: i32, min: i32, max: i32 };
 var updown_states: [32]UpDownState = [_]UpDownState{.{ .hwnd = 0, .pos = 0, .min = 0, .max = 100 }} ** 32;
 var updown_state_count: usize = 0;
@@ -1612,6 +1657,7 @@ fn upDownStateOf(hwnd: usize) *UpDownState {
     for (updown_states[0..updown_state_count]) |*st| {
         if (st.hwnd == hwnd) return st;
     }
+    if (updown_state_count >= updown_states.len) return &updown_states[0];
     const st = &updown_states[updown_state_count];
     updown_state_count += 1;
     st.* = .{ .hwnd = hwnd, .pos = 0, .min = 0, .max = 100 };

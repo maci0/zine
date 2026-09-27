@@ -155,6 +155,7 @@ var surface_count: u32 = 0;
 const MAX_SURFACE_BUFS = 64;
 var sbuf_keys: [MAX_SURFACE_BUFS]usize = [_]usize{0} ** MAX_SURFACE_BUFS;
 var sbuf_ptrs: [MAX_SURFACE_BUFS]?[*]u8 = [_]?[*]u8{null} ** MAX_SURFACE_BUFS;
+var sbuf_sizes: [MAX_SURFACE_BUFS]usize = [_]usize{0} ** MAX_SURFACE_BUFS;
 var sbuf_count: u32 = 0;
 
 // The backbuffer surface (largest offscreen) — set during CreateSurface
@@ -188,6 +189,7 @@ fn getOrAllocSurfaceBuffer(this_addr: usize) ?[*]u8 {
         @memset(buf, 0);
         sbuf_keys[sbuf_count] = this_addr;
         sbuf_ptrs[sbuf_count] = buf.ptr;
+        sbuf_sizes[sbuf_count] = size;
         sbuf_count += 1;
         if (trace.enable_tracing) trace.print("DDRAW: Allocated surface buffer for 0x{x} ({d}x{d}) buf=0x{x} trunc=0x{x}\n", .{ this_addr, w, h, @intFromPtr(buf.ptr), @as(u32, @truncate(@intFromPtr(buf.ptr))) });
         return buf.ptr;
@@ -282,10 +284,35 @@ fn ddraw_QueryInterface(this: *anyopaque, riid: usize, ppvObj: *?*anyopaque) cal
     return w32.S_OK;
 }
 
+/// Release a surface's pixel buffer, if it owns one.
+/// Returns the buffer size in bytes, or null when this address owns none.
+fn releaseSurfaceBuffer(this_addr: usize) ?usize {
+    for (0..sbuf_count) |i| {
+        if (sbuf_keys[i] != this_addr) continue;
+        const size = sbuf_sizes[i];
+        if (@import("../kernel32.zig").global_env) |genv| {
+            if (sbuf_ptrs[i]) |p| genv.allocator.free(p[0..size]);
+        }
+        sbuf_count -= 1;
+        if (i != sbuf_count) {
+            sbuf_keys[i] = sbuf_keys[sbuf_count];
+            sbuf_ptrs[i] = sbuf_ptrs[sbuf_count];
+            sbuf_sizes[i] = sbuf_sizes[sbuf_count];
+        }
+        sbuf_keys[sbuf_count] = 0;
+        sbuf_ptrs[sbuf_count] = null;
+        return size;
+    }
+    return null;
+}
+
 /// IDirectDraw::Release — decrements the reference count.
+/// For IDirectDrawSurface this also returns the surface's pixel buffer, which
+/// is a full w*h*4 allocation; without this the per-surface table fills up and
+/// every later surface renders as a blank source.
 /// Implementation status: Stub
 fn ddraw_Release(this: *anyopaque) callconv(w32cc.WINAPI) u32 {
-    _ = this;
+    _ = releaseSurfaceBuffer(@intFromPtr(this));
     return 0;
 }
 

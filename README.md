@@ -81,6 +81,21 @@ release, not a 0.2.1 patch.
   from another directory now fails with `ModuleAlreadyLoaded` instead of
   handing the guest the first image under the second's name.
 
+#### Fixes
+
+- `IDirectDrawSurface::Release` and `IDirectSoundBuffer::Release` now return
+  the surface pixel buffer and sound buffer to the emulator, and the freed
+  slots are reused. A guest that creates and releases surfaces or sound
+  buffers in a loop no longer strands one buffer per surface or runs the
+  fixed pools dry.
+- `DestroyWindow` releases the per-window listbox, progress bar, up-down, and
+  date-time picker state, and each of those tables is now bounds-checked. A
+  guest that creates more controls than fit no longer writes past the end of
+  the table.
+- On WASI, `_spawnvp` no longer strands the child process environment and its
+  128 MB child address space after each child exits. A guest that spawns
+  helpers repeatedly no longer exhausts module memory.
+
 #### Security fixes
 
 - The host home directory is redacted from every diagnostic before it reaches

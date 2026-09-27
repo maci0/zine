@@ -722,6 +722,7 @@ pub fn stub_DestroyWindow(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     // exhaust the fixed tables.
     user32.removeWindowInfo(hWnd);
     user32.removeHwndText(hWnd);
+    @import("message.zig").releaseControlState(hWnd);
     return 1;
 }
 

@@ -178,6 +178,7 @@ pub fn setupSearchPaths(
     try environment.registry.addSearchPath(".");
 
     const fixed_target = try allocator.dupe(u8, target_exe);
+    defer allocator.free(fixed_target);
     std.mem.replaceScalar(u8, fixed_target, '\\', '/');
     if (std.fs.path.dirname(fixed_target)) |dir| {
         try environment.registry.addSearchPath(dir);
@@ -237,6 +238,12 @@ pub fn getHostPathDirs(allocator: std.mem.Allocator) !std.ArrayListUnmanaged([]c
         i += 1;
     }
     return dirs;
+}
+
+/// Free a list from getHostPathDirs, including each path it owns.
+pub fn freeHostPathDirs(allocator: std.mem.Allocator, dirs: *std.ArrayListUnmanaged([]const u8)) void {
+    for (dirs.items) |d| allocator.free(d);
+    dirs.deinit(allocator);
 }
 
 // -----------------------------------------------------------------------

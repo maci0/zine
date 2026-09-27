@@ -318,7 +318,7 @@ pub fn main(init: std.process.Init) !void {
     try runner.registerAllStubs(&environment, @intFromPtr(&not_implemented));
 
     var host_dirs = try runner.getHostPathDirs(allocator);
-    defer host_dirs.deinit(allocator);
+    defer runner.freeHostPathDirs(allocator, &host_dirs);
     try runner.setupSearchPaths(&environment, allocator, target_exe, host_dirs.items);
 
     const exe_name = std.fs.path.basename(target_exe);
@@ -748,6 +748,17 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     const saved_argc = stubs_msvcrt.global_argc;
     const saved_argv = stubs_msvcrt.global_argv;
     const saved_thunk = loader.saveThunkState();
+    const child_alloc = std.heap.page_allocator;
+    var child_env = Environment.init(child_alloc);
+    var child_buf: ?[]u8 = null;
+    var child_argv_ptrs: std.ArrayListUnmanaged(?[*:0]u8) = .empty;
+
+    // The argv copies live in the parent's address space and must outlive
+    // the defer that restores it; the child only reads them.
+    defer {
+        for (arg_strings.items) |s| std.heap.page_allocator.free(s);
+        arg_strings.deinit(std.heap.page_allocator);
+    }
 
     defer {
         // Restore parent state
@@ -761,16 +772,22 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
         kernel32_process.resetProcCache();
         kernel32_process.resetCommandLine();
         msvcrt_process.resetGuestArgs();
+        // Free the child environment last: its module mappings and the
+        // child's linear memory (128 MB of it) are the bulk of what a
+        // spawning guest would otherwise strand per call.
+        for (child_argv_ptrs.items) |p| {
+            if (p) |s| std.heap.page_allocator.free(std.mem.span(s));
+        }
+        child_argv_ptrs.deinit(std.heap.page_allocator);
+        if (child_buf) |b| child_alloc.free(b);
+        child_env.deinit();
     }
 
     // Load the child PE
-    const child_alloc = std.heap.page_allocator;
-    var child_env = Environment.init(child_alloc);
-
     // Register all stub DLLs (same as main)
     runner.registerAllStubs(&child_env, @intFromPtr(&not_implemented)) catch return -1;
     var child_host_dirs = runner.getHostPathDirs(child_alloc) catch return -1;
-    defer child_host_dirs.deinit(child_alloc);
+    defer runner.freeHostPathDirs(child_alloc, &child_host_dirs);
     runner.setupSearchPaths(&child_env, child_alloc, exe_path, child_host_dirs.items) catch return -1;
 
     const exe_name = std.fs.path.basename(exe_path);
@@ -797,40 +814,40 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     // do this if the parent's combined_buf doesn't overlap. If both PEs have the
     // same preferred base, fall back to a separate buffer (child won't get correct
     // pointer dereferences in stubs, but at least won't crash the parent).
-    const child_buf = child_alloc.alloc(u8, child_combined_size) catch return -1;
+    child_buf = child_alloc.alloc(u8, child_combined_size) catch return -1;
+    const child_mem = child_buf.?;
     // For relocatable PEs, use buffer host address as base.
     // For fixed-base PEs, use preferred ImageBase (interpreter translates correctly,
     // but raw @ptrFromInt in stubs may not work for file paths — trace.addr() handles this).
     const child_preferred: u32 = if (has_relocs)
-        @intCast(@intFromPtr(child_buf.ptr))
+        @intCast(@intFromPtr(child_mem.ptr))
     else
         pe_preferred;
 
-    @memset(child_buf[child_image_size .. child_image_size + CHILD_STACK], 0);
-    @memset(child_buf[child_image_size + CHILD_STACK ..], 0xCC);
+    @memset(child_mem[child_image_size .. child_image_size + CHILD_STACK], 0);
+    @memset(child_mem[child_image_size + CHILD_STACK ..], 0xCC);
 
     const child_thunk_base = child_preferred +% child_image_size +% CHILD_STACK;
     var child_guest_mem = x86_memory.GuestMemory{
-        .base = child_buf,
+        .base = child_mem,
         .base_addr = child_preferred,
     };
     loader.setThunkMemory(&child_guest_mem, child_thunk_base);
 
     child_guest_mem.heap_start = child_image_size + CHILD_STACK + CHILD_THUNK;
     child_guest_mem.heap_cursor = child_guest_mem.heap_start;
-    child_env.relocateDataExports(&child_guest_mem, child_buf, child_preferred);
+    child_env.relocateDataExports(&child_guest_mem, child_mem, child_preferred);
 
     runner.resolveAllImports(&child_env, child_alloc) catch return -1;
 
-    @memcpy(child_buf[0..child_image_size], child_module.mapped_memory[0..child_image_size]);
+    @memcpy(child_mem[0..child_image_size], child_module.mapped_memory[0..child_image_size]);
 
-    loader.applyReverseRelocations(child_buf, &child_module.parser, child_image_size, @truncate(child_module.image_base), child_preferred);
-    loader.zeroFillBss(child_buf, child_module.parser.sections);
+    loader.applyReverseRelocations(child_mem, &child_module.parser, child_image_size, @truncate(child_module.image_base), child_preferred);
+    loader.zeroFillBss(child_mem, child_module.parser.sections);
 
     // Build argv as host-allocated null-terminated strings.
     // ensureGuestArgs() reads these via std.mem.span() and copies them
     // into the child's guest memory for the interpreter.
-    var child_argv_ptrs: std.ArrayListUnmanaged(?[*:0]u8) = .empty;
     for (arg_strings.items) |s| {
         child_argv_ptrs.append(std.heap.page_allocator, std.heap.page_allocator.dupeZ(u8, s) catch null) catch return -1;
     }
@@ -847,7 +864,7 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
 
     var child_cpu = x86_cpu.Cpu{};
     child_cpu.memory = x86_memory.GuestMemory{
-        .base = child_buf,
+        .base = child_mem,
         .base_addr = child_preferred,
         .heap_start = child_image_size + CHILD_STACK + CHILD_THUNK,
         .heap_cursor = child_guest_mem.heap_cursor,

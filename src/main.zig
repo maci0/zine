@@ -351,7 +351,10 @@ pub fn main(init: std.process.Init) !void {
 
     // Search paths: CWD + exe dir + BAT PATH or host PATH
     var extra_paths: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer extra_paths.deinit(allocator);
+    defer {
+        for (extra_paths.items) |p| allocator.free(p);
+        extra_paths.deinit(allocator);
+    }
     if (bat_env_opt) |*be| {
         var bat_path_opt = be.env.get("PATH");
         if (bat_path_opt == null) bat_path_opt = be.env.get("Path");
@@ -370,7 +373,7 @@ pub fn main(init: std.process.Init) !void {
         }
     } else {
         var host_dirs = try runner.getHostPathDirs(allocator);
-        defer host_dirs.deinit(allocator);
+        defer runner.freeHostPathDirs(allocator, &host_dirs);
         for (host_dirs.items) |d| try extra_paths.append(allocator, d);
     }
     try runner.setupSearchPaths(&environment, allocator, target_exe, extra_paths.items);

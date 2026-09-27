@@ -69,6 +69,7 @@ const MAX_SOUND_BUFFERS = 16;
 const SoundBufferState = struct {
     com_obj: IDirectSoundBuffer = undefined,
     data: [*]u8 = undefined,
+    has_data: bool = false,
     size: u32 = 0,
     volume: i32 = 0, // hundredths of dB, -10000..0
     pan: i32 = 0, // -10000 (left) to 10000 (right)
@@ -204,9 +205,20 @@ fn dsound_CreateSoundBuffer(this: usize, pcDSBufferDesc: usize, ppDSBuffer: usiz
             return 0;
         }
 
-        // Secondary buffer: allocate from pool
-        if (buffer_pool_count < MAX_SOUND_BUFFERS) {
-            const idx = buffer_pool_count;
+        // Secondary buffer: reuse a slot a released buffer freed, else take
+        // the next one. Reusing keeps create/release cycles from exhausting
+        // the pool.
+        const free_slot = blk: {
+            for (0..buffer_pool_count) |i| {
+                if (!buffer_pool[i].allocated) break :blk i;
+            }
+            if (buffer_pool_count >= MAX_SOUND_BUFFERS) break :blk null;
+            break :blk @as(usize, buffer_pool_count);
+        };
+        if (free_slot) |idx| {
+            // Only a slot past the high-water mark grows the pool; reusing a
+            // released one must not advance the count.
+            const is_fresh_slot = idx == buffer_pool_count;
             var buf = &buffer_pool[idx];
             buf.allocated = true;
             buf.com_obj.lpVtbl = @truncate(@intFromPtr(&dsbuffer_vtbl));
@@ -219,11 +231,12 @@ fn dsound_CreateSoundBuffer(this: usize, pcDSBufferDesc: usize, ppDSBuffer: usiz
             if (@import("../kernel32.zig").global_env) |genv| {
                 const data = genv.allocator.alloc(u8, buf_size) catch {
                     if (ppDSBuffer != 0) @as(*align(1) u32, @ptrFromInt(ppDSBuffer)).* = @truncate(@intFromPtr(&buf.com_obj));
-                    buffer_pool_count += 1;
+                    if (is_fresh_slot) buffer_pool_count += 1;
                     return 0;
                 };
                 @memset(data, 0);
                 buf.data = data.ptr;
+                buf.has_data = true;
             }
 
             // Parse format if provided
@@ -231,7 +244,7 @@ fn dsound_CreateSoundBuffer(this: usize, pcDSBufferDesc: usize, ppDSBuffer: usiz
                 parseWaveFormatInto(buf, desc.lpwfxFormat);
             }
 
-            buffer_pool_count += 1;
+            if (is_fresh_slot) buffer_pool_count += 1;
             if (trace.enable_tracing) trace.print("DSOUND:   -> secondary buffer #{d}, size={d}\n", .{ idx, buf_size });
 
             if (ppDSBuffer != 0) {
@@ -526,6 +539,25 @@ fn dsbuffer_GetVolume(this: usize, plVolume: usize) callconv(w32cc.WINAPI) i32 {
     return 0;
 }
 
+/// IDirectSoundBuffer::Release — returns the buffer's audio storage and frees
+/// its pool slot. Each secondary buffer holds up to 256 KB; without this the
+/// pool fills up and every later CreateSoundBuffer fails.
+/// Implementation status: Stub
+fn dsbuffer_Release(this: *anyopaque) callconv(w32cc.WINAPI) u32 {
+    const buf = findBuffer(@intFromPtr(this)) orelse return 0;
+    if (buf.has_data) {
+        if (@import("../kernel32.zig").global_env) |genv| {
+            genv.allocator.free(buf.data[0..buf.size]);
+        }
+        buf.has_data = false;
+    }
+    buf.allocated = false;
+    buf.playing = false;
+    buf.size = 0;
+    buf.com_obj.lpVtbl = 0;
+    return 0;
+}
+
 /// Registers DSOUND.dll functions with the environment.
 /// Implementation status: Partially implemented
 pub fn register(environment: *env.Environment) !void {
@@ -550,7 +582,7 @@ pub fn register(environment: *env.Environment) !void {
     dsbuffer_vtbl = .{
         .QueryInterface = d3,
         .AddRef = d1,
-        .Release = d1,
+        .Release = comPtr(dsbuffer_Release, "IDirectSoundBuffer::Release"),
         .GetCaps = comPtr(dsbuffer_GetCaps, "IDirectSoundBuffer::GetCaps"),
         .GetCurrentPosition = comPtr(dsbuffer_GetCurrentPosition, "IDirectSoundBuffer::GetCurrentPosition"),
         .GetFormat = comPtr(dsbuffer_GetFormat, "IDirectSoundBuffer::GetFormat"),
