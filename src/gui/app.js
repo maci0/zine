@@ -2202,7 +2202,9 @@ canvas.addEventListener('wheel', (e) => {
         let delta = 0;
         if (e.deltaY !== 0) delta = e.deltaY > 0 ? -120 : 120;
         else if (e.deltaX !== 0) delta = e.deltaX > 0 ? 120 : -120;
-        ws.send(JSON.stringify({ type: 'wheel', delta }));
+        // WM_MOUSEWHEEL carries the pointer position, so the guest needs it.
+        const c = getCanvasCoords(e);
+        ws.send(JSON.stringify({ type: 'wheel', delta, x: c.x, y: c.y }));
     }
     e.preventDefault();
 });

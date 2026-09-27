@@ -132,6 +132,15 @@ release, not a 0.2.1 patch.
   count below 1 is not a request; the menu id used to be truncated, so a large
   id selected a different item than the client asked for. A `command` or
   `listbox_select` id outside its range was already refused this way.
+  `page_setup_chosen` also refuses a `paperW` or `paperH` below 1 and an
+  `orientation` other than 0 or 1.
+- A web UI mouse message with `button` 1 (middle click) is dropped instead of
+  being delivered as a primary-button press, which used to click wherever the
+  user scrolled. Only `button` 0 and 2 reach the guest. A frontend that needs
+  the middle button has to keep it to itself until the guest window uses one.
+- A web UI `wheel` message may carry `x` and `y`; both default to 0, so an
+  older frontend keeps working, and a `WM_MOUSEWHEEL` now lands under the
+  pointer the user scrolled at instead of at the window origin.
 - `zig build -Darch=wasm32` and `-Darch=wasm64` compile again. The JIT host
   loop registered the SMC flush hook against a host instance that no longer
   existed, so the WASI targets failed to build.

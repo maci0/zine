@@ -475,14 +475,25 @@ fn parsePageSetupRequest(object: std.json.ObjectMap, reason: []u8) error{Malform
     const required = "page_setup_chosen requires integer fields \"left\" and \"top\"";
     const left = jsonInt(object, "left") orelse return reject(reason, required);
     const top = jsonInt(object, "top") orelse return reject(reason, required);
+    const paper_w = try optionalI32(object, "paperW", default_paper_width, "page_setup_chosen", reason);
+    const paper_h = try optionalI32(object, "paperH", default_paper_height, "page_setup_chosen", reason);
+    const orientation = try optionalI32(object, "orientation", 0, "page_setup_chosen", reason);
+    // A paper size of zero or less has no page, and an orientation other than
+    // portrait or landscape is not a setup the guest dialog can apply.
+    if (paper_w <= 0 or paper_h <= 0) {
+        return reject(reason, "page_setup_chosen fields \"paperW\" and \"paperH\" must be positive");
+    }
+    if (orientation != 0 and orientation != 1) {
+        return reject(reason, "page_setup_chosen field \"orientation\" must be 0 or 1");
+    }
     return .{
         .left = try narrowToI32(left, "page_setup_chosen", "left", reason),
         .top = try narrowToI32(top, "page_setup_chosen", "top", reason),
         .right = try optionalI32(object, "right", 0, "page_setup_chosen", reason),
         .bottom = try optionalI32(object, "bottom", 0, "page_setup_chosen", reason),
-        .paper_w = try optionalI32(object, "paperW", default_paper_width, "page_setup_chosen", reason),
-        .paper_h = try optionalI32(object, "paperH", default_paper_height, "page_setup_chosen", reason),
-        .orientation = try optionalI32(object, "orientation", 0, "page_setup_chosen", reason),
+        .paper_w = paper_w,
+        .paper_h = paper_h,
+        .orientation = orientation,
     };
 }
 
@@ -999,7 +1010,20 @@ fn handleSocketMessage(ws: *std.http.Server.WebSocket, allocator: std.mem.Alloca
                 sendError(ws, "wheel field \"delta\" is out of range");
                 return;
             };
-            if (renderer.on_wheel_event) |cb| cb(delta, 0, 0);
+            // WM_MOUSEWHEEL carries the pointer position. A client that omits
+            // x and y, or sends a value that is not an integer, wheels at the
+            // window origin, which is where a wheel arrives when the host UI
+            // has no pointer to report. A value that does not fit i32 is
+            // refused rather than landing at a different point.
+            const wheel_x = std.math.cast(i32, jsonInt(root.object, "x") orelse 0) orelse {
+                sendError(ws, "wheel field \"x\" is out of range");
+                return;
+            };
+            const wheel_y = std.math.cast(i32, jsonInt(root.object, "y") orelse 0) orelse {
+                sendError(ws, "wheel field \"y\" is out of range");
+                return;
+            };
+            if (renderer.on_wheel_event) |cb| cb(delta, wheel_x, wheel_y);
         } else {
             sendError(ws, "wheel requires an integer field \"delta\"");
         }
@@ -1023,11 +1047,19 @@ fn handleSocketMessage(ws: *std.http.Server.WebSocket, allocator: std.mem.Alloca
         };
         const button = jsonIntOr(root.object, "button", 0);
         const w32 = @import("../win32/constants.zig");
+        const is_move = std.mem.eql(u8, type_val.string, "mousemove");
+        // A browser reports the middle button as 1, and the guest window has
+        // no use for it. Delivering it as the primary button would click
+        // wherever the user scrolled, so a button with no Win32 equivalent is
+        // dropped, the same way a key with no Win32 equivalent is.
+        if (!is_move and button != 0 and button != 2) return;
         var msg_id: u32 = w32.WM_MOUSEMOVE;
-        if (std.mem.eql(u8, type_val.string, "mousedown")) {
-            msg_id = if (button == 2) w32.WM_RBUTTONDOWN else w32.WM_LBUTTONDOWN;
-        } else if (std.mem.eql(u8, type_val.string, "mouseup")) {
-            msg_id = if (button == 2) w32.WM_RBUTTONUP else w32.WM_LBUTTONUP;
+        if (!is_move) {
+            if (std.mem.eql(u8, type_val.string, "mousedown")) {
+                msg_id = if (button == 2) w32.WM_RBUTTONDOWN else w32.WM_LBUTTONDOWN;
+            } else {
+                msg_id = if (button == 2) w32.WM_RBUTTONUP else w32.WM_LBUTTONUP;
+            }
         }
         if (renderer.on_mouse_event) |cb| cb(msg_id, x, y);
     } else {
@@ -1317,6 +1349,9 @@ test "a page setup answer is validated before it reaches the guest" {
         .{ .body = "{\"type\":\"page_setup_chosen\",\"left\":\"720\",\"top\":1440}", .expected = null },
         .{ .body = "{\"type\":\"page_setup_chosen\",\"left\":4294967296,\"top\":1440}", .expected = null },
         .{ .body = "{\"type\":\"page_setup_chosen\",\"left\":720,\"top\":1440,\"paperH\":4294967296}", .expected = null },
+        .{ .body = "{\"type\":\"page_setup_chosen\",\"left\":720,\"top\":1440,\"paperW\":0}", .expected = null },
+        .{ .body = "{\"type\":\"page_setup_chosen\",\"left\":720,\"top\":1440,\"paperH\":-1}", .expected = null },
+        .{ .body = "{\"type\":\"page_setup_chosen\",\"left\":720,\"top\":1440,\"orientation\":2}", .expected = null },
     };
     for (cases) |case| {
         var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, case.body, .{});

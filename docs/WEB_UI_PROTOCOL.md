@@ -118,8 +118,8 @@ be resynchronized behind it.
 | --- | --- |
 | `command` | `id` (integer, required, u32 range) |
 | `keydown`, `keyup` | `key` (string, required; a `KeyboardEvent.code` with no Win32 equivalent is ignored, not an error) |
-| `mousedown`, `mouseup`, `mousemove` | `x`, `y` (integers, required), `button` (integer, default 0) |
-| `wheel` | `delta` (integer, required) |
+| `mousedown`, `mouseup`, `mousemove` | `x`, `y` (integers, required), `button` (integer, default 0; only 0 and 2 reach the guest, and a button with no Win32 equivalent is dropped rather than delivered as the primary button) |
+| `wheel` | `delta` (integer, required), `x`, `y` (integers, default 0; the pointer position the guest's `WM_MOUSEWHEEL` needs) |
 | `resize` | `clientW`, `clientH` (integers, required, both positive), `sizeType` (integer, default 0, negatives clamped to 0, refused with an `error` frame when it does not fit the host's `usize`) |
 | `close` | none |
 | `open_file` | `filename` (string, required), `dir` (string, default `Desktop`) |
@@ -128,7 +128,7 @@ be resynchronized behind it.
 | `find_action` | `action` (string, required: `find_next`, `replace`, `replace_all`, or `close`), `findText` (string, required), `replaceText` (string, default `""`), `matchCase` (bool, default false), `searchDown` (bool, default true) |
 | `font_chosen` | `face` (string, required), `size` (integer, required, positive), `bold`, `italic` (bools, default false) |
 | `print_chosen` | `from`, `to` (integers, required, both positive), `copies` (integer, default 1, positive) |
-| `page_setup_chosen` | `left`, `top` (integers, required), `right`, `bottom`, `paperW`, `paperH`, `orientation` (integers, default 0/0/8500/11000/0); an integer too large for a 32-bit field is refused instead of answered with the default |
+| `page_setup_chosen` | `left`, `top` (integers, required), `right`, `bottom`, `paperW`, `paperH`, `orientation` (integers, default 0/0/8500/11000/0; an integer too large for a 32-bit field is refused instead of answered with the default, `paperW` and `paperH` must be positive, and `orientation` must be 0 or 1) |
 | `color_selected` | `color` (integer, required; `0x000000` to `0xFFFFFF`, a negative value means cancel) |
 | `listbox_select` | `id` (integer, required, u32 range), `index` (integer, required, i32 range; a value outside either range is refused with an `error` frame) |
 | `context_menu_select` | `id` (integer, required, u32 range; 0 dismisses the menu) |
