@@ -77,8 +77,11 @@ pub fn registerAllStubs(environment: *Environment, not_implemented_addr: usize) 
             const self_dir = dll_path_buf[0..self_dir_len];
             var buf: [std.fs.max_path_bytes]u8 = undefined;
             const dll_dir = std.fmt.bufPrint(&buf, "{s}/dll", .{self_dir}) catch self_dir;
-            environment.registry.addSearchPath(dll_dir) catch {};
-        } else |_| {}
+            try environment.registry.addSearchPath(dll_dir);
+        } else |_| {
+            // No executable path to derive a DLL directory from; external
+            // stubs are then found only through paths the caller registers.
+        }
         return;
     }
 

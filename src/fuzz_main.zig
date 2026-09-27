@@ -100,6 +100,8 @@ fn report(
 ) void {
     target.run(allocator, input) catch |err| {
         failures.* += 1;
+        // The failure itself is already counted and printed; a crash file is
+        // best effort, and nothing after this line can report its absence.
         saveCrash(io, target.name, input, failures.*) catch {};
         std.debug.print("fuzz: {s} failed on {d} bytes: {t}\n", .{ target.name, input.len, err });
     };

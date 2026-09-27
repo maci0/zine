@@ -34,6 +34,7 @@ fi
 steps=(
     'zig fmt --check src build.zig build.zig.zon'
     'check_shell'
+    'check_c'
     'zig build --summary all'
     'zig build -Darch=x86_64 --summary all'
     'zig build -Darch=wasm32 --summary all'
@@ -54,6 +55,26 @@ steps=(
 # matches the CI command so a script outside tests/ cannot slip through locally.
 check_shell() {
     git ls-files '*.sh' | xargs -r shellcheck -x
+}
+
+# Nothing else in the gate analyzes the tracked C sources: the Zig build never
+# sees them. `zig cc` is already a required tool and is pinned to the same
+# version CI installs, so it is the analyzer, and the warnings it would print
+# are errors here. Only compilation runs, so the objects land in the gitignored
+# .scratch/ instead of the repo root.
+#
+# src/gui/fltk_bridge.cpp is deliberately absent: it needs the FLTK headers
+# from libfltk1.3-dev, which the gate does not install. It is built by
+# `zig build -Darch=x86_64 -Dfltk` (see README.md).
+check_c() {
+    local objdir=".scratch/c-check"
+    mkdir -p "$objdir"
+    local src
+    while IFS= read -r src; do
+        zig cc -c -o "$objdir/$(basename "$src").o" -std=c99 -Wall -Wextra -Wpedantic -Werror "$src"
+    done < <(git ls-files 'tests/*.c' ':!tests/cpubench_win32.c')
+    zig cc -c -o "$objdir/cpubench_win32.o" -target x86-windows-gnu -std=c99 \
+        -Wall -Wextra -Wpedantic -Werror tests/cpubench_win32.c
 }
 
 for step in "${steps[@]}"; do

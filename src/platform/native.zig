@@ -29,6 +29,7 @@ pub const is_x86_64 = builtin.target.cpu.arch == .x86_64;
 
 /// Yields execution to the host environment.
 pub fn yield() void {
+    // A host that refuses to yield is not an error the guest can act on.
     std.Thread.yield() catch {};
 }
 

@@ -21,6 +21,7 @@ root.
 | CLI output and exit status | `zig build test-cli` (add `-Darch=x86_64` or `-Darch=wasm32`) |
 | Fix formatting | `zig fmt src build.zig build.zig.zon` |
 | Lint shell scripts | `git ls-files '*.sh' \| xargs -r shellcheck -x` |
+| Check C sources | `bash tests/check.sh` (the `check_c` step) |
 | Full gate, same as CI | `bash tests/check.sh` |
 | List build steps and options | `zig build --help` |
 
@@ -35,8 +36,9 @@ embeds. Pass `-Doptimize=Debug` when stepping through code.
 
 `tests/check.sh` is the single pre-pull-request gate. It runs the same checks,
 in the same order, as the `static-analysis` job in `.github/workflows/ci.yml`:
-`zig fmt --check`, shellcheck over every tracked script, all four architecture
-builds, the unit tests, and both native `test-cli` runs. If you add a check,
+`zig fmt --check`, shellcheck over every tracked script, a warning-free
+`zig cc` compile of every tracked C source, all four architecture builds, the
+unit tests, and both native `test-cli` runs. If you add a check,
 add it in both places or local runs stop predicting CI.
 
 The job takes its Zig version from `build.zig.zon` and restores `.zig-cache/`
