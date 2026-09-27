@@ -100,7 +100,7 @@ The loader subsystem consists of four core modules and three resource parsers:
 |--------|---------------|
 | [module.zig](../src/loader/module.zig) | Loads a PE file from disk, maps it into memory via `platform.mmap`, copies section data, and applies base relocations if the image was loaded at a non-preferred address. |
 | [registry.zig](../src/loader/registry.zig) | Maintains a name → `Module*` mapping and search path list. Handles DLL (Dynamic Link Library) search order. |
-| [env.zig](../src/loader/env.zig) | The `Environment` struct ties together the module registry and built-in stub exports. Provides `resolveExport()` which first checks built-in stubs (our verified implementations), then falls back to PE DLLs loaded from disk. Also contains `addBuiltinExportComptime()`, which generates WASM thunk handlers at compile time. |
+| [env.zig](../src/loader/env.zig) | The `Environment` struct ties together the module registry and built-in stub exports. Provides `resolveExport()` which first checks built-in stubs (our verified implementations), then falls back to PE DLLs loaded from disk. Also contains `addBuiltinExportComptime()`, which registers a comptime thunk handler as a builtin export and picks the cdecl calling convention for the `MSVCRT.dll` and `MSVCP*` modules. |
 | [loader.zig](../src/loader/loader.zig) | Walks the PE import directory, resolves each function by name or ordinal, and patches the IAT (Import Address Table). On native targets, writes host function addresses directly. On WASM, allocates `INT 0xFE` thunk stubs in guest memory. Also calls `DllMain` (`DLL_PROCESS_ATTACH`) for loaded PE DLLs. |
 
 #### Import Resolution Flow
@@ -281,7 +281,7 @@ The GUI subsystem presents Win32 GUI applications in a web browser (web backend)
 └─────────────────────────┘
 ```
 
-- **Framebuffer**: The renderer maintains a shared BGRA framebuffer (Blue, Green, Red, Alpha byte order). DirectDraw/D3D8 surface locks write pixel data here. Frames are pushed to connected browsers at ~60 FPS (frames per second) over WebSocket binary messages.
+- **Framebuffer**: The renderer maintains a shared BGRA framebuffer (Blue, Green, Red, Alpha byte order). DirectDraw/D3D8 surface locks write pixel data here. Frames are pushed to connected browsers whenever the guest marks the screen dirty, over WebSocket binary messages; the frontend schedules presentation with `requestAnimationFrame`.
 - **JSON Messages**: Window chrome (title, menus, dialogs, status bar, controls) is sent as JSON text messages. The frontend renders them using a Windows 2000 CSS (Cascading Style Sheets) theme.
 - **Input**: Browser keyboard/mouse events are sent back as JSON and dispatched to Win32 stub callbacks.
 - **Audio**: Audio samples are pushed as binary WebSocket messages with an `AUD` prefix. The browser plays them via the Web Audio API.
@@ -375,7 +375,7 @@ sequenceDiagram
 
     CLI->>Main: Parse arguments
     Main->>Env: Environment.init()
-    Main->>Stubs: Register 37 DLL stub modules
+    Main->>Stubs: Register 36 DLL stub modules (37 on WASM, 0 with -Dexternal-stubs)
     Main->>Reg: Add search paths (cwd, exe dir)
     Main->>Reg: loadModule(target.exe)
     Reg->>Mod: Module.load() — parse PE, mmap, relocate
@@ -413,6 +413,7 @@ zine/
 ├── build.zig.zon            # Zig package manifest
 ├── docs/                    # Documentation
 │   ├── ARCHITECTURE.md      # This file
+│   ├── README.md            # Index of the docs directory
 │   ├── CLI_STATUS.md        # CLI functionality status
 │   ├── cross-boundary-data-design.md # Cross-boundary data handling architecture
 │   ├── DX_VTABLES.md        # DirectX COM vtable layouts
@@ -427,7 +428,7 @@ zine/
 │   ├── WEBGPU_TRANSLATION.md # DirectDraw/D3D → WebGPU translation guide
 │   ├── WEB_UI_PROTOCOL.md   # Web UI HTTP routes and WebSocket messages
 │   └── X86_64_NATIVE_EXECUTION.md # x86_64 native execution notes
-├── drive_c/                 # Virtual C: drive for guest apps
+├── drive_c/                 # Virtual C: drive for guest apps (local, gitignored)
 ├── src/
 │   ├── main.zig             # Native entry point
 │   ├── wasm_main.zig        # WASM entry point
@@ -519,12 +520,17 @@ zine/
 │   │   ├── fltk_bridge.h/.cpp # C/C++ bridge to FLTK 1.3 widgets
 │   │   ├── app.js           # Frontend JavaScript
 │   │   ├── index.html       # Frontend HTML
-│   │   └── win2k.css        # Windows 2000 theme CSS
-│   └── dll/                 # Standalone DLL build sources (zig build -Ddll=true)
+│   │   ├── win2k.css        # Windows 2000 theme CSS
+│   │   ├── menu.json        # Guest menu data
+│   │   ├── van.min.js       # Vendored JS runtime
+│   │   └── assets/          # SVGs used by the frontend
+│   ├── fuzz/                 # Fuzz harnesses for untrusted-input parsers
+│   │   ├── pe.zig, menu.zig, mutation.zig, replay.zig
+│   └── dll/                 # Standalone DLL build sources (zig build -Ddll=all)
 │       ├── msvcrt_dll.zig, kernel32_dll.zig, user32_dll.zig, ...
 │       └── dll_common.zig   # Shared DLL build utilities
 ├── tests/                   # Test data (PE files, scripts)
-└── tools/                   # MSVC compiler test toolchain
+└── tools/                   # MSVC compiler test toolchain (local, gitignored)
 ```
 
 ---

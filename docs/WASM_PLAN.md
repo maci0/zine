@@ -162,8 +162,9 @@ base_addr (PE ImageBase or buffer host address for child PEs)
       └──────────────────────┘
 ```
 
-Child PEs (loaded by `_spawnvp`) get their own combined buffer with
-`base_addr = @intFromPtr(child_buf.ptr)` to avoid address space collisions.
+Child PEs (loaded by `_spawnvp`) get their own combined buffer. Relocatable PEs
+use `base_addr = @intFromPtr(child_buf.ptr)`; fixed-base PEs use the PE's preferred
+`ImageBase`, which the interpreter translates.
 
 ---
 
@@ -295,8 +296,8 @@ a browser runtime).
 
 ### Phase 5: Testing and hardening ⚠️ IN PROGRESS
 
-- [x] Run MSVC CLI tools through interpreter (42/42 native, 42/42 interpret)
-- [x] Run MSVC CLI tools through WASM (23/36 wasmtime, 23/36 wasmer)
+- [x] Run MSVC CLI tools through interpreter (counts tracked in [`STATUS.md`](STATUS.md))
+- [x] Run MSVC CLI tools through WASM (counts tracked in [`STATUS.md`](STATUS.md))
 - [x] Fix BSS zero-initialization for WASM
 - [x] Fix .rsrc write protection
 - [x] Implement in-process _spawnvp for child PE execution
@@ -305,8 +306,8 @@ a browser runtime).
 - [x] Fix POSIX path heuristic for MSVC option args
 - [x] Fix child PE argv passing (CRT __getmainargs cache)
 - [x] Fix CL.EXE child process execution (C1.DLL/C2.DLL)
-- [ ] Profile interpreter hot spots
-- [ ] Create browser demo page
+- [x] Profile interpreter hot spots (`--profile` / `ZINE_PROFILE`, `src/profiler.zig`)
+- [x] Create browser demo page (`src/gui/index.html` + `app.js`, embedded in native builds and served over HTTP/WebSocket by the zine process)
 
 ### Phase 6: JIT compiler ⚠️ IN PROGRESS
 

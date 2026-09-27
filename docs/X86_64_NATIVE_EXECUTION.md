@@ -121,7 +121,7 @@ mechanism from the WASM/interpreter path. This avoids complex GDT manipulation a
 #### Signal Handling
 - [x] `sigsegvHandler` detects `CD FE` at faulting IP and dispatches to `compat_thunks`
 - [x] `dispatchFromSignal` reads 32-bit guest stack, calls 64-bit stub, writes EAX/ESP/EIP in ucontext
-- [ ] CS=0x23 check for non-thunk faults (SEH dispatch in compat mode) — future work
+- [x] CS=0x23 check for non-thunk faults: compat-mode guest faults fall through to SEH dispatch instead of exiting
 - [ ] Full 32-bit CONTEXT extraction from 64-bit ucontext — future work
 
 ---

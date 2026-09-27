@@ -31,7 +31,7 @@ The combined buffer is typically laid out as follows:
 
 ### 4. Heap
 - **Location**: Follows the thunks.
-- **Size**: Default is 512 MB (`HEAP_RESERVE` in `wasm_main.zig`; raised from an earlier 32 MB because MSVC `c1.dll` requests ~50 MB+ compiler arenas).
+- **Size**: Default is 512 MB (`HEAP_RESERVE` in `wasm_main.zig`; raised from an earlier 32 MB because MSVC `c1.dll` requests ~50 MB+ compiler arenas). An in-process child PE spawned by `_spawnvp` gets its own buffer with a 128 MB heap and a 64 KB stack (`CHILD_HEAP`, `CHILD_STACK`).
 - **Purpose**: The guest heap, used by `HeapAlloc`, `malloc`, and other guest memory allocation functions.
 
 ## Address Translation

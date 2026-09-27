@@ -384,4 +384,4 @@ src/
 
 ~68K lines of Zig.
 
-See `docs/` for detailed design notes on memory layout, JIT strategy, native execution, and Win32 API coverage. `docs/THREAT_MODEL.md` records the attack surface, trust boundaries, and known gaps. The web UI's HTTP routes and WebSocket message types are specified in [`docs/WEB_UI_PROTOCOL.md`](docs/WEB_UI_PROTOCOL.md).
+See [`docs/`](docs/README.md) for the documentation index: memory layout, JIT strategy, native execution, and Win32 API coverage. `docs/THREAT_MODEL.md` records the attack surface, trust boundaries, and known gaps. The web UI's HTTP routes and WebSocket message types are specified in [`docs/WEB_UI_PROTOCOL.md`](docs/WEB_UI_PROTOCOL.md).

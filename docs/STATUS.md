@@ -8,6 +8,11 @@ web-based GUI backends). Companion docs: [`ARCHITECTURE.md`](ARCHITECTURE.md),
 
 *Last verified: 2026-08-08 (native 158/0, native64 158/0, wasmtime 128/0, FLTK smoke 20/0)*
 
+These counts predate later guest-visible fixes and have not been re-measured:
+the suites need the external MSVC binaries under `MSVC_ROOT`, which is not
+part of this repository. Treat the numbers as a dated baseline, not a current
+run.
+
 ## Verification state
 
 | Suite | Result | Command |

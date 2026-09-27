@@ -1,9 +1,9 @@
 # CLI Binaries Execution Status
 
 Status: progress tracker, not a specification. Counts are per-binary observations from
-`tests/test-msvc-cli.sh` runs; the binary list lives outside this repository.
+`tests/test_msvc_cli.sh` runs; the binary list lives outside this repository.
 
-This document tracks our progress attempting to run the MSVC CLI utilities listed in `tests/test_msvc_cli.sh` via the `zine` minimal environment.
+This document tracks our progress attempting to run the MSVC CLI utilities listed in `tests/test_msvc_cli.sh` via the `zine` minimal environment. Suite-level pass/fail counts live in [`STATUS.md`](STATUS.md).
 
 *Note: The loader now natively parses and executes `.bat` and `.cmd` wrappers (such as `VCVARS32.BAT`), correctly populating the internal DOS environment map (e.g. `INCLUDE`, `LIB`, `PATH`) and mapping `PATH` elements into the recursive module resolution system across UNIX filesystems.*
 

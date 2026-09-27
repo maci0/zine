@@ -4,7 +4,8 @@ Open items, prioritized. Current state and what is already implemented:
 see [`STATUS.md`](STATUS.md).
 
 Verified baseline (2026-08-08): native **158/0**, native64 **158/0**,
-wasmtime **128/0**, FLTK smoke **20/0** — all suites green.
+wasmtime **128/0**, FLTK smoke **20/0** — all suites green. Not re-measured
+since; see the note in [`STATUS.md`](STATUS.md).
 
 ## GUI (web + FLTK backends)
 

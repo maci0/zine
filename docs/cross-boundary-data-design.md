@@ -62,7 +62,7 @@ The loader supports (or will support) these execution contexts. Each has a diffe
 
 ### The Pattern
 
-**7 out of 9 contexts pass raw, host-dereferenceable pointers to stubs. Only WASM32/WASM64/Browser differ.** In all three WASM cases, the comptime thunk handler performs the translation BEFORE calling the stub. The stub itself always receives host-accessible pointers.
+**6 of the 11 contexts above pass raw, host-dereferenceable pointers to stubs. Only the five WASM/Browser rows differ.** In every WASM case, the comptime thunk handler performs the translation BEFORE calling the stub. The stub itself always receives host-accessible pointers.
 
 The translation burden belongs in the **thunk handler** (`castArg` in `env.zig`), not in the stubs.
 
@@ -432,7 +432,9 @@ When compiled as a real Windows DLL:
 Goal: All file/path operations go through `host_io.zig`. Stubs stop calling `path_utils` or `std.fs` directly.
 
 Status: `host_io.zig` exists with `open`, `access`, `stat`, `deleteFile`, `getCwd`,
-`getFullPath`, `searchPath`, `fileFromFd`. `findFirst`/`findNext` were not needed
+`getFullPath`, `fileFromFd`. `searchPath` was removed as dead code; `searchenv`
+inlines its own PATH walk against `posix_fs.access` (`msvcrt/path.zig`).
+`findFirst`/`findNext` were not needed
 as separate APIs (`FindFirstFileA`/`FindNextFileA` keep their own handle pool in
 `kernel32/file.zig`). Current test counts live in [`STATUS.md`](STATUS.md).
 
@@ -458,7 +460,7 @@ as separate APIs (`FindFirstFileA`/`FindNextFileA` keep their own handle pool in
 - [x] Migrate `_getcwd` to use `host_io.getCwd` (`msvcrt/path.zig`)
 - [ ] Migrate `_fullpath` to use `host_io.getFullPath` (used by `kernel32/path.zig` GetFullPathNameA instead)
 - [x] Migrate `_stat` to use `host_io.stat` (`msvcrt/file.zig`)
-- [ ] Migrate `_searchenv` to use `host_io` for probing (`host_io.searchPath` exists but is unused by stubs so far)
+- [ ] Migrate `_searchenv` to use `host_io` for probing (`host_io.searchPath` was removed; `searchenv` inlines its own PATH walk against `posix_fs.access`)
 - [ ] Migrate `_findfirst`/`_findnext` to `host_io` helpers
 - [ ] Run full test suite (current counts tracked in [`STATUS.md`](STATUS.md))
 
@@ -466,7 +468,7 @@ as separate APIs (`FindFirstFileA`/`FindNextFileA` keep their own handle pool in
 
 Goal: Stubs use `[*]u8`, `*T`, `?[*:0]const u8` instead of `usize`. The comptime thunk handler auto-translates pointer types. All `trace.addr()` calls removed from stubs.
 
-Status: NOT fully done. 114 `trace.addr()` call sites remain across
+Status: NOT fully done. 113 `trace.addr()` call sites remain across
 `src/win32/` (concentrated in `user32/message.zig`, `comdlg32/dialogs.zig`,
 `advapi32/registry.zig`, `kernel32/locale.zig`/`path.zig`/`mem.zig`, and the
 msvcrt modules below; count checked 2026-09-27).
@@ -498,7 +500,7 @@ an exception to the target design.
   - Use `std.mem.span(path)` instead of `trace.c_span(path_ptr)`
 - [ ] `msvcrt/file.zig`: done for `read`, `stat`, `fstat`, `fileno`; still `usize`: `access`, `sopen`, `write`
   - Same pattern
-- [ ] `msvcrt/string.zig`: done for `strlen`, `strcpy`, `strncpy`, `strcat`, `strcmp`; 3 `trace.addr()` sites remain further down the file
+- [ ] `msvcrt/string.zig`: done for `strlen`, `strcpy`, `strncpy`, `strcat`, `strcmp`; 2 `trace.addr()` sites remain further down the file
   - All `s1_ptr: usize` → `s1: [*:0]const u8`
 - [ ] `msvcrt/fmt.zig`: `printf`, `sprintf`, `sscanf`, etc.
   - Format string: `fmt_ptr: usize` → `fmt: [*:0]const u8`
@@ -779,7 +781,7 @@ baseline.
 |------|-------------|-------------|
 | `src/win32/msvcrt/*.zig` | Stubs with `trace.addr()` workarounds | Pure C-callable stubs, no loader deps |
 | `src/win32/kernel32/*.zig` | Same | Same |
-| `src/win32/host_io.zig` | Implemented: file I/O + path conversion (`open`, `access`, `stat`, `getCwd`, `getFullPath`, `searchPath`, `fileFromFd`) | Single choke point for all stub file/path operations |
+| `src/win32/host_io.zig` | Implemented: file I/O + path conversion (`open`, `access`, `stat`, `getCwd`, `getFullPath`, `fileFromFd`) | Single choke point for all stub file/path operations |
 | `src/loader/env.zig` | Thunk handler with `castArg` | Thunk handler translates ALL pointer params |
 | `src/trace.zig` | `addr()`, `c_span()` for manual translation | Deprecated for stubs; used only by loader internals |
 | `src/path_utils.zig` | Win32 <-> POSIX conversion | Called only from `host_io.zig` |
