@@ -1405,7 +1405,7 @@ function connect() {
                                 'data-type': 'folder',
                                 onclick: () => selectFile(f),
                                 ondblclick: () => navigateTo(currentPath + '/' + f)
-                            }, img({src: 'assets/folder.svg', width: 16, height: 16}), f);
+                            }, img({src: 'assets/folder.svg', width: 16, height: 16}), span({class: 'file-item-name'}, f));
                             van.add(fileListEl, item);
                         });
                         files.forEach(f => {
@@ -1416,7 +1416,7 @@ function connect() {
                                 'data-type': 'file',
                                 onclick: () => selectFile(f),
                                 ondblclick: () => { selectFile(f); openSelectedFile(); }
-                            }, img({src: 'assets/file.svg', width: 16, height: 16}), f));
+                            }, img({src: 'assets/file.svg', width: 16, height: 16}), span({class: 'file-item-name'}, f)));
                         });
                     }
                     ftSel.addEventListener('change', renderFileList);

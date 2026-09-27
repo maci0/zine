@@ -409,8 +409,13 @@ pub fn CompareStringA(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1:
 pub fn CompareStringW(Locale: u32, dwCmpFlags: u32, lpString1: usize, cchCount1: i32, lpString2: usize, cchCount2: i32) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: CompareStringW(flags={x}, locale={x})\n", .{ dwCmpFlags, Locale });
 
-    const s1 = if (lpString1 != 0) @as([*]const u16, @ptrFromInt(lpString1)) else @as([*]const u16, @ptrFromInt(lpString1));
-    const s2 = if (lpString2 != 0) @as([*]const u16, @ptrFromInt(lpString2)) else @as([*]const u16, @ptrFromInt(lpString2));
+    if (lpString1 == 0 or lpString2 == 0) {
+        kernel32_error.SetLastError(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    }
+    // lpString1/lpString2 are guest VAs (usize params — not auto-translated).
+    const s1 = @as([*]const u16, @ptrFromInt(trace.addr(lpString1)));
+    const s2 = @as([*]const u16, @ptrFromInt(trace.addr(lpString2)));
 
     const len1: usize = if (cchCount1 < 0) trace.c_span_w(lpString1).len else @intCast(cchCount1);
     const len2: usize = if (cchCount2 < 0) trace.c_span_w(lpString2).len else @intCast(cchCount2);
@@ -524,7 +529,7 @@ pub fn LCMapStringEx(lpLocaleName: usize, dwMapFlags: u32, lpSrcStr: usize, cchS
 
     // lpSrcStr/lpDestStr are guest VAs (usize params — not auto-translated).
     const src = @as([*]const u16, @ptrFromInt(trace.addr(lpSrcStr)));
-    const dst = @as([*]u16, @ptrFromInt(lpDestStr));
+    const dst = @as([*]u16, @ptrFromInt(trace.addr(lpDestStr)));
     const copy_len = @min(counted.src_len, @as(usize, @intCast(cchDest)));
     for (0..copy_len) |i| {
         const ch = src[i];
@@ -629,7 +634,7 @@ pub fn GetLocaleInfoA(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) c
     }
 
     if (lpLCData != 0) {
-        const out = @as([*]u8, @ptrFromInt(lpLCData));
+        const out = @as([*]u8, @ptrFromInt(trace.addr(lpLCData)));
         const copy_len = @min(val.len, @as(usize, @intCast(cchData)) - 1);
         @memcpy(out[0..copy_len], val[0..copy_len]);
         out[copy_len] = 0;
@@ -658,7 +663,7 @@ pub fn GetLocaleInfoW(Locale: u32, LCType: u32, lpLCData: usize, cchData: i32) c
     }
 
     if (lpLCData != 0) {
-        const out = @as([*]u16, @ptrFromInt(lpLCData));
+        const out = @as([*]u16, @ptrFromInt(trace.addr(lpLCData)));
         const copy_len = @min(val.len, @as(usize, @intCast(cchData)) - 1);
         for (0..copy_len) |i| out[i] = val[i];
         out[copy_len] = 0;
@@ -686,7 +691,7 @@ const full_month_names = [_][]const u8{
 /// guest clock (same policy as GetLocalTime).
 fn formatInputSystemTime(lpSystemTime: usize) w32.SYSTEMTIME {
     if (lpSystemTime != 0) {
-        const st = @as(*const w32.SYSTEMTIME, @ptrFromInt(lpSystemTime));
+        const st = @as(*const w32.SYSTEMTIME, @ptrFromInt(trace.addr(lpSystemTime)));
         return st.*;
     }
     var now = w32.SYSTEMTIME{};
@@ -709,7 +714,7 @@ fn dayOfWeekIndex(st: *const w32.SYSTEMTIME) usize {
 fn writeFormattedOut(out_ptr: usize, cch: i32, formatted: []const u8) i32 {
     if (cch == 0) return @intCast(formatted.len + 1);
     if (out_ptr == 0 or cch <= 0 or @as(usize, @intCast(cch)) <= formatted.len) return 0;
-    const buf = @as([*]u8, @ptrFromInt(out_ptr));
+    const buf = @as([*]u8, @ptrFromInt(trace.addr(out_ptr)));
     @memcpy(buf[0..formatted.len], formatted);
     buf[formatted.len] = 0;
     return @intCast(formatted.len + 1);
@@ -799,7 +804,7 @@ fn ampmSuffix(st: *const w32.SYSTEMTIME, show: bool) []const u8 {
 pub fn lstrcpynA(lpString1: usize, lpString2: usize, iMaxLength: i32) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0 or lpString2 == 0 or iMaxLength <= 0) return lpString1;
     const src = trace.c_span(lpString2);
-    const dst = @as([*]u8, @ptrFromInt(lpString1));
+    const dst = @as([*]u8, @ptrFromInt(trace.addr(lpString1)));
     const max_len: usize = @intCast(iMaxLength);
     const copy_len = @min(src.len, max_len - 1);
     @memcpy(dst[0..copy_len], src[0..copy_len]);
@@ -825,7 +830,7 @@ pub fn lstrcmpA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 {
 pub fn lstrcpyA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0 or lpString2 == 0) return lpString1;
     const src = trace.c_span(lpString2);
-    const dst = @as([*]u8, @ptrFromInt(lpString1));
+    const dst = @as([*]u8, @ptrFromInt(trace.addr(lpString1)));
     @memcpy(dst[0..src.len], src);
     dst[src.len] = 0;
     return lpString1;
@@ -844,7 +849,7 @@ pub fn lstrlenA(lpString: usize) callconv(w32cc.WINAPI) i32 {
 pub fn lstrcatA(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0) return 0;
     if (lpString2 == 0) return lpString1;
-    const dst = @as([*]u8, @ptrFromInt(lpString1));
+    const dst = @as([*]u8, @ptrFromInt(trace.addr(lpString1)));
     const src = trace.c_span(lpString2);
     var len: usize = 0;
     while (dst[len] != 0) : (len += 1) {}
@@ -889,7 +894,7 @@ fn wlen(ptr: [*]const u16) usize {
 /// Implementation status: Partially implemented
 pub fn lstrlenW(lpString: usize) callconv(w32cc.WINAPI) i32 {
     if (lpString == 0) return 0;
-    return @intCast(wlen(@ptrFromInt(lpString)));
+    return @intCast(wlen(@ptrFromInt(trace.addr(lpString))));
 }
 
 /// Copies a Unicode string to a buffer.
@@ -897,8 +902,8 @@ pub fn lstrlenW(lpString: usize) callconv(w32cc.WINAPI) i32 {
 pub fn lstrcpyW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0) return 0;
     if (lpString2 == 0) return lpString1;
-    const dst = @as([*]u16, @ptrFromInt(lpString1));
-    const src = @as([*]const u16, @ptrFromInt(lpString2));
+    const dst = @as([*]u16, @ptrFromInt(trace.addr(lpString1)));
+    const src = @as([*]const u16, @ptrFromInt(trace.addr(lpString2)));
     const len = wlen(src);
     for (0..len) |i| dst[i] = src[i];
     dst[len] = 0;
@@ -909,12 +914,12 @@ pub fn lstrcpyW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize
 /// Implementation status: Partially implemented
 pub fn lstrcpynW(lpString1: usize, lpString2: usize, iMaxLength: i32) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0 or iMaxLength <= 0) return lpString1;
-    const dst = @as([*]u16, @ptrFromInt(lpString1));
+    const dst = @as([*]u16, @ptrFromInt(trace.addr(lpString1)));
     if (lpString2 == 0) {
         dst[0] = 0;
         return lpString1;
     }
-    const src = @as([*]const u16, @ptrFromInt(lpString2));
+    const src = @as([*]const u16, @ptrFromInt(trace.addr(lpString2)));
     const max: usize = @intCast(iMaxLength);
     const src_len = wlen(src);
     const copy_len = @min(src_len, max - 1);
@@ -928,8 +933,8 @@ pub fn lstrcpynW(lpString1: usize, lpString2: usize, iMaxLength: i32) callconv(w
 pub fn lstrcatW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize {
     if (lpString1 == 0) return 0;
     if (lpString2 == 0) return lpString1;
-    const dst = @as([*]u16, @ptrFromInt(lpString1));
-    const src = @as([*]const u16, @ptrFromInt(lpString2));
+    const dst = @as([*]u16, @ptrFromInt(trace.addr(lpString1)));
+    const src = @as([*]const u16, @ptrFromInt(trace.addr(lpString2)));
     const dst_len = wlen(dst);
     const src_len = wlen(src);
     for (0..src_len) |i| dst[dst_len + i] = src[i];
@@ -941,8 +946,8 @@ pub fn lstrcatW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) usize
 /// Implementation status: Partially implemented
 pub fn lstrcmpW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 {
     if (lpString1 == 0 or lpString2 == 0) return 0;
-    const s1 = @as([*]const u16, @ptrFromInt(lpString1));
-    const s2 = @as([*]const u16, @ptrFromInt(lpString2));
+    const s1 = @as([*]const u16, @ptrFromInt(trace.addr(lpString1)));
+    const s2 = @as([*]const u16, @ptrFromInt(trace.addr(lpString2)));
     var i: usize = 0;
     while (s1[i] != 0 and s2[i] != 0) : (i += 1) {
         if (s1[i] < s2[i]) return -1;
@@ -957,8 +962,8 @@ pub fn lstrcmpW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 {
 /// Implementation status: Partially implemented
 pub fn lstrcmpiW(lpString1: usize, lpString2: usize) callconv(w32cc.WINAPI) i32 {
     if (lpString1 == 0 or lpString2 == 0) return 0;
-    const s1 = @as([*]const u16, @ptrFromInt(lpString1));
-    const s2 = @as([*]const u16, @ptrFromInt(lpString2));
+    const s1 = @as([*]const u16, @ptrFromInt(trace.addr(lpString1)));
+    const s2 = @as([*]const u16, @ptrFromInt(trace.addr(lpString2)));
     var i: usize = 0;
     while (s1[i] != 0 and s2[i] != 0) : (i += 1) {
         const c1 = unicase.foldKey(s1[i]);
@@ -1158,6 +1163,16 @@ test "CompareStringW folds I and dotless i together only in Turkish" {
     try testing.expectEqual(@as(i32, 2), CompareStringW(LANG_TR, NORM_IGNORECASE, d, -1, lo, -1));
     try testing.expect(CompareStringW(LANG_TR, NORM_IGNORECASE, d, -1, l, -1) != 2);
     try testing.expect(CompareStringW(LANG_TR, NORM_IGNORECASE, p, -1, d, -1) != 2);
+}
+
+test "CompareStringW rejects a null string instead of reading address zero" {
+    var text = [_:0]u16{ 'a', 'b' };
+    const va = @intFromPtr(&text);
+    const NORM_IGNORECASE: u32 = 0x00000001;
+
+    try testing.expectEqual(@as(i32, 0), CompareStringW(default_lcid, NORM_IGNORECASE, 0, -1, va, -1));
+    try testing.expectEqual(@as(i32, 0), CompareStringW(default_lcid, NORM_IGNORECASE, va, -1, 0, -1));
+    try testing.expectEqual(@as(i32, 0), CompareStringW(default_lcid, NORM_IGNORECASE, 0, 0, va, -1));
 }
 
 test "LCMapStringEx resolves the locale name it is given" {

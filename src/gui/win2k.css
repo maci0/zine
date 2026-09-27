@@ -167,11 +167,14 @@ canvas                      { cursor: none; }
 
     /* ===== Typography (NONCLIENTMETRICS lfMessageFont at 96 DPI) ===== */
 
-    /* The Win2k faces carry no glyphs outside Latin-1, so the stacks end in
-     * families that cover Cyrillic, Greek, Arabic, Hebrew, CJK and Devanagari
-     * before the generic fallback picks a system face for the whole range. */
-    --font-ui:   'MS Sans Serif', 'Microsoft Sans Serif', 'Tahoma', 'Noto Sans', 'DejaVu Sans', 'Liberation Sans', sans-serif;
-    --font-mono: 'Lucida Console', 'Consolas', 'Courier New', 'DejaVu Sans Mono', 'Noto Sans Mono', monospace;
+    /* The Win2k faces carry no glyphs outside Latin-1, and 'Noto Sans' and the
+     * DejaVu and Liberation faces stop at Cyrillic and Greek, so the script
+     * families are named explicitly before the generic fallback. 'Noto Sans
+     * CJK' and 'Noto Sans Arabic' are font-config aliases that also resolve
+     * to the SC/TC/JP/KR and regular cuts, so a stock Linux desktop matches
+     * them without the script subfamily having to be guessed. */
+    --font-ui:   'MS Sans Serif', 'Microsoft Sans Serif', 'Tahoma', 'Noto Sans', 'DejaVu Sans', 'Liberation Sans', 'Noto Sans CJK', 'Noto Sans Arabic', 'Noto Sans Hebrew', 'Noto Sans Devanagari', sans-serif;
+    --font-mono: 'Lucida Console', 'Consolas', 'Courier New', 'DejaVu Sans Mono', 'Noto Sans Mono', 'Noto Sans Mono CJK', 'Noto Sans Mono Arabic', monospace;
 
     /* ===== Surfaces outside the GetSysColor set =====
      * Paint used by controls whose fill is not a system color:
@@ -1873,11 +1876,19 @@ select.win2k-edit:disabled {
     box-sizing: border-box;
     font-size: 11px;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     display: flex;
     align-items: center;
     gap: 4px;
+}
+
+/* The name is a flex item of its own so it can shrink and ellipsize: a bare
+   text node inside the row becomes an anonymous flex item, which neither
+   inherits text-overflow nor drops below its min-content width, so a long
+   German compound or a run of CJK would push the row wider than the pane. */
+.comdlg-file-list .file-item-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .comdlg-file-list .file-item:hover {
