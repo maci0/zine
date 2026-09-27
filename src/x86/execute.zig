@@ -1230,14 +1230,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             const result: i64 = @as(i64, a) * @as(i64, b);
             const r32: u32 = @truncate(@as(u64, @bitCast(result)));
             cpu.setReg(@enumFromInt(insn.modrm_reg), r32);
-            var ef = cpu.flags.toEflags();
-            const sext: i64 = @as(i32, @bitCast(r32));
-            if (result != sext) {
-                ef |= flags_mod.FLAG_CF | flags_mod.FLAG_OF;
-            } else {
-                ef &= ~(flags_mod.FLAG_CF | flags_mod.FLAG_OF);
-            }
-            cpu.flags.fromEflags(ef);
+            setMulOverflow(cpu, result != @as(i64, @as(i32, @bitCast(r32))));
         },
 
         // CMOVcc (0F 40-4F)
@@ -1458,14 +1451,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             const result: i64 = @as(i64, src) * @as(i64, imm);
             const r32: u32 = @truncate(@as(u64, @bitCast(result)));
             cpu.setReg(@enumFromInt(insn.modrm_reg), r32);
-            var ef = cpu.flags.toEflags();
-            const sext: i64 = @as(i32, @bitCast(r32));
-            if (result != sext) {
-                ef |= flags_mod.FLAG_CF | flags_mod.FLAG_OF;
-            } else {
-                ef &= ~(flags_mod.FLAG_CF | flags_mod.FLAG_OF);
-            }
-            cpu.flags.fromEflags(ef);
+            setMulOverflow(cpu, result != @as(i64, @as(i32, @bitCast(r32))));
         },
 
         // --- Legacy segment PUSH/POP ---
@@ -1886,6 +1872,15 @@ inline fn readMemAddr(cpu: *const Cpu, insn: *const Instruction, idx: u1) u32 {
     return if (kind == .mem) computeEffectiveAddress(cpu, insn) else 0;
 }
 
+/// MUL and IMUL report overflow the same way: CF and OF both take the
+/// overflowed value, and both are left untouched otherwise.
+fn setMulOverflow(cpu: *Cpu, overflowed: bool) void {
+    const mask = flags_mod.FLAG_CF | flags_mod.FLAG_OF;
+    var ef = cpu.flags.toEflags();
+    if (overflowed) ef |= mask else ef &= ~mask;
+    cpu.flags.fromEflags(ef);
+}
+
 pub inline fn computeEffectiveAddress(cpu: *const Cpu, insn: *const Instruction) u32 {
     var addr: u32 = 0;
     if (insn.mem_base != 0xF) addr +%= cpu.getReg(@enumFromInt(@as(u3, @truncate(insn.mem_base))));
@@ -2016,24 +2011,12 @@ fn execGroup3(cpu: *Cpu, insn: *const Instruction) void {
             if (is_byte) {
                 const result: u16 = @as(u16, @truncate(cpu.eax & 0xFF)) * @as(u16, @truncate(val));
                 cpu.eax = (cpu.eax & 0xFFFF0000) | result;
-                var ef = cpu.flags.toEflags();
-                if ((result & 0xFF00) != 0) {
-                    ef |= flags_mod.FLAG_CF | flags_mod.FLAG_OF;
-                } else {
-                    ef &= ~(flags_mod.FLAG_CF | flags_mod.FLAG_OF);
-                }
-                cpu.flags.fromEflags(ef);
+                setMulOverflow(cpu, (result & 0xFF00) != 0);
             } else {
                 const result: u64 = @as(u64, cpu.eax) * @as(u64, val);
                 cpu.eax = @truncate(result);
                 cpu.edx = @truncate(result >> 32);
-                var ef = cpu.flags.toEflags();
-                if ((result >> 32) != 0) {
-                    ef |= flags_mod.FLAG_CF | flags_mod.FLAG_OF;
-                } else {
-                    ef &= ~(flags_mod.FLAG_CF | flags_mod.FLAG_OF);
-                }
-                cpu.flags.fromEflags(ef);
+                setMulOverflow(cpu, (result >> 32) != 0);
             }
         },
         5 => { // IMUL (one-operand form)
@@ -2042,28 +2025,16 @@ fn execGroup3(cpu: *Cpu, insn: *const Instruction) void {
                 const b: i16 = @as(i8, @bitCast(@as(u8, @truncate(val))));
                 const result: u16 = @bitCast(a * b);
                 cpu.eax = (cpu.eax & 0xFFFF0000) | result;
-                var ef = cpu.flags.toEflags();
                 const sext: i16 = @as(i8, @bitCast(@as(u8, @truncate(result))));
-                if (result != @as(u16, @bitCast(sext))) {
-                    ef |= flags_mod.FLAG_CF | flags_mod.FLAG_OF;
-                } else {
-                    ef &= ~(flags_mod.FLAG_CF | flags_mod.FLAG_OF);
-                }
-                cpu.flags.fromEflags(ef);
+                setMulOverflow(cpu, result != @as(u16, @bitCast(sext)));
             } else {
                 const a: i64 = @as(i32, @bitCast(cpu.eax));
                 const b: i64 = @as(i32, @bitCast(val));
                 const result: u64 = @bitCast(a * b);
                 cpu.eax = @truncate(result);
                 cpu.edx = @truncate(result >> 32);
-                var ef = cpu.flags.toEflags();
                 const sext: i64 = @as(i32, @bitCast(@as(u32, @truncate(result))));
-                if (result != @as(u64, @bitCast(sext))) {
-                    ef |= flags_mod.FLAG_CF | flags_mod.FLAG_OF;
-                } else {
-                    ef &= ~(flags_mod.FLAG_CF | flags_mod.FLAG_OF);
-                }
-                cpu.flags.fromEflags(ef);
+                setMulOverflow(cpu, result != @as(u64, @bitCast(sext)));
             }
         },
         6 => { // DIV

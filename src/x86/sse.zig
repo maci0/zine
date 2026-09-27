@@ -13,6 +13,7 @@ const decoder = @import("decoder.zig");
 const flags_mod = @import("flags.zig");
 const fpu = @import("fpu.zig");
 const log = @import("../log.zig");
+const execute_mod = @import("execute.zig");
 
 const Cpu = cpu_mod.Cpu;
 const Instruction = decoder.Instruction;
@@ -23,16 +24,9 @@ const Segment = cpu_mod.Segment;
 // Address computation (uses flat mem_* fields from Instruction)
 // -----------------------------------------------------------------------
 
-fn computeAddr(cpu: *const Cpu, insn: *const Instruction) u32 {
-    var addr: u32 = 0;
-    if (insn.mem_base != 0xF) addr +%= cpu.getReg(@enumFromInt(@as(u3, @truncate(insn.mem_base))));
-    if (insn.mem_index != 0xF) {
-        const idx_val = cpu.getReg(@enumFromInt(@as(u3, @truncate(insn.mem_index))));
-        addr +%= idx_val << insn.mem_scale;
-    }
-    addr +%= @bitCast(insn.mem_disp);
-    return cpu.resolveSegmentAddress(insn.mem_seg, addr);
-}
+/// execute.zig dispatches here, so the address formula lives there and both
+/// modules resolve a memory operand the same way.
+const computeAddr = execute_mod.computeEffectiveAddress;
 
 // -----------------------------------------------------------------------
 // Source operand readers

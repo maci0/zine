@@ -28,29 +28,21 @@ fn findResourceImpl(hModule: usize, lpName: usize, lpType: usize) usize {
     const resource_type: u32 = @intCast(lpType & 0xFFFF);
 
     // Find the module to get its resource data
-    if (kernel32.global_env) |genv| {
-        var mod_handle = hModule;
-        if (mod_handle == 0) mod_handle = kernel32.main_module_handle;
-
-        var it = genv.registry.modules.valueIterator();
-        while (it.next()) |m| {
-            if (@intFromPtr(m.*.mapped_memory.ptr) == mod_handle) {
-                if (lpName <= 0xFFFF) {
-                    // Integer resource ID
-                    const resource_id: u32 = @intCast(lpName & 0xFFFF);
-                    if (m.*.getResource(resource_type, resource_id)) |data| {
-                        if (trace.enable_tracing) trace.print("KERNEL32: FindResource -> {x} (size={d})\n", .{ @intFromPtr(data.ptr), data.len });
-                        return @intFromPtr(data.ptr);
-                    }
-                } else {
-                    // String resource name — look up by name in the PE resource directory
-                    const name_str = trace.c_span(lpName);
-                    if (m.*.getResourceByName(resource_type, name_str)) |data| {
-                        if (trace.enable_tracing) trace.print("KERNEL32: FindResource('{s}') -> {x} (size={d})\n", .{ name_str, @intFromPtr(data.ptr), data.len });
-                        return @intFromPtr(data.ptr);
-                    }
-                }
-                break;
+    const mod_handle = if (hModule == 0) kernel32.main_module_handle else hModule;
+    if (kernel32.moduleForInstance(mod_handle)) |m| {
+        if (lpName <= 0xFFFF) {
+            // Integer resource ID
+            const resource_id: u32 = @intCast(lpName & 0xFFFF);
+            if (m.getResource(resource_type, resource_id)) |data| {
+                if (trace.enable_tracing) trace.print("KERNEL32: FindResource -> {x} (size={d})\n", .{ @intFromPtr(data.ptr), data.len });
+                return @intFromPtr(data.ptr);
+            }
+        } else {
+            // String resource name — look up by name in the PE resource directory
+            const name_str = trace.c_span(lpName);
+            if (m.getResourceByName(resource_type, name_str)) |data| {
+                if (trace.enable_tracing) trace.print("KERNEL32: FindResource('{s}') -> {x} (size={d})\n", .{ name_str, @intFromPtr(data.ptr), data.len });
+                return @intFromPtr(data.ptr);
             }
         }
     }
@@ -108,7 +100,6 @@ pub fn stub_SizeofResource(hModule: usize, hResInfo: usize) callconv(w32cc.WINAP
                         }
                     }
                 }
-                break;
             }
         }
     }

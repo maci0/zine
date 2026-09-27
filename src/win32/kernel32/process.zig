@@ -1732,20 +1732,15 @@ pub fn GetModuleFileNameA_Full(hModule: usize, lpFilename: usize, nSize: u32) ca
     }
 
     // Fallback: try to find module name from registry
-    if (kernel32.global_env) |genv| {
-        var it = genv.registry.modules.valueIterator();
-        while (it.next()) |m| {
-            if (@intFromPtr(m.*.mapped_memory.ptr) == hModule) {
-                const dir = runtime.main_exe_dir[0..runtime.main_exe_dir_len];
-                const mname = m.*.name;
-                const total = dir.len + mname.len;
-                if (total < nSize) {
-                    @memcpy(buf[0..dir.len], dir);
-                    @memcpy(buf[dir.len..total], mname);
-                    buf[total] = 0;
-                    return @intCast(total);
-                }
-            }
+    if (kernel32.moduleForInstance(hModule)) |m| {
+        const dir = runtime.main_exe_dir[0..runtime.main_exe_dir_len];
+        const mname = m.name;
+        const total = dir.len + mname.len;
+        if (total < nSize) {
+            @memcpy(buf[0..dir.len], dir);
+            @memcpy(buf[dir.len..total], mname);
+            buf[total] = 0;
+            return @intCast(total);
         }
     }
 

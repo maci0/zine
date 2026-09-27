@@ -13,16 +13,7 @@ pub fn LoadIconA(hInstance: usize, lpIconName: usize) callconv(w32cc.WINAPI) usi
         hInst = kernel32.main_module_handle;
     }
 
-    var mod: ?*@import("../../loader/module.zig").Module = null;
-    if (kernel32.global_env) |genv| {
-        var it = genv.registry.modules.valueIterator();
-        while (it.next()) |m| {
-            if (@intFromPtr(m.*.mapped_memory.ptr) == hInst) {
-                mod = m.*;
-                break;
-            }
-        }
-    }
+    const mod = kernel32.moduleForInstance(hInst);
 
     if (mod) |m| {
         if (lpIconName <= 0xFFFF) {
@@ -337,16 +328,7 @@ pub fn stub_LoadMenuA(hInstance: usize, lpMenuName: usize) callconv(w32cc.WINAPI
 }
 
 fn loadBitmapFromPE(hInst: usize, lpBitmapName: usize) usize {
-    var mod: ?*@import("../../loader/module.zig").Module = null;
-    if (kernel32.global_env) |genv| {
-        var it = genv.registry.modules.valueIterator();
-        while (it.next()) |m| {
-            if (@intFromPtr(m.*.mapped_memory.ptr) == hInst) {
-                mod = m.*;
-                break;
-            }
-        }
-    }
+    const mod = kernel32.moduleForInstance(hInst);
     if (mod) |m| {
         if (lpBitmapName <= 0xFFFF) {
             // RT_BITMAP is 2

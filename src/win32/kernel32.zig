@@ -13,10 +13,19 @@
 
 const std = @import("std");
 const env = @import("../loader/env.zig");
+const module = @import("../loader/module.zig");
 const w32 = @import("constants.zig");
 
 pub var global_env: ?*env.Environment = null;
 pub var main_module_handle: usize = 0;
+
+/// Resolves a guest HINSTANCE/HMODULE to the module mapped there. A null
+/// handle names nothing: callers that allow it to mean the running
+/// executable substitute `main_module_handle` first.
+pub fn moduleForInstance(handle: usize) ?*module.Module {
+    const genv = global_env orelse return null;
+    return genv.registry.moduleForHandle(handle);
+}
 
 const kernel32_file = @import("kernel32/file.zig");
 const kernel32_mem = @import("kernel32/mem.zig");

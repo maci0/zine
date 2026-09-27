@@ -38,16 +38,7 @@ pub fn DialogBoxParamA(hInstance: usize, lpTemplateName: usize, hWndParent: usiz
     var hInst = hInstance;
     if (hInst == 0) hInst = @import("../kernel32.zig").main_module_handle;
 
-    var mod: ?*@import("../../loader/module.zig").Module = null;
-    if (@import("../kernel32.zig").global_env) |genv| {
-        var it = genv.registry.modules.valueIterator();
-        while (it.next()) |m| {
-            if (@intFromPtr(m.*.mapped_memory.ptr) == hInst) {
-                mod = m.*;
-                break;
-            }
-        }
-    }
+    const mod = @import("../kernel32.zig").moduleForInstance(hInst);
 
     if (lpTemplateName < 0x10000) {
         var pushed = false;
@@ -397,16 +388,7 @@ pub fn CreateDialogParamA(hInstance: usize, lpTemplateName: usize, hWndParent: u
 
         if (trace.enable_tracing) trace.print("  dialog: hInst={x}, looking for module...\n", .{hInst});
 
-        var mod: ?*@import("../../loader/module.zig").Module = null;
-        if (@import("../kernel32.zig").global_env) |genv| {
-            var it = genv.registry.modules.valueIterator();
-            while (it.next()) |m| {
-                if (@intFromPtr(m.*.mapped_memory.ptr) == hInst) {
-                    mod = m.*;
-                    break;
-                }
-            }
-        }
+        const mod = @import("../kernel32.zig").moduleForInstance(hInst);
 
         if (mod) |m| {
             if (trace.enable_tracing) trace.print("  dialog: found module, parsing resource {d}...\n", .{@as(u32, @intCast(lpTemplateName))});
