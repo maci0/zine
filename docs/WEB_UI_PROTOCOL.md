@@ -42,17 +42,17 @@ Assets carrying a build-time gzip variant (see `precompressedContent` in
 negotiates gzip. `Vary: Accept-Encoding` is always sent, and the ETag covers
 the representation actually sent, so a client that revalidates with
 `If-None-Match` gets a 304 only for the encoding it asked for. A 304 repeats
-`ETag`, `Cache-Control: private, no-cache`, `Vary`, the security headers
-described below, and `Content-Encoding: gzip` when the revalidated
-representation was compressed.
+`ETag`, `Cache-Control: private, no-cache`, `Vary`, the three security headers
+below, and `Content-Encoding: gzip` when the revalidated representation was
+compressed. It does not repeat `Content-Security-Policy`, which is sent only
+with the 200.
 `Cache-Control: private, no-cache`
 forces revalidation, so an edited asset is picked up on the next load.
 
 Every asset response, including a 304, carries `X-Content-Type-Options:
-nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and a
-`Content-Security-Policy` of `default-src 'self'` with the WebSocket URL
-allowed in `connect-src`, plus `object-src 'none'; base-uri 'none';
-frame-ancestors 'none'`.
+nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: no-referrer`. A 200
+adds a `Content-Security-Policy` of
+`default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' <ws-url>; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`.
 
 Assets over 10 MiB are refused with 413.
 
@@ -89,7 +89,7 @@ sides may then send text messages at any time.
 | `open_file_dialog`, `open_find_dialog`, `open_font_dialog`, `show_page_setup_dialog`, `show_print_dialog` (`from`, `to`, `min`, `max`, `copies`), `show_color_dialog`, `show_context_menu`, `message_box` | dialog requests |
 | `show_controls`, `add_control`, `set_control_checked`, `set_control_color`, `set_listbox_items`, `update_control_range`, `update_control_text`, `update_control_value` | guest control state |
 | `show_edit_control`, `set_edit_text`, `set_edit_font`, `resize_edit_control`, `edit_setsel`, `edit_replacesel`, `edit_scrollcaret`, `edit_undo` | guest edit control state |
-| `close_dialog`, `custom_dialog` | dialog lifecycle |
+| `show_dialog`, `close_dialog`, `custom_dialog` | dialog lifecycle |
 | `error` | `message`: see below |
 
 ### Client to server

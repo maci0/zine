@@ -123,7 +123,3 @@ pub const raiseStackLimit = backend.raiseStackLimit;
 pub const pipe = backend.pipe;
 /// Duplicates a file descriptor.
 pub const dup = backend.dup;
-
-// -------------------------------------------------------------------------
-// Guest pointer helpers
-// -------------------------------------------------------------------------

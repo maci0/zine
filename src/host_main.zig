@@ -4,9 +4,10 @@
 //! imports. Uses the wasmer C API (wasm-c-api standard) to:
 //!   1. Load zine.wasm as the main module
 //!   2. Provide WASI imports (file I/O, clock, args, env)
-//!   3. Add two custom imports in the "jit" namespace:
+//!   3. Add three custom imports in the "jit" namespace:
 //!      - jit_compile(wasm_ptr: i32, wasm_len: i32) -> i32
 //!      - jit_call(block_id: i32)
+//!      - jit_reset_blocks()
 //!
 //! Build:  zig build -Dhost
 //! Usage:  zine-host [options] <zine.wasm> [args...]
@@ -100,7 +101,9 @@ fn jitCompile(args: [*c]const c.wasm_val_vec_t, results: [*c]c.wasm_val_vec_t) c
 }
 
 /// jit_call(block_id: i32)
-/// Calls the "run" export of a previously compiled JIT block.
+/// Runs a previously compiled JIT block. The compiler emits exactly one
+/// zero-argument export named "run", so exports.data[0] is it by position
+/// rather than by name lookup.
 fn jitCall(args: [*c]const c.wasm_val_vec_t, results: [*c]c.wasm_val_vec_t) callconv(.c) ?*c.wasm_trap_t {
     _ = results;
     const block_id: i32 = args.*.data[0].of.i32;

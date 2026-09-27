@@ -61,8 +61,10 @@ pub inline fn tickEip(eip: u32) void {
 // -----------------------------------------------------------------------
 // 2. Opcode Frequency Table
 // -----------------------------------------------------------------------
-// Supports 1-byte opcodes (0x00-0xFF) and 0F-prefixed 2-byte opcodes
-// stored as 0x0F00-0x0FFF.  Total: 4096 entries.
+// Callers pass 1-byte opcodes (0x00-0xFF) and 0F-prefixed 2-byte opcodes
+// encoded as 0x0F00-0x0FFF. tickOpcode maps the second range onto table
+// slots 0x100-0x1FF, so only the first 512 entries can ever be non-zero;
+// the array stays at 4096 to leave room for wider encodings.
 const MAX_OPCODES = 4096;
 
 var opcode_counts: [MAX_OPCODES]u64 = .{0} ** MAX_OPCODES;

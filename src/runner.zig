@@ -168,7 +168,8 @@ pub fn failTargetLoad(target: []const u8, err: anyerror) noreturn {
 // Search Path Setup
 // -----------------------------------------------------------------------
 
-/// Configure module search paths: CWD, exe directory, and optional extras.
+/// Configure module search paths: the host CWD, the directory holding
+/// `target_exe`, and any extras the caller supplies.
 pub fn setupSearchPaths(
     environment: *Environment,
     allocator: std.mem.Allocator,

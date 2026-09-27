@@ -26,9 +26,8 @@ pub var current_directory_len: usize = 0;
 const builtin = @import("builtin");
 const is_wasi = builtin.os.tag == .wasi;
 
-/// On WASI, resolve an absolute path through preopened directories.
-/// Returns a Dir handle for the matching preopen and the relative sub-path.
-/// The Dir is a borrowed preopen fd, so the caller must not close it.
+/// A preopen directory borrowed from WASI and the part of an absolute path
+/// below it. `dir` is a borrowed preopen fd, so the caller must not close it.
 pub const ResolvedPath = struct {
     dir: std.Io.Dir,
     rel_path: []const u8,
@@ -55,6 +54,10 @@ fn wasiPreopenSubPath(abs_path: []const u8, preopen_path: []const u8) ?[]const u
     return abs_path[preopen_path.len + 1 ..];
 }
 
+/// Resolve an absolute path through the WASI preopened directories.
+/// The longest matching preopen wins, so a nested preopen stays reachable
+/// when a broader one has a lower fd. Null off WASI, or when no preopen owns
+/// the path.
 pub fn resolveWasiPath(abs_path: []const u8) ?ResolvedPath {
     if (comptime !is_wasi) return null;
     // The longest matching preopen wins, so a nested preopen stays reachable
@@ -121,7 +124,8 @@ pub fn isInsideDriveC(path: []const u8) bool {
 ///
 /// `C:\Desktop\file.txt`  → `drive_c/Desktop/file.txt`
 /// `Z:\home\user\foo`     → `/home/user/foo`
-/// `Desktop\file.txt`     → `drive_c/Desktop/file.txt` (relative → inside drive_c)
+/// `\Desktop\file.txt`    → `drive_c/Desktop/file.txt` (root-relative → inside drive_c)
+/// `Desktop\file.txt`     → `Desktop/file.txt` (relative is left for `toHostPath`)
 ///
 /// Returns the number of bytes written to `out`.
 pub fn win32ToPosix(win_path: []const u8, out: []u8) !usize {
@@ -247,8 +251,11 @@ pub fn hasDriveLetter(path: []const u8) bool {
 //   1. Normalize \ → /
 //   2. Strip ./ or .\ prefix ("same dir as me" on Windows)
 //   3. Handle drive letters: Z:\path → /path, C:\path → drive_c/path
-//   4. Resolve relative paths against the virtual CWD
-//   5. Try case-insensitive filename fallback if file not found
+//   4. Pass absolute POSIX and drive_c/ paths through unchanged
+//   5. Resolve relative paths against the virtual CWD
+//
+// Case-insensitive fallback is not done here. Callers that need it call
+// `tryCaseInsensitiveResolve` on the result.
 //
 // The result is written to `out` and the length is returned.
 // Returns 0 if the input is empty/null.
@@ -851,7 +858,11 @@ test "tryCaseInsensitiveResolve matches non-ASCII filename casing" {
     try testing.expect(std.mem.endsWith(u8, resolved, "/Café.TXT"));
 }
 
-/// Case-insensitive path resolution: scan parent directory for matching filename.
+/// Case-insensitive path resolution: find the file under a different case,
+/// scanning each parent directory upward. Linux has a dedicated path
+/// (tryCaseInsensitiveResolveLinux) that reads only the immediate directory
+/// and rejects a filename longer than NAME_MAX; other targets take the
+/// portable walk below.
 pub fn tryCaseInsensitiveResolve(path: []const u8, buf: []u8) ?[]const u8 {
     if (comptime builtin.target.os.tag == .linux) return tryCaseInsensitiveResolveLinux(path, buf);
     if (path.len > buf.len) return null;

@@ -68,7 +68,7 @@ Today, all three rendering paths converge on a shared CPU-side framebuffer:
 ```
 Guest App
  ├── DDRAW.dll stubs  → surface_buffer[] ──┐
- ├── d3d8.dll stubs   → surface_buffer[] ──┤  pushSurfaceFrame() / pushFrame()
+ ├── d3d7/d3d8 stubs  → surface_buffer[] ──┤  pushSurfaceFrameFrom() / pushFrame()
  └── GDI32 BitBlt etc → renderer.global_framebuf[] ──→ renderer.pushFrame()
                                                          ↓
                                                    WebSocket → browser canvas
@@ -330,7 +330,7 @@ DirectDraw's native pixel format is BGRA (32bpp) or BGR (24bpp), and the most
 common WebGPU canvas format is `bgra8unorm`. This means:
 
 - **32bpp DirectDraw surfaces can be uploaded with zero pixel conversion**
-- The current code in `pushSurfaceFrame()` that swaps R↔B channels is eliminated
+- The current per-pixel BGR→RGB loop in `display_surface.pushFrame()` is eliminated
 - `device.queue.writeTexture()` handles the DMA efficiently
 
 ### Zig-Side Changes (stub integration)
@@ -350,17 +350,17 @@ extern "webgpu" fn presentFrame(
 The ddraw and d3d8 stubs change from:
 ```zig
 // Before: CPU pixel conversion + pushFrame
-fn pushSurfaceFrame() void {
-    // ... per-pixel BGR→RGB loop ...
+fn pushSurfaceFrameFrom(src: [*]u8, declared_w: u32, declared_h: u32, src_len: usize) void {
+    // ... per-pixel BGR→RGB loop into renderer.global_framebuf ...
     renderer.pushFrame();
 }
 ```
 to:
 ```zig
 // After: direct GPU upload
-fn pushSurfaceFrame() void {
-    const format: u32 = if (display_mode_bpp == 16) 1 else 0;
-    presentFrame(surface_buffer.ptr, display_mode_w, display_mode_h, format);
+fn pushSurfaceFrameFrom(src: [*]u8, declared_w: u32, declared_h: u32, src_len: usize) void {
+    const format: u32 = if (display_surface.bpp == 16) 1 else 0;
+    presentFrame(src, declared_w, declared_h, format);
 }
 ```
 
@@ -525,33 +525,44 @@ blending. D3D8 kept the same pipeline and added optional shader programs
 (VS/PS 1.0–1.4). For our purposes, both map to the same WebGPU emulation layer.
 
 **Implementation Checklist (D3D7):**
+
+The `d3d7` stub module and its `IDirect3D7` / `IDirect3DDevice7` COM
+interfaces already exist (`src/win32/d3d7/`), with software rasterization in
+`d3d7/rasterizer.zig`. What is still open is replacing that software path with
+WebGPU.
+
 - [ ] Create `SceneUniforms` uniform buffer (transforms, lights, materials, fog)
 - [ ] Write `vs_fixed` WGSL vertex shader (transform + lighting)
 - [ ] Write `fs_fixed` WGSL fragment shader (texture sampling + fog)
-- [ ] Create `d3d7.zig` stub module with `IDirect3D7` / `IDirect3DDevice7` COM interfaces
-- [ ] Implement `SetTransform` → write matrix to uniform buffer
+- [x] Create `d3d7.zig` stub module with `IDirect3D7` / `IDirect3DDevice7` COM interfaces
+- [ ] Port `SetTransform` (`d3d7.zig:907`) to write the matrix into the uniform buffer
 - [ ] Implement `SetLight` / `LightEnable` → update light array in uniform buffer
 - [ ] Implement `SetMaterial` → write material data to uniform buffer
-- [ ] Implement `SetRenderState` → update pipeline state flags
-- [ ] Implement `SetTexture` / `SetTextureStageState` → update bind group
-- [ ] Implement `DrawPrimitive` (inline vertex data upload → `pass.draw()`)
+- [ ] Port `SetRenderState` → update pipeline state flags
+- [ ] Port `SetTexture` / `SetTextureStageState` → update bind group
+- [ ] Port `DrawPrimitive` (`d3d7/rasterizer.zig:282`) to `pass.draw()`
 - [ ] Implement `DrawPrimitiveVB` (vertex buffer path → `pass.draw()`)
-- [ ] Implement `DrawIndexedPrimitive` / `DrawIndexedPrimitiveVB`
+- [ ] Port `DrawIndexedPrimitive` to an indexed draw
+- [ ] Implement `DrawIndexedPrimitiveVB`
 - [ ] Implement FVF parsing → `GPUVertexBufferLayout` creation
 - [ ] Implement pipeline state cache (keyed on blend/cull/depth state)
-- [ ] Implement `BeginScene` / `EndScene` → render pass lifecycle
-- [ ] Implement `Clear` → render pass clear values
-- [ ] Implement `SetViewport` → `pass.setViewport()`
+- [x] Implement `BeginScene` / `EndScene` (`d3d7.zig:718`/`:724`) → render pass lifecycle
+- [x] Implement `Clear` (`d3d7.zig:731`) → render pass clear values
+- [ ] Port `SetViewport` → `pass.setViewport()`
 - [ ] Verify with a D3D7 game (e.g., Gothic, Deus Ex)
 
 **Implementation Checklist (D3D8 additions):**
-- [ ] Create `d3d8.zig` stub sharing the same WebGPU backend as D3D7
-- [ ] Implement `IDirect3D8::CreateDevice` (separate from DirectDraw)
-- [ ] Implement `CreateVertexBuffer` / `CreateIndexBuffer` → `GPUBuffer`
+
+The `d3d8` stub module exists (`src/win32/d3d8/`) and presents through
+`display_surface`; it does not yet share a WebGPU backend with D3D7.
+
+- [x] Create `d3d8.zig` stub sharing the same software backend as D3D7
+- [x] Implement `IDirect3D8::CreateDevice` (`d3d8.zig:430`, separate from DirectDraw)
+- [ ] Port `CreateVertexBuffer` / `CreateIndexBuffer` → `GPUBuffer`
 - [ ] Implement `SetStreamSource` / `SetIndices`
 - [ ] Implement `SetVertexShader(fvf)` → FVF parsing (fixed-function path)
 - [ ] Implement `DrawPrimitiveUP` / `DrawIndexedPrimitiveUP` (inline data)
-- [ ] Implement `Present` → `device.queue.submit()`
+- [x] Implement `Present` (`d3d8.zig:501`) → `device.queue.submit()`
 - [ ] Stub VS/PS 1.0–1.4 creation (log + fall back to fixed-function)
 - [ ] Verify with a D3D8 game (e.g., Morrowind, GTA Vice City)
 
@@ -1924,7 +1935,7 @@ Our stubs simply ignore the memory allocation calls and let WebGPU handle it:
 These topics apply across all tiers and D3D versions.
 
 **Implementation Checklist:**
-- [ ] Implement `requestAnimationFrame`-based frame pacing (replace `sleep()` loop)
+- [ ] Implement `requestAnimationFrame`-based frame pacing (replace the `pauseOrAdvance` wait in `renderer.pushFrame()`)
 - [ ] Implement alpha test emulation via WGSL `discard` in fragment shaders
 - [ ] Implement DXT1/DXT3/DXT5 → BC1/BC2/BC3 compressed texture upload path
 - [ ] Check `texture-compression-bc` feature support at adapter request time
@@ -1935,8 +1946,10 @@ These topics apply across all tiers and D3D versions.
 
 ### Frame Pacing and VSync
 
-The current native path uses `std.Thread.sleep(16ms)` in `renderer.pushFrame()`
-to cap at ~60fps. In the browser, this changes fundamentally:
+The current native path paces frames in `renderer.pushFrame()`: it compares
+`runtime.monoMilliTimestamp()` against the last frame and, when the frame is
+early, calls `runtime.pauseOrAdvance()` for the remainder, which sleeps on the
+host clock or charges a virtual one. In the browser, this changes fundamentally:
 
 - **`requestAnimationFrame`** provides natural VSync-aligned frame timing
 - The emulator's main loop must become **non-blocking** — the x86 interpreter
@@ -2192,10 +2205,10 @@ The stubs use comptime platform selection to choose between native rendering
 ```zig
 const platform = @import("../platform.zig");
 
-fn pushSurfaceFrame() void {
+fn pushSurfaceFrameFrom(src: [*]u8, declared_w: u32, declared_h: u32, src_len: usize) void {
     if (platform.is_wasm) {
         // WebGPU path: direct GPU upload
-        platform.wasm.presentFrame(surface_buffer.ptr, display_mode_w, display_mode_h, format);
+        platform.wasm.presentFrame(src, declared_w, declared_h, format);
     } else {
         // Native path: existing CPU conversion + WebSocket
         // ... current code ...
@@ -2264,18 +2277,20 @@ function presentFrameSoftware(bufPtr, width, height, format) {
 ```
 
 **Zig-side comptime selection:** For the native Linux target, the existing
-WebSocket-based `renderer.pushFrame()` path remains completely unchanged.
-The platform abstraction selects the right path:
+frame presentation stays unchanged. `renderer.pushFrame()` picks the active
+backend and dispatches to `web_ui.pushFrame()` or `fltk_ui.pushFrame()`; the
+WebSocket server behind `web_ui` is native-only and does not exist in the WASM
+target. The platform abstraction selects the right path:
 
 ```zig
 // In any stub's frame presentation function
-fn pushSurfaceFrame() void {
+fn pushSurfaceFrameFrom(src: [*]u8, declared_w: u32, declared_h: u32, src_len: usize) void {
     if (comptime platform.is_wasm) {
         // WASM target: call JS import (which internally picks WebGPU or Canvas2D)
-        const format: u32 = if (display_mode_bpp == 16) 1 else 0;
-        platform.wasm.presentFrame(surface_buffer.ptr, display_mode_w, display_mode_h, format);
+        const format: u32 = if (display_surface.bpp == 16) 1 else 0;
+        platform.wasm.presentFrame(src, declared_w, declared_h, format);
     } else {
-        // Native target: existing pixel conversion + WebSocket push (unchanged)
+        // Native target: existing pixel conversion + frame push (unchanged)
         convertAndCopyToFramebuf();
         renderer.pushFrame();
     }

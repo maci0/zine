@@ -303,21 +303,25 @@ Already handled by `relocateDataExports()`:
 
 ---
 
-## Audit 5: `shared.guest_memory` References in Stubs (9 sites)
+## Audit 5: Guest memory references in Stubs (9 sites)
 
-These loader dependencies must be removed from stubs and moved to the registration/wrapper layer.
+Line numbers below are the ones the audit observed and have since drifted. The accessor
+is `x86_memory.guest_memory` in `src/x86/memory.zig`, not `shared.guest_memory`. Not
+all of these are loader dependencies to remove: `trace.addr` translating a guest
+pointer inside a stub is the intended design, and only the call sites that hand a
+host pointer back to the guest need a slot or a registration wrapper.
 
-| File:Line | Function | What it does | Fix |
+| File | Function | What it does | Fix |
 |-----------|----------|-------------|-----|
-| `kernel32/mem.zig:13` | `getGuestMemory()` | Returns guest_memory for VirtualAlloc | Registration wrapper |
-| `kernel32/file.zig:236` | `MapViewOfFileEx` | Allocates from guest heap | Registration wrapper |
-| `kernel32/process.zig:107` | `loadDllIntoGuest` | Copies DLL to guest memory | Already loader-level |
-| `msvcrt/misc.zig:103` | `errno()` | Allocates guest errno slot | Phase 3 guest_statics |
-| `msvcrt/process.zig:29` | `ensureGuestGlobals` | Allocates guest globals | Keep (loader-level) |
-| `msvcrt/process.zig:55` | `updateGuestGlobals` | Syncs guest globals | Keep (loader-level) |
-| `msvcrt/process.zig:126` | `ensureGuestArgs` | Builds guest argv/envp | Keep (loader-level) |
-| `msvcrt/process.zig:513` | `p_pgmptr` | Reads guest argv for pgmptr | Phase 3 guest_statics |
-| `rpcrt4.zig:38` | `UuidToStringA` | Allocates UUID in guest | Registration wrapper |
+| `kernel32/mem.zig` | `guest_memory()` | Returns guest_memory for VirtualAlloc | Registration wrapper |
+| `kernel32/file.zig` | `MapViewOfFileEx` | Allocates from guest heap | Registration wrapper |
+| `kernel32/process.zig` | `loadDllIntoGuest` | Copies DLL to guest memory | Already loader-level |
+| `msvcrt/misc.zig` | `errno()` | Allocates guest errno slot | Phase 3 guest_statics |
+| `msvcrt/process.zig` | `ensureGuestGlobals` | Allocates guest globals | Keep (loader-level) |
+| `msvcrt/process.zig` | `updateGuestGlobals` | Syncs guest globals | Keep (loader-level) |
+| `msvcrt/process.zig` | `ensureGuestArgs` | Builds guest argv/envp | Keep (loader-level) |
+| `msvcrt/process.zig` | `p_pgmptr` | Reads guest argv for pgmptr | Phase 3 guest_statics |
+| `rpcrt4.zig` | `stub_UuidToStringA` | Formats the GUID into the caller's buffer via `trace.addr`; no guest allocation | None |
 
 ---
 
@@ -334,7 +338,7 @@ originally proposed):
 | `msvcrt/file.zig:stat` | `posix_fs.stat` | `host_io.stat` |
 | `msvcrt/io.zig:fopen` | `posix_fs.open` | none; still calls `posix_fs.open` directly |
 | `msvcrt/path.zig:getcwd` | `std.process.getCwdAlloc` | `host_io.getCwd` |
-| `msvcrt/path.zig:fullpath` | copies input | `host_io.getFullPath` |
+| `msvcrt/path.zig:fullpath` | copies input | none; it still copies the input verbatim |
 | `msvcrt/path.zig:searchenv` | `file.access` + PATH search | none; it inlines its own PATH walk against `posix_fs.access` |
 | `kernel32/file.zig:CreateFileA` | `posix_fs.open` via `toHostPath` | `host_io.open` |
 | `kernel32/file.zig:FindFirstFileA` | `std.fs.cwd().openDir` | none; it keeps its own find-handle pool |
@@ -370,7 +374,7 @@ Migrated stubs:
 - [x] `msvcrt/file.zig: sopen()` — now uses `host_io.open`
 - [x] `msvcrt/io.zig: fopen()` — later reverted to `posix_fs.open` (still bypassing `host_io.open`)
 - [x] `msvcrt/path.zig: getcwd()` — now uses `host_io.getCwd` (returns Win32 format)
-- [x] `msvcrt/path.zig: fullpath()` — now uses `host_io.getFullPath` (actually resolves paths)
+- [ ] `msvcrt/path.zig: fullpath()` — still copies its input verbatim into the caller's buffer; it does not resolve against the CWD
 - [x] `msvcrt/path.zig: searchenv()` — later inlined its own PATH walk against `posix_fs.access`
 - [x] `kernel32/path.zig: GetCurrentDirectoryA()` — lazy-inits from `host_io.getCwd`
 - [x] `kernel32/path.zig: GetFullPathNameA()` — now uses `host_io.getFullPath`

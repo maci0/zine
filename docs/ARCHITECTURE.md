@@ -232,13 +232,13 @@ A comptime-selected backend that abstracts OS-specific functionality:
 | `spawnThread` | `std.Thread.spawn` | Stub (single-threaded) |
 | `yield`/`sleep`/`Mutex` | `std.Thread` primitives | No-ops / no-op mutex |
 | `readExceptionList` | Reads `FS:0` (SEH chain head) on x86 | Returns `0xFFFFFFFF` |
-| `getProcessId` | Host PID | Fixed constant |
+| `getProcessId` | Fixed `guest_process_id` (4) | Same fixed `guest_process_id` |
 | `getStackBounds` | Reads `/proc/self/maps` | Returns zeros (not available on WASM) |
 | `installSegfaultHandler` | `sigaction(SIGSEGV, SIGFPE, SIGILL)` | No-op |
 | `mapNullPage` | `mmap` at address 0 | No-op |
 | `raiseStackLimit` | Raises `RLIMIT_STACK` to its hard limit | No-op |
 | `exitProcess` | `std.process.exit` | `std.process.exit` |
-| `timestamp` | `std.time.timestamp` (epoch seconds) | Returns 0 |
+| `timestamp` | `clock_gettime(CLOCK_REALTIME)` (epoch seconds) | Returns 0 |
 | `mprotect`/`mprotectExec` | Linux `mprotect` | No-op |
 | `pipe`/`dup` | Linux `pipe2`/`dup` | Returns error |
 
@@ -448,6 +448,7 @@ zine/
 │   ├── log.zig              # Structured diagnostic logging with colored prefixes
 │   ├── config.zig           # ZINE_* runtime configuration and validation
 │   ├── path_utils.zig       # POSIX ↔ Win32 path conversion
+│   ├── text_utils.zig       # Shared text encoding and UTF helpers
 │   ├── platform.zig         # Platform abstraction (re-export)
 │   ├── runtime.zig          # Process-global Io/allocator/env + exe dir
 │   ├── profiler.zig         # Profiling (EIP heat map, opcodes, stubs)
@@ -533,9 +534,11 @@ zine/
 │   │   ├── win2k.css        # Windows 2000 theme CSS
 │   │   ├── menu.json        # Guest menu data
 │   │   ├── van.min.js       # Vendored JS runtime, SHA-256 pinned in build.zig
+│   │   ├── van.LICENSE      # VanJS license, shipped alongside the vendored copy
 │   │   └── assets/          # SVGs used by the frontend
 │   ├── fuzz/                 # Fuzz harnesses for untrusted-input parsers
-│   │   ├── pe.zig, menu.zig, dialog.zig, icon.zig, mutation.zig, replay.zig
+│   │   ├── pe.zig, resource.zig, export.zig, menu.zig, dialog.zig, icon.zig, loadstring.zig, bat.zig
+│   │   └── mutation.zig, replay.zig, seed.zig
 │   └── dll/                 # Standalone DLL build sources (zig build -Ddll=all)
 │       ├── msvcrt_dll.zig, kernel32_dll.zig, user32_dll.zig, ...
 │       └── dll_common.zig   # Shared DLL build utilities

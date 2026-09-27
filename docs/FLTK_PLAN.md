@@ -30,7 +30,7 @@ graph TD
         SH["shell32 (about dialog)"]
     end
 
-    R["renderer.zig<br/>Backend dispatch<br/>(~30 output fns, ~10 input callbacks)"]
+    R["renderer.zig<br/>Backend dispatch<br/>(~50 output fns, ~15 input callbacks)"]
 
     WEB["web_ui.zig<br/>WebSocket server → browser"]
     FLTK_UI["fltk_ui.zig<br/>Thread-safe cmd queue → FLTK"]
@@ -133,7 +133,7 @@ Status as of 2026-08: most of this table shipped (see `src/gui/fltk_bridge.h` an
 
 | Feature | FLTK approach | Status |
 |---|---|---|
-| Edit control | `Fl_Text_Editor` + `Fl_Text_Buffer` | ✅ Done (`fltk_edit_*` bridge functions) |
+| Edit control | Single-line `Fl_Input`; the `fltk_edit_*` family exists but `fltk_edit_undo` is a no-op, since `Fl_Input` has no undo stack | 🟡 Partial |
 | Status bar | `Fl_Group` with N `Fl_Box` children | ✅ Done (`msctls_statusbar32` handling) |
 | File dialog | `Fl_Native_File_Chooser` | ✅ Done (`fltk_open_file_dialog`) |
 | Font dialog | Custom `Fl_Window` (FLTK has no built-in) | ✅ Done (`fltk_open_font_dialog`) |
@@ -165,7 +165,15 @@ FLTK thread:    spawned in init(), runs Fl::check() + drainQueue() loop
                   → forwards FLTK events to renderer callbacks
 ```
 
-The `Command` union supports: `set_title`, `set_framebuf`, `resize_window`, `set_menu`, `show_message_box`, `set_resolution`, `redraw`.
+The `Command` union covers window and framebuffer output (`set_title`,
+`set_framebuf`, `resize_window`, `set_menu`, `set_resolution`, `redraw`,
+`set_icon`, `set_clipboard`), guest controls (`add_control`, the
+`update_control_*` family, `set_listbox_items`, `set_control_color`),
+dialogs (`show_message_box`, `show_dialog`, `show_controls`, `close_dialog`,
+`open_file_dialog`, `open_font_dialog`, `open_print_dialog`,
+`open_find_dialog`, `open_page_setup_dialog`, `open_color_dialog`,
+`show_context_menu`), and the whole `edit_*` family. See the union in
+`fltk_ui.zig` for the payload of each.
 
 ---
 

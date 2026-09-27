@@ -127,6 +127,9 @@ pub fn installConfiguredClock(start_ns: i64, step_ns: i64) void {
     installVirtualClock(&configured_clock);
 }
 
+/// Makes `clock` the source for every guest-visible time reading until
+/// `useHostClock` runs. The callee owns the clock; it must outlive every
+/// reading that can reach it.
 pub fn installVirtualClock(clock: *VirtualClock) void {
     virtual_clock_mutex.lock();
     defer virtual_clock_mutex.unlock();
@@ -141,6 +144,8 @@ pub fn useHostClock() void {
     virtual_clock = null;
 }
 
+/// Whether a virtual clock is installed, so a caller can tell whether a
+/// reading is simulated without consuming a clock tick to find out.
 pub fn useVirtualClock() bool {
     virtual_clock_mutex.lock();
     defer virtual_clock_mutex.unlock();
@@ -187,6 +192,9 @@ pub fn milliTimestamp() i64 {
     return ts.toMilliseconds();
 }
 
+/// Nanoseconds since the UNIX epoch. Under a virtual clock this returns the
+/// simulated cursor, which advances by one step on every call, not a host
+/// reading.
 pub fn nanoTimestamp() i128 {
     if (virtualNow()) |ns| return ns;
     const ts = std.Io.Timestamp.now(io(), .real);

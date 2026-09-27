@@ -199,7 +199,10 @@ whole CLI suite (158/0), including LINK.EXE (ReadSymbolTable) and LIB.EXE
   `callCompat32_4`. Same latent pattern fixed in EnumSystemLocalesA/W and
   DirectDraw EnumDisplayModes callbacks.
 - RCDLL's std.Io openFile/close hit TLS (`%fs:0x308`) inside the compat
-  dispatch context; switched to raw `host_io` syscalls (RC.EXE works).
+  dispatch context; the `.rc` and `.res` paths now use raw `host_io`/`posix_fs`
+  calls. The `NAME ICON` path in the same function still reads the `.ico`
+  through `std.Io.Dir.cwd().openFile(runtime.io(), ...)`, so `RC.EXE /I` with an
+  icon remains on the TLS-touching path.
 
 ## Other implemented subsystems (summary)
 
@@ -243,8 +246,10 @@ These are the open items; see [`TODO.md`](TODO.md) for the prioritized list.
   handle fall back to the interpreter. Expanding instruction coverage and
   hot-block pre-warming are the main remaining JIT slices.
 - **WASI timer delivery** — there is no dispatcher thread on WASI (the runtime
-  is single-threaded), so a timer fires when the guest pumps messages. The
-  TIMER suite section still runs there and fails on a missing marker.
+  is single-threaded), so a timer fires when the guest pumps messages. WASM
+  builds run GUI apps headless (renderer backend `.none`), so WM_TIMER delivery
+  through the message loop is verifiable on WASI too, and the TIMER suite
+  section is not skipped there.
 - **wasmtime text-mode stdio** — no longer a gap: `fopen("r")` + `fgets`
   read-back is a byte-at-a-time `host_io` translate, and the STD suite section
   asserts it on every mode, wasmtime included.

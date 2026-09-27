@@ -331,7 +331,7 @@ pub fn main(init: std.process.Init) !void {
         try compat_thunks.init();
     }
 
-    // Search paths: CWD + exe dir + BAT PATH or host PATH
+    // Search paths: CWD + the target's directory + BAT PATH or host PATH
     var extra_paths: std.ArrayListUnmanaged([]const u8) = .empty;
     defer {
         for (extra_paths.items) |p| allocator.free(p);

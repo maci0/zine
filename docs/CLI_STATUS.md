@@ -11,7 +11,7 @@ This document tracks our progress attempting to run the MSVC CLI utilities liste
 | :--- | :--- | :--- |
 | `CL.EXE` | 🟢 Fully Working | Properly boots `C1.DLL`, parses C source, invokes `C2.DLL`, and spawns `LINK.EXE` to generate a valid executable. |
 | `LINK.EXE` | 🟢 Fully Working | Correctly acts as Linker, Dumper, and Lib Manager. |
-| `RC.EXE` | 🟢 Fully Working | Natively preprocesses `.rc` through raw `posix_fs`/`host_io` calls (no `std.Io` TLS) and writes the `.res`. |
+| `RC.EXE` | 🟢 Fully Working | Preprocesses `.rc` and writes the `.res` through raw `posix_fs`/`host_io` calls (no `std.Io` TLS). A `NAME ICON` entry still reads its `.ico` through `std.Io`, which touches TLS. |
 | `DUMPBIN.EXE` | 🟢 Fully Working | Properly parses arguments and delegates to `LINK.EXE`. |
 | `LIB.EXE` | 🟢 Fully Working | Successfully delegates to `LINK.EXE -lib`. |
 | `CVPACK.EXE` | 🟢 Fully Working | Properly parses arguments and prints help usage. |

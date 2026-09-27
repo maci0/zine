@@ -125,23 +125,18 @@ Stubs that need to interact with the host (file system, memory allocation, conso
 
 ```zig
 // src/win32/host_io.zig
-// Platform-neutral file operations. On real Windows, these are pass-through.
-// On Linux/WASM, they convert Win32 paths to POSIX.
+// Platform-neutral file operations. There is no Windows branch: the path
+// conversion lives in posix_fs, so the host is always POSIX.
 
 pub fn open(win32_path: []const u8, flags: u32, mode: u32) i32 {
-    if (comptime builtin.os.tag == .windows) {
-        return windows.CreateFileA(win32_path, ...);
-    } else {
-        var posix_buf: [1024]u8 = undefined;
-        const len = path_utils.win32ToPosix(win32_path, &posix_buf) catch return -1;
-        posix_buf[len] = 0;
-        return posix_fs.open(@ptrCast(&posix_buf), flags, mode);
-    }
+    var ntz_buf: [1025]u8 = undefined;
+    const ntz = nullTerminate(win32_path, &ntz_buf) orelse return -1;
+    return posix_fs.open(ntz, flags, mode);
 }
 ```
 
-On **real Windows**, this compiles to a direct `CreateFileA` call (zero cost).
-On **Linux/WASM**, it converts the path first.
+The Win32-to-POSIX conversion, the virtual CWD, and the case-insensitive
+retry all happen inside `posix_fs`, not in `host_io`.
 
 ### Layer 3: Thunk Handler (WASM-only address translation)
 
@@ -563,8 +558,10 @@ slots are carved out of the guest globals block allocated by
 `ensureGuestGlobals()` in `msvcrt/process.zig`, and the affected stubs
 (`errno`, `setlocale`, ...) sync/return those slots inline. This keeps the
 guest-visible behavior but deviates from the "stub stays pure" structure below:
-the stubs do check `x86_memory.guest_memory`. Still outstanding: `localtime`,
-`ctime`, and `asctime` return the bare host static with no guest slot.
+the stubs do check `x86_memory.guest_memory`. Still outstanding: `localtime`
+and `ctime` return the bare host static with no guest slot. `asctime` and
+`localtime64` allocate from the guest heap when `x86_memory.guest_memory` is
+set and fall back to the host static otherwise.
 
 - [ ] Create `src/win32/guest_statics.zig`: module that pre-allocates guest memory slots for all static return values during CRT init
 - [ ] Slots needed:
@@ -747,19 +744,25 @@ baseline.
 | `d3d8/d3d8.zig:1006` | `Direct3DCreate8()` | `global_d3d8` | vtable struct |
 | `mss32/miles.zig:14` | `AIL_last_error()` | `no_error_str` | 16 bytes |
 
-### D. Files referencing `shared.guest_memory` (9 sites — loader dependency to remove)
+### D. Files reaching for guest memory (9 sites)
 
-| File:Line | Function | What it does | Fix |
+The accessor is `x86_memory.guest_memory` in `src/x86/memory.zig`, not
+`shared.guest_memory`. A stub translating a guest pointer with `trace.addr` is
+the intended design; only these call sites hand a host pointer back to the
+guest, so only they need a slot or a registration wrapper. Line numbers are
+the ones the audit observed and have since drifted.
+
+| File | Function | What it does | Fix |
 |-----------|----------|-------------|-----|
-| `kernel32/mem.zig:11` | `guest_memory()` | Returns guest_memory for VirtualAlloc | Move to registration wrapper |
-| `kernel32/file.zig:236` | `MapViewOfFileEx` | Allocates from guest heap | Move to registration wrapper |
-| `kernel32/process.zig:107` | `loadDllIntoGuest` | Copies DLL to guest memory | Already wrapper-only code |
-| `msvcrt/misc.zig:103` | `errno()` | Allocates guest errno slot | Move to guest_statics init |
-| `msvcrt/process.zig:29` | `ensureGuestGlobals` | Allocates guest globals | Keep in loader-level code |
-| `msvcrt/process.zig:55` | `updateGuestGlobals` | Syncs guest globals | Keep in loader-level code |
-| `msvcrt/process.zig:126` | `ensureGuestArgs` | Builds guest argv/envp | Keep in loader-level code |
-| `msvcrt/process.zig:513` | `p_pgmptr` | Reads guest argv for pgmptr | Move to registration wrapper |
-| `rpcrt4.zig:38` | `UuidToStringA` | Allocates UUID string in guest | Move to registration wrapper |
+| `kernel32/mem.zig` | `guest_memory()` | Returns guest_memory for VirtualAlloc | Move to registration wrapper |
+| `kernel32/file.zig` | `MapViewOfFileEx` | Allocates from guest heap | Move to registration wrapper |
+| `kernel32/process.zig` | `loadDllIntoGuest` | Copies DLL to guest memory | Already wrapper-only code |
+| `msvcrt/misc.zig` | `errno()` | Allocates guest errno slot | Move to guest_statics init |
+| `msvcrt/process.zig` | `ensureGuestGlobals` | Allocates guest globals | Keep in loader-level code |
+| `msvcrt/process.zig` | `updateGuestGlobals` | Syncs guest globals | Keep in loader-level code |
+| `msvcrt/process.zig` | `ensureGuestArgs` | Builds guest argv/envp | Keep in loader-level code |
+| `msvcrt/process.zig` | `p_pgmptr` | Reads guest argv for pgmptr | Move to registration wrapper |
+| `rpcrt4.zig` | `stub_UuidToStringA` | Formats the GUID into the caller's buffer via `trace.addr`; no guest allocation | None |
 
 ### E. `usize` parameters that should become pointer types (sampled)
 

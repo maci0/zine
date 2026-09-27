@@ -34,7 +34,7 @@ level, which is what CheerpX does with Linux syscalls but one layer higher.
 | x87 FPU instructions | ⚠️ Partial |
 | SSE/SSE2 instructions | ⚠️ Partial (`src/x86/sse.zig`) |
 | x86-to-WASM JIT compiler | ✅ Working (`src/jit/`; blocks execute end-to-end via a host runtime) |
-| JIT host execution (zine-host) | ✅ Working (`--jit` via `zine-host`; SEH/nested-SEH/registry tests green) |
+| JIT host execution (zine-host) | ✅ Working (`--jit` via `zine-host`; SEH/nested-SEH/registry behavior verified manually, not gated by an automated test) |
 | JIT host execution (browser) | ⬚ Not implemented |
 | Browser JS host frontend | ⬚ Not implemented (the demo page in `src/gui/` drives a native zine process over WebSocket; hosting `zine.wasm32.wasm` in a page is not built) |
 | Basic block caching | ⚠️ Partial ([`JIT.md`](JIT.md#jit-block-caching-strategy-partial): interpreter decode cache 1024-entry hash-indexed; JIT block caches fixed 4096-entry with no trace linking) |
@@ -209,7 +209,7 @@ zig build -Darch=wasm32
 wasmtime --dir=. zig-out/bin/zine.wasm32.wasm -- path/to/program.exe
 
 # wasmtime with JIT compile-only validation
-wasmtime --dir=. zig-out/bin/zine.wasm32.wasm --jit path/to/program.exe
+wasmtime --dir=. zig-out/bin/zine.wasm32.wasm -- --jit path/to/program.exe
 
 # wasmer
 wasmer run --volume "$(pwd):$(pwd)" --volume . zig-out/bin/zine.wasm32.wasm -- \
@@ -236,8 +236,9 @@ zig build -Dhost
 
 The `--jit` runtime flag works with the standard WASM build (compile-only mode).
 The `-Djit_host=true` build flag is only needed for actual JIT block execution,
-which requires a host providing `jit_compile`/`jit_call` imports (zine-host or
-a browser runtime).
+which requires a host providing the `jit_compile`/`jit_call`/`jit_reset_blocks`
+imports (zine-host or a browser runtime). All three are required at
+instantiation; see `src/jit/host_wasm.zig`.
 
 ---
 
