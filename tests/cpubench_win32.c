@@ -1,5 +1,11 @@
 /* Minimal CPU benchmark — uses only KERNEL32.dll (no CRT) */
-/* Compiled with: zig cc -target x86-windows-gnu -O2 -nostdlib -lkernel32 */
+/* Compiled with: zig cc -target x86-windows-gnu -O2 -nostdlib -fno-builtin -lkernel32 */
+/* -fno-builtin keeps the hand-written strcpy/strcat/fill loops below as loops:
+   without it the compiler rewrites them into calls to the CRT's memcpy and
+   memset, which -nostdlib has no definition for. The two large arrays are
+   static for the same reason: a local this size is allocated through
+   __alloca, which only the CRT provides. Both measure memory the same way a
+   local would, so the numbers are unaffected. */
 
 typedef unsigned long DWORD;
 typedef int BOOL;
@@ -41,11 +47,26 @@ static long get_ms(void) {
     return (long)st.h * 3600000L + (long)st.min * 60000L + (long)st.s * 1000L + (long)st.ms;
 }
 
+/* How long each test runs, in guest milliseconds. The runner overrides it
+   (-DDURATION_MS=) for the modes whose interpreter makes 3 seconds of guest
+   time cost minutes of wall time; the rates printed below are per second
+   whatever the duration, so two durations stay comparable. */
+#ifndef DURATION_MS
 #define DURATION_MS 3000
+#endif
+/* Iterrations between the two clock reads of the timed loops. The duration
+   can only end on a batch boundary, so this, not DURATION_MS, is what sets how
+   long a loop can overshoot: on the software interpreters one 10000-iteration
+   batch of bench_integer already costs minutes, and no shorter guest duration
+   can cut that. The runner lowers it for those modes. */
+#ifndef BENCH_BATCH
+#define BENCH_BATCH 10000
+#endif
+#define SECONDS ((DURATION_MS + 999) / 1000)
 
 static long bench_sieve(void) {
     long iters = 0;
-    char flags[8192];
+    static char flags[8192];
     long start = get_ms();
     while (get_ms() - start < DURATION_MS) {
         int i, k;
@@ -63,11 +84,11 @@ static long bench_integer(void) {
     long start = get_ms();
     while (get_ms() - start < DURATION_MS) {
         int i;
-        for (i = 0; i < 10000; i++) {
+        for (i = 0; i < BENCH_BATCH; i++) {
             d=a*b+c; a=d^b; b=(c+a)>>1; c=d-b+17;
             d=a*b+c; a=d^b; b=(c+a)>>1; c=d-b+17;
         }
-        iters += 20000;
+        iters += 2 * BENCH_BATCH;
     }
     return iters;
 }
@@ -78,7 +99,7 @@ static long bench_string(void) {
     long start = get_ms();
     while (get_ms() - start < DURATION_MS) {
         int i;
-        for (i = 0; i < 10000; i++) {
+        for (i = 0; i < BENCH_BATCH; i++) {
             /* manual strcpy */
             const char* s = "The quick brown fox jumps over the lazy dog 0123456789";
             int j = 0;
@@ -94,14 +115,14 @@ static long bench_string(void) {
             while (a[l]) { b[l] = a[l]; l++; }
             b[l] = 0;
         }
-        iters += 40000;
+        iters += 4 * BENCH_BATCH;
     }
     return iters;
 }
 
 static long bench_memory(void) {
     long iters = 0;
-    char buf[65536];
+    static char buf[65536];
     long start = get_ms();
     while (get_ms() - start < DURATION_MS) {
         int i;
@@ -120,23 +141,24 @@ void mainCRTStartup(void) {
     long r;
 
     print("=== CPU Benchmark ===\n");
-    print("3 seconds per test, 4 tests\n\n");
+    print_num(SECONDS);
+    print(" second(s) per test, 4 tests\n\n");
 
     print("1. Integer Arithmetic... ");
     r = bench_integer();
-    print_num(r / 3 / 1000); print(" Kops/s\n");
+    print_num(r / SECONDS / 1000); print(" Kops/s\n");
 
     print("2. Memory Bandwidth...   ");
     r = bench_memory();
-    print_num(r * 64 / 3); print(" KB/s\n");
+    print_num(r * 64 / SECONDS); print(" KB/s\n");
 
     print("3. String Operations...  ");
     r = bench_string();
-    print_num(r / 3 / 1000); print(" Kops/s\n");
+    print_num(r / SECONDS / 1000); print(" Kops/s\n");
 
     print("4. Sieve (primes)...     ");
     r = bench_sieve();
-    print_num(r / 3); print(" iterations/sec\n");
+    print_num(r / SECONDS); print(" iterations/sec\n");
 
     print("\n=== Done ===\n");
     ExitProcess(0);
