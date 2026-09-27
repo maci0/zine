@@ -63,6 +63,9 @@ pub fn init(allocator: std.mem.Allocator) void {
         std.process.exit(1);
     };
     const root_table = result.value;
+    // Every value below is duped into the config's own maps, so the parser's
+    // arena can go once the walk is done.
+    defer result.deinit();
 
     // Each TOML table header is a registry path, values are name→data pairs.
     // Headers of the form "app:<MODULE>:<KEY>" are per-application overrides.
@@ -89,6 +92,10 @@ pub fn init(allocator: std.mem.Allocator) void {
         } else null;
 
         if (base_key) |bk| {
+            defer {
+                allocator.free(bk.module);
+                allocator.free(bk.key);
+            }
             // Per-app entries: "MODULE\x00KEY\x00VALUE"
             var val_it = sub_table.iterator();
             while (val_it.next()) |val_entry| {
@@ -97,12 +104,23 @@ pub fn init(allocator: std.mem.Allocator) void {
                 const lookup_key = std.fmt.allocPrint(allocator, "{s}\x00{s}\x00{s}", .{ bk.module, bk.key, value_name }) catch continue;
                 switch (value) {
                     .string => |s| {
-                        config.app_entries.put(lookup_key, .{ .string = allocator.dupe(u8, s) catch continue }) catch continue;
+                        const copy = allocator.dupe(u8, s) catch {
+                            allocator.free(lookup_key);
+                            continue;
+                        };
+                        config.app_entries.put(lookup_key, .{ .string = copy }) catch {
+                            allocator.free(copy);
+                            allocator.free(lookup_key);
+                            continue;
+                        };
                     },
                     .integer => |i| {
-                        config.app_entries.put(lookup_key, .{ .dword = @truncate(@as(u64, @bitCast(i))) }) catch continue;
+                        config.app_entries.put(lookup_key, .{ .dword = @truncate(@as(u64, @bitCast(i))) }) catch {
+                            allocator.free(lookup_key);
+                            continue;
+                        };
                     },
-                    else => {},
+                    else => allocator.free(lookup_key),
                 }
             }
             continue;
@@ -111,7 +129,10 @@ pub fn init(allocator: std.mem.Allocator) void {
         // Register the key path as known (for RegOpenKeyEx)
         const upper_key = allocator.alloc(u8, key_path.len) catch continue;
         _ = std.ascii.upperString(upper_key, key_path);
-        config.keys.put(upper_key, {}) catch continue;
+        config.keys.put(upper_key, {}) catch {
+            allocator.free(upper_key);
+            continue;
+        };
 
         var val_it = sub_table.iterator();
         while (val_it.next()) |val_entry| {
@@ -122,17 +143,54 @@ pub fn init(allocator: std.mem.Allocator) void {
 
             switch (value) {
                 .string => |s| {
-                    config.entries.put(lookup_key, .{ .string = allocator.dupe(u8, s) catch continue }) catch continue;
+                    const copy = allocator.dupe(u8, s) catch {
+                        allocator.free(lookup_key);
+                        continue;
+                    };
+                    config.entries.put(lookup_key, .{ .string = copy }) catch {
+                        allocator.free(copy);
+                        allocator.free(lookup_key);
+                        continue;
+                    };
                 },
                 .integer => |i| {
-                    config.entries.put(lookup_key, .{ .dword = @truncate(@as(u64, @bitCast(i))) }) catch continue;
+                    config.entries.put(lookup_key, .{ .dword = @truncate(@as(u64, @bitCast(i))) }) catch {
+                        allocator.free(lookup_key);
+                        continue;
+                    };
                 },
-                else => {},
+                else => allocator.free(lookup_key),
             }
         }
     }
 
     global_config = config;
+}
+
+/// Release the parsed config and clear the singleton. A guest process parses
+/// once and exits, so only tests call this; the maps own the keys and the
+/// dupe'd value strings, so both are freed here.
+pub fn deinit(allocator: std.mem.Allocator) void {
+    var config = global_config orelse return;
+
+    freeEntries(allocator, &config.entries);
+    freeEntries(allocator, &config.app_entries);
+    // The key set owns an uppercased copy of every path, not the entries' keys.
+    var key_it = config.keys.keyIterator();
+    while (key_it.next()) |path| allocator.free(path.*);
+    config.keys.deinit();
+
+    global_config = null;
+}
+
+fn freeEntries(allocator: std.mem.Allocator, map: *std.StringHashMap(RegValue)) void {
+    var it = map.iterator();
+    while (it.next()) |entry| {
+        const value = entry.value_ptr.*;
+        if (value == .string) allocator.free(value.string);
+        allocator.free(entry.key_ptr.*);
+    }
+    map.deinit();
 }
 
 /// Look up a registry value by key path and value name (case-insensitive path).
@@ -171,4 +229,40 @@ pub fn keyExists(key_path: []const u8) bool {
     if (key_path.len > buf.len) return false;
     _ = std.ascii.upperString(buf[0..key_path.len], key_path);
     return config.keys.contains(buf[0..key_path.len]);
+}
+
+const cpu_key = "HKLM\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0";
+const nt_key = "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion";
+
+// One test: init() and setAppModule() write process-wide singletons that
+// deinit() only clears on the config, so splitting the module case into its
+// own test would make the first one's expectations depend on test order.
+test "the embedded config serves keys, strings, dwords, and app overrides" {
+    const allocator = std.testing.allocator;
+    init(allocator);
+    defer deinit(allocator);
+
+    // Key paths match case-insensitively, as RegOpenKeyEx does.
+    try std.testing.expect(keyExists("hklm\\hardware\\description\\system\\centralprocessor\\0"));
+    try std.testing.expect(!keyExists("HKLM\\Software\\NoSuchProduct"));
+
+    const product = lookup("HKLM\\Software\\Microsoft\\DevStudio\\6.0\\Products\\Microsoft Visual C++", "ProductDir").?;
+    try std.testing.expectEqualStrings("C:\\MSVC600\\VC98", product.string);
+
+    const mhz = lookup(cpu_key, "~MHz").?;
+    try std.testing.expectEqual(@as(u32, 1000), mhz.dword);
+
+    try std.testing.expect(lookup(cpu_key, "NoSuchValue") == null);
+
+    // Without a module set, the global value wins.
+    const name = lookup(nt_key, "ProductName").?;
+    try std.testing.expectEqualStrings("Microsoft Windows 2000", name.string);
+
+    setAppModule("regapp.exe");
+    const overridden = lookup(nt_key, "ProductName").?;
+    try std.testing.expectEqualStrings("Microsoft Windows 2000 (regapp)", overridden.string);
+
+    // A value the override table does not carry still resolves globally.
+    const build = lookup(nt_key, "CurrentBuildNumber").?;
+    try std.testing.expectEqualStrings("2195", build.string);
 }

@@ -449,12 +449,23 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     const test_filter = b.option([]const u8, "test-filter", "Run unit tests whose names contain this substring");
+    // registry_config.zig is the one consumer of the pinned toml package and
+    // src/test_root.zig reaches it, so the test root needs the same import the
+    // shipped executables carry. Without it the parse path is unanalyzable
+    // under `zig build test`.
+    const toml_test_dep = b.dependency("toml", .{
+        .target = b.graph.host,
+        .optimize = optimize,
+    });
     const t = b.addTest(.{
         .filters = if (test_filter) |filter| &.{filter} else &.{},
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/test_root.zig"),
             .target = b.graph.host,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "toml", .module = toml_test_dep.module("toml") },
+            },
         }),
     });
     // runner.zig (and anything importing it) reads build_options; provide
