@@ -7,15 +7,18 @@
 #   bash tests/check.sh --list          # the step names
 #   bash tests/check.sh <step> [step..] # only the named steps, still in order
 #
+# Environment:
+#   ZINE_FUZZ_SECONDS  seconds each fuzz target runs (default 10; CI raises it)
+#
 # The named steps are the ones in the step_names list below; `bash
-# tests/check.sh` with no argument runs all of them. CI calls this script for
-# the two helper steps (check_shell, check_c) so the commands and the file
-# lists live here once. A command added to one belongs in the other.
+# tests/check.sh` with no argument runs all of them. Every CI step calls this
+# script by name, so the commands and the file lists live here once: a step
+# added to the lists below reaches CI without a second copy.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-required=(zig shellcheck git timeout cmp grep sed)
+required=(zig shellcheck git timeout cmp grep sed mktemp)
 missing=()
 for cmd in "${required[@]}"; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
@@ -85,8 +88,10 @@ step_commands=(
     'zig build test-cli --summary all'
     'zig build test-cli -Darch=x86_64 --summary all'
     # Short budget locally; the untrusted-input parsers otherwise never run
-    # outside a hand-run `zig build fuzz`.
-    'zig build fuzz -Dfuzz-seconds=10 --summary all'
+    # outside a hand-run `zig build fuzz`. CI raises it through
+    # ZINE_FUZZ_SECONDS, which the function below reads, so the command stays
+    # in this file.
+    'fuzz'
 )
 
 # Every tracked script, wherever it lives, must stay shellcheck-clean. This
@@ -119,6 +124,13 @@ check_c() {
     done < <(git ls-files 'tests/*.c' ':!tests/cpubench_win32.c')
     zig cc -c -o "$objdir/cpubench_win32.o" -target x86-windows-gnu -std=c99 \
         -Wall -Wextra -Wpedantic -Werror tests/cpubench_win32.c
+}
+
+# The untrusted-input parsers. A function rather than a literal command, so
+# the budget expands here: 10 seconds keeps the local gate short, and CI
+# raises it with ZINE_FUZZ_SECONDS.
+fuzz() {
+    zig build fuzz -Dfuzz-seconds="${ZINE_FUZZ_SECONDS:-10}" --summary all
 }
 
 # No argument means the whole gate. Named steps always run in gate order, so

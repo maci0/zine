@@ -38,24 +38,26 @@ always run on the host. Only `test-cli` varies by architecture.
 optimized ones and stay free of the absolute build path that a Debug binary
 embeds. Pass `-Doptimize=Debug` when stepping through code.
 
-`tests/check.sh` is the single pre-pull-request gate. It runs the same checks,
-in the same order, as the `static-analysis` job in `.github/workflows/ci.yml`:
-`zig fmt --check`, shellcheck over every tracked script, a warning-free
-`zig cc` compile of every tracked C source, all four architecture builds, the
-external-stub DLL and `-Dexternal-stubs` builds, the unit tests, both native
-`test-cli` runs, and a short fuzz run. If you add a check, add it in both
-places or local runs stop predicting CI.
+`tests/check.sh` is the single pre-pull-request gate, and it is where each
+check's command lives: `zig fmt --check`, shellcheck over every tracked script,
+a warning-free `zig cc` compile of every tracked C source, all four
+architecture builds, the unit tests, and both native `test-cli` runs. The
+`static-analysis` job in `.github/workflows/ci.yml` runs every one of those
+steps through this script, so a check added here reaches CI without a second
+copy, and a local run cannot drift from CI.
 
 Each check is a named step, and `bash tests/check.sh <step> [step...]` runs
 just those, still in gate order: `fmt`, `check_shell`, `check_c`, `build`,
 `build-x86_64`, `build-wasm32`, `build-wasm64`, `dll`, `external-stubs`,
 `test`, `test-cli`, `test-cli-x86_64`, `fuzz`. `bash tests/check.sh --list`
 prints the names, and `bash tests/check.sh test build` runs those two in gate
-order. The two helper steps (shellcheck and the C compile) are the ones CI
-calls this script for, so the commands and the `git ls-files` lists live in
-one place. An unknown name fails with the list of known steps. The
+order. An unknown name fails with the list of known steps. The
 pre-pull-request run is the bare `bash tests/check.sh`, which runs all of
 them.
+
+`ZINE_FUZZ_SECONDS` sets the seconds each fuzz target runs (10 by default).
+CI sets it to 60, which is why that step passes the budget as an environment
+variable rather than repeating the build command.
 
 The job takes its Zig version from `build.zig.zon` and restores `.zig-cache/`
 and `zig-pkg/` from a cache keyed on `build.zig.zon`, which pins the toolchain

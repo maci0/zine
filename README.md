@@ -571,9 +571,11 @@ bash tests/check.sh test-cli test-cli-x86_64
 bash tests/check.sh fuzz
 ```
 
-Named steps run in gate order, whatever order you pass them in. They are the
-`static-analysis` job in `.github/workflows/ci.yml`, and the script is where
-each one's command lives; a step added there reaches CI without a second copy.
+Named steps run in gate order, whatever order you pass them in. The
+`static-analysis` job in `.github/workflows/ci.yml` runs each of them through
+this script, and the script is where each one's command lives; a step added
+there reaches CI without a second copy. `ZINE_FUZZ_SECONDS` sets the seconds
+each fuzz target runs (10 locally, 60 in CI).
 
 For the edit-test loop, use `zig build test -Dtest-filter=<substring>` above;
 `-Darch` does not change the host target of unit tests. Run

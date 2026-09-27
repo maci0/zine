@@ -52,12 +52,16 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: ${{ steps.zig-version.outputs.version }}
-      - run: |
-          required=${{ steps.zig-version.outputs.version }}
-          if [[ "$(zig version)" != "$required"* ]]; then
-            echo "zig $(zig version) is installed, this project requires $required" >&2
-            exit 1
-          fi
+      # No separate version check here: tests/check.sh compares the installed
+      # `zig version` against build.zig.zon and reports a mismatch before it
+      # runs anything, and every step below goes through it.
+      #
+      # Every gate step below runs out of tests/check.sh, so each command and
+      # each file list has one home: a step added to the script's step list
+      # reaches CI without a second copy. The step names here are the script's
+      # step names, kept one per CI step so a failure names the target that
+      # broke; the script runs them in gate order whatever order they are in.
+      #
       # Canonical formatter check (mirrors the in-build gate; kept explicit so
       # a formatting failure is reported before any compile work).
       - name: Formatting
@@ -66,27 +70,37 @@ jobs:
       - name: Shell scripts shellcheck-clean
         run: bash tests/check.sh check_shell
       # The tracked C sources are invisible to the Zig build, so nothing else
-      # analyzes them. The three helper steps above and here run out of
-      # tests/check.sh, so each command and each file list has one home and a
-      # step added there reaches CI without a second copy.
+      # analyzes them.
       - name: C sources compile warning-free
         run: bash tests/check.sh check_c
       # Compile every shipped target, not just the default: the compiler is
       # this repo's analyzer, so an error on x86_64/wasm32/wasm64 must block
       # merges exactly like one on x86. Separate steps keep peak memory at a
       # single wasm compile and attribute failures per target.
-      - run: zig build --summary all
-      - run: zig build -Darch=x86_64 --summary all
-      - run: zig build -Darch=wasm32 --summary all
-      - run: zig build -Darch=wasm64 --summary all
+      - name: Build x86
+        run: bash tests/check.sh build
+      - name: Build x86_64
+        run: bash tests/check.sh build-x86_64
+      - name: Build wasm32
+        run: bash tests/check.sh build-wasm32
+      - name: Build wasm64
+        run: bash tests/check.sh build-wasm64
       # External-stub DLLs (src/dll/, src/win32_dll_api.zig) and the
       # -Dexternal-stubs half of the stub switch are shipped targets the
       # steps above never compile.
-      - run: zig build -Ddll=all --summary all
-      - run: zig build -Dexternal-stubs --summary all
-      - run: zig build test --summary all
-      - run: zig build test-cli --summary all
-      - run: zig build test-cli -Darch=x86_64 --summary all
-      # Untrusted-input parsers: short budget, but they must fail the build
-      # when a mutation trips a safety check.
-      - run: zig build fuzz -Dfuzz-seconds=60 --summary all
+      - name: Build external-stub DLLs
+        run: bash tests/check.sh dll
+      - name: Build external stubs
+        run: bash tests/check.sh external-stubs
+      - name: Unit tests
+        run: bash tests/check.sh test
+      - name: CLI tests (x86)
+        run: bash tests/check.sh test-cli
+      - name: CLI tests (x86_64)
+        run: bash tests/check.sh test-cli-x86_64
+      # Untrusted-input parsers: short budget locally, but they must fail the
+      # build here when a mutation trips a safety check.
+      - name: Fuzz parsers
+        env:
+          ZINE_FUZZ_SECONDS: 60
+        run: bash tests/check.sh fuzz
