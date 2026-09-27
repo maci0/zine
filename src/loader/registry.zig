@@ -360,9 +360,18 @@ pub const Registry = struct {
 
         if (file_path) |path| {
             defer self.allocator.free(path);
+
+            // Entries are keyed by the module's own basename, so a request
+            // spelled as a path misses the lookup above. Re-check by basename
+            // before loading a second copy of an already-mapped image: two
+            // mappings of one DLL give the guest two module bases for the same
+            // file, each with its own writable data, and leak the first.
+            if (self.cachedByBasename(path)) |mod| return mod;
+
             const mod = try Module.load(self.allocator, path);
 
             const mod_lower_name = try self.allocator.alloc(u8, mod.name.len);
+            errdefer self.allocator.free(mod_lower_name);
             _ = std.ascii.lowerString(mod_lower_name, mod.name);
 
             try self.modules.put(mod_lower_name, mod);
@@ -371,6 +380,18 @@ pub const Registry = struct {
         }
 
         return error.ModuleNotFound;
+    }
+
+    /// Returns the already-loaded module whose key matches the basename of
+    /// `path`, case-insensitively. Used to avoid mapping the same image twice
+    /// when a later request names it by a different spelling.
+    fn cachedByBasename(self: *Registry, path: []const u8) ?*Module {
+        const base = std.fs.path.basename(path);
+        if (base.len == 0) return null;
+        const key = self.allocator.alloc(u8, base.len) catch return null;
+        defer self.allocator.free(key);
+        _ = std.ascii.lowerString(key, base);
+        return self.modules.get(key);
     }
 
     /// Resolves an export from a loaded PE module.
@@ -385,3 +406,22 @@ pub const Registry = struct {
         return null;
     }
 };
+
+const testing = std.testing;
+
+test "registry: cachedByBasename matches a loaded module by basename, case-insensitively" {
+    var reg = Registry.init(testing.allocator);
+    defer reg.deinit();
+
+    // Stand-in for a mapped module: cachedByBasename only compares keys, but
+    // deinit would try to unmap it, so drop it from the table first.
+    var stand_in: Module = undefined;
+    try reg.modules.put("game.dll", &stand_in);
+    defer _ = reg.modules.fetchRemove("game.dll");
+
+    try testing.expect(reg.cachedByBasename("bin/GAME.DLL") == &stand_in);
+    try testing.expect(reg.cachedByBasename("bin/game.dll") == &stand_in);
+    try testing.expect(reg.cachedByBasename("/usr/lib/bin/game.dll") == &stand_in);
+    try testing.expect(reg.cachedByBasename("bin/other.dll") == null);
+    try testing.expect(reg.cachedByBasename("") == null);
+}

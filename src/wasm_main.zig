@@ -716,6 +716,7 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     // Save parent state
     const shared = @import("win32/shared.zig");
     const msvcrt_process = @import("win32/msvcrt/process.zig");
+    const kernel32_process = @import("win32/kernel32/process.zig");
     const saved_guest_memory = x86_memory.guest_memory;
     const saved_argc = stubs_msvcrt.global_argc;
     const saved_argv = stubs_msvcrt.global_argv;
@@ -727,7 +728,11 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
         stubs_msvcrt.global_argc = saved_argc;
         stubs_msvcrt.global_argv = saved_argv;
         loader.restoreThunkState(saved_thunk);
-        @import("win32/kernel32/process.zig").resetCommandLine();
+        // The child resolved exports into its own thunk memory; those
+        // addresses are gone now, so the parent must resolve them again
+        // rather than reuse a cache entry pointing into the child image.
+        kernel32_process.resetProcCache();
+        kernel32_process.resetCommandLine();
         msvcrt_process.resetGuestArgs();
     }
 
@@ -859,15 +864,21 @@ const jit_host_mod = @import("jit/host.zig");
 const build_options = @import("build_options");
 
 var global_jit_ptr: ?*jit_compiler.JitCompiler = null;
-var global_block_ids_keys_ptr: ?*[4096]u32 = null;
+var global_block_index_ptr: ?*jit_compiler.BlockIndex = null;
 
 fn flushJitCache() callconv(.c) void {
-    if (global_block_ids_keys_ptr) |keys| {
-        @memset(keys, 0xFFFFFFFF);
+    if (global_block_index_ptr) |index| {
+        index.invalidateAll();
     }
     if (global_jit_ptr) |j| {
-        @memset(&j.block_cache_keys, 0xFFFFFFFF);
+        @memset(&j.block_cache_keys, jit_compiler.EMPTY_KEY);
     }
+}
+
+/// Runs the guest to completion without the JIT. Used when the block cache
+/// cannot be allocated.
+fn runInterpretedOnly(cpu: *x86_cpu.Cpu) void {
+    while (!cpu.halted) x86_execute.step(cpu);
 }
 
 /// JIT-integrated execution loop with host execution support.
@@ -890,21 +901,26 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: 
     var jit = jit_compiler.JitCompiler.init(allocator, state_addr);
     defer jit.deinit();
 
-    // Cache: guest_eip → host block id
-    // Use a fixed 4096-entry ring buffer to bound memory
-    var block_ids_keys = [_]u32{0xFFFFFFFF} ** 4096;
-    var block_ids_vals = [_]jit_host_mod.BlockId{0} ** 4096;
+    // Cache: guest_eip → host block id, validated against the x86 bytes the
+    // block was compiled from. Fixed 4096-entry direct-mapped table to bound
+    // memory; a hit requires the guest bytes to be unchanged.
+    var block_index = jit_compiler.BlockIndex.init(allocator) catch {
+        log.err("JIT: block index allocation failed, running interpreted", .{});
+        runInterpretedOnly(cpu);
+        return;
+    };
+    defer block_index.deinit();
     // Per-block execution counters (hot-block detection): how many times each
     // cached block ran. Mirrors the ring buffer layout.
-    var block_counts = [_]u32{0} ** 4096;
+    var block_counts = [_]u32{0} ** jit_compiler.BLOCK_CACHE_SLOTS;
 
     // Register SMC invalidation hook globally
     global_jit_ptr = &jit;
-    global_block_ids_keys_ptr = &block_ids_keys;
+    global_block_index_ptr = &block_index;
     stub_common.smc_invalidate_cache = flushJitCache;
     defer {
         global_jit_ptr = null;
-        global_block_ids_keys_ptr = null;
+        global_block_index_ptr = null;
         stub_common.smc_invalidate_cache = null;
     }
 
@@ -920,14 +936,20 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: 
 
         // Only attempt JIT at basic block entries (discontinuous EIP changes)
         if (eip != expected_next_eip and eip < jit_max_eip) {
-            // Try to execute a cached JIT block
-            const cache_idx = eip & 4095;
+            const cache_idx = eip & jit_compiler.BLOCK_CACHE_MASK;
             var block_id: ?jit_host_mod.BlockId = null;
-            if (block_ids_keys[cache_idx] == eip) {
-                block_id = block_ids_vals[cache_idx];
-            } else if (!jit.isCached(eip)) {
-                // Compile a new block if we haven't seen this EIP
-                if (cpu.memory.readSlice(eip, 256)) |code| {
+            if (cpu.memory.readSlice(eip, @intCast(jit_compiler.MAX_JIT_BLOCK_BYTES))) |code| {
+                // A hit means these exact bytes are what produced the block.
+                // Guest code patched in place, or a region remapped at the
+                // same address, misses and recompiles below.
+                if (block_index.lookup(eip, code)) |cached| {
+                    block_id = cached;
+                } else {
+                    // The slot is empty, evicted, or holds stale bytes. Drop
+                    // the compile mark too, or a mark left by an earlier visit
+                    // would suppress the recompile.
+                    block_index.invalidateEip(eip);
+                    jit.invalidateEip(eip);
                     const block_len = runner.scanBlock(code);
                     if (block_len > 0) {
                         jit.module.deinit();
@@ -936,9 +958,7 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: 
                         if (jit.compile(eip, code[0..block_len])) |wasm_bin| {
                             // Send to host for compilation
                             if (jit_host.compile(wasm_bin)) |new_block_id| {
-                                const new_cache_idx = eip & 4095;
-                                block_ids_keys[new_cache_idx] = eip;
-                                block_ids_vals[new_cache_idx] = new_block_id;
+                                block_index.store(eip, code[0..block_len], new_block_id);
                                 blocks_compiled += 1;
                                 if (blocks_compiled <= 10) {
                                     log.info("JIT: compiled+loaded block at EIP=0x{X} ({d} x86 bytes -> {d} WASM bytes)", .{
@@ -1042,7 +1062,9 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: 
     for (hot_idx, 0..) |idx, j| {
         if (block_counts[idx] == 0) break;
         log.info("JIT: hot block #{d}: EIP=0x{X} executed {d} times ({d}% of block calls)", .{
-            j + 1,                                                                              block_ids_keys[idx], block_counts[idx],
+            j + 1,
+            block_index.keyAt(idx),
+            block_counts[idx],
             @as(u32, @intCast((@as(u64, block_counts[idx]) * 100) / @max(blocks_executed, 1))),
         });
     }

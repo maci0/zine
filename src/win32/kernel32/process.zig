@@ -269,12 +269,27 @@ pub fn LoadLibraryA(lpFileName_ptr: usize) callconv(w32cc.WINAPI) usize {
 /// exhausts those fixed-size tables.
 const ProcCacheEntry = struct { hmodule: usize, name: []u8, addr: usize };
 var proc_cache: std.ArrayListUnmanaged(ProcCacheEntry) = .empty;
+/// Allocator the cached name copies came from, captured on the first insert.
+var proc_cache_allocator: ?std.mem.Allocator = null;
 
 fn lookupCachedProcAddress(hModule: usize, name: []const u8) ?usize {
     for (proc_cache.items) |*entry| {
         if (entry.hmodule == hModule and std.mem.eql(u8, entry.name, name)) return entry.addr;
     }
     return null;
+}
+
+/// Drop every cached (module, name) → address entry.
+///
+/// Cached addresses are thunks written into whichever guest memory is
+/// current, so they do not outlive it. A nested spawn (WASM spawn handler)
+/// switches thunk memory and restores it afterwards; without this the parent
+/// would be handed an address that was emitted into the child's image.
+pub fn resetProcCache() void {
+    if (proc_cache_allocator) |alloc| {
+        for (proc_cache.items) |*entry| alloc.free(entry.name);
+    }
+    proc_cache.clearRetainingCapacity();
 }
 
 /// Retrieves the address of an exported function or variable from the specified DLL.
@@ -305,6 +320,7 @@ pub fn GetProcAddress(hModule: usize, lpProcName_ptr: usize) callconv(w32cc.WINA
                         // c_span points into mutable guest memory.
                         if (result != 0) {
                             if (genv.allocator.dupe(u8, name)) |owned| {
+                                proc_cache_allocator = genv.allocator;
                                 proc_cache.append(genv.allocator, .{ .hmodule = hModule, .name = owned, .addr = result }) catch genv.allocator.free(owned);
                             } else |_| {}
                         }
@@ -1843,8 +1859,7 @@ test "GetProcAddress returns a stable cached address per module+name" {
     var environment = env.Environment.init(alloc);
     defer {
         // Cache entries own their (page_allocator) name copies.
-        for (proc_cache.items) |*e| alloc.free(e.name);
-        proc_cache.clearRetainingCapacity();
+        resetProcCache();
         environment.deinit();
     }
     try environment.addBuiltinExport("TESTDLL.dll", "FakeApi", 0x00F00D00);
@@ -1865,6 +1880,34 @@ test "GetProcAddress returns a stable cached address per module+name" {
     try std.testing.expectEqual(@as(usize, 0), missing);
     const third = GetProcAddress(hmod, @intFromPtr(name_z));
     try std.testing.expectEqual(first, third);
+}
+
+test "resetProcCache drops entries so no address outlives its guest memory" {
+    const saved_env = kernel32.global_env;
+    defer kernel32.global_env = saved_env;
+
+    const alloc = std.heap.page_allocator;
+    var environment = env.Environment.init(alloc);
+    defer {
+        resetProcCache();
+        environment.deinit();
+    }
+    try environment.addBuiltinExport("TESTDLL.dll", "FakeApi", 0x00F00D00);
+    kernel32.global_env = &environment;
+
+    const hmod = environment.getBuiltinHandle("TESTDLL.dll") orelse return error.TestUnexpectedResult;
+    const name_z: [*:0]const u8 = "FakeApi";
+
+    const first = GetProcAddress(hmod, @intFromPtr(name_z));
+    try std.testing.expect(first != 0);
+
+    resetProcCache();
+    try std.testing.expectEqual(@as(usize, 0), lookupCachedProcAddress(hmod, "FakeApi") orelse 0);
+
+    // The export resolves again, and the fresh address is what is cached.
+    const after_reset = GetProcAddress(hmod, @intFromPtr(name_z));
+    try std.testing.expect(after_reset != 0);
+    try std.testing.expectEqual(after_reset, lookupCachedProcAddress(hmod, "FakeApi").?);
 }
 
 test "SetEnvironmentVariableA NULL value deletes and shadows inherited vars" {

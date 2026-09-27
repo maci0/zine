@@ -63,11 +63,11 @@ WebAssembly executes on a stack machine, but standard blocks and functions decla
 A crucial component of any dynamic recompiler is avoiding re-translating the same blocks of code.
 
 ### Interpreter Decode Cache (Implemented)
-The interpreter uses a 1024-entry hash-indexed **instruction decode cache** (`decode_cache.zig`) that maps guest EIP addresses to previously decoded `Instruction` structs. Each entry is validated by both the EIP tag and the first 4 bytes of the instruction stream, which provides basic self-modifying code detection — if code is modified, the tag will mismatch on the next lookup, causing a cache miss and re-decode from the modified bytes.
+The interpreter uses a 1024-entry hash-indexed **instruction decode cache** (`decode_cache.zig`) that maps guest EIP addresses to previously decoded `Instruction` structs. Each entry is validated by the EIP tag, the fetch length, and every fetched byte, which provides self-modifying code detection — if code is modified, the comparison fails on the next lookup, causing a cache miss and re-decode from the modified bytes.
 
 ### JIT Block Caching Strategy (Partial)
-1. **Instruction Pointer Mapping (implemented):** `compiler.zig` tracks attempted compilation in fixed 4096-entry arrays. `runWithJitHost` in `wasm_main.zig` separately maps guest EIP to host block ID with 4096-entry arrays. Both index by `eip & 4095` and check the full EIP tag; collisions replace the previous entry. These replaced unbounded hash maps in commit `a76c8eb`.
-2. **Cache Invalidation (partial):** See [Handling Self-Modifying Code](#handling-self-modifying-code-smc) for the implemented coarse flush and planned per-page invalidation.
+1. **Instruction Pointer Mapping (implemented):** `compiler.zig` tracks attempted compilation in fixed 4096-entry arrays (`JitCompiler.block_cache_keys`/`block_cache_vals`, suppressing recompilation of a block already emitted). `runWithJitHost` in `wasm_main.zig` maps guest EIP to a host block ID with `JitCompiler.BlockIndex`, a 4096-entry direct-mapped table that also stores the x86 bytes each block was compiled from. Both index by `eip & 4095` and check the full EIP tag; collisions replace the previous entry. These replaced unbounded hash maps in commit `a76c8eb`.
+2. **Cache Invalidation (implemented, byte-validated):** See [Handling Self-Modifying Code](#handling-self-modifying-code-smc).
 3. **Trace Linking (planned):** Frequently executed blocks that jump to other known blocks could be linked without returning to the interpreter.
 
 ## Handling Self-Modifying Code (SMC)
@@ -76,10 +76,11 @@ Self-Modifying Code is historically the hardest problem for x86 recompilers (esp
 
 Current state:
 
-1. **Interpreter decode cache**: each entry is validated by its EIP tag plus the first 4 bytes of the instruction stream, so a write to cached code causes a tag mismatch and a re-decode on the next fetch. This covers the interpreter path.
-2. **JIT block cache**: keyed by guest EIP (`block_cache_keys`/`block_cache_vals` in `compiler.zig`). A coarse invalidation hook is implemented: guest calls that make code executable again — `VirtualProtect` raising an EXECUTE protection tier and `FlushInstructionCache` — invoke `stub_common.smc_invalidate_cache` (registered as `flushJitCache` in `wasm_main.zig`), which clears the entire block cache so stale blocks are recompiled. Fine-grained per-page invalidation of ordinary data writes to translated pages remains a known limitation.
+1. **Interpreter decode cache**: each entry is validated by its EIP tag, the fetch length, and every fetched byte, so a write to cached code causes a mismatch and a re-decode on the next fetch. This covers the interpreter path.
+2. **JIT block index**: `JitCompiler.BlockIndex` (`compiler.zig`) maps guest EIP to the host block ID and keeps the exact x86 bytes the block was compiled from (up to the 256-byte scan window). A hit requires those bytes to still be at the EIP, so code patched in place, or a region unmapped and remapped at the same address, misses and recompiles instead of executing the earlier translation. `JitCompiler.invalidateEip` drops the companion "already compiled" mark so a stale mark cannot suppress that recompile.
+3. **Coarse flush hook**: guest calls that make code executable again — `VirtualProtect` raising an EXECUTE protection tier and `FlushInstructionCache` — invoke `stub_common.smc_invalidate_cache` (registered as `flushJitCache` in `wasm_main.zig`), which clears the block index and the compile marks in one step. Byte validation makes this a fast path, not the correctness mechanism: a guest that writes to its own code without either call still recompiles on the next visit to that EIP. What remains unimplemented is avoiding the recompile: marking translated pages read-only and intercepting writes to re-translate in place.
 
-Planned design (only the fine-grained parts remain unimplemented; the coarse whole-cache flush described above ships today):
+Planned design (only the fine-grained parts remain unimplemented; the byte-validated index and the coarse whole-cache flush described above ship today):
 
 1. **Marking Translated Pages:** When the JIT translates a block of memory, it marks the underlying guest memory page (usually 4KB) as "Translated" in the MMU (Memory Management Unit).
 2. **Write Intercepts:** The MMU enforces soft "Read-Only" permissions on these Translated pages.

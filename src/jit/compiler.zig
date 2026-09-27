@@ -14,12 +14,119 @@ const host = @import("host.zig");
 
 const Body = emitter.Buffer;
 
+/// Sentinel for an unused block-cache slot. 0xFFFFFFFF is not a valid
+/// guest EIP (the guest address space ends at 0xFFFFFFFF inclusive only as an
+/// unmapped probe), so it can never collide with a real key.
+pub const EMPTY_KEY: u32 = 0xFFFFFFFF;
+
+/// Number of slots in the direct-mapped block caches.
+pub const BLOCK_CACHE_SLOTS: u32 = 4096;
+pub const BLOCK_CACHE_MASK: u32 = BLOCK_CACHE_SLOTS - 1;
+
+/// Largest x86 block the JIT scans and compiles (runner.scanBlock window).
+pub const MAX_JIT_BLOCK_BYTES: usize = 256;
+
+/// Direct-mapped guest EIP → compiled block index that revalidates the x86
+/// bytes the block was compiled from on every hit.
+///
+/// A cached block is only reusable while the guest bytes at its EIP are
+/// unchanged: a guest that patches its own code, or a memory region that is
+/// unmapped and remapped at the same address, would otherwise execute the
+/// previously compiled translation of bytes that no longer exist. The check
+/// mirrors x86/decode_cache.zig, which validates the full decode input.
+///
+/// A hit therefore means "these exact bytes were compiled into block id N",
+/// not merely "something was compiled for this EIP once".
+pub const BlockIndex = struct {
+    allocator: std.mem.Allocator,
+    keys: []u32,
+    vals: []u32,
+    /// Bytes compiled per slot, BLOCK_CACHE_SLOTS * MAX_JIT_BLOCK_BYTES long.
+    code: []u8,
+    /// Compiled length per slot, 0 for an empty slot.
+    code_len: []u8,
+
+    pub fn init(allocator: std.mem.Allocator) !BlockIndex {
+        const slot_count: usize = BLOCK_CACHE_SLOTS;
+        const keys = try allocator.alloc(u32, slot_count);
+        errdefer allocator.free(keys);
+        const vals = try allocator.alloc(u32, slot_count);
+        errdefer allocator.free(vals);
+        const code = try allocator.alloc(u8, slot_count * MAX_JIT_BLOCK_BYTES);
+        errdefer allocator.free(code);
+        const code_len = try allocator.alloc(u8, slot_count);
+        errdefer allocator.free(code_len);
+
+        @memset(keys, EMPTY_KEY);
+        @memset(code_len, 0);
+        return .{
+            .allocator = allocator,
+            .keys = keys,
+            .vals = vals,
+            .code = code,
+            .code_len = code_len,
+        };
+    }
+
+    pub fn deinit(self: *BlockIndex) void {
+        self.allocator.free(self.keys);
+        self.allocator.free(self.vals);
+        self.allocator.free(self.code);
+        self.allocator.free(self.code_len);
+        self.* = undefined;
+    }
+
+    /// Look up the block compiled from `current` (the bytes now at `eip`).
+    /// Returns null when the slot is empty, holds another EIP, or the guest
+    /// bytes changed since the block was compiled.
+    pub fn lookup(self: *const BlockIndex, eip: u32, current: []const u8) ?u32 {
+        const idx = eip & BLOCK_CACHE_MASK;
+        if (self.keys[idx] != eip) return null;
+        const len = self.code_len[idx];
+        if (len == 0 or len > current.len or len > MAX_JIT_BLOCK_BYTES) return null;
+        const base = @as(usize, idx) * MAX_JIT_BLOCK_BYTES;
+        if (!std.mem.eql(u8, self.code[base .. base + len], current[0..len])) return null;
+        return self.vals[idx];
+    }
+
+    /// Record that `block_id` was compiled from the first `code.len` bytes
+    /// now at `eip`. Blocks longer than the scan window are not indexable.
+    pub fn store(self: *BlockIndex, eip: u32, code: []const u8, block_id: u32) void {
+        const idx = eip & BLOCK_CACHE_MASK;
+        self.keys[idx] = eip;
+        self.vals[idx] = block_id;
+        self.code_len[idx] = 0;
+        if (code.len == 0 or code.len > MAX_JIT_BLOCK_BYTES) return;
+        const base = @as(usize, idx) * MAX_JIT_BLOCK_BYTES;
+        @memcpy(self.code[base .. base + code.len], code);
+        self.code_len[idx] = @intCast(code.len);
+    }
+
+    /// Drop the slot for `eip`. Used when the surrounding cache is flushed.
+    pub fn invalidateEip(self: *BlockIndex, eip: u32) void {
+        const idx = eip & BLOCK_CACHE_MASK;
+        if (self.keys[idx] == eip) self.keys[idx] = EMPTY_KEY;
+    }
+
+    /// Guest EIP held by `slot`, or EMPTY_KEY when the slot is empty. Used by
+    /// the hot-block report, which counts per slot rather than per EIP.
+    pub fn keyAt(self: *const BlockIndex, slot: u32) u32 {
+        return self.keys[slot];
+    }
+
+    /// Drop every entry.
+    pub fn invalidateAll(self: *BlockIndex) void {
+        @memset(self.keys, EMPTY_KEY);
+        @memset(self.code_len, 0);
+    }
+};
+
 /// JIT compiler instance for translating x86 basic blocks to WASM.
 pub const JitCompiler = struct {
     allocator: std.mem.Allocator,
     module: emitter.WasmModule,
-    block_cache_keys: [4096]u32,
-    block_cache_vals: [4096]u32,
+    block_cache_keys: [BLOCK_CACHE_SLOTS]u32,
+    block_cache_vals: [BLOCK_CACHE_SLOTS]u32,
     /// WASM linear memory address of the JitCpuState struct.
     state_addr: u32,
 
@@ -28,8 +135,8 @@ pub const JitCompiler = struct {
         return .{
             .allocator = allocator,
             .module = emitter.WasmModule.init(allocator),
-            .block_cache_keys = [_]u32{0xFFFFFFFF} ** 4096,
-            .block_cache_vals = [_]u32{0} ** 4096,
+            .block_cache_keys = [_]u32{EMPTY_KEY} ** BLOCK_CACHE_SLOTS,
+            .block_cache_vals = [_]u32{0} ** BLOCK_CACHE_SLOTS,
             .state_addr = state_addr,
         };
     }
@@ -41,14 +148,22 @@ pub const JitCompiler = struct {
     }
 
     pub fn isCached(self: *JitCompiler, eip: u32) bool {
-        const idx = eip & 4095;
+        const idx = eip & BLOCK_CACHE_MASK;
         return self.block_cache_keys[idx] == eip;
     }
 
     pub fn markCached(self: *JitCompiler, eip: u32, func_idx: u32) void {
-        const idx = eip & 4095;
+        const idx = eip & BLOCK_CACHE_MASK;
         self.block_cache_keys[idx] = eip;
         self.block_cache_vals[idx] = func_idx;
+    }
+
+    /// Drop the "already compiled" mark for `eip` so the next visit
+    /// recompiles. Callers that rewrote or unmapped guest code use this so
+    /// the mark cannot suppress a recompile of changed bytes.
+    pub fn invalidateEip(self: *JitCompiler, eip: u32) void {
+        const idx = eip & BLOCK_CACHE_MASK;
+        if (self.block_cache_keys[idx] == eip) self.block_cache_keys[idx] = EMPTY_KEY;
     }
 
     /// Compiles a basic block of x86 code starting at `guest_eip` into a WASM binary.
@@ -1833,4 +1948,100 @@ test "jit compiler lea" {
     try expectValidWasmModule(wasm_bin);
     // SIB addressing scales the index (mul) and adds base + displacement.
     try expectCodeSectionContains(wasm_bin, &.{ @intFromEnum(wasm.Opcode.i32_mul), @intFromEnum(wasm.Opcode.i32_add) });
+}
+
+test "block index: hit only for the bytes that were compiled" {
+    var index = try BlockIndex.init(std.testing.allocator);
+    defer index.deinit();
+
+    const code = [_]u8{ 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 };
+    try std.testing.expect(index.lookup(0x401000, &code) == null);
+    index.store(0x401000, &code, 7);
+    try std.testing.expectEqual(@as(u32, 7), index.lookup(0x401000, &code).?);
+}
+
+test "block index: guest code patched at the same EIP misses" {
+    var index = try BlockIndex.init(std.testing.allocator);
+    defer index.deinit();
+
+    var code = [_]u8{ 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 };
+    index.store(0x401000, &code, 1);
+    // Same length, one byte different: the compiled block is stale.
+    code[1] = 0x02;
+    try std.testing.expect(index.lookup(0x401000, &code) == null);
+    // Every byte of the compiled block is validated, not just the first.
+    code[1] = 0x01;
+    code[5] = 0x90;
+    try std.testing.expect(index.lookup(0x401000, &code) == null);
+}
+
+test "block index: a shorter fetch than the compiled block misses" {
+    var index = try BlockIndex.init(std.testing.allocator);
+    defer index.deinit();
+
+    const code = [_]u8{ 0x90, 0x90, 0x90, 0x90 };
+    index.store(0x500000, &code, 3);
+    try std.testing.expectEqual(@as(u32, 3), index.lookup(0x500000, &code).?);
+    try std.testing.expect(index.lookup(0x500000, code[0..2]) == null);
+}
+
+test "block index: slot aliasing evicts and never returns another EIP's block" {
+    var index = try BlockIndex.init(std.testing.allocator);
+    defer index.deinit();
+
+    const eip_a: u32 = 0x401000;
+    const eip_b = eip_a + BLOCK_CACHE_SLOTS;
+    try std.testing.expectEqual(eip_a & BLOCK_CACHE_MASK, eip_b & BLOCK_CACHE_MASK);
+
+    const code_a = [_]u8{0x90};
+    const code_b = [_]u8{0xCC};
+    index.store(eip_a, &code_a, 11);
+    index.store(eip_b, &code_b, 22);
+    // eip_b took the shared slot, so eip_a is gone rather than aliased.
+    try std.testing.expect(index.lookup(eip_a, &code_a) == null);
+    try std.testing.expectEqual(@as(u32, 22), index.lookup(eip_b, &code_b).?);
+}
+
+test "block index: invalidateEip and invalidateAll drop only their targets" {
+    var index = try BlockIndex.init(std.testing.allocator);
+    defer index.deinit();
+
+    const eip_a: u32 = 0x401000;
+    const eip_b: u32 = 0x402000;
+    const code = [_]u8{0x90};
+    index.store(eip_a, &code, 1);
+    index.store(eip_b, &code, 2);
+
+    index.invalidateEip(0x409000); // empty slot, no effect
+    index.invalidateEip(eip_a);
+    try std.testing.expect(index.lookup(eip_a, &code) == null);
+    try std.testing.expectEqual(@as(u32, 2), index.lookup(eip_b, &code).?);
+
+    index.invalidateAll();
+    try std.testing.expect(index.lookup(eip_b, &code) == null);
+}
+
+test "block index: blocks beyond the scan window are not indexable" {
+    var index = try BlockIndex.init(std.testing.allocator);
+    defer index.deinit();
+
+    const oversized = [_]u8{0x90} ** (MAX_JIT_BLOCK_BYTES + 1);
+    index.store(0x401000, &oversized, 5);
+    try std.testing.expect(index.lookup(0x401000, &oversized) == null);
+}
+
+test "compiler: invalidateEip clears the compile mark for that EIP only" {
+    var compiler = JitCompiler.init(std.testing.allocator, 0);
+    defer compiler.deinit();
+
+    const eip_a: u32 = 0x401000;
+    const eip_b: u32 = 0x401004;
+    try std.testing.expect(eip_a & BLOCK_CACHE_MASK != eip_b & BLOCK_CACHE_MASK);
+
+    compiler.markCached(eip_a, 0);
+    compiler.markCached(eip_b, 0);
+    try std.testing.expect(compiler.isCached(eip_a));
+    compiler.invalidateEip(eip_a);
+    try std.testing.expect(!compiler.isCached(eip_a));
+    try std.testing.expect(compiler.isCached(eip_b));
 }
