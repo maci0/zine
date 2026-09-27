@@ -172,6 +172,9 @@ release, not a 0.2.1 patch.
 - `zine --quiet` (`-q`) raises the log level to `warn` for one run, on native and
   WASI, so a chatty environment can be quieted without rewriting
   `ZINE_LOG_LEVEL`.
+- `--jit-max-eip` on the WASI build takes its value as a separate argument,
+  like `--argv0`, in addition to `--jit-max-eip=<u32>`. The separate-argument
+  spelling reported "requires a value" and exited 2 even when a value followed.
 
 #### Fixed
 

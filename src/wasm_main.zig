@@ -55,6 +55,22 @@ const runtime = @import("runtime.zig");
 /// the terminating NUL that `path_utils` appends.
 const max_guest_cwd_len = 1021;
 
+/// Parses a `--jit-max-eip` value. A rejected value is a usage error, so the
+/// diagnostic names the option and the offending text, and the process ends
+/// with the usage status rather than continuing with the default bound.
+fn parseJitMaxEip(val: []const u8) u32 {
+    if (val.len == 0) {
+        std.debug.print("{s}", .{"Error: --jit-max-eip requires a non-empty value.\nTry 'zine --help' for more information.\n"});
+        std.process.exit(2);
+    }
+    return std.fmt.parseInt(u32, val, 0) catch {
+        var err_buf: [512]u8 = undefined;
+        const msg = std.fmt.bufPrint(&err_buf, "Error: --jit-max-eip requires a u32 value (decimal or 0x-prefixed hex), got '{s}'.\nTry 'zine --help' for more information.\n", .{val}) catch "Error: --jit-max-eip requires a u32 value.\nTry 'zine --help' for more information.\n";
+        std.debug.print("{s}", .{msg});
+        std.process.exit(2);
+    };
+}
+
 /// The entry point for the WASM build of Zine.
 /// It sets up guest memory, loads the PE, and starts the x86 interpreter.
 pub fn main(init: std.process.Init) !void {
@@ -137,21 +153,16 @@ pub fn main(init: std.process.Init) !void {
             continue;
         }
         if (!end_of_options and std.mem.eql(u8, arg, "--jit-max-eip")) {
-            std.debug.print("{s}", .{"Error: --jit-max-eip requires a value.\nTry 'zine --help' for more information.\n"});
-            std.process.exit(2);
-        }
-        if (!end_of_options and std.mem.startsWith(u8, arg, "--jit-max-eip=")) {
-            const val = arg["--jit-max-eip=".len..];
-            if (val.len == 0) {
-                std.debug.print("{s}", .{"Error: --jit-max-eip requires a non-empty value.\nTry 'zine --help' for more information.\n"});
-                std.process.exit(2);
-            }
-            jit_max_eip = std.fmt.parseInt(u32, val, 0) catch {
-                var err_buf: [512]u8 = undefined;
-                const msg = std.fmt.bufPrint(&err_buf, "Error: --jit-max-eip requires a u32 value (decimal or 0x-prefixed hex), got '{s}'.\nTry 'zine --help' for more information.\n", .{val}) catch "Error: --jit-max-eip requires a u32 value.\nTry 'zine --help' for more information.\n";
-                std.debug.print("{s}", .{msg});
+            // Same two spellings as --argv0: a separate argument, or "=".
+            const val = args.next() orelse {
+                std.debug.print("{s}", .{"Error: --jit-max-eip requires a value.\nTry 'zine --help' for more information.\n"});
                 std.process.exit(2);
             };
+            jit_max_eip = parseJitMaxEip(val);
+            continue;
+        }
+        if (!end_of_options and std.mem.startsWith(u8, arg, "--jit-max-eip=")) {
+            jit_max_eip = parseJitMaxEip(arg["--jit-max-eip=".len..]);
             continue;
         }
         if (!end_of_options and std.mem.eql(u8, arg, "--profile")) {
@@ -173,9 +184,10 @@ pub fn main(init: std.process.Init) !void {
                 \\Options:
                 \\  -i, --interpret     Use x86 software interpreter (default on WASM)
                 \\      --jit           Use JIT compiler (x86-to-WASM translation)
-                \\      --jit-max-eip=<u32>
+                \\      --jit-max-eip <u32>
                 \\                      Only JIT blocks below this EIP (decimal or
-                \\                      0x-prefixed hex; debugging)
+                \\                      0x-prefixed hex; debugging). Also accepted
+                \\                      as --jit-max-eip=<u32>
                 \\      --argv0 <name>  Override argv[0] passed to the target
                 \\  -t, --trace         Enable all tracing (API + instructions)
                 \\      --trace-api     Enable API tracing only
@@ -959,10 +971,6 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: 
 
     var jit = jit_compiler.JitCompiler.init(allocator, state_addr);
     defer jit.deinit();
-
-    // The SMC hook reaches the host through the vtable, not the module-level
-    // compile/call functions the loop below uses.
-    var jit_host = host_wasm.wasmJitHost();
 
     // Cache: guest_eip → host block id, validated against the x86 bytes the
     // block was compiled from. Fixed 4096-entry direct-mapped table to bound

@@ -58,6 +58,31 @@ if [[ "$expected_version" == zine\ * ]]; then
             printf '%s\n' "$expected_version" >"$workdir/expected"
             cmp "$workdir/expected" "$workdir/stdout"
         done
+        # The value may also stand as its own argument, like --argv0.
+        for value in 0 42 0x00400000 4294967295 0xFFFFFFFF; do
+            timeout 60 "$@" --jit-max-eip "$value" --version >"$workdir/stdout" 2>"$workdir/stderr"
+            [[ ! -s "$workdir/stderr" ]]
+            printf '%s\n' "$expected_version" >"$workdir/expected"
+            cmp "$workdir/expected" "$workdir/stdout"
+        done
+        for value in invalid 0x -1 ''; do
+            status=0
+            timeout 60 "$@" --jit-max-eip "$value" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+            if [[ "$status" != 2 || -s "$workdir/stdout" ]]; then
+                printf 'Invalid --jit-max-eip <%s> must exit with status 2 and no stdout (got %s)\n' "$value" "$status" >&2
+                exit 1
+            fi
+            grep --quiet -- 'Error: --jit-max-eip requires' "$workdir/stderr"
+        done
+        # A flag where the value belongs is consumed as the value, so the
+        # diagnostic names the offending text instead of printing a version.
+        status=0
+        timeout 60 "$@" --jit-max-eip --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+        if [[ "$status" != 2 || -s "$workdir/stdout" ]]; then
+            printf '--jit-max-eip with no value must exit with status 2 and no stdout (got %s)\n' "$status" >&2
+            exit 1
+        fi
+        grep --quiet -- 'Error: --jit-max-eip requires a u32 value' "$workdir/stderr"
     fi
     for level in fatal error err warn info trace '' debug INFO ' warn' 'trace '; do
         config_cmd=(env "ZINE_LOG_LEVEL=$level" "$@")

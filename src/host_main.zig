@@ -9,7 +9,8 @@
 //!      - jit_call(block_id: i32)
 //!
 //! Build:  zig build -Dhost
-//! Usage:  zine-host [options] <zine.wasm> [-- args...]
+//! Usage:  zine-host [options] <zine.wasm> [args...]
+//!         every argument after the module path is passed to the module
 
 const std = @import("std");
 const runtime = @import("runtime.zig");
