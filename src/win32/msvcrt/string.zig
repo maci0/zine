@@ -1114,15 +1114,22 @@ test "isctype and iswctype consult the mask the caller passes" {
     try std.testing.expectEqual(@as(i32, 0), iswctype('A', 0x0002));
 }
 
-test "tolower, toupper, and their wide twins are identity past 255" {
+test "the narrow case mappers are identity past 255, the wide ones fold" {
     try std.testing.expectEqual(@as(i32, 'a'), tolower('A'));
     try std.testing.expectEqual(@as(i32, 'a'), tolower('a'));
     try std.testing.expectEqual(@as(i32, '5'), tolower('5'));
     try std.testing.expectEqual(@as(i32, 'A'), toupper('a'));
+    // A byte argument has no non-ANSI case, so the narrow mappers pass 0x0410
+    // through; towlower and towupper map the full code point.
     try std.testing.expectEqual(@as(i32, 0x0410), toupper(0x0410));
+    try std.testing.expectEqual(@as(i32, 0x0410), tolower(0x0410));
     try std.testing.expectEqual(@as(i32, 'A'), towupper('a'));
     try std.testing.expectEqual(@as(i32, 'a'), towlower('A'));
-    try std.testing.expectEqual(@as(i32, 0x0410), towlower(0x0410));
+    try std.testing.expectEqual(@as(i32, 0x0430), towlower(0x0410));
+    try std.testing.expectEqual(@as(i32, 0x0410), towupper(0x0430));
+    // A code point with no case partner is its own answer.
+    try std.testing.expectEqual(@as(i32, 0x4E2D), towupper(0x4E2D));
+    try std.testing.expectEqual(@as(i32, 0x4E2D), towlower(0x4E2D));
 }
 
 test "ismbcspace accepts only the six whitespace code points" {

@@ -560,7 +560,12 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                             sendError(&ws, "resize fields \"clientW\" and \"clientH\" must be positive");
                             continue;
                         }
-                        const size_type: usize = @intCast(@max(jsonInt(root.object, "sizeType") orelse 0, 0));
+                        // The callback takes a usize, which is 32 bits wide on
+                        // wasm32: a client value above that narrows and panics.
+                        const size_type = std.math.cast(usize, @max(jsonInt(root.object, "sizeType") orelse 0, 0)) orelse {
+                            sendError(&ws, "resize field \"sizeType\" is out of range");
+                            continue;
+                        };
                         if (renderer.on_resize) |cb| cb(new_cw, new_ch, size_type);
                     } else if (std.mem.eql(u8, type_val.string, "close")) {
                         if (renderer.on_close) |cb| cb();
@@ -674,17 +679,28 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                             sendError(&ws, "color_selected requires an integer field \"color\"");
                         }
                     } else if (std.mem.eql(u8, type_val.string, "listbox_select")) {
-                        // Listbox item clicked: (id, index)
-                        if (jsonInt(root.object, "id")) |id| {
-                            if (jsonInt(root.object, "index")) |index| {
-                                if (renderer.on_listbox_select) |cb| {
-                                    cb(@intCast(@as(u64, @bitCast(id))), @intCast(index));
-                                }
-                            } else {
-                                sendError(&ws, "listbox_select requires integer fields \"id\" and \"index\"");
-                            }
-                        } else {
+                        // Listbox item clicked: (id, index). Both fields narrow
+                        // to the callback's types, so an out-of-range value is
+                        // refused rather than narrowing, which panics and takes
+                        // the whole emulator down.
+                        const raw_id = jsonInt(root.object, "id") orelse {
                             sendError(&ws, "listbox_select requires integer fields \"id\" and \"index\"");
+                            continue;
+                        };
+                        const raw_index = jsonInt(root.object, "index") orelse {
+                            sendError(&ws, "listbox_select requires integer fields \"id\" and \"index\"");
+                            continue;
+                        };
+                        const cb_id = std.math.cast(u32, raw_id) orelse {
+                            sendError(&ws, "listbox_select field \"id\" is out of range");
+                            continue;
+                        };
+                        const cb_index = std.math.cast(i32, raw_index) orelse {
+                            sendError(&ws, "listbox_select field \"index\" is out of range");
+                            continue;
+                        };
+                        if (renderer.on_listbox_select) |cb| {
+                            cb(cb_id, cb_index);
                         }
                     } else if (std.mem.eql(u8, type_val.string, "context_menu_select")) {
                         // Context menu item selected
@@ -924,13 +940,18 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
         // A 304 has to describe the representation it revalidated, so a
         // client that negotiated gzip sees the same Content-Encoding it would
         // have seen on the 200.
-        var not_modified_headers: [4]std.http.Header = undefined;
+        var not_modified_headers: [7]std.http.Header = undefined;
         not_modified_headers[0] = .{ .name = "etag", .value = etag };
         not_modified_headers[1] = .{ .name = "cache-control", .value = "private, no-cache" };
         not_modified_headers[2] = .{ .name = "vary", .value = "Accept-Encoding" };
-        const not_modified_count: usize = 3 + @as(usize, @intFromBool(compressed != null));
+        // The 304 repeats the security headers so a client that revalidates
+        // cannot end up with a revalidated response that lacks them.
+        not_modified_headers[3] = .{ .name = "x-content-type-options", .value = "nosniff" };
+        not_modified_headers[4] = .{ .name = "x-frame-options", .value = "DENY" };
+        not_modified_headers[5] = .{ .name = "referrer-policy", .value = "no-referrer" };
+        const not_modified_count: usize = 6 + @as(usize, @intFromBool(compressed != null));
         if (compressed != null) {
-            not_modified_headers[3] = .{ .name = "content-encoding", .value = "gzip" };
+            not_modified_headers[6] = .{ .name = "content-encoding", .value = "gzip" };
         }
         try req.respond("", .{
             .status = .not_modified,
@@ -942,8 +963,8 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
     }
 
     var ws_buf: [config.max_url_len]u8 = undefined;
-    var csp_buf: [256]u8 = undefined;
-    const csp = std.fmt.bufPrint(&csp_buf, "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' {s}", .{config.web_server.wsUrl(&ws_buf)}) catch "default-src 'self'";
+    var csp_buf: [512]u8 = undefined;
+    const csp = std.fmt.bufPrint(&csp_buf, "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' {s}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'", .{config.web_server.wsUrl(&ws_buf)}) catch "default-src 'self'; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 
     const response_headers = [_]std.http.Header{
         .{ .name = "content-type", .value = content_type },
@@ -951,6 +972,7 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
         .{ .name = "cache-control", .value = "private, no-cache" },
         .{ .name = "x-content-type-options", .value = "nosniff" },
         .{ .name = "x-frame-options", .value = "DENY" },
+        .{ .name = "referrer-policy", .value = "no-referrer" },
         .{ .name = "content-security-policy", .value = csp },
         .{ .name = "vary", .value = "Accept-Encoding" },
         .{ .name = "content-encoding", .value = "gzip" },

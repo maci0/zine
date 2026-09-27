@@ -712,6 +712,13 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
             const dir = runtime.main_exe_dir[0..runtime.main_exe_dir_len];
             const dir_posix_len = path_utils.win32ToPosix(dir, &resolved_buf) catch 0;
             if (dir_posix_len > 0) {
+                // The name is guest-supplied and reaches here unbounded when
+                // win32ToPosix could not convert it, so the joined path is
+                // refused rather than written past the end of the buffer.
+                if (dir_posix_len + exe_path.len >= resolved_buf.len) {
+                    log.err("wasm: spawn handler: child path does not fit in {d} bytes", .{resolved_buf.len});
+                    return -1;
+                }
                 @memcpy(resolved_buf[dir_posix_len..][0..exe_path.len], exe_path);
                 exe_path = resolved_buf[0 .. dir_posix_len + exe_path.len];
             }
