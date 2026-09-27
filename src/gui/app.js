@@ -446,7 +446,7 @@ function renderStartMenu() {
             'No programs on the Desktop'));
     } else {
         programs.forEach(p => {
-            van.add(startMenu, div({class: 'popup-item', onclick: () => {
+            van.add(startMenu, div({class: 'popup-item', dir: 'auto', onclick: () => {
                 closeStartMenu();
                 launchDesktopItem(p.name);
             }}, p.name));
@@ -512,7 +512,7 @@ function PopupItem(sub, onAfterClick) {
     }
     const isChecked = (sub.flags & 0x0008) !== 0; // MF_CHECKED
     const isDisabled = (sub.flags & 0x0003) !== 0; // MF_GRAYED | MF_DISABLED
-    return div({class: 'popup-item' + (isChecked ? ' checked' : '') + (isDisabled ? ' disabled' : ''), role: 'menuitem', 'aria-disabled': isDisabled ? 'true' : 'false', 'data-cmd-id': sub.id, onclick: (e) => {
+    return div({class: 'popup-item' + (isChecked ? ' checked' : '') + (isDisabled ? ' disabled' : ''), role: 'menuitem', dir: 'auto', 'aria-disabled': isDisabled ? 'true' : 'false', 'data-cmd-id': sub.id, onclick: (e) => {
         e.stopPropagation();
         if (isDisabled) return;
         sendCommand(sub.id);
@@ -533,9 +533,9 @@ function renderMenu(menuData) {
                     setTimeout(() => popup.style.display = '', 100);
                 }))
             );
-            menuItem = div({class: 'menu-item', role: 'menuitem', 'aria-haspopup': 'true'}, menuLabel(item.name), popup);
+            menuItem = div({class: 'menu-item', role: 'menuitem', dir: 'auto', 'aria-haspopup': 'true'}, menuLabel(item.name), popup);
         } else {
-            menuItem = div({class: 'menu-item', role: 'menuitem', onclick: (e) => {
+            menuItem = div({class: 'menu-item', role: 'menuitem', dir: 'auto', onclick: (e) => {
                 e.stopPropagation();
                 sendCommand(item.id);
             }}, menuLabel(item.name));
@@ -664,24 +664,24 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
         if (bsType === 7) {
             // BS_GROUPBOX
             return fieldset({style: absPos + ' border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); margin:0; padding:4px;'},
-                legend({style: 'font-size:11px; padding:0 4px; color:var(--sys-text);'}, item.text)
+                legend({style: 'font-size:11px; padding:0 4px; color:var(--sys-text);', dir: 'auto'}, item.text)
             );
         }
         if (bsType === 2 || bsType === 3) {
             // BS_CHECKBOX / BS_AUTOCHECKBOX
             return label({style: absPos + ' display:flex; align-items:center; gap:4px; font-size:11px; overflow:hidden; white-space:nowrap;'},
                 input({type:'checkbox', class:'win2k-check', "data-id": item.id, style:'width:13px;height:13px;margin:0;flex:none;', onclick: (e) => { e.stopPropagation(); sendCommand(item.id); }}),
-                span({style:'overflow:hidden;text-overflow:ellipsis;'}, (item.text||'').replace(/&([^&])/g,'$1').replace(/&&/g,'&'))
+                span({style:'overflow:hidden;text-overflow:ellipsis;', dir: 'auto'}, (item.text||'').replace(/&([^&])/g,'$1').replace(/&&/g,'&'))
             );
         }
         if (bsType === 4 || bsType === 9) {
             // BS_RADIOBUTTON / BS_AUTORADIOBUTTON
             return label({style: absPos + ' display:flex; align-items:center; gap:4px; font-size:11px; overflow:hidden; white-space:nowrap;'},
                 input({type:'radio', class:'win2k-check', "data-id": item.id, name:'radio-'+item.id, style:'width:13px;height:13px;margin:0;flex:none;', onclick: (e) => { e.stopPropagation(); sendCommand(item.id); }}),
-                span({style:'overflow:hidden;text-overflow:ellipsis;'}, (item.text||'').replace(/&([^&])/g,'$1').replace(/&&/g,'&'))
+                span({style:'overflow:hidden;text-overflow:ellipsis;', dir: 'auto'}, (item.text||'').replace(/&([^&])/g,'$1').replace(/&&/g,'&'))
             );
         }
-        return button({class: 'win2k-button', style: absPos, "data-id": item.id, onclick: () => sendCommand(item.id)}, item.text);
+        return button({class: 'win2k-button', style: absPos, dir: 'auto', "data-id": item.id, onclick: () => sendCommand(item.id)}, item.text);
     }
 
     // Static
@@ -697,7 +697,7 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
             return div({style: absPos + ' border-top:1px solid var(--sys-shadow); border-left:1px solid var(--sys-shadow); border-right:1px solid var(--sys-hilight); border-bottom:1px solid var(--sys-hilight);'});
         }
         const align = (ssType === 1) ? 'text-align:center;' : '';
-        return div({style: absPos + ` ${align} white-space:pre-wrap; overflow:hidden; font-size:11px; line-height:1.3;`, "data-id": item.id}, item.text);
+        return div({style: absPos + ` ${align} white-space:pre-wrap; overflow:hidden; font-size:11px; line-height:1.3;`, dir: 'auto', "data-id": item.id}, item.text);
     }
 
     // Edit
@@ -711,7 +711,7 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
         if (siblingLabel && siblingLabel.text) {
             ariaLabel = siblingLabel.text.replace(/&/g, "");
         }
-        return input({type: 'text', class: 'win2k-edit', style: absPos, value: item.text, "aria-label": ariaLabel, "data-id": item.id});
+        return input({type: 'text', class: 'win2k-edit', style: absPos, dir: 'auto', value: item.text, "aria-label": ariaLabel, "data-id": item.id});
     }
 
     // ListBox
@@ -745,7 +745,7 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
         const sbText = (item.text || '').replace(/&([^&])/g, '$1').replace(/&&/g, '&');
         return div({"data-id": item.id, class: 'win2k-statusbar',
             style: `position:absolute; left:0; bottom:0; right:0; height:${pcy || 20}px;`},
-            div({class: 'win2k-statusbar-pane'}, sbText));
+            div({class: 'win2k-statusbar-pane', dir: 'auto'}, sbText));
     }
 
     // msctls_progress32
@@ -770,7 +770,7 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
     // SysDateTimePick32
     if (cls === 'SysDateTimePick32') {
         return div({"data-id": item.id, class: 'win2k-dtp', style: absPos + ' display:flex; align-items:center; justify-content:center; border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); background:var(--sys-window);'},
-            span({style: 'font-size:11px;'}, item.text || '2000-01-01'));
+            span({style: 'font-size:11px;', dir: 'auto'}, item.text || '2000-01-01'));
     }
 
     // SysTreeView32
@@ -1218,7 +1218,7 @@ function connect() {
                     let pathHistory = [];
 
                     // --- File selection logic ---
-                    const filenameInput = input({type: 'text', id: 'dialog_filename', class: 'win2k-edit'});
+                    const filenameInput = input({type: 'text', id: 'dialog_filename', class: 'win2k-edit', dir: 'auto'});
                     const nameErrorEl = div({class: 'dlg-error', style: 'display:none;'});
                     filenameInput.addEventListener('input', hideNameError);
                     function showNameError(text) {
@@ -1229,7 +1229,7 @@ function connect() {
                         nameErrorEl.style.display = 'none';
                     }
                     const fileListEl = div({class: 'win2k-edit comdlg-file-list'});
-                    const lookInLabel = div({class: 'win2k-edit comdlg-lookin'});
+                    const lookInLabel = div({class: 'win2k-edit comdlg-lookin', dir: 'auto'});
 
                     // The guest sends filter descriptions ("Text files (*.txt)"),
                     // so the pattern lives in the label and narrows the list here.
@@ -1368,6 +1368,7 @@ function connect() {
                         listFolders.forEach(f => {
                             const item = div({
                                 class: 'file-item',
+                                dir: 'auto',
                                 'data-name': f,
                                 'data-type': 'folder',
                                 onclick: () => selectFile(f),
@@ -1378,6 +1379,7 @@ function connect() {
                         files.forEach(f => {
                             van.add(fileListEl, div({
                                 class: 'file-item',
+                                dir: 'auto',
                                 'data-name': f,
                                 'data-type': 'file',
                                 onclick: () => selectFile(f),
@@ -1410,7 +1412,7 @@ function connect() {
                     const placeItems = [];
                     function makePlace(title, iconSrc, targetPath) {
                         const el = div({
-                            class: 'comdlg-place-item', title: title,
+                            class: 'comdlg-place-item', title: title, dir: 'auto',
                             onclick: () => { if (currentPath !== targetPath) navigateTo(targetPath); }
                         }, img({src: iconSrc}), span(title));
                         placeItems.push({el: el, path: targetPath});

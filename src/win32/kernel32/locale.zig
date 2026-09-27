@@ -281,22 +281,22 @@ pub fn GetStringTypeA(dwInfoType: u32, lpSrcStr: usize, cchSrc: i32, lpCharType:
 }
 
 /// --- LCMapString functions ---
+const LCMAP_UPPERCASE: u32 = 0x00000200;
+const LCMAP_LOWERCASE: u32 = 0x00000100;
+
 /// Implementation status: Partially implemented
 pub fn LCMapStringA(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, lpDestStr: usize, cchDest: i32) callconv(w32cc.WINAPI) i32 {
     _ = Locale;
     if (trace.enable_tracing) trace.print("KERNEL32: LCMapStringA(flags=0x{X})\n", .{dwMapFlags});
 
     if (lpSrcStr == 0) return 0;
-    const src_len: usize = if (cchSrc < 0) trace.c_span(lpSrcStr).len + 1 else @intCast(cchSrc);
-    if (cchDest == 0 or lpDestStr == 0) return @intCast(src_len);
+    const counted = countForMap(cchSrc, if (cchSrc < 0) trace.c_span(lpSrcStr).len else 0);
+    if (cchDest == 0 or lpDestStr == 0) return @intCast(counted.reported);
 
     // lpSrcStr/lpDestStr are guest VAs (usize params — not auto-translated).
     const src = @as([*]const u8, @ptrFromInt(trace.addr(lpSrcStr)));
     const dst = @as([*]u8, @ptrFromInt(trace.addr(lpDestStr)));
-    const copy_len = @min(src_len, @as(usize, @intCast(cchDest)));
-
-    const LCMAP_UPPERCASE = 0x00000200;
-    const LCMAP_LOWERCASE = 0x00000100;
+    const copy_len = @min(counted.src_len, @as(usize, @intCast(cchDest)));
 
     for (0..copy_len) |i| {
         if ((dwMapFlags & LCMAP_UPPERCASE) != 0) {
@@ -307,7 +307,30 @@ pub fn LCMapStringA(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, 
             dst[i] = src[i];
         }
     }
-    return @intCast(copy_len);
+    return @intCast(counted.report(copy_len));
+}
+
+/// Win32 length convention shared by the LCMapString family: a negative
+/// `cchSrc` measures a NUL-terminated string and the return value excludes
+/// the terminator, a non-negative one counts the terminator as a character.
+const MappedLen = struct {
+    /// Bytes or code units copied, terminator included.
+    src_len: usize,
+    /// What a sizing call (cchDest == 0) reports.
+    reported: usize,
+    /// What a completed call reports for `copy_len` units written.
+    fn report(self: MappedLen, copy_len: usize) usize {
+        return copy_len - @min(copy_len, self.src_len - self.reported);
+    }
+};
+
+/// `text_len_excl_nul` is the string length without its terminator, and is
+/// read only for a NUL-terminated source: a counted one needs no scan, and
+/// scanning it would read past a buffer that has none.
+fn countForMap(cchSrc: i32, text_len_excl_nul: usize) MappedLen {
+    if (cchSrc < 0) return .{ .src_len = text_len_excl_nul + 1, .reported = text_len_excl_nul };
+    const n: usize = @intCast(cchSrc);
+    return .{ .src_len = n, .reported = n };
 }
 
 /// Maps one Unicode character string to another.
@@ -317,16 +340,13 @@ pub fn LCMapStringW(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, 
     if (trace.enable_tracing) trace.print("KERNEL32: LCMapStringW(flags=0x{X})\n", .{dwMapFlags});
 
     if (lpSrcStr == 0) return 0;
-    const src_len: usize = if (cchSrc < 0) trace.c_span_w(lpSrcStr).len + 1 else @intCast(cchSrc);
-    if (cchDest == 0 or lpDestStr == 0) return @intCast(src_len);
+    const counted = countForMap(cchSrc, if (cchSrc < 0) trace.c_span_w(lpSrcStr).len else 0);
+    if (cchDest == 0 or lpDestStr == 0) return @intCast(counted.reported);
 
     // lpSrcStr/lpDestStr are guest VAs (usize params — not auto-translated).
     const src = @as([*]const u16, @ptrFromInt(trace.addr(lpSrcStr)));
     const dst = @as([*]u16, @ptrFromInt(trace.addr(lpDestStr)));
-    const copy_len = @min(src_len, @as(usize, @intCast(cchDest)));
-
-    const LCMAP_UPPERCASE = 0x00000200;
-    const LCMAP_LOWERCASE = 0x00000100;
+    const copy_len = @min(counted.src_len, @as(usize, @intCast(cchDest)));
 
     for (0..copy_len) |i| {
         const ch = src[i];
@@ -338,7 +358,7 @@ pub fn LCMapStringW(Locale: u32, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, 
             dst[i] = ch;
         }
     }
-    return @intCast(copy_len);
+    return @intCast(counted.report(copy_len));
 }
 
 /// Compares two character strings, for a specified locale.
@@ -475,23 +495,33 @@ fn callGuestCallback1(cb_addr: usize, arg0: usize) void {
 }
 
 /// Maps one character string to another, performing a specified locale-dependent transformation using a locale name.
+/// Honors LCMAP_LOWERCASE and LCMAP_UPPERCASE; other flags are ignored and the text passes through.
 /// Implementation status: Partially implemented
 pub fn LCMapStringEx(lpLocaleName: usize, dwMapFlags: u32, lpSrcStr: usize, cchSrc: i32, lpDestStr: usize, cchDest: i32, lpVersionInformation: usize, lpReserved: usize, sortHandle: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: LCMapStringEx(flags=0x{X}, localeName={X}, ver={X}, reserved={X}, sort={X})\n", .{ dwMapFlags, lpLocaleName, lpVersionInformation, lpReserved, sortHandle });
 
     if (lpSrcStr == 0) return 0;
 
-    const src_len: usize = if (cchSrc < 0) trace.c_span_w(lpSrcStr).len + 1 else @intCast(cchSrc);
+    const counted = countForMap(cchSrc, if (cchSrc < 0) trace.c_span_w(lpSrcStr).len else 0);
 
     // If output buffer is 0, return required size
-    if (cchDest == 0 or lpDestStr == 0) return @intCast(src_len);
+    if (cchDest == 0 or lpDestStr == 0) return @intCast(counted.reported);
 
-    // Simple identity copy (sufficient for MSVC CRT usage)
-    const src = @as([*]const u16, @ptrFromInt(lpSrcStr));
+    // lpSrcStr/lpDestStr are guest VAs (usize params — not auto-translated).
+    const src = @as([*]const u16, @ptrFromInt(trace.addr(lpSrcStr)));
     const dst = @as([*]u16, @ptrFromInt(lpDestStr));
-    const copy_len = @min(src_len, @as(usize, @intCast(cchDest)));
-    for (0..copy_len) |i| dst[i] = src[i];
-    return @intCast(copy_len);
+    const copy_len = @min(counted.src_len, @as(usize, @intCast(cchDest)));
+    for (0..copy_len) |i| {
+        const ch = src[i];
+        if ((dwMapFlags & LCMAP_UPPERCASE) != 0) {
+            dst[i] = unicase.toUpper(ch);
+        } else if ((dwMapFlags & LCMAP_LOWERCASE) != 0) {
+            dst[i] = unicase.toLower(ch);
+        } else {
+            dst[i] = ch;
+        }
+    }
+    return @intCast(counted.report(copy_len));
 }
 
 /// The emulated en-US locale string for `LCType`, or null when the code is
@@ -1035,6 +1065,24 @@ test "GetTimeFormatA formats en-US 12-hour clock with AM/PM" {
     try testing.expectEqualStrings("1:05 PM", formatTime(&afternoon, 0x2, &buf));
     try testing.expectEqualStrings("1 PM", formatTime(&afternoon, 0x1, &buf));
     try testing.expectEqualStrings("13:05:09", formatTime(&afternoon, 0x8, &buf));
+}
+
+test "LCMapStringEx maps case and reports Win32 lengths" {
+    // A non-Latin script, to keep the mapping from being ASCII-only. Sharp s
+    // has no single code point uppercase mapping and stays as it is.
+    var src = [_:0]u16{ 0x0436, 0x0430, 0x00E9, 'a', 0x00DF };
+    const src_va = @intFromPtr(&src);
+    var dst: [16]u16 = undefined;
+
+    try testing.expectEqual(@as(i32, 5), LCMapStringEx(0, LCMAP_UPPERCASE, src_va, -1, @intFromPtr(&dst), dst.len, 0, 0, 0));
+    try testing.expectEqualSlices(u16, &.{ 0x0416, 0x0410, 0x00C9, 'A', 0x00DF, 0 }, dst[0..6]);
+
+    try testing.expectEqual(@as(i32, 5), LCMapStringEx(0, LCMAP_LOWERCASE, src_va, -1, @intFromPtr(&dst), dst.len, 0, 0, 0));
+    try testing.expectEqualSlices(u16, &.{ 0x0436, 0x0430, 0x00E9, 'a', 0x00DF, 0 }, dst[0..6]);
+
+    // A counted source reports the terminator, a NUL-terminated one does not.
+    try testing.expectEqual(@as(i32, 6), LCMapStringEx(0, 0, src_va, 6, 0, 0, 0, 0, 0));
+    try testing.expectEqual(@as(i32, 5), LCMapStringEx(0, 0, src_va, -1, 0, 0, 0, 0, 0));
 }
 
 test "GetLocaleInfoW returns the same locale data as GetLocaleInfoA" {
