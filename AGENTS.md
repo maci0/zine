@@ -13,12 +13,13 @@ Run Win98/Win2K-era 32-bit Windows executables on Linux and in the browser witho
 
 ## Verification
 
-Run `bash tests/check.sh` from the repository root before a pull request. It runs the CI gate in the same order (formatting, shell lint, all four architecture builds, unit tests, both native `test-cli` runs) and stops at the first failure. Single steps, when bisecting:
+Run `bash tests/check.sh` from the repository root before a pull request. It runs the CI gate in the same order (formatting, shell lint, all four architecture builds, the external-stub DLL and `-Dexternal-stubs` builds, unit tests, both native `test-cli` runs) and stops at the first failure. Single steps, when bisecting:
 
 - Unit tests: `zig build test` (also checks formatting). Tests run on the host; `-Darch` does not change the test target.
 - Native CLI tests: `zig build test-cli`, then `zig build test-cli -Darch=x86_64`; no guest binaries required.
 - Formatting: `zig fmt --check src build.zig build.zig.zon`.
 - Compile/typecheck each target, sequentially to limit peak memory: `zig build`, `zig build -Darch=x86_64`, `zig build -Darch=wasm32`, `zig build -Darch=wasm64`. These build ReleaseSafe, the mode `b.standardOptimizeOption` prefers; pass `-Doptimize=Debug` for a debugging loop and expect that to change build time.
+- Stub DLLs: `zig build -Ddll=all` compiles `src/dll/` and `src/win32_dll_api.zig` for x86-windows. `zig build -Dexternal-stubs` covers the other half of the embed/external stub switch.
 
 Formatting also gates the install and test steps inside `build.zig`. A new gate belongs in `tests/check.sh` and `.github/workflows/ci.yml` together; fix failing code rather than weakening checks or dropping targets.
 

@@ -49,19 +49,22 @@ fi
 echo -e "${BOLD}CPU Benchmark Suite${NC}"
 echo "Compiling benchmarks..."
 
-# Compile Linux benchmarks
+# Compile Linux benchmarks.
+# A missing compiler or an unsupported target is tolerated (each mode below
+# reports SKIPPED), but the compiler's diagnostics are not discarded and
+# warnings are not muted, so "skipped" stays distinguishable from "broken".
 if command -v zig &>/dev/null; then
-    zig cc -target x86_64-linux-musl -O2 -w -std=c99 -static -o "$BENCH_LINUX64" "$BENCH_SRC" 2>/dev/null || \
-        cc -O2 -w -std=c99 -static -o "$BENCH_LINUX64" "$BENCH_SRC" 2>/dev/null || true
-    zig cc -target x86-linux-musl -O2 -w -std=c99 -static -o "$BENCH_LINUX32" "$BENCH_SRC" 2>/dev/null || true
+    zig cc -target x86_64-linux-musl -O2 -std=c99 -static -o "$BENCH_LINUX64" "$BENCH_SRC" || \
+        cc -O2 -std=c99 -static -o "$BENCH_LINUX64" "$BENCH_SRC" || true
+    zig cc -target x86-linux-musl -O2 -std=c99 -static -o "$BENCH_LINUX32" "$BENCH_SRC" || true
     # Win32 benchmark: no CRT, only KERNEL32.dll — works in all modes (native, interpret, WASM)
     if [ -f "$BENCH_WIN_SRC" ]; then
-        zig cc -target x86-windows-gnu -O2 -w -nostdlib -lkernel32 -e mainCRTStartup \
-            -o "$BENCH_WIN32" "$BENCH_WIN_SRC" 2>/dev/null || true
+        zig cc -target x86-windows-gnu -O2 -nostdlib -lkernel32 -e mainCRTStartup \
+            -o "$BENCH_WIN32" "$BENCH_WIN_SRC" || true
     fi
 else
-    cc -O2 -w -std=c99 -static -o "$BENCH_LINUX64" "$BENCH_SRC" 2>/dev/null || true
-    cc -m32 -O2 -w -std=c99 -static -o "$BENCH_LINUX32" "$BENCH_SRC" 2>/dev/null || true
+    cc -O2 -std=c99 -static -o "$BENCH_LINUX64" "$BENCH_SRC" || true
+    cc -m32 -O2 -std=c99 -static -o "$BENCH_LINUX32" "$BENCH_SRC" || true
 fi
 
 # Build zine (ReleaseFast for fair comparison)

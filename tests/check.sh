@@ -38,6 +38,13 @@ steps=(
     'zig build -Darch=x86_64 --summary all'
     'zig build -Darch=wasm32 --summary all'
     'zig build -Darch=wasm64 --summary all'
+    # The external-stub DLLs are a shipped target with their own root sources
+    # (src/dll/, src/win32_dll_api.zig); without this they are never compiled
+    # and a break in them merges unnoticed.
+    'zig build -Ddll=all --summary all'
+    # Embedding stubs is the default; -Dexternal-stubs is the other half of
+    # that switch and compiles src/dll/ through a different path.
+    'zig build -Dexternal-stubs --summary all'
     'zig build test --summary all'
     'zig build test-cli --summary all'
     'zig build test-cli -Darch=x86_64 --summary all'

@@ -5,6 +5,7 @@
 //! no-op stubs for unimplemented APIs.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const trace = @import("../trace.zig");
 
 /// Generic stub functions for unimplemented Win32 APIs.
@@ -67,14 +68,28 @@ pub fn get_aligned_hint(size: usize) usize {
 // this close to VirtualAlloc (0x02000000) or it will mistakenly trigger C1076.
 var internal_heap_hint: usize = 0x03000000;
 
+/// Reserves a zeroed chunk for the internal bump heap. Chunks are never
+/// released, matching the lifetime of the process-wide bump allocator.
+///
+/// Native Linux hosts and WASM map the chunk at a fixed low address so 32-bit
+/// guest code can reach it. A Windows-target stub DLL (-Ddll=...) is loaded by
+/// a real Windows process, where the platform backend has no POSIX mmap and
+/// the pointer only has to stay valid, so it takes the page allocator.
+fn allocHeapChunk(size: usize) ?[]align(4096) u8 {
+    if (comptime builtin.os.tag == .windows) {
+        return @alignCast(std.heap.page_allocator.alloc(u8, size) catch null);
+    }
+    const plt = @import("../platform.zig");
+    const hint = internal_heap_hint;
+    internal_heap_hint += (size + 0xFFFF) & ~@as(usize, 0xFFFF);
+    return plt.mmap(@ptrFromInt(hint), size, false, -1, 0, false, false) catch null;
+}
+
 fn heapAlloc(size: usize) ?[*]u8 {
     const aligned = (size + 7) & ~@as(usize, 7); // 8-byte align
     if (heap_base == null or heap_pos + aligned > heap_cap) {
-        const plt = @import("../platform.zig");
         const chunk_size = @max(aligned + 4096, heap_chunk_size);
-        const hint = internal_heap_hint;
-        internal_heap_hint += (chunk_size + 0xFFFF) & ~@as(usize, 0xFFFF);
-        const mem = plt.mmap(@ptrFromInt(hint), chunk_size, false, -1, 0, false, false) catch return null;
+        const mem = allocHeapChunk(chunk_size) orelse return null;
         @memset(mem, 0);
         heap_base = mem.ptr;
         heap_pos = 0;

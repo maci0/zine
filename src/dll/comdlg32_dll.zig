@@ -9,7 +9,7 @@ comptime {
     @export(&dlg.GetSaveFileNameA, .{ .name = "GetSaveFileNameA" });
     @export(&dlg.GetOpenFileNameW, .{ .name = "GetOpenFileNameW" });
     @export(&dlg.GetSaveFileNameW, .{ .name = "GetSaveFileNameW" });
-    @export(&dlg.stub_ChooseColorA, .{ .name = "ChooseColorA" });
+    @export(&dlg.ChooseColorA, .{ .name = "ChooseColorA" });
     @export(&dlg.ChooseFontA, .{ .name = "ChooseFontA" });
     @export(&dlg.PrintDlgA, .{ .name = "PrintDlgA" });
 }
