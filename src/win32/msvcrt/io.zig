@@ -802,13 +802,20 @@ test "fclose recycles FILE structs across fopen cycles" {
     file_ptrs = [_]usize{0} ** max_files;
     file_ptr_free_count = 0;
 
-    var name_buf: [16]u8 = undefined;
-    @memcpy(name_buf[0..9], "/dev/null");
-    name_buf[9] = 0;
+    // A real file in a tmp dir rather than a host device node, so the test
+    // needs no particular platform.
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const file_name = "fopen_cycle.txt";
+    var path_buf: [std.fs.max_path_bytes + std.fs.max_path_bytes]u8 = undefined;
+    try tmp_dir.dir.writeFile(runtime.io(), .{ .sub_path = file_name, .data = "x" });
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_len = try tmp_dir.dir.realPath(runtime.io(), &dir_buf);
+    const name_buf = try std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ dir_buf[0..dir_len], file_name });
     var mode_buf: [4]u8 = undefined;
     @memcpy(mode_buf[0..2], "r\x00");
 
-    const f1 = fopen(@intFromPtr(&name_buf), @intFromPtr(&mode_buf));
+    const f1 = fopen(@intFromPtr(name_buf.ptr), @intFromPtr(&mode_buf));
     try std.testing.expect(f1 != null);
     const p1 = @intFromPtr(f1.?);
 
@@ -816,7 +823,7 @@ test "fclose recycles FILE structs across fopen cycles" {
     try std.testing.expectEqual(@as(usize, 0), file_ptrs[0]);
 
     // The second open must reuse the recycled struct instead of allocating.
-    const f2 = fopen(@intFromPtr(&name_buf), @intFromPtr(&mode_buf));
+    const f2 = fopen(@intFromPtr(name_buf.ptr), @intFromPtr(&mode_buf));
     try std.testing.expect(f2 != null);
     try std.testing.expectEqual(p1, @intFromPtr(f2.?));
     _ = fclose(f2);

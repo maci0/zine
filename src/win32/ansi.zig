@@ -124,23 +124,32 @@ pub fn wideToAnsi(wide: []const u16, out: []u8) []const u8 {
 }
 
 test "cp1252 round trip for the 0x80..0x9F range" {
-    for (0x80..0xA0) |i| {
-        const b: u8 = @intCast(i);
-        const cp = byteToCodepoint(b);
-        var utf8_buf: [4]u8 = undefined;
-        const decoded = toUtf8(&[_]u8{b}, &utf8_buf);
-        var expected: [4]u8 = undefined;
-        const n = std.unicode.utf8Encode(cp, &expected) catch unreachable;
-        try std.testing.expectEqualSlices(u8, expected[0..n], decoded);
+    // The table is written out rather than derived from byteToCodepoint, so a
+    // wrong entry in upper_table fails instead of agreeing with itself.
+    const expected_utf8 = [32][]const u8{
+        "\u{20AC}", "\u{0081}", "\u{201A}", "\u{0192}", "\u{201E}", "\u{2026}", "\u{2020}", "\u{2021}",
+        "\u{02C6}", "\u{2030}", "\u{0160}", "\u{2039}", "\u{0152}", "\u{008D}", "\u{017D}", "\u{008F}",
+        "\u{0090}", "\u{2018}", "\u{2019}", "\u{201C}", "\u{201D}", "\u{2022}", "\u{2013}", "\u{2014}",
+        "\u{02DC}", "\u{2122}", "\u{0161}", "\u{203A}", "\u{0153}", "\u{009D}", "\u{017E}", "\u{0178}",
+    };
+    // The five undefined CP1252 bytes have no reverse mapping, so the round
+    // trip replaces them with default_char, as Windows does.
+    const expected_byte = [32]?u8{
+        0x80, null, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+        0x88, 0x89, 0x8A, 0x8B, 0x8C, null, 0x8E, null,
+        null, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
+        0x98, 0x99, 0x9A, 0x9B, 0x9C, null, 0x9E, 0x9F,
+    };
 
+    for (expected_utf8, 0..) |want, i| {
+        const b: u8 = @intCast(0x80 + i);
+
+        var utf8_buf: [4]u8 = undefined;
+        try std.testing.expectEqualStrings(want, toUtf8(&[_]u8{b}, &utf8_buf));
+
+        const round: u8 = expected_byte[i] orelse default_char;
         var back: [4]u8 = undefined;
-        // The five undefined CP1252 bytes have no reverse mapping and are
-        // replaced by default_char, as Windows does.
-        if (codepointToByte(cp) != null) {
-            try std.testing.expectEqualSlices(u8, &[_]u8{b}, fromUtf8(decoded, &back));
-        } else {
-            try std.testing.expectEqualSlices(u8, &[_]u8{default_char}, fromUtf8(decoded, &back));
-        }
+        try std.testing.expectEqualSlices(u8, &[_]u8{round}, fromUtf8(want, &back));
     }
 }
 

@@ -298,20 +298,26 @@ fn systemTimeOf(ft: w32.FILETIME) w32.SYSTEMTIME {
 test "SYSTEMTIME/FILETIME round trip across year, leap-day and DST boundaries" {
     // The guest clock is UTC with no DST, so every wall-time field must
     // survive the conversion exactly, including Feb 29 and New Year's Eve.
-    const samples = [_]w32.SYSTEMTIME{
-        .{ .wYear = 1601, .wMonth = 1, .wDay = 1 },
-        .{ .wYear = 1999, .wMonth = 12, .wDay = 31, .wHour = 23, .wMinute = 59, .wSecond = 59 },
-        .{ .wYear = 2000, .wMonth = 2, .wDay = 29 },
-        .{ .wYear = 2024, .wMonth = 2, .wDay = 29, .wHour = 23, .wMinute = 59, .wSecond = 59, .wMilliseconds = 999 },
-        .{ .wYear = 2100, .wMonth = 3, .wDay = 1 }, // non-leap century year
-        .{ .wYear = 2400, .wMonth = 2, .wDay = 29, .wDayOfWeek = 65535 },
-        .{ .wYear = 30827, .wMonth = 12, .wDay = 31, .wHour = 23, .wMinute = 59, .wSecond = 59, .wMilliseconds = 999 },
+    // Each sample carries the weekday the calendar gives that date (0 =
+    // Sunday), so a conversion that copies the caller's wDayOfWeek through
+    // instead of recomputing it is caught.
+    const samples = [_]struct { st: w32.SYSTEMTIME, wDayOfWeek: u16 }{
+        .{ .st = .{ .wYear = 1601, .wMonth = 1, .wDay = 1 }, .wDayOfWeek = 1 }, // Monday
+        .{ .st = .{ .wYear = 1999, .wMonth = 12, .wDay = 31, .wHour = 23, .wMinute = 59, .wSecond = 59 }, .wDayOfWeek = 5 }, // Friday
+        .{ .st = .{ .wYear = 2000, .wMonth = 2, .wDay = 29 }, .wDayOfWeek = 2 }, // Tuesday
+        .{ .st = .{ .wYear = 2024, .wMonth = 2, .wDay = 29, .wHour = 23, .wMinute = 59, .wSecond = 59, .wMilliseconds = 999 }, .wDayOfWeek = 4 }, // Thursday
+        .{ .st = .{ .wYear = 2100, .wMonth = 3, .wDay = 1 }, .wDayOfWeek = 1 }, // non-leap century year, Monday
+        // 65535 is the documented "recompute" input and must not survive.
+        .{ .st = .{ .wYear = 2400, .wMonth = 2, .wDay = 29, .wDayOfWeek = 65535 }, .wDayOfWeek = 2 }, // Tuesday
+        .{ .st = .{ .wYear = 30827, .wMonth = 12, .wDay = 31, .wHour = 23, .wMinute = 59, .wSecond = 59, .wMilliseconds = 999 }, .wDayOfWeek = 5 }, // Friday
     };
-    for (samples) |st| {
+    for (samples) |sample| {
+        const st = sample.st;
         const back = systemTimeOf(fileTimeOf(st));
         try testing.expectEqual(st.wYear, back.wYear);
         try testing.expectEqual(st.wMonth, back.wMonth);
         try testing.expectEqual(st.wDay, back.wDay);
+        try testing.expectEqual(sample.wDayOfWeek, back.wDayOfWeek);
         try testing.expectEqual(st.wHour, back.wHour);
         try testing.expectEqual(st.wMinute, back.wMinute);
         try testing.expectEqual(st.wSecond, back.wSecond);

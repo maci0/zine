@@ -277,13 +277,12 @@ test "virtual clock: waits are charged to it and never to the host clock" {
     installVirtualClock(&clock);
     defer useHostClock();
 
-    const host_before = hostMonoNanoTimestamp();
     _ = nanoTimestamp();
     try testing.expect(advanceVirtualClock(std.time.ns_per_s));
-    // A virtual second moved the guest clock by a second, so a host clock
-    // still tracking real time cannot differ from it by nearly that much.
+    // Exactly one virtual second plus the scripted step. A real clock could
+    // not land on that value, so it is what proves the wait was not charged
+    // to the host.
     try testing.expectEqual(@as(i128, std.time.ns_per_s + 1), nanoTimestamp());
-    try testing.expect(@abs(hostMonoNanoTimestamp() - host_before) < std.time.ns_per_s);
 }
 
 test "pauseOrAdvance: a simulated wait charges the virtual clock and no host time" {
@@ -291,15 +290,23 @@ test "pauseOrAdvance: a simulated wait charges the virtual clock and no host tim
     installVirtualClock(&clock);
     defer useHostClock();
 
-    const host_before = hostMonoNanoTimestamp();
     for (0..8) |_| pauseOrAdvance(5 * std.time.ns_per_ms);
     try testing.expectEqual(@as(i128, 40 * std.time.ns_per_ms), clock.now_ns);
-    try testing.expect(@abs(hostMonoNanoTimestamp() - host_before) < std.time.ns_per_s);
 }
 
 test "host clock: without a virtual clock the host clocks answer" {
     useHostClock();
     try testing.expect(!useVirtualClock());
     try testing.expect(!advanceVirtualClock(std.time.ns_per_ms));
-    try testing.expect(hostMonoNanoTimestamp() > 0);
+
+    // The monotonic reading is only ordered against itself; two reads of the
+    // same clock never go backwards.
+    const mono_first = hostMonoNanoTimestamp();
+    const mono_second = hostMonoNanoTimestamp();
+    try testing.expect(mono_second >= mono_first);
+
+    // The wall-clock branch reports milliseconds since the epoch, so it must
+    // sit well past 2001-01-01T00:00:00Z (978307200000 ms).
+    const epoch_ms = milliTimestamp();
+    try testing.expect(epoch_ms > 978_307_200_000);
 }

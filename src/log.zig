@@ -327,9 +327,11 @@ test "log level environment validates values before changing the active level" {
 }
 
 test "diagnostics redact the host home path in both path forms" {
+    const saved_level = min_level;
     const saved_forms = home_forms;
     const saved_lens = home_forms_len;
     defer {
+        min_level = saved_level;
         home_forms = saved_forms;
         home_forms_len = saved_lens;
     }
@@ -366,8 +368,12 @@ test "control characters from guest text cannot drive the terminal" {
 }
 
 test "home redaction stays off without a usable HOME" {
+    const saved_level = min_level;
     const saved_lens = home_forms_len;
-    defer home_forms_len = saved_lens;
+    defer {
+        min_level = saved_level;
+        home_forms_len = saved_lens;
+    }
 
     var env = std.process.Environ.Map.init(std.testing.allocator);
     defer env.deinit();

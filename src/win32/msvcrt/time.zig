@@ -311,8 +311,7 @@ test "asctime tolerates null and garbage fields" {
 test "mktime interprets tm as UTC and normalizes month overflow" {
     // 2024-02-29T00:00:00Z exists only on leap years; pin its exact value.
     var leap_day: Tm = .{ .tm_mday = 29, .tm_mon = 1, .tm_year = 124 };
-    const expected = (civil_time.daysFromCivil(2024, 2, 29) - civil_time.daysFromCivil(1970, 1, 1)) * 86400;
-    try testing.expectEqual(@as(i32, @intCast(expected)), mktime(&leap_day));
+    try testing.expectEqual(@as(i32, 1709164800), mktime(&leap_day));
 
     var month13: Tm = .{ .tm_mday = 1, .tm_mon = 12, .tm_year = 123 };
     var jan: Tm = .{ .tm_mday = 1, .tm_mon = 0, .tm_year = 124 };
@@ -341,6 +340,20 @@ test "mktime updates normalized fields across leap days and year boundaries" {
         var tm = case.input;
         try testing.expectEqual(case.timestamp, mktime(&tm));
         try testing.expectEqualDeep(case.expected, tm);
+    }
+}
+
+test "mktime rejects dates outside time_t and leaves tm untouched" {
+    // Before the epoch and past the 32-bit time_t ceiling both fail with -1,
+    // and the caller's struct is not partially normalized.
+    const cases = [_]Tm{
+        .{ .tm_mday = 31, .tm_mon = 11, .tm_year = 69, .tm_hour = 23, .tm_isdst = -1 },
+        .{ .tm_mday = 1, .tm_mon = 0, .tm_year = 200 },
+    };
+    for (cases) |input| {
+        var tm = input;
+        try testing.expectEqual(@as(i32, -1), mktime(&tm));
+        try testing.expectEqualDeep(input, tm);
     }
 }
 

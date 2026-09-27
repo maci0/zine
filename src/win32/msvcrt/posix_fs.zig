@@ -639,12 +639,24 @@ pub fn moveFileWin32(old_win: []const u8, new_win: []const u8) i32 {
 
 const testing = @import("std").testing;
 
-fn tmpFileRealPath(tmp_dir: *testing.TmpDir, name: []const u8, buf: []u8) ![]const u8 {
+const move_content = "move me";
+
+/// Absolute host path of `name` inside `tmp_dir`, creating it holding
+/// `move_content` only when `create` is set. A destination passed with
+/// `create = false` must not exist, so a move that silently leaves the target
+/// behind fails on the read-back.
+fn tmpFileRealPath(tmp_dir: *testing.TmpDir, name: []const u8, buf: []u8, create: bool) ![]const u8 {
     const io = runtime.io();
-    try tmp_dir.dir.writeFile(io, .{ .sub_path = name, .data = "move me" });
+    if (create) try tmp_dir.dir.writeFile(io, .{ .sub_path = name, .data = move_content });
     var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
     const dir_len = try tmp_dir.dir.realPath(io, &dir_buf);
     return std.fmt.bufPrint(buf, "{s}/{s}", .{ dir_buf[0..dir_len], name });
+}
+
+fn expectFileContent(path: []const u8, expected: []const u8) !void {
+    const data = try std.Io.Dir.cwd().readFileAlloc(runtime.io(), path, testing.allocator, .unlimited);
+    defer testing.allocator.free(data);
+    try testing.expectEqualStrings(expected, data);
 }
 
 test "moveFileWin32: same-filesystem move renames and drops the source" {
@@ -653,11 +665,13 @@ test "moveFileWin32: same-filesystem move renames and drops the source" {
 
     var src_buf: [512]u8 = undefined;
     var dst_buf: [512]u8 = undefined;
-    const src = try tmpFileRealPath(&tmp_dir, "mv_src.txt", &src_buf);
-    const dst = try tmpFileRealPath(&tmp_dir, "mv_dst.txt", &dst_buf);
+    const src = try tmpFileRealPath(&tmp_dir, "mv_src.txt", &src_buf, true);
+    const dst = try tmpFileRealPath(&tmp_dir, "mv_dst.txt", &dst_buf, false);
+    try testing.expect(fsStat(dst) == null);
 
     try testing.expectEqual(@as(i32, 0), moveFileWin32(src, dst));
     try testing.expect(fsStat(dst) != null);
+    try expectFileContent(dst, move_content);
     try testing.expect(fsStat(src) == null);
 }
 
@@ -667,8 +681,9 @@ test "moveFileWin32: Z: drive paths resolve through translation" {
 
     var src_buf: [512]u8 = undefined;
     var dst_buf: [512]u8 = undefined;
-    const src_posix = try tmpFileRealPath(&tmp_dir, "z_src.txt", &src_buf);
-    const dst_posix = try tmpFileRealPath(&tmp_dir, "z_dst.txt", &dst_buf);
+    const src_posix = try tmpFileRealPath(&tmp_dir, "z_src.txt", &src_buf, true);
+    const dst_posix = try tmpFileRealPath(&tmp_dir, "z_dst.txt", &dst_buf, false);
+    try testing.expect(fsStat(dst_posix) == null);
 
     var src_win: [516]u8 = undefined;
     var dst_win: [516]u8 = undefined;
@@ -677,6 +692,7 @@ test "moveFileWin32: Z: drive paths resolve through translation" {
 
     try testing.expectEqual(@as(i32, 0), moveFileWin32(src, dst));
     try testing.expect(fsStat(dst_posix) != null);
+    try expectFileContent(dst_posix, move_content);
     try testing.expect(fsStat(src_posix) == null);
 }
 
@@ -704,11 +720,12 @@ test "copyDeleteMove: copies content and removes the source" {
 
     var src_buf: [512]u8 = undefined;
     var dst_buf: [512]u8 = undefined;
-    const src = try tmpFileRealPath(&tmp_dir, "cp_src.txt", &src_buf);
-    const dst = try tmpFileRealPath(&tmp_dir, "cp_dst.txt", &dst_buf);
+    const src = try tmpFileRealPath(&tmp_dir, "cp_src.txt", &src_buf, true);
+    const dst = try tmpFileRealPath(&tmp_dir, "cp_dst.txt", &dst_buf, false);
 
     try testing.expect(copyDeleteMove(src, dst));
     try testing.expect(fsStat(src) == null);
     const st = fsStat(dst) orelse return error.TestUnexpectedResult;
-    try testing.expectEqual(@as(u64, "move me".len), st.size);
+    try testing.expectEqual(@as(u64, move_content.len), st.size);
+    try expectFileContent(dst, move_content);
 }

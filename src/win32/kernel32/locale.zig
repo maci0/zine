@@ -1052,9 +1052,15 @@ test "GetDateFormatA buffer semantics follow Win32" {
     try testing.expectEqual(@as(i32, "2/29/2024".len + 1), stub_GetDateFormatA(0, 0, @intFromPtr(&st), 0, @intFromPtr(&buf), "2/29/2024".len + 1));
     try testing.expectEqualStrings("2/29/2024", std.mem.sliceTo(&buf, 0));
 
-    // Out-of-range month folds into range instead of indexing out of bounds.
+    // Out-of-range month folds into range instead of indexing out of bounds:
+    // wMonth 25 is 24 months past January 1970-style, i.e. month index 0,
+    // and wDayOfWeek 0 is Sunday.
     const weird: w32.SYSTEMTIME = .{ .wYear = 2024, .wMonth = 25, .wDay = 1 };
-    _ = formatDate(&weird, 0x2, &buf);
+    try testing.expectEqualStrings("Sunday, January 1, 2024", formatDate(&weird, 0x2, &buf));
+    try testing.expectEqual(
+        @as(i32, "Sunday, January 1, 2024".len + 1),
+        stub_GetDateFormatA(0, 0x2, @intFromPtr(&weird), 0, 0, 0),
+    );
 }
 
 test "GetTimeFormatA formats en-US 12-hour clock with AM/PM" {
