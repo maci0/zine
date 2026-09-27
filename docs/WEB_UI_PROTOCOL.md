@@ -42,12 +42,23 @@ Assets carrying a build-time gzip variant (see `precompressedContent` in
 negotiates gzip. `Vary: Accept-Encoding` is always sent, and the ETag covers
 the representation actually sent, so a client that revalidates with
 `If-None-Match` gets a 304 only for the encoding it asked for. A 304 repeats
-`ETag`, `Cache-Control: private, no-cache`, `Vary`, the three security headers
+`ETag`, `Cache-Control`, `Vary`, the three security headers
 below, and `Content-Encoding: gzip` when the revalidated representation was
 compressed. It does not repeat `Content-Security-Policy`, which is sent only
 with the 200.
+
+The document and the assets the document names are embedded in the build and
+served by digest: `/win2k-<64 hex>.css`, `/app-<64 hex>.js`,
+`/assets/folder-<64 hex>.svg`. Those bytes cannot change under one URL, so they
+answer `Cache-Control: public, max-age=31536000, immutable` and are never
+revalidated. A name whose digest no build produced, or one that names different
+bytes, is a 404 rather than a 200 that would pin them in a cache entry the
+client was told never to revalidates. The document itself cannot carry a
+digest, because it is what names the others, so it answers
 `Cache-Control: private, no-cache`
-forces revalidation, so an edited asset is picked up on the next load.
+and is revalidated on every load, so an edited asset is picked up on the next
+one. Anything else the build did not embed is read from `src/gui/`, under the
+same revalidating policy.
 
 Every asset response, including a 304, carries `X-Content-Type-Options:
 nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: no-referrer`. A 200

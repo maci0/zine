@@ -238,17 +238,9 @@ fn addWasmExe(
     return wasm_lib;
 }
 
-/// Every asset the Web UI server precompresses at build time.
-const precompressed_web_assets = [_][]const u8{ "app.js", "win2k.css", "index.html", "van.min.js" };
-
-/// The assets the document references by digest. Their bytes cannot change
-/// under one URL, so the server caches them without revalidating and a rebuild
-/// reaches the browser as a new URL.
-const content_hashed_web_assets = [_][]const u8{ "app.js", "win2k.css", "van.min.js" };
-
-/// The document URL the build embeds, as opposed to the one on disk: the
-/// assets it names carry their digest, which only this build knows.
-const embedded_document_option = "index_html";
+// The web UI assets the build embeds, in the order their bytes are produced.
+// The list, and what each entry is, live with the server that serves them.
+const web_asset_list = @import("src/gui/web_asset_paths.zig");
 
 /// "/win2k.css" carrying its content digest: "/win2k-<64 hex>.css".
 fn hashedAssetUrl(allocator: std.mem.Allocator, name: []const u8, digest: [32]u8) ![]u8 {
@@ -258,53 +250,78 @@ fn hashedAssetUrl(allocator: std.mem.Allocator, name: []const u8, digest: [32]u8
     return std.fmt.allocPrint(allocator, "/{s}-{s}{s}", .{ stem, hex, ext });
 }
 
-fn compressedWebAssets(b: *std.Build) !*std.Build.Step.Options {
+/// A digested asset another one names by URL, and the name to write in its
+/// place.
+const DigestReference = struct {
+    path: []const u8,
+    url: []const u8,
+};
+
+/// The absolute form is rewritten first, so the bare pass cannot match the
+/// path inside a URL the absolute pass already produced. Nothing else changes:
+/// a digested URL still names the same asset, and its content is unchanged, so
+/// a build with no edit serves the same names and the caches hold.
+fn rewriteReference(allocator: std.mem.Allocator, content: []const u8, reference: DigestReference) ![]const u8 {
+    const absolute_path = try std.fmt.allocPrint(allocator, "/{s}", .{reference.path});
+    const absolute = try replaceAll(allocator, content, absolute_path, reference.url);
+    return replaceAll(allocator, absolute, reference.path, reference.url);
+}
+
+fn replaceAll(allocator: std.mem.Allocator, content: []const u8, needle: []const u8, replacement: []const u8) ![]const u8 {
+    if (std.mem.indexOf(u8, content, needle) == null) return content;
+    return std.mem.replaceOwned(u8, allocator, content, needle, replacement);
+}
+
+fn embeddedWebAssets(b: *std.Build) !*std.Build.Step.Options {
     const options = b.addOptions();
     const allocator = b.allocator;
 
-    var digests: [precompressed_web_assets.len][32]u8 = undefined;
-    inline for (precompressed_web_assets, 0..) |name, i| {
-        std.crypto.hash.sha2.Sha256.hash(@embedFile("src/gui/" ++ name), &digests[i], .{});
-    }
+    // An asset named by digest cannot change under one URL, so a rebuild that
+    // edits it reaches the browser as a new URL and the old one stays cached.
+    // That makes the digest part of the bytes that name the asset, so the
+    // assets are walked in dependency order: each one's references are
+    // rewritten with the digests of the entries already listed, and its digest
+    // is taken over the rewritten bytes.
+    var references: std.ArrayList(DigestReference) = .empty;
 
-    // The document is the one asset whose URL cannot be hashed (it is what
-    // names the others), so its references are rewritten to the digested form
-    // and the rewritten bytes are what the server serves and compresses.
-    var document: []const u8 = @embedFile("src/gui/index.html");
-    inline for (content_hashed_web_assets) |name| {
-        const digest = digests[indexOfAsset(name)];
-        document = try std.mem.replaceOwned(
-            u8,
-            allocator,
-            document,
-            "/" ++ name,
-            try hashedAssetUrl(allocator, name, digest),
-        );
-    }
-    var document_digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(document, &document_digest, .{});
-    options.addOption([]const u8, embedded_document_option, document);
+    inline for (web_asset_list.assets) |asset| {
+        var content: []const u8 = @embedFile("src/gui/" ++ asset.path);
+        for (references.items) |reference| {
+            content = try rewriteReference(allocator, content, reference);
+        }
 
-    inline for (precompressed_web_assets) |name| {
-        const is_document = std.mem.eql(u8, name, "index.html");
-        const content = if (is_document) document else @embedFile("src/gui/" ++ name);
-        var output = try std.Io.Writer.Allocating.initCapacity(allocator, content.len);
-        defer output.deinit();
-        var window: [std.compress.flate.max_window_len]u8 = undefined;
-        var compressor = try std.compress.flate.Compress.init(&output.writer, &window, .gzip, .best);
-        try compressor.writer.writeAll(content);
-        try compressor.finish();
-        options.addOption([]const u8, name, output.written());
-        options.addOption([32]u8, name ++ "_digest", if (is_document) document_digest else digests[indexOfAsset(name)]);
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(content, &digest, .{});
+        if (asset.digested_url) {
+            try references.append(allocator, .{
+                .path = asset.path,
+                .url = try hashedAssetUrl(allocator, asset.path, digest),
+            });
+        }
+
+        // Both representations are embedded: the server matches a request's
+        // URL against the digest of the content it holds, and answers from the
+        // content or the compressed variant of it. Holding only the compressed
+        // bytes would leave it with no content to hash.
+        options.addOption([]const u8, asset.path, content);
+        options.addOption([32]u8, asset.path ++ "_digest", digest);
+        if (asset.precompress) {
+            var output = try std.Io.Writer.Allocating.initCapacity(allocator, content.len);
+            defer output.deinit();
+            var window: [std.compress.flate.max_window_len]u8 = undefined;
+            var compressor = try std.compress.flate.Compress.init(&output.writer, &window, .gzip, .best);
+            try compressor.writer.writeAll(content);
+            try compressor.finish();
+            options.addOption([]const u8, asset.path ++ "_gzip", output.written());
+        }
+
+        // The document is served under its own name: its URL cannot carry a
+        // digest, because it is what names the assets that can.
+        if (std.mem.eql(u8, asset.path, "index.html")) {
+            options.addOption([]const u8, web_asset_list.document_option, content);
+        }
     }
     return options;
-}
-
-fn indexOfAsset(name: []const u8) usize {
-    for (precompressed_web_assets, 0..) |candidate, i| {
-        if (std.mem.eql(u8, candidate, name)) return i;
-    }
-    unreachable;
 }
 
 // The zig-toml revision named below, as a full commit SHA. Every value in the
@@ -470,7 +487,7 @@ fn addSbom(b: *std.Build) void {
 }
 
 pub fn build(b: *std.Build) void {
-    const web_assets = compressedWebAssets(b) catch @panic("failed to compress Web UI assets");
+    const web_assets = embeddedWebAssets(b) catch @panic("failed to embed Web UI assets");
     const arch = b.option(std.Target.Cpu.Arch, "arch", "Target architecture (x86, x86_64, wasm32, or wasm64)");
     const build_all = b.option(bool, "all", "Build all targets (x86 + x86_64 + wasm32 + wasm64)") orelse false;
 

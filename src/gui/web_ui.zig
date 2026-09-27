@@ -650,9 +650,11 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
 
             // The digested assets the document names exist only inside this
             // build: no file on disk carries those names, so they resolve here
-            // or not at all.
+            // or not at all. The content is what the digest covers, so the
+            // response's own digest check still holds and the client is told
+            // the asset cannot change.
             if (urlDigest(asset_path)) |digest| {
-                const content = precompressedContent(digest) orelse {
+                const content = embeddedContent(digest) orelse {
                     try respondStatus(&req, .not_found, "Not found", null);
                     return stream.close(runtime.io());
                 };
@@ -1085,17 +1087,34 @@ fn acceptsGzip(req: *const std.http.Server.Request) bool {
     return quality > 0 and quality >= identity_quality;
 }
 
+/// The content of the embedded asset `digest` names, or null when no embedded
+/// asset has that digest.
+fn embeddedContent(digest: [32]u8) ?[]const u8 {
+    const assets = @import("web_assets");
+    const list = @import("web_asset_paths.zig");
+    inline for (list.assets) |asset| {
+        if (std.mem.eql(u8, &digest, &@field(assets, asset.path ++ "_digest"))) return @field(assets, asset.path);
+    }
+    return null;
+}
+
+/// The gzip variant of the content `digest` names, or null when no embedded
+/// asset has that digest or none of them carries a compressed variant. The
+/// icons are embedded but not compressed, so their own response is the identity
+/// one.
 fn precompressedContent(digest: [32]u8) ?[]const u8 {
     const assets = @import("web_assets");
-    inline for (.{ "app.js", "win2k.css", "index.html", "van.min.js" }) |name| {
-        if (std.mem.eql(u8, &digest, &@field(assets, name ++ "_digest"))) return @field(assets, name);
+    const list = @import("web_asset_paths.zig");
+    inline for (list.assets) |asset| {
+        if (!asset.precompress) continue;
+        if (std.mem.eql(u8, &digest, &@field(assets, asset.path ++ "_digest"))) return @field(assets, asset.path ++ "_gzip");
     }
     return null;
 }
 
 /// The digest an asset URL carries, as "/win2k-<64 hex>.css" is the name the
-/// build gives `/win2k.css`. Null for any other path, including an asset whose
-/// name is not precompressed, so the digest never invents cacheability.
+/// build gives `/win2k.css`. Null for any other path, including an asset that
+/// is not embedded, so the digest never invents cacheability.
 fn urlDigest(target: []const u8) ?[std.crypto.hash.sha2.Sha256.digest_length]u8 {
     const query_start = std.mem.indexOfScalar(u8, target, '?') orelse target.len;
     const req_path = target[0..query_start];
@@ -1106,18 +1125,19 @@ fn urlDigest(target: []const u8) ?[std.crypto.hash.sha2.Sha256.digest_length]u8 
     const hex = name[dash + 1 .. dot];
     if (hex.len != 64) return null;
     const stem = name[0..dash];
-    if (!isPrecompressedName(stem, name[dot..])) return null;
+    if (!isEmbeddedName(stem, name[dot..])) return null;
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     _ = std.fmt.hexToBytes(&digest, hex) catch return null;
     return digest;
 }
 
-/// Whether `{s}{s}` names one of the precompressed assets, with `stem` the
-/// name minus its extension.
-fn isPrecompressedName(stem: []const u8, ext: []const u8) bool {
-    inline for (.{ "app.js", "win2k.css", "index.html", "van.min.js" }) |name| {
-        const name_ext = std.fs.path.extension(name);
-        if (std.mem.eql(u8, stem, name[0 .. name.len - name_ext.len]) and std.mem.eql(u8, ext, name_ext)) return true;
+/// Whether `{s}{s}` names one of the embedded assets, with `stem` the path
+/// minus its extension.
+fn isEmbeddedName(stem: []const u8, ext: []const u8) bool {
+    const list = @import("web_asset_paths.zig");
+    inline for (list.assets) |asset| {
+        const asset_ext = std.fs.path.extension(asset.path);
+        if (std.mem.eql(u8, stem, asset.path[0 .. asset.path.len - asset_ext.len]) and std.mem.eql(u8, ext, asset_ext)) return true;
     }
     return false;
 }
@@ -1423,8 +1443,14 @@ test "static assets map their extension to a content type" {
     try std.testing.expect(contentTypeForPath("/drive_c/game.exe") == null);
 }
 
+/// The script the build serves, which is the source with every digested asset
+/// it names rewritten to its content-addressed URL. The tests below answer
+/// requests with it rather than with `@embedFile`, because it is the content
+/// the server holds and the precompressed variant is keyed by its digest.
+const served_app_js = @import("web_assets").@"app.js";
+
 test "a 304 describes the gzip representation it revalidated" {
-    const content = @embedFile("app.js");
+    const content = served_app_js;
     var input = std.Io.Reader.fixed("GET /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n");
     var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer output.deinit();
@@ -1488,7 +1514,7 @@ test "message fields are read by JSON type, missing and wrong-typed alike" {
 }
 
 test "static asset responses carry an etag and 304 on a matching If-None-Match" {
-    const content = @embedFile("app.js");
+    const content = served_app_js;
     const content_type = "application/javascript";
     var input = std.Io.Reader.fixed("GET /app.js HTTP/1.1\r\nHost: localhost\r\n\r\n");
     var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
@@ -1535,24 +1561,28 @@ test "static asset responses carry an etag and 304 on a matching If-None-Match" 
 
 /// Ceiling on each precompressed asset, shared by the negotiation test and the
 /// transfer-budget test so the two cannot drift apart. Measured 2026-09-27 from
-/// the bytes this build embeds, each transferred as gzip: the document 1973
-/// bytes, the stylesheet 14405, the script 22418, and the van 1481. The limits
-/// leave a KiB over each, enough to absorb a deflate encoder change; the script
-/// was at 22418 against a 22528 ceiling, so its limit moved up rather than
-/// firing the next time 100 bytes of code are added. Past a limit is weight a
-/// reload re-transfers.
+/// the bytes this build embeds, each transferred as gzip: the document 2072
+/// bytes, the stylesheet 14405, the script 22991, and the van 1481, 40949 in
+/// all against the 44 KiB ceiling. The document and the script grew by the
+/// digested icon names they now carry (99 and 573 bytes); the icons
+/// themselves are a few hundred bytes each, are cached under a URL that cannot
+/// change, and so cost a first visit nothing after. Each limit leaves a KiB
+/// over the measured size, enough to absorb a deflate encoder change. Past a
+/// limit is weight a reload re-transfers.
 const budget_document: usize = 3 * 1024;
 const budget_stylesheet: usize = 15 * 1024;
-const budget_script: usize = 23 * 1024;
+const budget_script: usize = 24 * 1024;
 const budget_van: usize = 2 * 1024;
 
 test "static assets negotiate gzip without changing decoded content" {
+    const built = @import("web_assets");
     const assets = .{
-        .{ @embedFile("app.js"), "application/javascript" },
-        .{ @embedFile("win2k.css"), "text/css" },
-        // The document the server serves is the build's, not the one on disk.
-        .{ @import("web_assets").index_html, "text/html" },
-        .{ @embedFile("van.min.js"), "application/javascript" },
+        // What the server holds is the build's asset, not the file on disk:
+        // the script and the document name the other assets by digest.
+        .{ @field(built, "app.js"), "application/javascript" },
+        .{ @field(built, "win2k.css"), "text/css" },
+        .{ built.index_html, "text/html" },
+        .{ @field(built, "van.min.js"), "application/javascript" },
     };
     inline for (assets) |asset| {
         var input = std.Io.Reader.fixed("GET /asset HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: br, gzip, zstd\r\n\r\n");
@@ -1584,7 +1614,7 @@ test "static assets negotiate gzip without changing decoded content" {
 }
 
 test "a static asset keeps the connection open, and closes it when the client asks" {
-    const content = @embedFile("app.js");
+    const content = served_app_js;
     const cases = [_]struct { request: []const u8, closes: bool }{
         .{ .request = "GET /app.js HTTP/1.1\r\nHost: localhost\r\n\r\n", .closes = false },
         .{ .request = "GET /app.js HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", .closes = true },
@@ -1605,14 +1635,16 @@ test "a static asset keeps the connection open, and closes it when the client as
 test "precompressed assets stay inside their transfer budget" {
     const assets = @import("web_assets");
     // What every visitor downloads before the UI is interactive, as served.
-    // Measured 2026-09-27: 1973 byte document, 14405 stylesheet, 22418 script,
-    // 1481 van, 38277 in all against the 40 KiB ceiling. Anything past a limit
-    // is weight a reload re-transfers every time.
+    // Each entry is the compressed variant, which is what a client that
+    // accepts gzip receives. The measured sizes are recorded beside the
+    // limits, and the total has to leave room for the icons the document and
+    // the script name: those are a few hundred bytes each and are cached
+    // forever under their digest, so a reload transfers none of them.
     const budgets = [_]struct { name: []const u8, bytes: []const u8, limit: usize }{
-        .{ .name = "index.html", .bytes = assets.@"index.html", .limit = budget_document },
-        .{ .name = "win2k.css", .bytes = assets.@"win2k.css", .limit = budget_stylesheet },
-        .{ .name = "app.js", .bytes = assets.@"app.js", .limit = budget_script },
-        .{ .name = "van.min.js", .bytes = assets.@"van.min.js", .limit = budget_van },
+        .{ .name = "index.html", .bytes = assets.@"index.html_gzip", .limit = budget_document },
+        .{ .name = "win2k.css", .bytes = assets.@"win2k.css_gzip", .limit = budget_stylesheet },
+        .{ .name = "app.js", .bytes = assets.@"app.js_gzip", .limit = budget_script },
+        .{ .name = "van.min.js", .bytes = assets.@"van.min.js_gzip", .limit = budget_van },
     };
     var total: usize = 0;
     inline for (budgets) |budget| {
@@ -1622,7 +1654,7 @@ test "precompressed assets stay inside their transfer budget" {
         };
         total += budget.bytes.len;
     }
-    try std.testing.expect(total <= 40 * 1024);
+    try std.testing.expect(total <= 44 * 1024);
 }
 
 test "static asset encoding negotiation preserves identity and edited files" {
@@ -1643,7 +1675,7 @@ test "static asset encoding negotiation preserves identity and edited files" {
     // The body is named alongside whether it is the precompressed asset, so
     // the expectation does not come from comparing lengths.
     const bodies = [_]struct { content: []const u8, compressed: bool }{
-        .{ .content = @embedFile("app.js"), .compressed = true },
+        .{ .content = served_app_js, .compressed = true },
         .{ .content = "edited asset", .compressed = false },
         .{ .content = "", .compressed = false },
     };
@@ -1670,7 +1702,7 @@ test "static asset encoding negotiation preserves identity and edited files" {
 }
 
 test "gzip asset validators distinguish representations and HEAD omits the body" {
-    const content = @embedFile("app.js");
+    const content = served_app_js;
     var input = std.Io.Reader.fixed("GET /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n");
     var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer output.deinit();
@@ -1706,7 +1738,7 @@ test "gzip asset validators distinguish representations and HEAD omits the body"
 }
 
 test "a digested asset URL is served immutable, and a stale one is a miss" {
-    const content = @embedFile("app.js");
+    const content = served_app_js;
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(content, &digest, .{});
     const hex = std.fmt.bytesToHex(digest, .lower);
@@ -1760,35 +1792,82 @@ test "a digested asset URL is served immutable, and a stale one is a miss" {
     }
 }
 
-test "the embedded document names the digested assets the build embedded" {
+test "the document and the script name the digested assets the build embedded" {
     const assets = @import("web_assets");
-    const document = assets.index_html;
-    inline for (.{ "app.js", "win2k.css", "van.min.js" }) |name| {
-        const digest = @field(assets, name ++ "_digest");
+    const list = @import("web_asset_paths.zig");
+    inline for (list.assets) |asset| {
+        if (!asset.digested_url) continue;
+        const digest = @field(assets, asset.path ++ "_digest");
+        const ext = std.fs.path.extension(asset.path);
         const url = try std.fmt.allocPrint(std.testing.allocator, "/{s}-{s}{s}", .{
-            name[0 .. name.len - std.fs.path.extension(name).len],
+            asset.path[0 .. asset.path.len - ext.len],
             std.fmt.bytesToHex(digest, .lower),
-            std.fs.path.extension(name),
+            ext,
         });
         defer std.testing.allocator.free(url);
-        try std.testing.expect(std.mem.indexOf(u8, document, url) != null);
-        // The digested URL has to resolve to a precompressed asset, or the
-        // document would ask for bytes the server cannot send.
+        // The digested URL has to resolve to the content its digest covers, or
+        // the page would ask for bytes the server cannot send.
         try std.testing.expectEqual(digest, urlDigest(url).?);
-        try std.testing.expectEqualStrings(
-            @field(assets, name),
-            precompressedContent(urlDigest(url).?).?,
-        );
+        try std.testing.expectEqualStrings(@field(assets, asset.path), embeddedContent(urlDigest(url).?).?);
+        if (asset.precompress) {
+            try std.testing.expectEqualStrings(@field(assets, asset.path ++ "_gzip"), precompressedContent(digest).?);
+        } else {
+            // An icon gains nothing from a compressed variant, so the response
+            // is the content itself.
+            try std.testing.expect(precompressedContent(digest) == null);
+        }
+        // Whoever names the asset names the digested form. The document loads
+        // the scripts, the stylesheet and the taskbar icon; the script renders
+        // the rest of the icons, and it is digested last of the two so the
+        // names it carries are part of its own content.
+        const namer = if (std.mem.indexOf(u8, @embedFile("index.html"), asset.path) != null) assets.index_html else @field(assets, "app.js");
+        try std.testing.expect(std.mem.indexOf(u8, namer, url) != null);
     }
     // A digest no build produced resolves to nothing, so the request is a
     // miss rather than a 200 that would pin bytes under an immutable URL.
     const absent: [std.crypto.hash.sha2.Sha256.digest_length]u8 = [_]u8{0} ** 32;
+    try std.testing.expect(embeddedContent(absent) == null);
     try std.testing.expect(precompressedContent(absent) == null);
     // The document itself keeps a stable URL: it is what names the assets.
     try std.testing.expect(urlDigest("/index.html") == null);
     try std.testing.expect(urlDigest("app.js") == null);
     try std.testing.expect(urlDigest("/start-0123456789abcdef.svg") == null);
     try std.testing.expect(urlDigest("/app-0000.js") == null);
+}
+
+test "a digested asset URL answers the content it names" {
+    const assets = @import("web_assets");
+    const list = @import("web_asset_paths.zig");
+    inline for (list.assets) |asset| {
+        if (!asset.digested_url) continue;
+        const content = @field(assets, asset.path);
+        const digest = @field(assets, asset.path ++ "_digest");
+        const ext = std.fs.path.extension(asset.path);
+        const url = try std.fmt.allocPrint(std.testing.allocator, "/{s}-{s}{s}", .{
+            asset.path[0 .. asset.path.len - ext.len],
+            std.fmt.bytesToHex(digest, .lower),
+            ext,
+        });
+        defer std.testing.allocator.free(url);
+        const request = try std.fmt.allocPrint(std.testing.allocator, "GET {s} HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n", .{url});
+        defer std.testing.allocator.free(request);
+
+        var input = std.Io.Reader.fixed(request);
+        var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer output.deinit();
+        var server = std.http.Server.init(&input, &output.writer);
+        var req = try server.receiveHead();
+        try respondStaticContent(&req, content, contentTypeForPath(url).?);
+        const response = output.written();
+
+        // The response carries the bytes the name promises, so the digest
+        // check passes and the client is told the asset cannot change.
+        try std.testing.expect(std.mem.startsWith(u8, response, "HTTP/1.1 200 OK\r\n"));
+        try std.testing.expect(std.mem.indexOf(u8, response, "\r\ncache-control: public, max-age=31536000, immutable\r\n") != null);
+        const body_start = (std.mem.indexOf(u8, response, "\r\n\r\n") orelse return error.TestUnexpectedResult) + 4;
+        const expected = if (asset.precompress) @field(assets, asset.path ++ "_gzip") else content;
+        try std.testing.expectEqualStrings(expected, response[body_start..]);
+    }
 }
 
 test "static asset revalidation accepts weak tags and the * matcher" {

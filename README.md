@@ -287,6 +287,17 @@ release, not a 0.2.1 patch.
 
 #### Fixed
 
+- The web UI's content-addressed assets are served again, and the icons join
+  them. The document named each asset by its digest (`/win2k-<digest>.css`),
+  and the server looked that name up to the compressed bytes, whose digest is
+  not the one the URL carries, so every digested request answered 404 and the
+  page loaded unstyled and inert. A digested name now resolves to the content
+  it names, checked against the digest in the URL. The nine icons in
+  `src/gui/assets/` are embedded and digested like the scripts, so they are
+  served `immutable` and cost a reload no request and no round trip, instead of
+  a revalidation each on a URL that cannot change. The one list of what is
+  embedded, and which of it is precompressed, is
+  `src/gui/web_asset_paths.zig`, read by the build and the server alike.
 - `ZINE_VIRTUAL_CLOCK_NS` and `ZINE_CLOCK_STEP_NS` are read by the WASI build
   as well as the native one. The WASI `--help` listed both, and the README
   listed both without a build qualifier, but only the native entry point parsed
