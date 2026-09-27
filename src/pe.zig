@@ -326,12 +326,16 @@ pub const PEParser = struct {
         if (nt_headers_ptr.Signature != IMAGE_NT_SIGNATURE) return error.InvalidPESignature;
 
         const num_sections = nt_headers_ptr.FileHeader.NumberOfSections;
-        const sections_array = allocator.alloc(IMAGE_SECTION_HEADER, num_sections) catch return error.OutOfMemory;
-        errdefer allocator.free(sections_array);
-
+        // Bound the headers before allocating: NumberOfSections is a raw u16
+        // from the file, and a short file claiming 65535 sections would
+        // otherwise cost a 2.5 MB allocation before the check rejects it.
         const section_headers_offset = @as(usize, @intCast(dos_header_ptr.e_lfanew)) + @sizeOf(u32) + @sizeOf(IMAGE_FILE_HEADER) + nt_headers_ptr.FileHeader.SizeOfOptionalHeader;
         const section_headers_end = section_headers_offset + @as(usize, num_sections) * @sizeOf(IMAGE_SECTION_HEADER);
         if (section_headers_end > data.len) return error.BufferTooSmall;
+
+        const sections_array = allocator.alloc(IMAGE_SECTION_HEADER, num_sections) catch return error.OutOfMemory;
+        errdefer allocator.free(sections_array);
+
         const sections_ptr: [*]align(1) const IMAGE_SECTION_HEADER = @ptrCast(data.ptr + section_headers_offset);
 
         for (0..num_sections) |i| {

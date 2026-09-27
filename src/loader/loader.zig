@@ -127,18 +127,23 @@ pub fn applyReverseRelocations(
     var iat_ranges: [32][2]u32 = undefined;
     var iat_range_count: usize = 0;
     if (import_dir_entry.Size > 0) {
-        var imp_off = import_dir_entry.VirtualAddress;
-        while (imp_off + 20 <= image_size) {
-            const imp_name = @as(*align(1) const u32, @ptrCast(buf[imp_off + 12 ..].ptr)).*;
+        // Every RVA below comes from guest data, so each bound is computed in
+        // u64: `rva + n` in u32 wraps and lets a huge RVA pass a range check.
+        const img_end: u64 = image_size;
+        var imp_off: u64 = import_dir_entry.VirtualAddress;
+        while (imp_off + 20 <= img_end) {
+            const imp_name = @as(*align(1) const u32, @ptrCast(buf[@intCast(imp_off + 12)..].ptr)).*;
             if (imp_name == 0) break;
-            const first_thunk_rva = @as(*align(1) const u32, @ptrCast(buf[imp_off + 16 ..].ptr)).*;
-            const orig_thunk_rva_raw = @as(*align(1) const u32, @ptrCast(buf[imp_off..].ptr)).*;
-            const ilt_rva = if (orig_thunk_rva_raw == 0) first_thunk_rva else orig_thunk_rva_raw;
+            const first_thunk_rva = @as(*align(1) const u32, @ptrCast(buf[@intCast(imp_off + 16)..].ptr)).*;
+            const orig_thunk_rva_raw = @as(*align(1) const u32, @ptrCast(buf[@intCast(imp_off)..].ptr)).*;
+            const ilt_rva: u64 = if (orig_thunk_rva_raw == 0) first_thunk_rva else orig_thunk_rva_raw;
             var count: u32 = 0;
-            while (ilt_rva + (count + 1) * 4 <= image_size) {
-                const e_val = @as(*align(1) const u32, @ptrCast(buf[ilt_rva + count * 4 ..].ptr)).*;
+            var entry_off = ilt_rva;
+            while (entry_off + 4 <= img_end) {
+                const e_val = @as(*align(1) const u32, @ptrCast(buf[@intCast(entry_off)..].ptr)).*;
                 if (e_val == 0) break;
                 count += 1;
+                entry_off += 4;
             }
             if (iat_range_count < iat_ranges.len) {
                 // IAT RVAs in buf are in actual_base terms (from Module.load relocation),
@@ -430,7 +435,10 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
             break;
         }
 
-        const dll_name = std.mem.span(@as([*:0]const u8, @ptrCast(&mod.mapped_memory[import_desc.Name])));
+        const dll_name = mod.stringAt(import_desc.Name) orelse {
+            log.warn("loader: {s}: unterminated import DLL name at RVA 0x{X}, stopping", .{ mod.name, import_desc.Name });
+            break;
+        };
 
         if (env.registry.loadModule(dll_name)) |loaded_mod| {
             log.info("Loaded dependency: {s}", .{loaded_mod.name});
@@ -495,7 +503,11 @@ pub fn resolveImports(env: *Environment, mod: *Module) !void {
                     first_thunk.* = 0;
                     continue;
                 }
-                const func_name = std.mem.span(@as([*:0]const u8, @ptrCast(@alignCast(&mod.mapped_memory[orig_thunk.u1.AddressOfData + @sizeOf(pe.IMAGE_IMPORT_BY_NAME)]))));
+                const func_name = mod.stringAt(orig_thunk.u1.AddressOfData + @sizeOf(pe.IMAGE_IMPORT_BY_NAME)) orelse {
+                    log.warn("loader: {s}: unterminated import name RVA 0x{X} for {s}, skipping", .{ mod.name, orig_thunk.u1.AddressOfData, dll_name });
+                    first_thunk.* = 0;
+                    continue;
+                };
 
                 if (env.resolveExport(dll_name, func_name)) |exp| {
                     patchImport(first_thunk, exp, dll_name, func_name);

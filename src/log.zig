@@ -159,6 +159,38 @@ fn redactHome(body: []u8) []const u8 {
     return body[0..write];
 }
 
+// ── Control character neutralization ────────────────────────────────
+
+/// Every record quotes guest-controlled text: file names, window titles,
+/// registry values, module paths. A guest that puts an escape sequence in any
+/// of them drives the terminal that renders the log (OSC 52 rewrites the
+/// clipboard, OSC 0/2 rewrites the window title, CSI erases earlier output),
+/// and a carriage return replays a line over an earlier one. Both hide records
+/// from whoever reads the log. Newline and tab survive: multi-line records are
+/// legitimate and callers end their format string with one.
+/// Each byte becomes at most `\xNN`, so a body of `n` bytes needs 4n of
+/// room and never truncates.
+fn neutralizeControlChars(src: []const u8, dst: []u8) []const u8 {
+    std.debug.assert(src.len * 4 <= dst.len);
+    var read: usize = 0;
+    var write: usize = 0;
+    while (read < src.len) : (read += 1) {
+        const c = src[read];
+        if (c < 0x20 and c != '\n' and c != '\t') {
+            const digits = "0123456789abcdef";
+            dst[write] = '\\';
+            dst[write + 1] = 'x';
+            dst[write + 2] = digits[c >> 4];
+            dst[write + 3] = digits[c & 0xf];
+            write += 4;
+        } else {
+            dst[write] = c;
+            write += 1;
+        }
+    }
+    return dst[0..write];
+}
+
 // ── Core emit function ──────────────────────────────────────────────
 
 /// Formats and emits a log message at the specified level.
@@ -186,7 +218,8 @@ pub fn emit(level: Level, comptime fmt: []const u8, args: anytype) void {
         return;
     };
 
-    const redacted = redactHome(body);
+    var clean_buf: [log_buf.len * 4]u8 = undefined;
+    const redacted = neutralizeControlChars(redactHome(body), &clean_buf);
     const needs_nl = redacted.len == 0 or redacted[redacted.len - 1] != '\n';
     if (builtin.target.os.tag == .linux) {
         // Direct write to fd 2 avoids the locked-stderr vtable in std.debug.print.
@@ -295,6 +328,19 @@ test "diagnostics redact the host home path in both path forms" {
         var buf: [128]u8 = undefined;
         @memcpy(buf[0..case[0].len], case[0]);
         try std.testing.expectEqualStrings(case[1], redactHome(buf[0..case[0].len]));
+    }
+}
+
+test "control characters from guest text cannot drive the terminal" {
+    const cases = .{
+        .{ "CreateFileA(\"a\x1b[2J\rb.txt\")", "CreateFileA(\"a\\x1b[2J\\x0db.txt\")" },
+        .{ "title\x07", "title\\x07" },
+        .{ "line one\nline two\ttabbed", "line one\nline two\ttabbed" },
+    };
+    inline for (cases) |case| {
+        var dst: [case[0].len * 4]u8 = undefined;
+        const got = neutralizeControlChars(case[0], &dst);
+        try std.testing.expectEqualStrings(case[1], got);
     }
 }
 

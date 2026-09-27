@@ -25,6 +25,9 @@ pub const DialogItem = struct {
     text: []const u8,
     /// Window class name (e.g., "Button", "Static").
     class: []const u8,
+    /// Backing allocation when `class` came from a string class name rather
+    /// than an atom; freed with the item.
+    class_owned: ?[]const u8 = null,
 };
 
 /// Reads a NUL-terminated UTF-16 string from a PE resource and returns it as
@@ -149,6 +152,7 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
     defer {
         for (items.items) |item| {
             allocator.free(item.text);
+            if (item.class_owned) |owned| allocator.free(owned);
         }
         items.deinit(allocator);
     }
@@ -246,6 +250,7 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
             .style = item_style,
             .text = try text_buf.toOwnedSlice(allocator),
             .class = class_name,
+            .class_owned = class_name_owned,
         });
     }
 
@@ -271,7 +276,19 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
 
     for (items.items, 0..) |item, idx| {
         if (idx > 0) try w.writeAll(", ");
-        try w.print("{{\"id\": {d}, \"x\": {d}, \"y\": {d}, \"cx\": {d}, \"cy\": {d}, \"style\": {d}, \"class\": \"{s}\", \"text\": \"", .{ item.id, item.x, item.y, item.cx, item.cy, item.style, item.class });
+        try w.print("{{\"id\": {d}, \"x\": {d}, \"y\": {d}, \"cx\": {d}, \"cy\": {d}, \"style\": {d}, \"class\": \"", .{ item.id, item.x, item.y, item.cx, item.cy, item.style });
+        for (item.class) |char| {
+            if (char == '"') {
+                try w.writeAll("\\\"");
+            } else if (char == '\\') {
+                try w.writeAll("\\\\");
+            } else if (char < 0x20) {
+                try w.print("\\u{x:0>4}", .{char});
+            } else {
+                try w.writeByte(char);
+            }
+        }
+        try w.writeAll("\", \"text\": \"");
         for (item.text) |char| {
             if (char == '\n') {
                 try w.writeAll("\\n");

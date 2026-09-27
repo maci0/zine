@@ -339,6 +339,18 @@ pub const Module = struct {
         self.allocator.destroy(self);
     }
 
+    /// NUL-terminated guest string at `rva`.
+    ///
+    /// Guest data is not required to be terminated, so the scan stops at the
+    /// end of the mapping and reports null rather than reading the host memory
+    /// that follows it.
+    pub fn stringAt(self: *const Module, rva: u32) ?[]const u8 {
+        if (rva >= self.mapped_memory.len) return null;
+        const rest = self.mapped_memory[rva..];
+        const end = std.mem.indexOfScalar(u8, rest, 0) orelse return null;
+        return rest[0..end];
+    }
+
     /// Resolves a named exported symbol and returns its virtual address.
     /// Returns null for forwarded exports (e.g. NTDLL.RtlAllocateHeap →
     /// KERNEL32.HeapAlloc) which are not yet followed.
@@ -374,8 +386,7 @@ pub const Module = struct {
 
         for (0..export_dir.NumberOfNames) |i| {
             const name_rva = names[i];
-            if (name_rva >= self.mapped_memory.len) continue;
-            const func_name = std.mem.span(@as([*:0]const u8, @ptrCast(&self.mapped_memory[name_rva])));
+            const func_name = self.stringAt(name_rva) orelse continue;
 
             if (std.mem.eql(u8, func_name, name)) {
                 const ordinal = ords[i];
@@ -384,7 +395,7 @@ pub const Module = struct {
 
                 // Check for forwarded exports: if func_rva points inside the export directory, it's a forwarder
                 if (func_rva >= export_dir_rva and func_rva < export_dir_rva + export_dir_size) {
-                    const forwarder = std.mem.span(@as([*:0]const u8, @ptrCast(&self.mapped_memory[func_rva])));
+                    const forwarder = self.stringAt(func_rva) orelse return null;
                     log.warn("Forwarded export {s} -> {s}", .{ name, forwarder });
                     // Forwarded export (not yet implemented)
                     return null;
