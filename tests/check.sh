@@ -214,11 +214,30 @@ check_web() {
 #
 # Both native targets are built first so the step stands alone; in the gate the
 # two build steps above already produced them and this is a cache hit.
+#
+# The gate runs a step inside `if ! ...`, which suspends errexit for the whole
+# body, so a build that fails here would be followed by a check of whatever the
+# previous step left in zig-out: the stale binaries carry the same headers the
+# step looks for, it prints its pass line, and the gate reports success on a
+# build that never happened. The status is collected here instead, the way
+# check_c and check_web do, and the function returns before it reads a file.
 hardening() {
-    zig build --summary all
-    zig build -Darch=x86_64 --summary all
+    local status=0
+    zig build --summary all || status=1
+    zig build -Darch=x86_64 --summary all || status=1
+    if ((status != 0)); then
+        printf 'hardening: a build failed, so the linked artifacts were not checked\n' >&2
+        return 1
+    fi
     local binary headers stack_flags
     for binary in zig-out/bin/zine.x86 zig-out/bin/zine.x86_64; do
+        # A missing file is its own failure: readelf's error is not the
+        # diagnosis, and running the checks on its empty output reports the
+        # artifact as having unstated stack permissions.
+        if [[ ! -f "$binary" ]]; then
+            printf '%s was not installed, so the link was not checked\n' "$binary" >&2
+            return 1
+        fi
         headers=$(readelf -lW "$binary")
         if grep -q ' INTERP ' <<<"$headers"; then
             printf '%s requests a dynamic loader; the shipped image must stay static\n' "$binary" >&2
@@ -278,6 +297,12 @@ compare_installs() {
 # The two native targets are the shipped ELF artifacts; the wasm ones carry no
 # DWARF, so there is nothing left in them for a path to leak into.
 #
+# The second build also runs under a different locale and timezone, which is
+# what makes the two runs independent of the ambient environment rather than
+# merely of the path. A sort order, a formatted date or a number format that
+# reached an artifact would agree under the pinned LC_ALL/TZ both runs
+# otherwise share, so the variation is what proves the toolchain ignores them.
+#
 # The second build is cold: the copy carries only what reaches the compiler, so
 # it has no .zig-cache of its own and recompiles from scratch. That is the point,
 # not the cost. A warm cache would prove only that Zig's cache is stable, not
@@ -286,7 +311,7 @@ compare_installs() {
 # project and not into whatever TMPDIR happens to be (on many hosts that is a
 # tmpfs, and two full install trees plus a cold cache do not belong in RAM).
 reproducible() {
-    local scratch a b
+    local scratch a b status=0
     mkdir -p .scratch
     # Absolute: the copy below builds from inside the copied tree, and a
     # relative prefix would name a directory that does not exist there.
@@ -295,19 +320,31 @@ reproducible() {
     trap "rm -rf '$scratch'" EXIT
     a="$scratch/out-a"
     b="$scratch/out-b"
-    zig build -p "$a" --summary all
-    zig build -Darch=x86_64 -p "$a-64" --summary all
+    zig build -p "$a" --summary all || status=1
+    zig build -Darch=x86_64 -p "$a-64" --summary all || status=1
     mkdir -p "$scratch/tree"
     # -a keeps the copy's timestamps, and only src/ plus the two build files
     # reach the compiler; the rest of the checkout is not an input. zig-pkg
     # comes along when it exists so the copied tree resolves the pinned TOML
     # dependency from disk rather than over the network.
-    cp -a src build.zig build.zig.zon "$scratch/tree/"
-    if [[ -d zig-pkg ]]; then cp -a zig-pkg "$scratch/tree/"; fi
-    (cd "$scratch/tree" && zig build -p "$b" --summary all)
-    (cd "$scratch/tree" && zig build -Darch=x86_64 -p "$b-64" --summary all)
-    compare_installs "$a" "$b" "$scratch" x86
-    compare_installs "$a-64" "$b-64" "$scratch" x86_64
+    cp -a src build.zig build.zig.zon "$scratch/tree/" || status=1
+    if [[ -d zig-pkg ]]; then cp -a zig-pkg "$scratch/tree/" || status=1; fi
+    # C.UTF-8 and C differ in collation and character classification, and the
+    # POSIX TZ form is honoured without a tzdata entry, so neither depends on
+    # what the host installed. The subshell keeps the variation off the first
+    # build and off the rest of the gate.
+    (cd "$scratch/tree" && LC_ALL=C.UTF-8 TZ=JST-9 zig build -p "$b" --summary all) || status=1
+    (cd "$scratch/tree" && LC_ALL=C.UTF-8 TZ=JST-9 zig build -Darch=x86_64 -p "$b-64" --summary all) || status=1
+    if ((status != 0)); then
+        printf 'reproducible: a build failed, so there is nothing to compare (see above)\n' >&2
+        return 1
+    fi
+    # Both targets are compared even when the first one fails: a report of what
+    # the gate is about to reject is worth more than the first difference, and
+    # either result failing the step is the point.
+    compare_installs "$a" "$b" "$scratch" x86 || status=1
+    compare_installs "$a-64" "$b-64" "$scratch" x86_64 || status=1
+    return "$status"
 }
 
 # No argument means the whole gate. Named steps always run in gate order, so
@@ -339,6 +376,13 @@ fi
 
 for i in "${run_indices[@]}"; do
     printf '\n== %s: %s\n' "${step_names[$i]}" "${step_commands[$i]}"
+    # The `if !` suspends errexit for the whole command, including the body of
+    # a step function it calls and including a `set -e` in that body, so a step
+    # made of more than one command has to collect its own status: without that,
+    # the last command decides the result and an earlier failure is printed and
+    # then forgotten. A step that needs errexit has to return the status of the
+    # command that failed rather than the status of the last one it ran.
+    #
     # Word splitting is what runs each step; the list is a literal, not input.
     # shellcheck disable=SC2086
     if ! ${step_commands[$i]}; then
