@@ -8,6 +8,8 @@
 const std = @import("std");
 const testing = std.testing;
 const mutation = @import("mutation.zig");
+const dialog_fuzz = @import("dialog.zig");
+const icon_fuzz = @import("icon.zig");
 const menu_fuzz = @import("menu.zig");
 const pe_fuzz = @import("pe.zig");
 
@@ -35,6 +37,14 @@ fn replay(
 
 test "fuzz: menu seeds and mutations hold the parser contract" {
     try replay(&menu_fuzz.seeds, menu_fuzz.harness);
+}
+
+test "fuzz: dialog seeds and mutations hold the parser contract" {
+    try replay(&dialog_fuzz.seeds, dialog_fuzz.harness);
+}
+
+test "fuzz: icon seeds and mutations hold the parser contract" {
+    try replay(&icon_fuzz.seeds, icon_fuzz.harness);
 }
 
 test "fuzz: pe seeds and mutations hold the parser contract" {

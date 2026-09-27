@@ -10,11 +10,13 @@
 //! regression test.
 //!
 //! Coverage-guided fuzzers (libFuzzer, AFL++, honggfuzz) can drive the same
-//! harnesses by linking `menu.zig` / `pe.zig` and calling `harness` per input.
+//! harnesses by linking any module under `fuzz/` and calling `harness` per input.
 
 const std = @import("std");
 const fuzz_options = @import("fuzz_options");
 const mutation = @import("fuzz/mutation.zig");
+const dialog_fuzz = @import("fuzz/dialog.zig");
+const icon_fuzz = @import("fuzz/icon.zig");
 const menu_fuzz = @import("fuzz/menu.zig");
 const pe_fuzz = @import("fuzz/pe.zig");
 
@@ -29,6 +31,8 @@ const Target = struct {
 
 const targets = [_]Target{
     .{ .name = "menu", .seeds = &menu_fuzz.seeds, .run = menu_fuzz.harness },
+    .{ .name = "dialog", .seeds = &dialog_fuzz.seeds, .run = dialog_fuzz.harness },
+    .{ .name = "icon", .seeds = &icon_fuzz.seeds, .run = icon_fuzz.harness },
     .{ .name = "pe", .seeds = &pe_fuzz.seeds, .run = pe_fuzz.harness },
 };
 

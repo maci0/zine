@@ -25,9 +25,6 @@ pub const DialogItem = struct {
     text: []const u8,
     /// Window class name (e.g., "Button", "Static").
     class: []const u8,
-    /// Backing allocation when `class` came from a string class name rather
-    /// than an atom; freed with the item.
-    class_owned: ?[]const u8 = null,
 };
 
 /// Reads a NUL-terminated UTF-16 string from a PE resource and returns it as
@@ -69,8 +66,18 @@ fn appendCodepoint(allocator: std.mem.Allocator, list: *std.ArrayListUnmanaged(u
 
 /// Parses a binary dialog resource from a PE module and returns its JSON representation.
 pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog_id: u32) !?[]const u8 {
-    const data = module.getResource(5, dialog_id) orelse return null; // RT_DIALOG = 5
+    const data = module.getResource(RT_DIALOG, dialog_id) orelse return null;
+    return parseDialogData(allocator, data);
+}
 
+/// The resource type a dialog is stored under.
+const RT_DIALOG = 5;
+
+/// Parses one raw RT_DIALOG resource blob and returns its JSON representation.
+/// `data` comes from the PE resource directory and is untrusted: every read is
+/// bounds-checked by the fixed reader, so a truncated or self-contradictory
+/// resource rejects rather than reading past the blob.
+pub fn parseDialogData(allocator: std.mem.Allocator, data: []const u8) !?[]const u8 {
     if (data.len < 18) return null;
 
     var reader = std.Io.Reader.fixed(data);
@@ -152,9 +159,15 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
     defer {
         for (items.items) |item| {
             allocator.free(item.text);
-            if (item.class_owned) |owned| allocator.free(owned);
         }
         items.deinit(allocator);
+    }
+    var owned_classes = std.ArrayListUnmanaged([]const u8).empty;
+    defer {
+        for (owned_classes.items) |class| {
+            allocator.free(class);
+        }
+        owned_classes.deinit(allocator);
     }
 
     var i: usize = 0;
@@ -196,7 +209,6 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
 
         // Window Class array - capture the class name
         var class_name: []const u8 = "Unknown";
-        var class_name_owned: ?[]const u8 = null;
         c = try reader.takeInt(u16, .little);
         if (c == 0xFFFF) {
             const class_atom = try reader.takeInt(u16, .little);
@@ -214,7 +226,9 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
             const class_buf = try readUtf16String(allocator, &reader, null);
             if (class_buf.len > 0) {
                 class_name = class_buf;
-                class_name_owned = class_buf;
+                // The atom names above are string literals, so only the parsed
+                // ones are owned and freed on the way out.
+                try owned_classes.append(allocator, class_buf);
             } else {
                 allocator.free(class_buf);
             }
@@ -250,7 +264,6 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
             .style = item_style,
             .text = try text_buf.toOwnedSlice(allocator),
             .class = class_name,
-            .class_owned = class_name_owned,
         });
     }
 
@@ -259,9 +272,30 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
     const w = &aw.writer;
 
     try w.writeAll("{\"type\": \"custom_dialog\", \"title\": \"");
-    for (title) |char| {
-        // JSON string escape incl. control chars: dialog strings come from PE
-        // resources and must not be able to break the frontend's JSON.parse.
+    try writeJsonString(w, title);
+    try w.print("\", \"x\": {d}, \"y\": {d}, \"cx\": {d}, \"cy\": {d}, \"items\": [", .{ dlg_x, dlg_y, dlg_cx, dlg_cy });
+
+    for (items.items, 0..) |item, idx| {
+        if (idx > 0) try w.writeAll(", ");
+        try w.print("{{\"id\": {d}, \"x\": {d}, \"y\": {d}, \"cx\": {d}, \"cy\": {d}, \"style\": {d}, \"class\": \"", .{ item.id, item.x, item.y, item.cx, item.cy, item.style });
+        try writeJsonString(w, item.class);
+        try w.writeAll("\", \"text\": \"");
+        try writeJsonString(w, item.text);
+        try w.writeAll("\"}");
+    }
+
+    try w.writeAll("]}");
+
+    var list = aw.toArrayList();
+    const slice = try list.toOwnedSlice(allocator);
+    return slice;
+}
+
+/// Writes `text` as the body of a JSON string, escaping quotes, backslashes
+/// and control characters. Every dialog string comes from a PE resource and
+/// none of them may be able to break the frontend's JSON.parse.
+fn writeJsonString(w: *std.Io.Writer, text: []const u8) !void {
+    for (text) |char| {
         if (char == '"') {
             try w.writeAll("\\\"");
         } else if (char == '\\') {
@@ -272,42 +306,4 @@ pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog
             try w.writeByte(char);
         }
     }
-    try w.print("\", \"x\": {d}, \"y\": {d}, \"cx\": {d}, \"cy\": {d}, \"items\": [", .{ dlg_x, dlg_y, dlg_cx, dlg_cy });
-
-    for (items.items, 0..) |item, idx| {
-        if (idx > 0) try w.writeAll(", ");
-        try w.print("{{\"id\": {d}, \"x\": {d}, \"y\": {d}, \"cx\": {d}, \"cy\": {d}, \"style\": {d}, \"class\": \"", .{ item.id, item.x, item.y, item.cx, item.cy, item.style });
-        for (item.class) |char| {
-            if (char == '"') {
-                try w.writeAll("\\\"");
-            } else if (char == '\\') {
-                try w.writeAll("\\\\");
-            } else if (char < 0x20) {
-                try w.print("\\u{x:0>4}", .{char});
-            } else {
-                try w.writeByte(char);
-            }
-        }
-        try w.writeAll("\", \"text\": \"");
-        for (item.text) |char| {
-            if (char == '\n') {
-                try w.writeAll("\\n");
-            } else if (char == '"') {
-                try w.writeAll("\\\"");
-            } else if (char == '\\') {
-                try w.writeAll("\\\\");
-            } else if (char < 0x20) {
-                try w.print("\\u{x:0>4}", .{char});
-            } else {
-                try w.writeByte(char);
-            }
-        }
-        try w.writeAll("\"}");
-    }
-
-    try w.writeAll("]}");
-
-    var list = aw.toArrayList();
-    const slice = try list.toOwnedSlice(allocator);
-    return slice;
 }

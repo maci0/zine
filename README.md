@@ -115,6 +115,10 @@ release, not a 0.2.1 patch.
   With radix `0` the leading octal digit was consumed but not counted as parsed,
   so `end` stayed at the start of the string. Callers that loop on `*end` to
   advance past a parsed number now advance past the digit.
+- A dialog control whose class name holds a quote, a backslash, or a control
+  character is escaped like the other dialog strings, so the frontend parses the
+  dialog instead of dropping the whole resource. Parsed class names are also
+  released, which a malformed resource used to leak on every parse.
 - Web UI `error` frames are parseable again. A rejection that names a field
   (`resize`, `color_selected`, a missing `type`) embedded its quotes unescaped,
   so the browser dropped the frame and the reason never reached the status bar.
