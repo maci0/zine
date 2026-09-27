@@ -101,16 +101,20 @@ pub const LazyFlags = struct {
             .sbb => (@as(u64, self.operand1 & m)) < (@as(u64, self.operand2 & m) + self.carry_in),
             .neg => (self.result & m) != 0,
             .shl => blk: {
-                // Carry is the last bit shifted out
-                const shift: u6 = @truncate(self.operand2);
+                // Carry is the last bit shifted out. A count wider than the
+                // operand repeats the shift that many times, so the bit that
+                // leaves last comes from the count taken modulo the width.
+                const width = self.size.bits();
+                const shift: u6 = @as(u6, @truncate(self.operand2)) % width;
                 if (shift == 0) break :blk false;
-                const bit_pos: u5 = @truncate(self.size.bits() -| shift);
+                const bit_pos: u5 = @truncate(width - shift);
                 break :blk ((self.operand1 >> bit_pos) & 1) != 0;
             },
             .shr, .sar => blk: {
-                const shift = @as(u5, @truncate(self.operand2));
+                const width = self.size.bits();
+                const shift: u6 = @as(u6, @truncate(self.operand2)) % width;
                 if (shift == 0) break :blk false;
-                break :blk ((self.operand1 >> @as(u5, @truncate(shift -% 1))) & 1) != 0;
+                break :blk ((self.operand1 >> @as(u5, @truncate(shift - 1))) & 1) != 0;
             },
             .logic => false,
             .inc, .dec => false, // INC/DEC don't affect CF

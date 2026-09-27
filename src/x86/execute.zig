@@ -1577,12 +1577,15 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         },
         0x0FB1 => {
             const dst = readOperand(cpu, insn, 0);
-            if (cpu.eax == dst) {
+            const acc = cpu.eax;
+            if (acc == dst) {
                 writeOperand(cpu, insn, 0, readOperand(cpu, insn, 1));
             } else {
                 cpu.eax = dst;
             }
-            cpu.flags.update(.sub, insn.op_size, cpu.eax -% dst, cpu.eax, dst);
+            // The flags come from the accumulator as it was before the
+            // mismatch path overwrote it.
+            cpu.flags.update(.sub, insn.op_size, acc -% dst, acc, dst);
         },
 
         // BT/BTS/BTR/BTC imm8 (0F BA)
@@ -2159,7 +2162,15 @@ fn execShift(cpu: *Cpu, insn: *const Instruction) void {
     const result: u32 = switch (sub_op) {
         4, 6 => val << count, // SHL
         5 => val >> count, // SHR
-        7 => @bitCast(@as(i32, @bitCast(val)) >> count), // SAR
+        7 => blk: {
+            // A byte or word operand arrives zero-extended, so shifting it as
+            // i32 would fill with zeros and make SAR behave like SHR. Extend
+            // the sign through the top of the 32-bit register first; the write
+            // below narrows the result back to the operand width.
+            const width = insn.op_size.bits();
+            const signed_val: i32 = @bitCast(val << @as(u5, @intCast(32 - width)));
+            break :blk @as(u32, @bitCast(signed_val >> count)) & insn.op_size.mask();
+        },
         else => unreachable,
     };
 
