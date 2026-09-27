@@ -93,13 +93,13 @@ pub fn stub_SizeofResource(hModule: usize, hResInfo: usize) callconv(w32cc.WINAP
                     const res_dir_rva = opt_header.DataDirectory[@import("../../pe.zig").IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
                     if (res_dir_rva == 0) return 0;
                     // Scan all potential data entries in the resource directory.
-                    // The directory size comes from the PE, so the scan stops at
-                    // the end of the image: a Size that runs past the mapping
-                    // would walk off it.
-                    const res_end = @min(
-                        @as(u64, res_dir_rva) + opt_header.DataDirectory[@import("../../pe.zig").IMAGE_DIRECTORY_ENTRY_RESOURCE].Size,
-                        m.*.mapped_memory.len,
-                    );
+                    // The directory RVA and size come from the PE but are not
+                    // covered by any image-bound check, so both the end offset
+                    // and the cursor are widened to u64 and clamped to the
+                    // mapped image before the walk starts.
+                    const res_dir = opt_header.DataDirectory[@import("../../pe.zig").IMAGE_DIRECTORY_ENTRY_RESOURCE];
+                    const image_len: u64 = m.*.mapped_memory.len;
+                    const res_end: u64 = @min(@as(u64, res_dir_rva) + res_dir.Size, image_len);
                     var pos: u64 = res_dir_rva;
                     while (pos + @sizeOf(pe_res.IMAGE_RESOURCE_DATA_ENTRY) <= res_end) : (pos += 4) {
                         const de = @as(*align(1) const pe_res.IMAGE_RESOURCE_DATA_ENTRY, @ptrCast(&m.*.mapped_memory[@intCast(pos)]));

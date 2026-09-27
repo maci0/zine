@@ -7,6 +7,77 @@ const io = @import("io.zig");
 const string = @import("string.zig");
 const platform = @import("../../platform.zig");
 
+/// Renders `val` for the printf conversion `spec` (`f`, `e`, `E`, `g`, `G`)
+/// into `buf` and returns the written slice.
+///
+/// `e`/`E` and `g`/`G` are not fixed-point: C prints an exponent for the
+/// first pair and picks between the two styles for the second, so
+/// `printf("%e", 12345.0)` is `1.234500e+04`, not `12345.000000`. NaN and
+/// infinity have no C exponent form and pass through as `nan`/`inf`.
+fn renderFloat(buf: []u8, val: f64, spec: u8, prec: u8) ?[]const u8 {
+    if (std.math.isNan(val)) return std.fmt.bufPrint(buf, "{s}", .{if (std.math.signbit(val)) "-nan" else "nan"}) catch null;
+    if (std.math.isInf(val)) return std.fmt.bufPrint(buf, "{s}", .{if (val < 0) "-inf" else "inf"}) catch null;
+
+    return switch (spec) {
+        'f' => std.fmt.bufPrint(buf, "{d:.[1]}", .{ val, prec }) catch null,
+        'e', 'E' => formatExp(buf, val, spec == 'E', prec),
+        else => formatGeneral(buf, val, spec == 'G', prec),
+    };
+}
+
+/// C `%e`: `[-]d.dddde[+-]NN` with at least two exponent digits.
+fn formatExp(buf: []u8, val: f64, upper: bool, prec: u8) ?[]u8 {
+    var mantissa: [96]u8 = undefined;
+    const sci = std.fmt.bufPrint(&mantissa, "{e:.[1]}", .{ val, prec }) catch return null;
+    const e_pos = std.mem.indexOfAny(u8, sci, "eE") orelse return sci[0..sci.len];
+    const exp = std.fmt.parseInt(i32, sci[e_pos + 1 ..], 10) catch return sci[0..sci.len];
+    return std.fmt.bufPrint(buf, "{s}{c}{s}{d:0>2}", .{
+        sci[0..e_pos],
+        @as(u8, if (upper) 'E' else 'e'),
+        @as([]const u8, if (exp < 0) "-" else "+"),
+        @abs(exp),
+    }) catch null;
+}
+
+/// C `%g`: fixed-point when the decimal exponent is in `[-4, prec)`, otherwise
+/// scientific, with trailing fractional zeros removed in both cases.
+fn formatGeneral(buf: []u8, val: f64, upper: bool, prec: u8) ?[]u8 {
+    // A precision of 0 is treated as 1, and `val` is never zero-exponented
+    // here because a zero value formats as "0" with no exponent at all.
+    const p: i32 = if (prec == 0) 1 else prec;
+    var sci: [96]u8 = undefined;
+    const sci_str = std.fmt.bufPrint(&sci, "{e}", .{val}) catch return null;
+    const e_pos = std.mem.indexOfAny(u8, sci_str, "eE") orelse return std.fmt.bufPrint(buf, "{d:.[1]}", .{ val, prec }) catch null;
+    const exp = std.fmt.parseInt(i32, sci_str[e_pos + 1 ..], 10) catch 0;
+
+    if (exp < -4 or exp >= p) {
+        const s = formatExp(buf, val, upper, @intCast(@max(p - 1, 0))) orelse return null;
+        return stripTrailingZeros(s);
+    }
+    const digits: u8 = @intCast(@min(@max(p - 1 - exp, 0), 20));
+    const s = std.fmt.bufPrint(buf, "{d:.[1]}", .{ val, digits }) catch return null;
+    return stripTrailingZeros(s);
+}
+
+/// Drops trailing fractional zeros and a bare trailing '.', as C does for
+/// `%g` without the `#` flag. The exponent marker ends the scan, so a
+/// scientific form keeps its `1.23e+04` mantissa and exponent intact. The
+/// exponent is shifted back over the trimmed zeros in the caller's buffer
+/// rather than allocated.
+fn stripTrailingZeros(s: []u8) []u8 {
+    const dot = std.mem.indexOfScalar(u8, s, '.') orelse return s;
+    const marker = std.mem.indexOfAny(u8, s, "eE") orelse s.len;
+    if (dot + 1 >= marker) return s;
+    var end = marker;
+    while (end > dot + 1 and s[end - 1] == '0') end -= 1;
+    // Nothing to trim: hand back the whole string, exponent included.
+    if (end == marker) return s;
+    if (end == dot + 1) end = dot;
+    const tail = s[marker..];
+    std.mem.copyForwards(u8, s[end .. end + tail.len], tail);
+    return s[0 .. end + tail.len];
+}
+
 /// Helper to convert C va_list to a raw usize address.
 /// Implementation status: Fully implemented
 pub inline fn va_list_to_usize(ap: anytype) usize {
@@ -131,12 +202,19 @@ pub fn x86_vsnprintf(buf: [*]u8, max: usize, format: [*:0]const u8, args_ptr: us
                     ai += 2;
                     const bits: u64 = (@as(u64, hi) << 32) | @as(u64, lo);
                     const val: f64 = @bitCast(bits);
-                    var nb: [64]u8 = undefined;
+                    var nb: [128]u8 = undefined;
                     // A float with no precision prints six fractional digits,
                     // and an explicit one (including ".0") prints exactly
                     // that many, so "$%.0f" of 3.5 reads "4" and not "3.5".
                     const prec_val: u8 = if (precision_given) @intCast(@min(precision, 20)) else 6;
-                    const ns = std.fmt.bufPrint(&nb, "{d:.[1]}", .{ val, prec_val }) catch "?";
+                    const ns = renderFloat(&nb, val, c, prec_val) orelse "?";
+
+                    const len = ns.len;
+                    while (len < width and oi < max - 1) : (width -= 1) {
+                        buf[oi] = pad_char;
+                        oi += 1;
+                    }
+
                     const copy_len = @min(ns.len, max - 1 - oi);
                     @memcpy(buf[oi .. oi + copy_len], ns[0..copy_len]);
                     oi += copy_len;
@@ -646,6 +724,41 @@ test "vsnprintf rounds to the requested precision and survives a huge width" {
     // moves the padding to the left of them.
     try testing.expectEqualStrings("      2147483647", buf[0..x86_vsnprintf(&buf, 64, "%16d", @intFromPtr(&int_args))]);
     try testing.expectEqualStrings("0000002147483647", buf[0..x86_vsnprintf(&buf, 64, "%016d", @intFromPtr(&int_args))]);
+}
+
+test "vsnprintf %e and %g use the exponent form C specifies" {
+    const doubleArg = struct {
+        fn of(v: f64) [2]u32 {
+            const bits: u64 = @bitCast(v);
+            return .{ @truncate(bits), @truncate(bits >> 32) };
+        }
+    }.of;
+
+    var buf: [64]u8 = undefined;
+    var args = doubleArg(12345.0);
+    // %e always carries an exponent, with a sign and at least two digits.
+    try testing.expectEqualStrings("1.234500e+04", buf[0..x86_vsnprintf(&buf, 64, "%e", @intFromPtr(&args))]);
+    try testing.expectEqualStrings("1.234500E+04", buf[0..x86_vsnprintf(&buf, 64, "%E", @intFromPtr(&args))]);
+
+    args = doubleArg(0.000012345);
+    try testing.expectEqualStrings("1.234500e-05", buf[0..x86_vsnprintf(&buf, 64, "%e", @intFromPtr(&args))]);
+
+    // %g picks fixed-point for an exponent inside [-4, precision) and drops
+    // trailing fractional zeros.
+    args = doubleArg(1234.5);
+    try testing.expectEqualStrings("1234.5", buf[0..x86_vsnprintf(&buf, 64, "%g", @intFromPtr(&args))]);
+    try testing.expectEqualStrings("1.23e+03", buf[0..x86_vsnprintf(&buf, 64, "%.3g", @intFromPtr(&args))]);
+    args = doubleArg(12345.0);
+    try testing.expectEqualStrings("1.23e+04", buf[0..x86_vsnprintf(&buf, 64, "%.3g", @intFromPtr(&args))]);
+    try testing.expectEqualStrings("1.23E+04", buf[0..x86_vsnprintf(&buf, 64, "%.3G", @intFromPtr(&args))]);
+
+    // A zero has no exponent, so %g keeps it in plain fixed-point.
+    args = doubleArg(0.0);
+    try testing.expectEqualStrings("0", buf[0..x86_vsnprintf(&buf, 64, "%g", @intFromPtr(&args))]);
+
+    // The float branch pads to the field width, like the integer branches.
+    args = doubleArg(3.14159);
+    try testing.expectEqualStrings("      3.14", buf[0..x86_vsnprintf(&buf, 64, "%10.2f", @intFromPtr(&args))]);
 }
 
 test "narrowWide truncates and always terminates" {

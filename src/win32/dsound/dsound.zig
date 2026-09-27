@@ -276,9 +276,16 @@ fn parseWaveFormatInto(buf: *SoundBufferState, fmt_addr: u32) void {
 
     buf.channels = fmt.nChannels;
     buf.sample_rate = fmt.nSamplesPerSec;
-    buf.bytes_per_sec = fmt.nAvgBytesPerSec;
-    buf.block_align = fmt.nBlockAlign;
     buf.bits_per_sample = fmt.wBitsPerSample;
+    // nBlockAlign and nAvgBytesPerSec are not validated above and a guest may
+    // pass 0 for either. A zero block align makes every buffer-length
+    // calculation collapse to zero, and a zero byte rate freezes the play
+    // cursor for the life of the buffer, so derive what the format implies
+    // and only trust a guest value that agrees with it.
+    const frame_bytes: u16 = (buf.channels * (buf.bits_per_sample / 8));
+    buf.block_align = if (fmt.nBlockAlign == frame_bytes) fmt.nBlockAlign else frame_bytes;
+    const derived_rate: u32 = buf.sample_rate * buf.block_align;
+    buf.bytes_per_sec = if (fmt.nAvgBytesPerSec == derived_rate) fmt.nAvgBytesPerSec else derived_rate;
 
     if (trace.enable_tracing) trace.print("DSOUND:   format: {d}Hz {d}ch {d}bit\n", .{ buf.sample_rate, buf.channels, buf.bits_per_sample });
 }

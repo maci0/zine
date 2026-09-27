@@ -503,6 +503,12 @@ pub fn freopen(filename_ptr: usize, mode_ptr: usize, f: ?*anyopaque) callconv(.c
 /// Implementation status: Partially implemented
 pub fn fread(buffer: [*]u8, size: usize, count: usize, f: ?*anyopaque) callconv(.c) usize {
     if (getFile(f)) |file| {
+        // size and count are guest u32s. On the x86 target usize is u32, so
+        // fread(buf, 0x10000, 0x10000) would overflow the product.
+        if (size != 0 and count > std.math.maxInt(usize) / size) {
+            setStreamError(f, "read", error.Overflow);
+            return 0;
+        }
         const bytes_to_read = size * count;
         if (bytes_to_read == 0) return 0;
         const read_bytes = @import("../host_io.zig").readFromFile(file, buffer[0..bytes_to_read]) catch |err| {

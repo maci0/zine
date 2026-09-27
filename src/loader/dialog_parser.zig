@@ -46,7 +46,11 @@ fn readUtf16String(allocator: std.mem.Allocator, reader: *std.Io.Reader, first: 
                 if (next >= 0xDC00 and next < 0xE000) {
                     cp = @as(u21, 0x10000) + ((@as(u21, unit) - 0xD800) << 10) + (@as(u21, next) - 0xDC00);
                 } else {
+                    // `next` is already consumed and is not part of the pair,
+                    // so it must be emitted as a code point of its own or the
+                    // character is lost from the string.
                     try appendCodepoint(allocator, &list, 0xFFFD);
+                    try appendCodepoint(allocator, &list, next);
                 }
             }
         } else if (unit >= 0xDC00 and unit < 0xE000) {

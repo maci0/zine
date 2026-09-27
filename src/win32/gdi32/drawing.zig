@@ -20,7 +20,7 @@ pub fn BitBlt(hdcDest: usize, x: i32, y: i32, cx: i32, cy: i32, hdcSrc: usize, x
 
     const dest_dib = gdi32.getDcDib(hdcDest);
     const dest_buf = if (dest_dib) |dib|
-        @as([*]u8, @ptrFromInt(dib.buffer))[0..gdi32.dibPixelLen(dib)]
+        gdi32.dibSurface(dib)
     else
         renderer.global_framebuf;
 
@@ -47,6 +47,10 @@ pub fn BitBlt(hdcDest: usize, x: i32, y: i32, cx: i32, cy: i32, hdcSrc: usize, x
     const hi_dx: i64 = @min(@as(i64, blit_w), @min(dw - @as(i64, x), sw - @as(i64, x1)));
     if (hi_dy <= lo_dy or hi_dx <= lo_dx) return 1;
 
+    // A DIB below 8 bits per pixel has no byte-addressable pixel here: the
+    // loops below read a whole pixel per iteration, so `bpp / 8` would be 0
+    // and the row-span ceiling would divide by it.
+    if (src.bpp < 8) return 1;
     const src_bpp: u32 = @as(u32, src.bpp) / 8;
     const src_stride = @as(u64, src_w) * src_bpp;
     // The old per-pixel guards skipped pixels whose read crossed the declared
@@ -155,7 +159,7 @@ pub fn StretchBlt(hdcDest: usize, xDest: i32, yDest: i32, wDest: i32, hDest: i32
 
     const dest_dib = gdi32.getDcDib(hdcDest);
     const dest_buf = if (dest_dib) |dib|
-        @as([*]u8, @ptrFromInt(dib.buffer))[0..gdi32.dibPixelLen(dib)]
+        gdi32.dibSurface(dib)
     else
         renderer.global_framebuf;
     const dest_w = if (dest_dib) |dib| dib.width else renderer.global_width;
@@ -421,7 +425,7 @@ pub fn StretchDIBits(hdc: usize, xDest: i32, yDest: i32, DestWidth: i32, DestHei
 
     const dest_dib = gdi32.getDcDib(hdc);
     const dest_buf = if (dest_dib) |dib|
-        @as([*]u8, @ptrFromInt(dib.buffer))[0..gdi32.dibPixelLen(dib)]
+        gdi32.dibSurface(dib)
     else
         renderer.global_framebuf;
 
@@ -475,11 +479,13 @@ pub const FramebufferInfo = struct {
     pub fn drawLine(self: *const FramebufferInfo, x0: i32, y0: i32, x1: i32, y1: i32, color: u32) void {
         var cx = x0;
         var cy = y0;
-        const dx: i32 = @intCast(@abs(x1 - x0));
+        // i64: a full-width line needs 2*|dx| + |dy| headroom, which is 33
+        // bits, and x1 - x0 overflows i32 across the sign boundary.
+        const dx: i64 = @intCast(@abs(@as(i64, x1) - x0));
         // Bresenham requires dy NEGATIVE (the error term accumulates toward
         // zero). With a positive dy both branches fired each step and the walk
         // filled the entire bounding box instead of drawing a line.
-        const dy: i32 = -@as(i32, @intCast(@abs(y1 - y0)));
+        const dy: i64 = -@as(i64, @intCast(@abs(@as(i64, y1) - y0)));
         const sx: i32 = if (x0 < x1) 1 else -1;
         const sy: i32 = if (y0 < y1) 1 else -1;
         var err = dx + dy;
@@ -524,7 +530,7 @@ pub const FramebufferInfo = struct {
 pub fn getFramebufferForDc(hdc: usize) ?FramebufferInfo {
     if (gdi32.getDcDib(hdc)) |dib| {
         return FramebufferInfo{
-            .buf = @as([*]u8, @ptrFromInt(dib.buffer))[0..gdi32.dibPixelLen(dib)],
+            .buf = gdi32.dibSurface(dib),
             .w = dib.width,
             .h = dib.height,
             .is_screen = false,
@@ -694,7 +700,7 @@ pub fn SetDIBitsToDevice(hdc: usize, xDest: i32, yDest: i32, w: u32, h: u32, xSr
 
     const dest_dib = gdi32.getDcDib(hdc);
     const dest_buf = if (dest_dib) |dib|
-        @as([*]u8, @ptrFromInt(dib.buffer))[0..gdi32.dibPixelLen(dib)]
+        gdi32.dibSurface(dib)
     else
         renderer.global_framebuf;
 
@@ -846,9 +852,12 @@ pub fn Ellipse(hdc: usize, left: i32, top: i32, right: i32, bottom: i32) callcon
             const ratio = 1.0 - (yf * yf) / (ryf * ryf);
             if (ratio < 0) continue;
             const x_span: i32 = @intFromFloat(rxf * @sqrt(ratio));
+            // The outline pass below draws cx ± x_span, so the fill covers
+            // both boundary pixels too; without the +1 the centre row stopped
+            // one column short of the drawn outline.
             // cx ± x_span stays inside [left, right], but twice the span can
             // exceed i32 for a full-width rectangle.
-            const span: i32 = @intCast(@min(@as(i64, x_span) * 2, std.math.maxInt(i32)));
+            const span: i32 = @intCast(@min(@as(i64, x_span) * 2 + 1, std.math.maxInt(i32)));
             fb.fillRect(cx - x_span, cy + y_off, span, 1, brush_color);
         }
     }
@@ -922,7 +931,9 @@ pub fn Polygon(hdc: usize, apt: usize, cpt: i32) callconv(w32cc.WINAPI) i32 {
                     crossings += 1;
                     const x0 = pts[i].x;
                     const x1 = pts[j].x;
-                    const ix = x0 + @divTrunc((scan_y - y0) * (x1 - x0), (y1 - y0));
+                    // i64: (scan_y - y0) * (x1 - x0) overflows i32 on a tall
+                    // edge spanning a wide x range.
+                    const ix: i32 = @intCast(x0 + @divTrunc((@as(i64, scan_y) - y0) * (@as(i64, x1) - x0), @as(i64, y1) - y0));
                     if (ix < min_x) min_x = ix;
                     if (ix > max_x) max_x = ix;
                 }

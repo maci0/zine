@@ -111,6 +111,40 @@ release, not a 0.2.1 patch.
 - Case-insensitive path fallback folds case per code point, so a guest opening
   `CAFÉ.TXT` finds `café.txt` on disk. Names that are not valid UTF-8 keep the
   previous byte comparison, since the host filesystem accepts arbitrary bytes.
+- Bitmap and pixel-buffer sizes are computed in 64 bits and rejected past a
+  documented cap, so `CreateCompatibleBitmap` or `CreateDIBSection` with a
+  guest-supplied dimension whose `width * height * bpp` passes 4 GB returns
+  failure instead of aborting the emulator on an overflow. `CreateDIBSection`
+  also negates a negative `biHeight` in 64 bits, so `biHeight = INT32_MIN` no
+  longer traps. A DIB created with `biBitCount` below 32 is read and written
+  within its own allocation: the pixel slice is bounded by the recorded buffer
+  length, where it was previously taken as four bytes per pixel regardless of
+  the guest's bit count.
+- `BitBlt` refuses a source DIB below 8 bits per pixel rather than dividing by
+  a zero bytes-per-pixel, and `LineTo`/`Rectangle` and `Polygon` carry their
+  line-walk and scanline interpolation in 64-bit arithmetic, so a line across
+  the full coordinate range and a polygon edge spanning a wide x range no
+  longer overflow. `Ellipse` fills its boundary pixels instead of stopping one
+  column short of the outline it draws. A font `lfHeight` of `INT32_MIN` or a
+  value past 16M clamps to a height the text metrics can be derived from.
+- `fread` refuses a `size * count` product that does not fit the host's address
+  space (reachable on the 32-bit build with two 64K arguments) and reports it
+  through the stream error indicator, like `fwrite` already did.
+- `SizeofResource` bounds its resource-directory walk by the mapped image
+  length and does the end-offset sum in 64 bits, so a data directory pointing
+  past the module's own mapping is rejected instead of read. A malformed
+  import descriptor whose name RVA wraps the 32-bit add is skipped rather than
+  resolved from offset 0 of the image.
+- A DirectSound format with a zero `nBlockAlign` or `nAvgBytesPerSec` now gets
+  the values the sample rate and bit depth imply, so the play cursor advances
+  instead of freezing for the life of the buffer.
+- A UTF-16 string in a dialog resource keeps the character that follows an
+  unpaired high surrogate, which was consumed and dropped.
+- `printf` `%e`, `%E`, `%g`, and `%G` print the exponent form C specifies
+  (`%e` of 12345 is `1.234500e+04`, not `12345.000000`) with `%g` choosing
+  between the two styles and dropping trailing fractional zeros, and the
+  floating-point conversions honour the field width like the integer ones.
+  `nan` and `inf` are unchanged.
 
 #### Security fixes
 

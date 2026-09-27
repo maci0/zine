@@ -90,16 +90,22 @@ pub const FontData = struct {
     /// Derive tmHeight from the font height parameter.
     /// Win32 convention: negative = character height, positive = cell height.
     pub fn tmHeight(self: FontData) i32 {
-        const h = if (self.height < 0) -self.height else if (self.height > 0) self.height else 13;
-        return @max(h, 1);
+        // i64: lfHeight is a guest i32, and negating INT32_MIN has no i32
+        // counterpart. The result feeds the height * 46 product in
+        // aveCharWidth, so it is clamped to a range that keeps that in range
+        // too rather than wrapping.
+        const raw: i64 = if (self.height < 0) -@as(i64, self.height) else if (self.height > 0) self.height else 13;
+        const h = @min(@max(raw, 1), 0x0100_0000);
+        return @intCast(h);
     }
 
     /// Derive average character width proportional to height.
     /// MS Sans Serif at 13px height has aveCharWidth=6, roughly height * 0.46.
     pub fn aveCharWidth(self: FontData) i32 {
         if (self.width > 0) return self.width;
-        const h = self.tmHeight();
-        return @max(@divTrunc(h * 46, 100), 1);
+        // i64: tmHeight reaches 0x0100_0000, and 46x that overflows i32.
+        const h: i64 = self.tmHeight();
+        return @intCast(@max(@divTrunc(h * 46, 100), 1));
     }
 };
 
@@ -169,6 +175,23 @@ pub fn registerDib(handle: usize, buffer: usize, width: u32, height: u32, bpp: u
         } },
     });
     return true;
+}
+
+/// Largest pixel buffer GDI allocates for a bitmap, in bytes. Win32 documents
+/// no cap, but the request must fit the size arithmetic below, and a guest
+/// asking for more than this has no allocation that could be served anyway.
+pub const max_dib_bytes: u64 = 256 * 1024 * 1024;
+
+/// Pixel slice for a registered DIB.
+///
+/// The length comes from the recorded allocation, not from
+/// `width * height * 4`: CreateDIBSection honours the guest's `biBitCount`,
+/// so a 1/2/4-bpp DIB is allocated with fewer than 4 bytes per pixel and
+/// slicing it at 4 would hand callers a span past the allocation. An
+/// `alloc_len` of 0 means the registration is untracked (caller-owned
+/// scratch, as tests use), and only then does the nominal size stand.
+pub fn dibSurface(dib: *const DibInfo) []u8 {
+    return @as([*]u8, @ptrFromInt(dib.buffer))[0..dibPixelLen(dib)];
 }
 
 pub fn findDib(handle: usize) ?*const DibInfo {
@@ -518,4 +541,83 @@ test "a blit is bounded by the DIB's allocation, not its declared 4bpp size" {
         .bpp = 32,
         .alloc_len = 0,
     }));
+}
+
+test "dibSurface is bounded by the recorded allocation, not by 4 bytes per pixel" {
+    // CreateDIBSection honours the guest's biBitCount, so an 8bpp DIB holds
+    // one byte per pixel. Slicing it at width*height*4 handed every consumer
+    // a span three quarters of an allocation past its end.
+    var bytes: [64 * 64]u8 = undefined;
+    const dib: DibInfo = .{
+        .handle = 1,
+        .buffer = @intFromPtr(&bytes),
+        .width = 64,
+        .height = 64,
+        .bpp = 8,
+        .alloc_len = bytes.len,
+        .owned = false,
+    };
+    try std.testing.expectEqual(bytes.len, dibSurface(&dib).len);
+
+    // A 32bpp DIB is allocated at exactly width*height*4 and reaches it.
+    var wide: [32 * 32 * 4]u8 = undefined;
+    const wide_dib: DibInfo = .{
+        .handle = 2,
+        .buffer = @intFromPtr(&wide),
+        .width = 32,
+        .height = 32,
+        .bpp = 32,
+        .alloc_len = wide.len,
+        .owned = false,
+    };
+    try std.testing.expectEqual(wide.len, dibSurface(&wide_dib).len);
+
+    // An under-allocated registration (a caller-owned buffer smaller than its
+    // declared dimensions) is clamped down to what actually exists.
+    const short: DibInfo = .{
+        .handle = 3,
+        .buffer = @intFromPtr(&wide),
+        .width = 32,
+        .height = 32,
+        .bpp = 32,
+        .alloc_len = 16,
+        .owned = false,
+    };
+    try std.testing.expectEqual(@as(usize, 16), dibSurface(&short).len);
+
+    // An untracked registration (alloc_len 0) has no allocation to check
+    // against, so it keeps the nominal size.
+    const untracked: DibInfo = .{
+        .handle = 4,
+        .buffer = @intFromPtr(&wide),
+        .width = 8,
+        .height = 8,
+        .bpp = 32,
+        .alloc_len = 0,
+        .owned = false,
+    };
+    try std.testing.expectEqual(@as(usize, 8 * 8 * 4), dibSurface(&untracked).len);
+}
+
+test "FontData tmHeight and aveCharWidth survive an extreme lfHeight" {
+    // lfHeight is a guest i32: INT32_MIN has no positive counterpart to
+    // negate, and 46x a large height overflows the average-width product.
+    // Both clamp to a height the metrics can be derived from, never trap.
+    const min_font: FontData = .{ .height = std.math.minInt(i32) };
+    try std.testing.expect(min_font.tmHeight() > 0);
+    try std.testing.expectEqual(@divTrunc(min_font.tmHeight() * 46, 100), min_font.aveCharWidth());
+
+    const huge_font: FontData = .{ .height = std.math.maxInt(i32) };
+    try std.testing.expectEqual(huge_font.tmHeight(), min_font.tmHeight());
+    try std.testing.expectEqual(huge_font.aveCharWidth(), min_font.aveCharWidth());
+
+    const min_height: FontData = .{ .height = -0x40000000 };
+    try std.testing.expectEqual(huge_font.tmHeight(), min_height.tmHeight());
+
+    // An ordinary font keeps the documented 0.46 ratio and the 13px default.
+    const normal: FontData = .{ .height = 13 };
+    try std.testing.expectEqual(@as(i32, 13), normal.tmHeight());
+    try std.testing.expectEqual(@as(i32, 5), normal.aveCharWidth());
+    const default_font: FontData = .{};
+    try std.testing.expectEqual(@as(i32, 13), default_font.tmHeight());
 }

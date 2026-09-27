@@ -199,7 +199,13 @@ pub fn CreateCompatibleBitmap(hdc: usize, cx: i32, cy: i32) callconv(w32cc.WINAP
 
     const handle = gdi32.nextHandle();
     const bitcount = 32;
-    const bytes = w * h * 4;
+    // u64: 65536x65536 is 2^32 bytes, which wraps a u32 product.
+    const total = @as(u64, w) * h * 4;
+    if (total > gdi32.max_dib_bytes) {
+        if (trace.enable_tracing) trace.print("GDI32: CreateCompatibleBitmap too large ({d} bytes)\n", .{total});
+        return 0;
+    }
+    const bytes: usize = @intCast(total);
     const buf = std.heap.page_allocator.alloc(u8, bytes) catch return 0;
     @memset(buf, 0);
 
@@ -242,18 +248,21 @@ pub fn CreateDIBSection(hdc: usize, pbmi: usize, usage: u32, ppvBits: usize, hSe
         const bi_height_raw = bmi.biHeight;
         bitcount = bmi.biBitCount;
         w = if (bi_width > 0) @intCast(bi_width) else 1;
-        // Negating INT32_MIN in i32 traps, and the geometry products wrap in
-        // u32, so the whole computation runs in u64 and a height that does not
-        // fit u32 is refused rather than wrapped.
-        const height: u64 = if (bi_height_raw > 0) @intCast(bi_height_raw) else @intCast(-@as(i64, bi_height_raw));
-        if (height > std.math.maxInt(u32)) {
+        // Negate in i64: biHeight == INT32_MIN has no i32 counterpart, and the
+        // geometry runs wide because a 32bpp bitmap wider than 2^30 overflows a
+        // u32 stride and the product overflows u64.
+        const raw_height: u64 = if (bi_height_raw > 0) @intCast(bi_height_raw) else @intCast(-@as(i64, bi_height_raw));
+        const height: u64 = @max(raw_height, 1);
+        const bpp: u64 = if (bitcount > 0) @as(u64, bitcount) / 8 else 4;
+        const row_stride: u64 = ((@as(u64, w) * bpp + 3) / 4) * 4;
+        const total: u128 = @as(u128, row_stride) * height;
+        if (total > gdi32.max_dib_bytes) {
+            if (trace.enable_tracing) trace.print("GDI32: CreateDIBSection too large ({d} bytes)\n", .{total});
             @as(*usize, @ptrFromInt(ppvBits)).* = 0;
             return 0; // GDI_ERROR
         }
         h = @intCast(height);
-        const bpp: u32 = if (bitcount > 0) @as(u32, bitcount) / 8 else 4;
-        const row_stride = (@as(u64, w) * bpp + 3) / 4 * 4;
-        buf_size = @intCast(@min(row_stride * height, @as(u64, std.math.maxInt(usize))));
+        buf_size = @intCast(total);
         if (trace.enable_tracing) trace.print("GDI32: CreateDIBSection({d}x{d} @ {d}bpp, {d} bytes)\n", .{ w, h, bitcount, buf_size });
     } else {
         if (trace.enable_tracing) trace.print("GDI32: CreateDIBSection(no BITMAPINFO)\n", .{});
