@@ -41,6 +41,12 @@ release, not a 0.2.1 patch.
 
 #### Breaking and migration
 
+- The build now fails when `src/gui/van.min.js` does not hash to the digest
+  recorded as `sbom_vanjs_sha256` in `build.zig`. The vendored VanJS copy is a
+  re-wrap, so no upstream release names it, and nothing checked its bytes; the
+  digest is now recorded, checked on every configure, and written into the
+  shipped SBOM. Re-wrapping or hand-editing the file means restating
+  `sha256sum src/gui/van.min.js` in the same edit.
 - The build now requires exactly the Zig version pinned in `build.zig.zon`
   (`.minimum_zig_version`), where a newer patch release used to pass the
   version check. The shipped binaries are produced by that compiler, and a
@@ -469,14 +475,16 @@ can be:
 | Component | Version | How it arrives |
 |---|---|---|
 | `zig-toml` (the only Zig package dependency, MIT) | commit `a73c94`, package `0.3.0` | `build.zig.zon` names a commit-pinned archive URL with a Zig content hash |
-| VanJS (MIT), embedded in the web UI | unpinned upstream release, repackaged | vendored at `src/gui/van.min.js`, shipped as `share/licenses/zine/van.LICENSE` |
+| VanJS (MIT), embedded in the web UI | repackaged, no upstream release named; SHA-256 pinned | vendored at `src/gui/van.min.js`, shipped as `share/licenses/zine/van.LICENSE` |
 | `websocket-client`, MSVC integration tests only | `1.9.0` | `tests/requirements.txt`, exact pin with two sha256 hashes |
 
 `zig build sbom` writes a CycloneDX 1.5 inventory of these (plus zine itself)
 to `zig-out/share/zine/sbom/zine.cdx.json`, and every install ships it. The
 build re-checks the `zig-toml` commit and version in the inventory against
 `build.zig.zon` and fails if they have drifted, so the list cannot describe a
-dependency the build no longer uses. Upgrading a component is a deliberate
+dependency the build no longer uses. It also hashes the vendored `van.min.js`
+and fails if the digest is not the one recorded in `build.zig`, so the copy
+that ships is the one that was reviewed. Upgrading a component is a deliberate
 edit of its pin and of the inventory together.
 
 ## Usage
@@ -593,7 +601,9 @@ an existing MSVC 6.0 installation at `tools/MSVC600/`, including `VC98/Bin`,
 `VC98/Include`, `VC98/Lib`, and `Common/`. These proprietary fixtures are not
 included in a clone. The script builds the selected interpreter automatically;
 WASM execution also requires the selected runtime on `PATH`. WebSocket tests
-require Python 3 and the dependencies in `tests/requirements.txt`.
+require Python 3 and the dependencies in `tests/requirements.txt`, installed
+with `uv pip install -r tests/requirements.txt --require-hashes` so the
+sha256 pins in that file are actually enforced.
 
 ```sh
 # Unit tests (no Windows binaries or GUI dependencies needed)

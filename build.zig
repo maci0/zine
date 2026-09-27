@@ -261,6 +261,14 @@ fn indexOfAsset(name: []const u8) usize {
 const sbom_toml_commit = "a73c9423d88ed413204b39638fab7e9bccdb83fd";
 const sbom_toml_version = "0.3.0";
 
+// The SHA-256 of the vendored VanJS repackaging, as hex. VanJS has no upstream
+// version recorded in this tree (the vendored file is a re-wrap, so it matches
+// no published artifact), which leaves its bytes the one third-party input
+// nothing checks. Pinning the digest restores that: the vendored file's own
+// header points here, the build refuses to configure on a mismatch, and the
+// inventory carries the same value so a consumer can verify the shipped copy.
+const sbom_vanjs_sha256 = "8070c4c7934b98ce80bd7aa604d98877cef2236c695a1e3203b5c180479ac82b";
+
 /// CycloneDX 1.5 inventory of the third-party components behind a shipped
 /// artifact. Downstream consumers and vulnerability scanners cannot recover
 /// this by reading the manifests, so it is generated and installed next to the
@@ -294,6 +302,14 @@ fn addSbom(b: *std.Build) void {
     if (std.mem.indexOf(u8, zon, "toml-" ++ sbom_toml_version ++ "-") == null) {
         std.log.err("build.zig.zon no longer resolves zig-toml {s}; update sbom_toml_version and the SBOM in build.zig", .{sbom_toml_version});
         @panic("SBOM dependency version is stale");
+    }
+
+    var vendored_vanjs: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(@embedFile("src/gui/van.min.js"), &vendored_vanjs, .{});
+    const vendored_vanjs_hex = std.fmt.bytesToHex(vendored_vanjs, .lower);
+    if (!std.mem.eql(u8, &vendored_vanjs_hex, sbom_vanjs_sha256)) {
+        std.log.err("src/gui/van.min.js hashes to {s}, not the {s} recorded as sbom_vanjs_sha256 in build.zig; a re-wrap or a hand edit has to restate the digest", .{ vendored_vanjs_hex, sbom_vanjs_sha256 });
+        @panic("vendored VanJS digest is stale");
     }
 
     const zine_ref = "pkg:generic/zine@" ++ package_version;
@@ -342,13 +358,19 @@ fn addSbom(b: *std.Build) void {
         // Vendored, not fetched: src/gui/van.min.js carries the SPDX header
         // the license expression below is transcribed from, and the file's own
         // comment records that it is a repackaging rather than an upstream
-        // artifact. No version: the tree does not record which one.
+        // artifact. No version: the tree does not record which one. The digest
+        // is of the vendored bytes, so it identifies what ships even though the
+        // upstream release it came from is not named, and addSbom re-checks it
+        // against the file on every configure.
         "    {\n" ++
         "      \"type\": \"library\",\n" ++
         "      \"bom-ref\": \"" ++ vanjs_ref ++ "\",\n" ++
         "      \"name\": \"vanjs\",\n" ++
         "      \"purl\": \"" ++ vanjs_ref ++ "\",\n" ++
         "      \"licenses\": [ { \"license\": { \"id\": \"MIT\" } } ],\n" ++
+        "      \"hashes\": [\n" ++
+        "        { \"alg\": \"SHA-256\", \"content\": \"" ++ sbom_vanjs_sha256 ++ "\" }\n" ++
+        "      ],\n" ++
         "      \"externalReferences\": [\n" ++
         "        { \"type\": \"website\", \"url\": \"https://vanjs.org\" }\n" ++
         "      ],\n" ++

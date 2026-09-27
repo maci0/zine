@@ -530,7 +530,7 @@ zine/
 │   │   ├── index.html       # Frontend HTML
 │   │   ├── win2k.css        # Windows 2000 theme CSS
 │   │   ├── menu.json        # Guest menu data
-│   │   ├── van.min.js       # Vendored JS runtime
+│   │   ├── van.min.js       # Vendored JS runtime, SHA-256 pinned in build.zig
 │   │   └── assets/          # SVGs used by the frontend
 │   ├── fuzz/                 # Fuzz harnesses for untrusted-input parsers
 │   │   ├── pe.zig, menu.zig, dialog.zig, icon.zig, mutation.zig, replay.zig
