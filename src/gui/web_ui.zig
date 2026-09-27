@@ -536,6 +536,18 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                 continue;
             }
 
+            // The digested assets the document names exist only inside this
+            // build: no file on disk carries those names, so they resolve here
+            // or not at all.
+            if (urlDigest(asset_path)) |digest| {
+                const content = precompressedContent(digest) orelse {
+                    try respondStatus(&req, .not_found, "Not found", null);
+                    return stream.close(runtime.io());
+                };
+                try respondStaticContent(&req, content, contentTypeForPath(asset_path).?);
+                continue;
+            }
+
             // Security: reject path traversal sequences, encoded variants, and null bytes.
             // Check for ".." (literal), "%2e" / "%2E" (percent-encoded dot), and null bytes.
             if (std.mem.indexOf(u8, asset_path, "..") != null or
@@ -1563,7 +1575,15 @@ test "the embedded document names the digested assets the build embedded" {
         // The digested URL has to resolve to a precompressed asset, or the
         // document would ask for bytes the server cannot send.
         try std.testing.expectEqual(digest, urlDigest(url).?);
+        try std.testing.expectEqualStrings(
+            @field(assets, name),
+            precompressedContent(urlDigest(url).?).?,
+        );
     }
+    // A digest no build produced resolves to nothing, so the request is a
+    // miss rather than a 200 that would pin bytes under an immutable URL.
+    const absent: [std.crypto.hash.sha2.Sha256.digest_length]u8 = [_]u8{0} ** 32;
+    try std.testing.expect(precompressedContent(absent) == null);
     // The document itself keeps a stable URL: it is what names the assets.
     try std.testing.expect(urlDigest("/index.html") == null);
     try std.testing.expect(urlDigest("app.js") == null);

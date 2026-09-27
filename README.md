@@ -178,6 +178,12 @@ release, not a 0.2.1 patch.
 
 #### Fixed
 
+- The web UI's content-addressed stylesheet and scripts are served again. The
+  document names each asset by its digest (`/win2k-<digest>.css`), and those
+  names exist only inside the build, so the server answered the document's own
+  requests for them with 404 and the page loaded unstyled and inert. A digested
+  URL now resolves to the bytes this build embedded, and one no build produced
+  stays a 404.
 - `ctime` prints the day of month space-padded to two columns and the clock
   fields without a sign, so the epoch reads `Thu Jan  1 00:00:00 1970` instead
   of `Thu Jan +1 +0:+0:+0 1970`.
