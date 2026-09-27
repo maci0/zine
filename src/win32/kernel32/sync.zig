@@ -365,15 +365,19 @@ fn waitOnKernelObject(ko: *KernelObject, dwMilliseconds: u32) u32 {
                 ko.mutex_obj.recursion += 1;
                 return 0; // WAIT_OBJECT_0
             }
-            if (dwMilliseconds == 0) {
-                if (ko.mutex_obj.inner.tryLock()) {
-                    ko.mutex_obj.owner = tid;
-                    ko.mutex_obj.recursion = 1;
-                    return 0;
+            if (dwMilliseconds == 0xFFFFFFFF) {
+                ko.mutex_obj.inner.lock();
+            } else {
+                // A finite timeout is a deadline on the monotonic clock, not a
+                // hint: a mutex held elsewhere must report WAIT_TIMEOUT rather
+                // than block the guest forever. dwMilliseconds == 0 polls once.
+                const deadline_ms = runtime.monoMilliTimestamp() + @as(i64, dwMilliseconds);
+                while (!ko.mutex_obj.inner.tryLock()) {
+                    if (dwMilliseconds == 0) return 258; // WAIT_TIMEOUT
+                    if (runtime.monoMilliTimestamp() >= deadline_ms) return 258; // WAIT_TIMEOUT
+                    platform.sleep(1_000_000); // 1ms
                 }
-                return 258; // WAIT_TIMEOUT
             }
-            ko.mutex_obj.inner.lock();
             ko.mutex_obj.owner = tid;
             ko.mutex_obj.recursion = 1;
             return 0; // WAIT_OBJECT_0
@@ -1041,4 +1045,27 @@ test "semaphore timed wait returns WAIT_TIMEOUT when empty" {
     const ko = allocKernelObject(.semaphore) orelse return error.NoSlots;
     ko.semaphore.max_count = 4;
     try std.testing.expectEqual(@as(u32, 258), WaitForSingleObject(ko.handle, 30));
+}
+
+test "WaitForSingleObject times out on a mutex held by another thread" {
+    const saved_objects = kernel_objects;
+    defer kernel_objects = saved_objects;
+    kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
+
+    const ko = allocKernelObject(.mutex) orelse return error.NoSlots;
+    // Held without recording an owner, so the waiter takes the contended path
+    // rather than the recursive one.
+    ko.mutex_obj.inner.lock();
+    defer ko.mutex_obj.inner.unlock();
+
+    const started = runtime.monoMilliTimestamp();
+    try std.testing.expectEqual(@as(u32, 258), WaitForSingleObject(ko.handle, 40));
+    const elapsed = runtime.monoMilliTimestamp() - started;
+    try std.testing.expect(elapsed >= 30); // honored at least roughly
+    try std.testing.expect(elapsed < 5000); // and returned instead of hanging
+
+    // A zero timeout polls once and must not sleep.
+    const poll_started = runtime.monoMilliTimestamp();
+    try std.testing.expectEqual(@as(u32, 258), WaitForSingleObject(ko.handle, 0));
+    try std.testing.expect(runtime.monoMilliTimestamp() - poll_started < 1000);
 }

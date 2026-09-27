@@ -34,13 +34,20 @@ pub fn yield() void {
     std.Thread.yield() catch {};
 }
 
-/// Suspends execution for the specified number of nanoseconds.
+/// Suspends execution for the specified number of nanoseconds. Covers the full
+/// interval: zine installs its own signal handlers, so a guest Sleep() is
+/// routinely cut short by SIGSEGV/SIGALRM delivery and must resume from the
+/// unslept remainder instead of returning early.
 pub fn sleep(ns: u64) void {
-    const req = linux.timespec{
+    var req = linux.timespec{
         .sec = @intCast(ns / std.time.ns_per_s),
         .nsec = @intCast(ns % std.time.ns_per_s),
     };
-    _ = linux.nanosleep(&req, null);
+    var rem: linux.timespec = undefined;
+    while (linux.nanosleep(&req, &rem) == @intFromEnum(linux.E.INTR)) {
+        if (rem.sec == 0 and rem.nsec == 0) break;
+        req = rem;
+    }
 }
 
 pub const Mutex = runtime.Mutex;

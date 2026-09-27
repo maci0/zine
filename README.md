@@ -92,6 +92,10 @@ retroactively.
 - `select` timeouts and `poll` convert a guest `timeval` to whole milliseconds
   or nanoseconds by rounding up, so a sub-millisecond wait no longer becomes a
   non-blocking wait.
+- `WaitForSingleObject` honors a finite timeout when the handle is a mutex
+  instead of blocking until the mutex is released, and a host sleep covers its
+  full interval when a signal cuts it short, so a guest `Sleep` no longer
+  returns early.
 - Web desktop Start button, common dialogs, and modal dismissal behave
   consistently across the desktop, the taskbar, and Escape.
 - The web UI serves the document, stylesheet, and both scripts over one
