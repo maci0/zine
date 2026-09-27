@@ -481,6 +481,14 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
             var asset_path = req_path;
             if (std.mem.eql(u8, asset_path, "/")) asset_path = "/index.html";
 
+            // The document is served from the build, not from disk: it names
+            // the assets by digest, and only this build knows those digests.
+            if (std.mem.eql(u8, asset_path, "/index.html")) {
+                const assets = @import("web_assets");
+                try respondStaticContent(&req, assets.index_html, contentTypeForPath(asset_path).?);
+                continue;
+            }
+
             // Security: reject path traversal sequences, encoded variants, and null bytes.
             // Check for ".." (literal), "%2e" / "%2E" (percent-encoded dot), and null bytes.
             if (std.mem.indexOf(u8, asset_path, "..") != null or
@@ -932,10 +940,50 @@ fn precompressedContent(digest: [32]u8) ?[]const u8 {
     return null;
 }
 
+/// The digest an asset URL carries, as "/win2k-<64 hex>.css" is the name the
+/// build gives `/win2k.css`. Null for any other path, including an asset whose
+/// name is not precompressed, so the digest never invents cacheability.
+fn urlDigest(target: []const u8) ?[std.crypto.hash.sha2.Sha256.digest_length]u8 {
+    const query_start = std.mem.indexOfScalar(u8, target, '?') orelse target.len;
+    const req_path = target[0..query_start];
+    if (req_path.len == 0 or req_path[0] != '/') return null;
+    const name = req_path[1..];
+    const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse return null;
+    const dash = std.mem.lastIndexOfScalar(u8, name[0..dot], '-') orelse return null;
+    const hex = name[dash + 1 .. dot];
+    if (hex.len != 64) return null;
+    const stem = name[0..dash];
+    if (!isPrecompressedName(stem, name[dot..])) return null;
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    _ = std.fmt.hexToBytes(&digest, hex) catch return null;
+    return digest;
+}
+
+/// Whether `{s}{s}` names one of the precompressed assets, with `stem` the
+/// name minus its extension.
+fn isPrecompressedName(stem: []const u8, ext: []const u8) bool {
+    inline for (.{ "app.js", "win2k.css", "index.html", "van.min.js" }) |name| {
+        const name_ext = std.fs.path.extension(name);
+        if (std.mem.eql(u8, stem, name[0 .. name.len - name_ext.len]) and std.mem.eql(u8, ext, name_ext)) return true;
+    }
+    return false;
+}
+
 fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, content_type: []const u8) !void {
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(content, &digest, .{});
-    const candidate = if (acceptsGzip(req)) precompressedContent(digest) else null;
+    const content_digest = digest;
+    // A digested URL promises the bytes it names. One that does not match is a
+    // stale name, and serving it would pin a different asset in a cache entry
+    // the client is told never to revalidate.
+    const cache_control = if (urlDigest(req.head.target)) |url_digest| blk: {
+        if (!std.mem.eql(u8, &url_digest, &content_digest)) {
+            try respondStatus(req, .not_found, "Not found", null);
+            return;
+        }
+        break :blk "public, max-age=31536000, immutable";
+    } else "private, no-cache";
+    const candidate = if (acceptsGzip(req)) precompressedContent(content_digest) else null;
     const compressed = if (candidate) |bytes| (if (bytes.len < content.len) bytes else null) else null;
     const body = compressed orelse content;
     if (compressed != null) std.crypto.hash.sha2.Sha256.hash(body, &digest, .{});
@@ -948,7 +996,7 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
         // have seen on the 200.
         var not_modified_headers: [7]std.http.Header = undefined;
         not_modified_headers[0] = .{ .name = "etag", .value = etag };
-        not_modified_headers[1] = .{ .name = "cache-control", .value = "private, no-cache" };
+        not_modified_headers[1] = .{ .name = "cache-control", .value = cache_control };
         not_modified_headers[2] = .{ .name = "vary", .value = "Accept-Encoding" };
         // The 304 repeats the security headers so a client that revalidates
         // cannot end up with a revalidated response that lacks them.
@@ -975,7 +1023,7 @@ fn respondStaticContent(req: *std.http.Server.Request, content: []const u8, cont
     const response_headers = [_]std.http.Header{
         .{ .name = "content-type", .value = content_type },
         .{ .name = "etag", .value = etag },
-        .{ .name = "cache-control", .value = "private, no-cache" },
+        .{ .name = "cache-control", .value = cache_control },
         .{ .name = "x-content-type-options", .value = "nosniff" },
         .{ .name = "x-frame-options", .value = "DENY" },
         .{ .name = "referrer-policy", .value = "no-referrer" },
@@ -1193,7 +1241,8 @@ test "static assets negotiate gzip without changing decoded content" {
     const assets = .{
         .{ @embedFile("app.js"), "application/javascript" },
         .{ @embedFile("win2k.css"), "text/css" },
-        .{ @embedFile("index.html"), "text/html" },
+        // The document the server serves is the build's, not the one on disk.
+        .{ @import("web_assets").index_html, "text/html" },
         .{ @embedFile("van.min.js"), "application/javascript" },
     };
     inline for (assets) |asset| {
@@ -1337,6 +1386,84 @@ test "gzip asset validators distinguish representations and HEAD omits the body"
         try std.testing.expectEqualStrings(if (case[4]) content else "", next[body_start..]);
         if (case[4]) try std.testing.expect(std.mem.indexOf(u8, next, etag) == null);
     }
+}
+
+test "a digested asset URL is served immutable, and a stale one is a miss" {
+    const content = @embedFile("app.js");
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(content, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    var stale_buf: [hex.len]u8 = undefined;
+    _ = try std.fmt.bufPrint(&stale_buf, "{s}", .{std.fmt.bytesToHex([_]u8{0} ** 32, .lower)});
+
+    const cases = [_]struct { url: []const u8, status: []const u8, cache_control: ?[]const u8 }{
+        .{ .url = "/app.js", .status = "200", .cache_control = "private, no-cache" },
+        .{ .url = "/app.js?v=1", .status = "200", .cache_control = "private, no-cache" },
+        .{ .url = "/assets/start.svg", .status = "200", .cache_control = "private, no-cache" },
+        .{ .url = "/win2k.css", .status = "200", .cache_control = "private, no-cache" },
+        .{ .url = "/win2k-", .status = "200", .cache_control = "private, no-cache" },
+    };
+    for (cases) |case| {
+        const request = try std.fmt.allocPrint(std.testing.allocator, "GET {s} HTTP/1.1\r\nHost: localhost\r\n\r\n", .{case.url});
+        defer std.testing.allocator.free(request);
+        var input = std.Io.Reader.fixed(request);
+        var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer output.deinit();
+        var server = std.http.Server.init(&input, &output.writer);
+        var req = try server.receiveHead();
+        try respondStaticContent(&req, content, "application/javascript");
+        const response = output.written();
+        const status_line = try std.fmt.allocPrint(std.testing.allocator, "HTTP/1.1 {s} ", .{case.status});
+        defer std.testing.allocator.free(status_line);
+        try std.testing.expect(std.mem.startsWith(u8, response, status_line));
+        const control = try std.fmt.allocPrint(std.testing.allocator, "\r\ncache-control: {s}\r\n", .{case.cache_control.?});
+        defer std.testing.allocator.free(control);
+        try std.testing.expect(std.mem.indexOf(u8, response, control) != null);
+    }
+
+    const digested = try std.fmt.allocPrint(std.testing.allocator, "/app-{s}.js", .{hex});
+    defer std.testing.allocator.free(digested);
+    const stale = try std.fmt.allocPrint(std.testing.allocator, "/app-{s}.js", .{stale_buf});
+    defer std.testing.allocator.free(stale);
+    for ([_][]const u8{ digested, stale }) |url| {
+        const request = try std.fmt.allocPrint(std.testing.allocator, "GET {s} HTTP/1.1\r\nHost: localhost\r\n\r\n", .{url});
+        defer std.testing.allocator.free(request);
+        var input = std.Io.Reader.fixed(request);
+        var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer output.deinit();
+        var server = std.http.Server.init(&input, &output.writer);
+        var req = try server.receiveHead();
+        try respondStaticContent(&req, content, "application/javascript");
+        const response = output.written();
+        const matches = std.mem.eql(u8, url, digested);
+        try std.testing.expect(std.mem.startsWith(u8, response, if (matches) "HTTP/1.1 200" else "HTTP/1.1 404"));
+        if (matches) {
+            try std.testing.expect(std.mem.indexOf(u8, response, "\r\ncache-control: public, max-age=31536000, immutable\r\n") != null);
+        }
+    }
+}
+
+test "the embedded document names the digested assets the build embedded" {
+    const assets = @import("web_assets");
+    const document = assets.index_html;
+    inline for (.{ "app.js", "win2k.css", "van.min.js" }) |name| {
+        const digest = @field(assets, name ++ "_digest");
+        const url = try std.fmt.allocPrint(std.testing.allocator, "/{s}-{s}{s}", .{
+            name[0 .. name.len - std.fs.path.extension(name).len],
+            std.fmt.bytesToHex(digest, .lower),
+            std.fs.path.extension(name),
+        });
+        defer std.testing.allocator.free(url);
+        try std.testing.expect(std.mem.indexOf(u8, document, url) != null);
+        // The digested URL has to resolve to a precompressed asset, or the
+        // document would ask for bytes the server cannot send.
+        try std.testing.expectEqual(digest, urlDigest(url).?);
+    }
+    // The document itself keeps a stable URL: it is what names the assets.
+    try std.testing.expect(urlDigest("/index.html") == null);
+    try std.testing.expect(urlDigest("app.js") == null);
+    try std.testing.expect(urlDigest("/start-0123456789abcdef.svg") == null);
+    try std.testing.expect(urlDigest("/app-0000.js") == null);
 }
 
 test "static asset revalidation accepts weak tags and the * matcher" {

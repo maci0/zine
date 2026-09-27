@@ -38,6 +38,9 @@ function clearStatus() {
 let ws;
 let currentRenderWidth = 1;
 let currentRenderHeight = 1;
+// One frame buffer, reused across messages and rebuilt when the guest
+// changes the resolution.
+let frameImage = null;
 const appIconUrl = van.state("");
 const hasEditControl = van.state(false);
 // Progress-bar state per control id: {value, min, max} -> fill width.
@@ -930,11 +933,17 @@ function connect() {
             if (view.length >= 4 && view[0] === 0x41 && view[1] === 0x55 && view[2] === 0x44 && view[3] === 0x00) {
                 handleAudioData(view.subarray(4));
             } else {
-                const buffer = new Uint8ClampedArray(event.data);
-                if (buffer.length === currentRenderWidth * currentRenderHeight * 4) {
-                    const imageData = new ImageData(buffer, currentRenderWidth, currentRenderHeight);
-                    ctx.putImageData(imageData, 0, 0);
+                // A frame is w*h*4 bytes and the host pushes one per emulated
+                // frame, so allocating an ImageData per message churns as much
+                // garbage as the frames themselves. One buffer per resolution is
+                // refilled in place instead; a resolution change drops it.
+                const frameLen = currentRenderWidth * currentRenderHeight * 4;
+                if (view.length !== frameLen) return;
+                if (!frameImage || frameImage.width !== currentRenderWidth || frameImage.height !== currentRenderHeight) {
+                    frameImage = new ImageData(currentRenderWidth, currentRenderHeight);
                 }
+                frameImage.data.set(view);
+                ctx.putImageData(frameImage, 0, 0);
             }
         } else {
             try {
@@ -946,6 +955,7 @@ function connect() {
                 } else if (msg.type === "set_resolution") {
                     currentRenderWidth = msg.width;
                     currentRenderHeight = msg.height;
+                    frameImage = null;
                     canvas.width = currentRenderWidth;
                     canvas.height = currentRenderHeight;
                     // Set initial CSS size to match pixel resolution

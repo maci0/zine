@@ -173,22 +173,73 @@ fn addWasmExe(
     return wasm_lib;
 }
 
+/// Every asset the Web UI server precompresses at build time.
+const precompressed_web_assets = [_][]const u8{ "app.js", "win2k.css", "index.html", "van.min.js" };
+
+/// The assets the document references by digest. Their bytes cannot change
+/// under one URL, so the server caches them without revalidating and a rebuild
+/// reaches the browser as a new URL.
+const content_hashed_web_assets = [_][]const u8{ "app.js", "win2k.css", "van.min.js" };
+
+/// The document URL the build embeds, as opposed to the one on disk: the
+/// assets it names carry their digest, which only this build knows.
+const embedded_document_option = "index_html";
+
+/// "/win2k.css" carrying its content digest: "/win2k-<64 hex>.css".
+fn hashedAssetUrl(allocator: std.mem.Allocator, name: []const u8, digest: [32]u8) ![]u8 {
+    const ext = std.fs.path.extension(name);
+    const stem = name[0 .. name.len - ext.len];
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    return std.fmt.allocPrint(allocator, "/{s}-{s}{s}", .{ stem, hex, ext });
+}
+
 fn compressedWebAssets(b: *std.Build) !*std.Build.Step.Options {
     const options = b.addOptions();
-    inline for (.{ "app.js", "win2k.css", "index.html", "van.min.js" }) |name| {
-        const content = @embedFile("src/gui/" ++ name);
-        var output = try std.Io.Writer.Allocating.initCapacity(b.allocator, content.len);
+    const allocator = b.allocator;
+
+    var digests: [precompressed_web_assets.len][32]u8 = undefined;
+    inline for (precompressed_web_assets, 0..) |name, i| {
+        std.crypto.hash.sha2.Sha256.hash(@embedFile("src/gui/" ++ name), &digests[i], .{});
+    }
+
+    // The document is the one asset whose URL cannot be hashed (it is what
+    // names the others), so its references are rewritten to the digested form
+    // and the rewritten bytes are what the server serves and compresses.
+    var document: []const u8 = @embedFile("src/gui/index.html");
+    inline for (content_hashed_web_assets) |name| {
+        const digest = digests[indexOfAsset(name)];
+        document = try std.mem.replaceOwned(
+            u8,
+            allocator,
+            document,
+            "/" ++ name,
+            try hashedAssetUrl(allocator, name, digest),
+        );
+    }
+    var document_digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(document, &document_digest, .{});
+    options.addOption([]const u8, embedded_document_option, document);
+
+    inline for (precompressed_web_assets) |name| {
+        const is_document = std.mem.eql(u8, name, "index.html");
+        const content = if (is_document) document else @embedFile("src/gui/" ++ name);
+        var output = try std.Io.Writer.Allocating.initCapacity(allocator, content.len);
         defer output.deinit();
         var window: [std.compress.flate.max_window_len]u8 = undefined;
         var compressor = try std.compress.flate.Compress.init(&output.writer, &window, .gzip, .best);
         try compressor.writer.writeAll(content);
         try compressor.finish();
         options.addOption([]const u8, name, output.written());
-        var digest: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(content, &digest, .{});
-        options.addOption([32]u8, name ++ "_digest", digest);
+        options.addOption([32]u8, name ++ "_digest", if (is_document) document_digest else digests[indexOfAsset(name)]);
     }
     return options;
+}
+
+fn indexOfAsset(name: []const u8) usize {
+    for (precompressed_web_assets, 0..) |candidate, i| {
+        if (std.mem.eql(u8, candidate, name)) return i;
+    }
+    unreachable;
 }
 
 pub fn build(b: *std.Build) void {
