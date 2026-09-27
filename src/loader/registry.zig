@@ -58,6 +58,55 @@ fn fileExists(path: []const u8) bool {
     return true;
 }
 
+/// Device and inode of a file, the identity a mapped image is reused by.
+const FileId = struct {
+    dev_major: u32,
+    dev_minor: u32,
+    ino: u64,
+};
+
+/// statx mask for the fields fileIdLinux reads.
+const statx_mask: std.os.linux.STATX = .{ .TYPE = true, .INO = true };
+
+/// Device and inode of `path`, or null when the host cannot report it.
+/// std.Io is avoided for the same reason fileExists avoids it: the TLS it
+/// touches faults in the compat-mode SIGSEGV dispatch handler.
+fn fileIdLinux(path: []const u8) ?FileId {
+    var buf: [std.posix.PATH_MAX]u8 = undefined;
+    if (path.len >= buf.len) return null;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    var st: std.os.linux.Statx = undefined;
+    const rc = std.os.linux.statx(std.os.linux.AT.FDCWD, @ptrCast(&buf), std.os.linux.AT.SYMLINK_NOFOLLOW, statx_mask, &st);
+    if (@as(isize, @bitCast(rc)) < 0 or !st.mask.INO) return null;
+    return .{ .dev_major = st.dev_major, .dev_minor = st.dev_minor, .ino = st.ino };
+}
+
+/// Whether `a` and `b` name the same file. Guest paths reach the registry in
+/// several spellings of one file (`\` for `/`, a relative or absolute root, a
+/// different case), so on Linux the comparison is by device and inode; hosts
+/// that cannot report those fall back to the normalized path text.
+fn sameFile(a: []const u8, b: []const u8) bool {
+    if (comptime builtin.os.tag == .linux) {
+        if (fileIdLinux(a)) |ida| {
+            if (fileIdLinux(b)) |idb| return std.meta.eql(ida, idb);
+        }
+    }
+    return pathsEqualCi(a, b);
+}
+
+/// Path text comparison after separator normalization, case-insensitive to
+/// match the guest's case-insensitive view of the file system.
+fn pathsEqualCi(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |ca, cb| {
+        const na = if (ca == '\\') '/' else ca;
+        const nb = if (cb == '\\') '/' else cb;
+        if (std.ascii.toLower(na) != std.ascii.toLower(nb)) return false;
+    }
+    return true;
+}
+
 /// Case-insensitive exact filename match.
 fn nameEqualsCi(name: []const u8, base: []const u8) bool {
     return name.len == base.len and std.ascii.eqlIgnoreCase(name, base);
@@ -187,6 +236,7 @@ pub const Registry = struct {
         var it = self.modules.iterator();
         while (it.next()) |entry| {
             entry.value_ptr.*.deinit();
+            self.allocator.free(entry.key_ptr.*);
         }
         self.modules.deinit();
 
@@ -366,14 +416,31 @@ pub const Registry = struct {
             // spelled as a path misses the lookup above. Re-check by basename
             // before loading a second copy of an already-mapped image: two
             // mappings of one DLL give the guest two module bases for the same
-            // file, each with its own writable data, and leak the first.
-            if (self.cachedByBasename(path)) |mod| return mod;
+            // file, each with its own writable data, and leak the first. The
+            // basename only narrows the search; the file itself must match, or
+            // a same-named file from another directory would be served in
+            // place of the one requested.
+            if (self.cachedFile(path)) |mod| return mod;
 
             const mod = try Module.load(self.allocator, path);
+            errdefer mod.deinit();
 
             const mod_lower_name = try self.allocator.alloc(u8, mod.name.len);
             errdefer self.allocator.free(mod_lower_name);
             _ = std.ascii.lowerString(mod_lower_name, mod.name);
+
+            // A different file already owns this basename. Windows keeps one
+            // module per name, so refusing keeps the guest from seeing two
+            // images under one name; overwriting the entry would strand the
+            // first mapping with nothing left to free it.
+            if (self.modules.get(mod_lower_name)) |existing| {
+                if (!sameFile(existing.path, mod.path)) {
+                    log.err("Module {s} is already loaded from {s}, refusing {s}", .{ mod.name, existing.path, mod.path });
+                    return error.ModuleAlreadyLoaded;
+                }
+                mod.deinit();
+                return existing;
+            }
 
             try self.modules.put(mod_lower_name, mod);
 
@@ -383,16 +450,19 @@ pub const Registry = struct {
         return error.ModuleNotFound;
     }
 
-    /// Returns the already-loaded module whose key matches the basename of
-    /// `path`, case-insensitively. Used to avoid mapping the same image twice
-    /// when a later request names it by a different spelling.
-    fn cachedByBasename(self: *Registry, path: []const u8) ?*Module {
+    /// Returns the already-loaded module mapped from the same file as `path`.
+    /// Used to avoid mapping one image twice when a later request names it by a
+    /// different spelling. A same-named file in another directory is a
+    /// different image and is not returned.
+    fn cachedFile(self: *Registry, path: []const u8) ?*Module {
         const base = std.fs.path.basename(path);
         if (base.len == 0) return null;
         const key = self.allocator.alloc(u8, base.len) catch return null;
         defer self.allocator.free(key);
         _ = std.ascii.lowerString(key, base);
-        return self.modules.get(key);
+        const mod = self.modules.get(key) orelse return null;
+        if (!sameFile(mod.path, path)) return null;
+        return mod;
     }
 
     /// Resolves an export from a loaded PE module.
@@ -410,19 +480,45 @@ pub const Registry = struct {
 
 const testing = std.testing;
 
-test "registry: cachedByBasename matches a loaded module by basename, case-insensitively" {
+test "registry: cachedFile reuses a mapping only for the same file" {
     var reg = Registry.init(testing.allocator);
     defer reg.deinit();
 
-    // Stand-in for a mapped module: cachedByBasename only compares keys, but
+    // Stand-in for a mapped module: cachedFile only reads its path, but
     // deinit would try to unmap it, so drop it from the table first.
     var stand_in: Module = undefined;
+    stand_in.path = "bin/game.dll";
     try reg.modules.put("game.dll", &stand_in);
     defer _ = reg.modules.fetchRemove("game.dll");
 
-    try testing.expect(reg.cachedByBasename("bin/GAME.DLL") == &stand_in);
-    try testing.expect(reg.cachedByBasename("bin/game.dll") == &stand_in);
-    try testing.expect(reg.cachedByBasename("/usr/lib/bin/game.dll") == &stand_in);
-    try testing.expect(reg.cachedByBasename("bin/other.dll") == null);
-    try testing.expect(reg.cachedByBasename("") == null);
+    // Same file, other spellings: no file exists here, so the comparison falls
+    // back to the normalized path text.
+    try testing.expect(reg.cachedFile("bin/GAME.DLL") == &stand_in);
+    try testing.expect(reg.cachedFile("./bin/game.dll") != &stand_in);
+    // Same basename, different directory: a different image.
+    try testing.expect(reg.cachedFile("other/game.dll") == null);
+    try testing.expect(reg.cachedFile("bin/other.dll") == null);
+    try testing.expect(reg.cachedFile("") == null);
+}
+
+test "registry: sameFile separates two real files sharing a basename" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "a");
+    try tmp.dir.createDirPath(testing.io, "b");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a/game.dll", .data = "first" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "b/game.dll", .data = "second" });
+
+    // std.testing.tmpDir roots the directory at .zig-cache/tmp under the cwd;
+    // the identity check takes a path, not a Dir, so spell it out.
+    const a = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/a/game.dll", .{tmp.sub_path});
+    defer testing.allocator.free(a);
+    const b = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/b/game.dll", .{tmp.sub_path});
+    defer testing.allocator.free(b);
+    const a_alias = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/a/./game.dll", .{tmp.sub_path});
+    defer testing.allocator.free(a_alias);
+
+    try testing.expect(!sameFile(a, b));
+    try testing.expect(sameFile(a, a));
+    try testing.expect(sameFile(a, a_alias));
 }

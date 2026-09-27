@@ -58,6 +58,13 @@ retroactively.
   WebSocket origins to that address, so a browser reaching the UI through
   another hostname is refused with HTTP 403.
 
+#### Fixes
+
+- A module already loaded from one file is no longer served for a request that
+  resolves to a different file with the same name. Loading a second `foo.dll`
+  from another directory now fails with `ModuleAlreadyLoaded` instead of
+  handing the guest the first image under the second's name.
+
 #### Security fixes
 
 - The host home directory is redacted from every diagnostic before it reaches

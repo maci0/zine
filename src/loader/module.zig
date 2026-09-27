@@ -139,6 +139,10 @@ pub const Module = struct {
     allocator: std.mem.Allocator,
     /// The name of the module (e.g., "kernel32.dll").
     name: []const u8,
+    /// The path the image was mapped from, as resolved by the registry. The
+    /// registry compares it to tell a re-request of the same file apart from a
+    /// different file that happens to share the basename.
+    path: []const u8,
     /// Raw bytes of the PE file as loaded from disk.
     file_data: []u8,
     /// The mapped PE image in guest memory (aligned to 4096).
@@ -315,11 +319,14 @@ pub const Module = struct {
         // errdefers below only run if construction itself fails.
         const name = try allocator.dupe(u8, std.fs.path.basename(path));
         errdefer allocator.free(name);
+        const loaded_path = try allocator.dupe(u8, path);
+        errdefer allocator.free(loaded_path);
         const mod = try allocator.create(Module);
         errdefer allocator.destroy(mod);
         mod.* = .{
             .allocator = allocator,
             .name = name,
+            .path = loaded_path,
             .file_data = file_data,
             .mapped_memory = mapped_slice,
             .image_base = actual_base,
@@ -336,6 +343,7 @@ pub const Module = struct {
         platform.munmap(self.mapped_memory);
         self.allocator.free(self.file_data);
         self.allocator.free(self.name);
+        self.allocator.free(self.path);
         self.allocator.destroy(self);
     }
 
@@ -609,6 +617,7 @@ const TestImage = struct {
         ti.mod = .{
             .allocator = allocator,
             .name = "test.dll",
+            .path = try allocator.dupe(u8, "test.dll"),
             .file_data = file_data,
             .mapped_memory = image,
             .image_base = @intFromPtr(image.ptr),
@@ -620,6 +629,7 @@ const TestImage = struct {
 
     fn destroy(self: *TestImage, allocator: std.mem.Allocator) void {
         self.parser.deinit(allocator);
+        allocator.free(self.mod.path);
         testing.allocator.free(self.image);
         allocator.free(self.file_data);
     }
