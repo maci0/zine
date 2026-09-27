@@ -121,8 +121,11 @@ const EventData = struct {
 
 const MutexData = struct {
     inner: runtime.Mutex = .{},
-    owner: std.Thread.Id = 0,
-    recursion: u32 = 0,
+    /// Ownership is read before `inner` is taken (the recursive-entry check)
+    /// and written after it, so it carries its own atomicity rather than
+    /// borrowing the lock the recursive path does not hold.
+    owner: std.atomic.Value(std.Thread.Id) = std.atomic.Value(std.Thread.Id).init(0),
+    recursion: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     name: [128]u8 = [_]u8{0} ** 128,
     name_len: u8 = 0,
 };
@@ -147,12 +150,19 @@ const KernelObject = struct {
 var kernel_objects: [MAX_KERNEL_OBJECTS]KernelObject = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
 var next_kernel_handle: usize = 0xE0000001;
 
+/// Serializes every scan and mutation of `kernel_objects`. A guest thread
+/// creating events while another closes one would otherwise race the free-slot
+/// scan: two creators can claim the same slot (one `ko.* = .{}` reset landing
+/// inside the other's object) and both hand out the same synthetic handle.
+var kernel_objects_mutex: runtime.Mutex = .{};
+
 fn allocKernelObject(obj_type: KernelObjectType) ?*KernelObject {
+    kernel_objects_mutex.lock();
+    defer kernel_objects_mutex.unlock();
     for (&kernel_objects) |*ko| {
         if (ko.handle == 0) {
             ko.* = .{ .obj_type = obj_type };
-            ko.handle = next_kernel_handle;
-            next_kernel_handle += 1;
+            ko.handle = @atomicRmw(usize, &next_kernel_handle, .Add, 1, .monotonic);
             return ko;
         }
     }
@@ -162,6 +172,8 @@ fn allocKernelObject(obj_type: KernelObjectType) ?*KernelObject {
 /// Look up a kernel object by handle.
 /// Used by WaitForSingleObject/WaitForMultipleObjects.
 pub fn getKernelObject(handle: usize) ?*KernelObject {
+    kernel_objects_mutex.lock();
+    defer kernel_objects_mutex.unlock();
     for (&kernel_objects) |*ko| {
         if (ko.handle == handle) return ko;
     }
@@ -172,6 +184,8 @@ pub fn getKernelObject(handle: usize) ?*KernelObject {
 /// Returns true when the handle belonged to this registry. Named objects are
 /// not refcounted: the first close frees the object.
 pub fn closeKernelObject(handle: usize) bool {
+    kernel_objects_mutex.lock();
+    defer kernel_objects_mutex.unlock();
     for (&kernel_objects) |*ko| {
         if (ko.handle == handle) {
             ko.* = .{};
@@ -183,6 +197,8 @@ pub fn closeKernelObject(handle: usize) bool {
 
 fn findByName(obj_type: KernelObjectType, name: []const u8) ?*KernelObject {
     if (name.len == 0) return null;
+    kernel_objects_mutex.lock();
+    defer kernel_objects_mutex.unlock();
     for (&kernel_objects) |*ko| {
         if (ko.handle == 0) continue;
         if (ko.obj_type != obj_type) continue;
@@ -284,16 +300,16 @@ pub fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.W
     if (process.getChildProc(hHandle)) |cp| {
         if (comptime platform.is_native) {
             if (cp.child) |*child| {
-                if (cp.exit_code == null) {
+                if (cp.exitCode() == null) {
                     // Actually wait for the child process
                     const result = child.wait(runtime.io()) catch {
-                        cp.exit_code = 1;
+                        cp.setExitCode(1);
                         return 0; // WAIT_OBJECT_0
                     };
-                    cp.exit_code = switch (result) {
+                    cp.setExitCode(switch (result) {
                         .exited => |code| @as(u32, code),
                         else => 1,
-                    };
+                    });
                 }
                 return 0; // WAIT_OBJECT_0
             }
@@ -304,7 +320,7 @@ pub fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) callconv(w32cc.W
     if (process.getThreadInfo(hHandle)) |ti| {
         if (comptime platform.is_native) {
             if (ti.thread) |thread| {
-                if (ti.running) {
+                if (ti.isRunning()) {
                     thread.join();
                     ti.thread = null;
                 }
@@ -361,8 +377,8 @@ fn waitOnKernelObject(ko: *KernelObject, dwMilliseconds: u32) u32 {
         },
         .mutex => {
             const tid = std.Thread.getCurrentId();
-            if (ko.mutex_obj.owner == tid) {
-                ko.mutex_obj.recursion += 1;
+            if (ko.mutex_obj.owner.load(.acquire) == tid) {
+                _ = ko.mutex_obj.recursion.fetchAdd(1, .acq_rel);
                 return 0; // WAIT_OBJECT_0
             }
             if (dwMilliseconds == 0xFFFFFFFF) {
@@ -378,8 +394,8 @@ fn waitOnKernelObject(ko: *KernelObject, dwMilliseconds: u32) u32 {
                     platform.sleep(1_000_000); // 1ms
                 }
             }
-            ko.mutex_obj.owner = tid;
-            ko.mutex_obj.recursion = 1;
+            ko.mutex_obj.owner.store(tid, .release);
+            ko.mutex_obj.recursion.store(1, .release);
             return 0; // WAIT_OBJECT_0
         },
         .semaphore => {
@@ -413,7 +429,7 @@ fn tryAcquire(handle: usize) bool {
     // Thread handle?
     const process = @import("process.zig");
     if (process.getThreadInfo(handle)) |ti| {
-        return !ti.running; // Signaled when thread has finished
+        return !ti.isRunning(); // Signaled when thread has finished
     }
     // Kernel object?
     const ko = getKernelObject(handle) orelse return true; // Unknown handle = signaled
@@ -429,13 +445,13 @@ fn tryAcquire(handle: usize) bool {
         },
         .mutex => {
             const tid = std.Thread.getCurrentId();
-            if (ko.mutex_obj.owner == tid) {
-                ko.mutex_obj.recursion += 1;
+            if (ko.mutex_obj.owner.load(.acquire) == tid) {
+                _ = ko.mutex_obj.recursion.fetchAdd(1, .acq_rel);
                 return true;
             }
             if (ko.mutex_obj.inner.tryLock()) {
-                ko.mutex_obj.owner = tid;
-                ko.mutex_obj.recursion = 1;
+                ko.mutex_obj.owner.store(tid, .release);
+                ko.mutex_obj.recursion.store(1, .release);
                 return true;
             }
             return false;
@@ -455,12 +471,25 @@ fn tryAcquire(handle: usize) bool {
 /// Check if a sync object is signaled without acquiring it.
 fn isSignaled(handle: usize) bool {
     const process = @import("process.zig");
-    if (process.getThreadInfo(handle)) |ti| return !ti.running;
+    if (process.getThreadInfo(handle)) |ti| return !ti.isRunning();
     const ko = getKernelObject(handle) orelse return true;
+    // Each flag is written under its own object lock by the setter, so the
+    // poll has to read it under that lock too.
     return switch (ko.obj_type) {
-        .event => ko.event.signaled,
-        .mutex => ko.mutex_obj.owner == 0 or ko.mutex_obj.owner == std.Thread.getCurrentId(),
-        .semaphore => ko.semaphore.count > 0,
+        .event => blk: {
+            ko.event.mutex.lock();
+            defer ko.event.mutex.unlock();
+            break :blk ko.event.signaled;
+        },
+        .mutex => blk: {
+            const owner = ko.mutex_obj.owner.load(.acquire);
+            break :blk owner == 0 or owner == std.Thread.getCurrentId();
+        },
+        .semaphore => blk: {
+            ko.semaphore.mutex.lock();
+            defer ko.semaphore.mutex.unlock();
+            break :blk ko.semaphore.count > 0;
+        },
     };
 }
 
@@ -614,8 +643,8 @@ pub fn CreateMutexA(lpMutexAttributes: usize, bInitialOwner: i32, lpName: usize)
     const ko = allocKernelObject(.mutex) orelse return 0;
     if (bInitialOwner != 0) {
         ko.mutex_obj.inner.lock();
-        ko.mutex_obj.owner = std.Thread.getCurrentId();
-        ko.mutex_obj.recursion = 1;
+        ko.mutex_obj.owner.store(std.Thread.getCurrentId(), .release);
+        ko.mutex_obj.recursion.store(1, .release);
     }
 
     if (lpName != 0) {
@@ -632,12 +661,13 @@ pub fn ReleaseMutex(hMutex: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: ReleaseMutex({x})\n", .{hMutex});
     const ko = getKernelObject(hMutex) orelse return 1; // Unknown handle — succeed silently
     if (ko.obj_type != .mutex) return 0;
-    if (ko.mutex_obj.recursion > 1) {
-        ko.mutex_obj.recursion -= 1;
+    const recursion = ko.mutex_obj.recursion.load(.acquire);
+    if (recursion > 1) {
+        _ = ko.mutex_obj.recursion.fetchSub(1, .acq_rel);
         return 1;
     }
-    ko.mutex_obj.owner = 0;
-    ko.mutex_obj.recursion = 0;
+    ko.mutex_obj.owner.store(0, .release);
+    ko.mutex_obj.recursion.store(0, .release);
     ko.mutex_obj.inner.unlock();
     return 1; // TRUE = success
 }
@@ -723,8 +753,7 @@ pub fn DuplicateHandle(
             const src_fd = @as(i32, @bitCast(@as(u32, @truncate(hSourceHandle))));
             const new_fd = platform.dup(src_fd) catch {
                 // Fallback to fake handle
-                @as(*u32, @ptrFromInt(lpTargetHandle)).* = @truncate(next_dup_handle);
-                next_dup_handle += 1;
+                @as(*u32, @ptrFromInt(lpTargetHandle)).* = @truncate(@atomicRmw(usize, &next_dup_handle, .Add, 1, .monotonic));
                 return 1;
             };
             if (trace.enable_tracing) trace.print("KERNEL32: DuplicateHandle fd {d} -> {d}\n", .{ src_fd, new_fd });
@@ -734,8 +763,7 @@ pub fn DuplicateHandle(
     }
 
     // Synthetic handle: return a new fake one
-    @as(*u32, @ptrFromInt(lpTargetHandle)).* = @truncate(next_dup_handle);
-    next_dup_handle += 1;
+    @as(*u32, @ptrFromInt(lpTargetHandle)).* = @truncate(@atomicRmw(usize, &next_dup_handle, .Add, 1, .monotonic));
     return 1; // TRUE = success
 }
 
@@ -769,8 +797,7 @@ pub fn stub_FindFirstChangeNotificationW(path_ptr: usize, watch_subtree: i32, fi
     _ = path_ptr;
     _ = watch_subtree;
     _ = filter;
-    const h = next_change_handle;
-    next_change_handle += 1;
+    const h = @atomicRmw(usize, &next_change_handle, .Add, 1, .monotonic);
     if (trace.enable_tracing) trace.print("KERNEL32: FindFirstChangeNotificationW -> {x}\n", .{h});
     return h;
 }
@@ -844,10 +871,17 @@ var fls_next: u32 = 0;
 const MAX_FLS_SLOTS = 128;
 var fls_values: [MAX_FLS_SLOTS]usize = [_]usize{0} ** MAX_FLS_SLOTS;
 var fls_callbacks: [MAX_FLS_SLOTS]usize = [_]usize{0} ** MAX_FLS_SLOTS;
+/// The tables above are shared by every guest thread, so allocation (a
+/// check-then-claim over `fls_next`) and value access take the same lock the
+/// TLS stubs use. Without it two threads calling FlsAlloc race for one index
+/// and their values alias.
+var fls_mutex: runtime.Mutex = .{};
 
 /// FLS is like TLS but per-fiber. We're single-fiber, so just use simple slots.
 /// Implementation status: Partially implemented
 pub fn FlsAlloc(lpCallback: usize) callconv(w32cc.WINAPI) u32 {
+    fls_mutex.lock();
+    defer fls_mutex.unlock();
     if (fls_next >= MAX_FLS_SLOTS) return 0xFFFFFFFF; // FLS_OUT_OF_INDEXES
     const idx = fls_next;
     fls_callbacks[idx] = lpCallback;
@@ -860,12 +894,16 @@ pub fn FlsAlloc(lpCallback: usize) callconv(w32cc.WINAPI) u32 {
 /// Implementation status: Partially implemented
 pub fn FlsGetValue(dwFlsIndex: u32) callconv(w32cc.WINAPI) usize {
     if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
+    fls_mutex.lock();
+    defer fls_mutex.unlock();
     return fls_values[dwFlsIndex];
 }
 
 /// Implementation status: Partially implemented
 pub fn FlsSetValue(dwFlsIndex: u32, lpFlsData: usize) callconv(w32cc.WINAPI) i32 {
     if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
+    fls_mutex.lock();
+    defer fls_mutex.unlock();
     fls_values[dwFlsIndex] = lpFlsData;
     return 1; // TRUE
 }
@@ -873,6 +911,8 @@ pub fn FlsSetValue(dwFlsIndex: u32, lpFlsData: usize) callconv(w32cc.WINAPI) i32
 /// Implementation status: Partially implemented
 pub fn FlsFree(dwFlsIndex: u32) callconv(w32cc.WINAPI) i32 {
     if (dwFlsIndex >= MAX_FLS_SLOTS) return 0;
+    fls_mutex.lock();
+    defer fls_mutex.unlock();
     fls_values[dwFlsIndex] = 0;
     fls_callbacks[dwFlsIndex] = 0;
     return 1; // TRUE

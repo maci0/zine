@@ -713,22 +713,41 @@ pub fn GetModuleFileNameA(hModule: usize, lpFilename: usize, nSize: u32) callcon
 
 // --- Child process tracking ---
 const max_child_procs = 16;
+/// `ChildProc.exit_code` sentinel for a child that has not been reaped yet.
+const child_still_running: u32 = std.math.maxInt(u32);
 pub const ChildProc = struct {
     handle: usize = 0,
     child: if (platform.is_native) ?std.process.Child else ?void = null,
-    exit_code: ?u32 = null,
+    /// Written by whoever reaps the child (the WaitForSingleObject stub or
+    /// `reapExitedChildren`, on whichever guest thread got there first) and
+    /// read by any other thread's GetExitCodeProcess, so it is atomic. The
+    /// sentinel stands for "still running", since an atomic optional has no
+    /// guaranteed representation.
+    exit_code: std.atomic.Value(u32) = std.atomic.Value(u32).init(child_still_running),
+
+    pub fn exitCode(self: *const ChildProc) ?u32 {
+        const code = self.exit_code.load(.acquire);
+        return if (code == child_still_running) null else code;
+    }
+    pub fn setExitCode(self: *ChildProc, code: ?u32) void {
+        self.exit_code.store(code orelse child_still_running, .release);
+    }
 };
 var child_procs: [max_child_procs]ChildProc = [_]ChildProc{.{}} ** max_child_procs;
 var next_process_handle: usize = 0xCA000001;
+/// Serializes the slot scans below. `reapExitedChildren` runs on a timer
+/// alongside guest waits, so a create/evict scan and a reap pass touch the
+/// same table concurrently.
+var child_procs_mutex: runtime.Mutex = .{};
 
 fn allocChildProc(child: if (platform.is_native) std.process.Child else void) ?usize {
-    const cp = reserveChildSlot() orelse return null;
-    return adoptReservedChild(cp, child);
+    child_procs_mutex.lock();
+    defer child_procs_mutex.unlock();
+    return adoptReservedChild(reserveChildSlot() orelse return null, child);
 }
 
-/// Find a free or evictable table slot without recording a child in it.
-/// Callers must fill the slot via adoptReservedChild (or leave it untouched,
-/// where handle == 0 keeps it free).
+/// Find a free or evictable table slot. The slot stays claimed only once
+/// `adoptReservedChild` fills it, so both run under `child_procs_mutex`.
 fn reserveChildSlot() ?*ChildProc {
     for (&child_procs) |*cp| {
         if (cp.handle == 0) {
@@ -738,7 +757,7 @@ fn reserveChildSlot() ?*ChildProc {
     // Evict an already-reaped child so repeated spawn/wait cycles don't
     // exhaust the table with finished entries.
     for (&child_procs) |*cp| {
-        if (cp.exit_code != null) {
+        if (cp.exitCode() != null) {
             return cp;
         }
     }
@@ -746,11 +765,10 @@ fn reserveChildSlot() ?*ChildProc {
 }
 
 fn adoptReservedChild(cp: *ChildProc, child: if (platform.is_native) std.process.Child else void) usize {
-    const h = next_process_handle;
-    next_process_handle += 1;
+    const h = @atomicRmw(usize, &next_process_handle, .Add, 1, .monotonic);
     cp.handle = h;
     cp.child = child;
-    cp.exit_code = null;
+    cp.setExitCode(null);
     return h;
 }
 
@@ -761,20 +779,24 @@ fn adoptReservedChild(cp: *ChildProc, child: if (platform.is_native) std.process
 pub fn reapExitedChildren() void {
     if (comptime !platform.is_native) return;
     if (comptime @import("builtin").os.tag != .linux) return;
+    child_procs_mutex.lock();
+    defer child_procs_mutex.unlock();
     for (&child_procs) |*cp| {
-        if (cp.handle == 0 or cp.exit_code != null) continue;
+        if (cp.handle == 0 or cp.exitCode() != null) continue;
         const child = &(cp.child orelse continue);
         const id = child.id orelse continue;
         var status: u32 = 0;
         const wrc = std.os.linux.waitpid(@intCast(id), &status, std.os.linux.W.NOHANG);
         const waited: isize = @bitCast(wrc);
         if (waited != id) continue; // still running (0) or error (<0)
-        cp.exit_code = if (std.posix.W.IFEXITED(status)) @as(u32, std.posix.W.EXITSTATUS(status)) else 1;
+        cp.setExitCode(if (std.posix.W.IFEXITED(status)) @as(u32, std.posix.W.EXITSTATUS(status)) else 1);
     }
 }
 
 /// Implementation status: Partially implemented
 pub fn getChildProc(handle: usize) ?*ChildProc {
+    child_procs_mutex.lock();
+    defer child_procs_mutex.unlock();
     for (&child_procs) |*cp| {
         if (cp.handle == handle) return cp;
     }
@@ -1082,13 +1104,28 @@ const MAX_GUEST_THREADS = 32;
 const ThreadInfo = struct {
     handle: usize = 0,
     thread: if (platform.is_native) ?std.Thread else void = if (platform.is_native) null else {},
-    running: bool = false,
-    exit_code: u32 = 0,
+    /// Cleared by the guest thread as it finishes and read by whichever other
+    /// thread calls WaitForSingleObject on this handle, so it is atomic.
+    running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    exit_code: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     /// TEB copy owned by this slot and reused by every guest thread created
     /// on it. Allocating a fresh one per CreateThread cycle and never freeing
     /// it leaked one page-allocator block per finished thread; slots are
     /// bounded (MAX_GUEST_THREADS) so reuse bounds total TEB memory too.
     teb_mem: ?[]u8 = null,
+
+    pub fn isRunning(self: *const ThreadInfo) bool {
+        return self.running.load(.acquire);
+    }
+    pub fn setRunning(self: *ThreadInfo, value: bool) void {
+        self.running.store(value, .release);
+    }
+    pub fn exitCode(self: *const ThreadInfo) u32 {
+        return self.exit_code.load(.acquire);
+    }
+    pub fn setExitCode(self: *ThreadInfo, code: u32) void {
+        self.exit_code.store(code, .release);
+    }
 };
 
 var thread_registry: [MAX_GUEST_THREADS]ThreadInfo = [_]ThreadInfo{.{}} ** MAX_GUEST_THREADS;
@@ -1106,7 +1143,7 @@ fn allocThreadInfo() ?*ThreadInfo {
     // Recycle a finished thread's slot so sequential CreateThread cycles
     // don't exhaust the registry with exited entries.
     for (&thread_registry) |*ti| {
-        if (!ti.running) {
+        if (!ti.isRunning()) {
             if (comptime platform.is_native) {
                 if (ti.thread) |t| t.detach();
                 ti.thread = null;
@@ -1132,7 +1169,7 @@ pub fn closeThreadHandle(handle: usize) bool {
                 // while the detached thread still writes it.
                 if (ti.thread) |t| t.detach();
                 ti.thread = null;
-                if (ti.running) return true;
+                if (ti.isRunning()) return true;
             }
             ti.handle = 0;
             return true;
@@ -1146,9 +1183,11 @@ pub fn closeThreadHandle(handle: usize) bool {
 /// its slot so WaitForSingleObject can still reap it later; only reaped
 /// children free their slot immediately.
 pub fn closeChildProcHandle(handle: usize) bool {
+    child_procs_mutex.lock();
+    defer child_procs_mutex.unlock();
     for (&child_procs) |*cp| {
         if (cp.handle == handle) {
-            if (cp.exit_code != null) cp.handle = 0;
+            if (cp.exitCode() != null) cp.handle = 0;
             return true;
         }
     }
@@ -1158,6 +1197,8 @@ pub fn closeChildProcHandle(handle: usize) bool {
 /// Look up a ThreadInfo entry by its Win32 handle.
 /// Used by WaitForSingleObject in sync.zig.
 pub fn getThreadInfo(handle: usize) ?*ThreadInfo {
+    thread_registry_mutex.lock();
+    defer thread_registry_mutex.unlock();
     for (&thread_registry) |*ti| {
         if (ti.handle == handle) return ti;
     }
@@ -1214,7 +1255,7 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
         // Clear running only after FS is back on host TLS: allocThreadInfo
         // recycles any slot whose thread is !running, and the recycled TEB
         // must not be repopulated while this thread can still reach it.
-        thread_info.running = false;
+        thread_info.setRunning(false);
     }
 
     if (teb_mod.teb_base_addr != 0) {
@@ -1226,7 +1267,7 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
                 teb_mod.setupFS(@ptrFromInt(teb_mod.teb_base_addr)) catch {};
                 if (start_address != 0) {
                     const func = @as(ThreadStartFn, @ptrFromInt(start_address));
-                    thread_info.exit_code = func(parameter);
+                    thread_info.setExitCode(func(parameter));
                 }
                 return;
             };
@@ -1295,15 +1336,15 @@ fn threadWrapper(ctx: ThreadWrapperCtx) void {
         }
 
         x86_execute.run(&cpu);
-        thread_info.exit_code = cpu.eax;
+        thread_info.setExitCode(cpu.eax);
     } else if (comptime platform.is_x86_64) {
         // x86_64: use compat mode (signal-based CS=0x23 execution)
         const compat_thunks = @import("../../x86/compat_thunks.zig");
-        thread_info.exit_code = compat_thunks.callCompat32(@intCast(start_address), @intCast(parameter), 0, 0);
+        thread_info.setExitCode(compat_thunks.callCompat32(@intCast(start_address), @intCast(parameter), 0, 0));
     } else {
         // Native x86: call directly — guest code runs natively on host CPU
         const func = @as(ThreadStartFn, @ptrFromInt(start_address));
-        thread_info.exit_code = func(parameter);
+        thread_info.setExitCode(func(parameter));
     }
 }
 
@@ -1320,12 +1361,11 @@ pub fn CreateThread(lpThreadAttributes: usize, dwStackSize: usize, lpStartAddres
         return 0;
     };
 
-    const handle = next_thread_handle;
-    next_thread_handle += 1;
+    const handle = @atomicRmw(usize, &next_thread_handle, .Add, 1, .monotonic);
 
     ti.handle = handle;
-    ti.running = true;
-    ti.exit_code = 0;
+    ti.setRunning(true);
+    ti.setExitCode(0);
 
     if (lpThreadId != 0) {
         @as(*u32, @ptrFromInt(lpThreadId)).* = @intCast(handle & 0xFFFF);
@@ -1339,7 +1379,7 @@ pub fn CreateThread(lpThreadAttributes: usize, dwStackSize: usize, lpStartAddres
         }}) catch {
             if (trace.enable_tracing) trace.print("KERNEL32: CreateThread spawn failed\n", .{});
             ti.handle = 0;
-            ti.running = false;
+            ti.setRunning(false);
             return 0;
         };
     } else {
@@ -1362,13 +1402,13 @@ pub fn ExitThread(dwExitCode: u32) callconv(w32cc.WINAPI) void {
     if (comptime platform.is_native) {
         const tid = std.Thread.getCurrentId();
         for (&thread_registry) |*ti| {
-            if (ti.handle != 0 and ti.running) {
+            if (ti.handle != 0 and ti.isRunning()) {
                 if (ti.thread) |t| {
                     _ = t;
                     // Match by host thread ID — the ThreadInfo.thread field
                     // has the same thread ID as the currently executing thread
                     _ = tid;
-                    ti.exit_code = dwExitCode;
+                    ti.setExitCode(dwExitCode);
                     break;
                 }
             }
@@ -1569,7 +1609,7 @@ pub fn GetExitCodeProcess(hProcess: usize, lpExitCode: usize) callconv(w32cc.WIN
 
     // Check if this is a tracked child process
     if (getChildProc(hProcess)) |cp| {
-        if (cp.exit_code) |code| {
+        if (cp.exitCode()) |code| {
             @as(*u32, @ptrFromInt(lpExitCode)).* = code;
         } else {
             @as(*u32, @ptrFromInt(lpExitCode)).* = 259; // STILL_ACTIVE
@@ -1721,7 +1761,7 @@ test "child proc table recycles reaped slots" {
     try std.testing.expect(allocChildProc(dummy) == null);
 
     // Once the first child is reaped, its slot is evictable.
-    getChildProc(first_handle).?.exit_code = 0;
+    getChildProc(first_handle).?.setExitCode(0);
     try std.testing.expect(allocChildProc(dummy) != null);
 }
 
@@ -1733,7 +1773,7 @@ test "closeChildProcHandle frees reaped slots only" {
     const dummy = testDummyChild();
     const h_live = allocChildProc(dummy) orelse return error.TestUnexpectedResult;
     const h_done = allocChildProc(dummy) orelse return error.TestUnexpectedResult;
-    getChildProc(h_done).?.exit_code = 7;
+    getChildProc(h_done).?.setExitCode(7);
 
     try std.testing.expect(closeChildProcHandle(h_done));
     try std.testing.expect(getChildProc(h_done) == null);
@@ -1750,7 +1790,7 @@ test "thread registry recycles finished slots" {
     for (&thread_registry) |*ti| ti.* = .{};
     for (&thread_registry, 0..) |*ti, i| {
         ti.handle = 0xA0010000 + i;
-        ti.running = false;
+        ti.setRunning(false);
     }
 
     // Every slot holds a finished thread — allocation must recycle, not fail.
@@ -1783,18 +1823,18 @@ test "reapExitedChildren records exit codes of finished children" {
             .stderr = null,
             .request_resource_usage_statistics = false,
         },
-        .exit_code = null,
+        .exit_code = std.atomic.Value(u32).init(child_still_running),
     };
 
     // The child may need a moment to terminate; reapExitedChildren only
     // collects children that have already exited.
     var spins: usize = 0;
-    while (spins < 1000 and child_procs[0].exit_code == null) : (spins += 1) {
+    while (spins < 1000 and child_procs[0].exitCode() == null) : (spins += 1) {
         reapExitedChildren();
-        if (child_procs[0].exit_code == null) platform.sleep(1 * std.time.ns_per_ms);
+        if (child_procs[0].exitCode() == null) platform.sleep(1 * std.time.ns_per_ms);
     }
-    try std.testing.expect(child_procs[0].exit_code != null);
-    try std.testing.expectEqual(@as(u32, 7), child_procs[0].exit_code.?);
+    try std.testing.expect(child_procs[0].exitCode() != null);
+    try std.testing.expectEqual(@as(u32, 7), child_procs[0].exitCode().?);
 
     // A reaped entry is evictable again.
     try std.testing.expect(allocChildProc(testDummyChild()) != null);
@@ -1808,11 +1848,11 @@ test "closeThreadHandle releases finished entries and reserves running ones" {
 
     const done = allocThreadInfo() orelse return error.TestUnexpectedResult;
     done.handle = 0xA0010042;
-    done.running = false;
+    done.setRunning(false);
 
     const live = allocThreadInfo() orelse return error.TestUnexpectedResult;
     live.handle = 0xA0010043;
-    live.running = true;
+    live.setRunning(true);
     live.thread = if (platform.is_native) null else {};
 
     try std.testing.expect(closeThreadHandle(0xA0010042));

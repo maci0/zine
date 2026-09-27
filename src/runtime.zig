@@ -130,6 +130,8 @@ pub fn useHostClock() void {
 }
 
 pub fn useVirtualClock() bool {
+    virtual_clock_mutex.lock();
+    defer virtual_clock_mutex.unlock();
     return virtual_clock != null;
 }
 
