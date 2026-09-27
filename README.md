@@ -84,6 +84,16 @@ release, not a 0.2.1 patch.
   upload and launch answer `Invalid path`, and a directory listing comes back
   empty. Frontends that sent absolute or drive-qualified paths must send paths
   relative to the virtual C: root.
+- `UnmapViewOfFile` now releases the view even when the writeback fails. It
+  still reports `ERROR_WRITE_FAULT` and leaves the file unchanged, but a guest
+  that hit a permanent flush failure used to strand the view, and once 64 of
+  them were stranded `MapViewOfFile` failed for the rest of the session.
+- `SetEnvironmentVariableA` and `_putenv` reuse the entry a delete emptied, so
+  a guest cycling one variable's value no longer adds an entry to the override
+  list per cycle. A name that is deleted and then set again still resolves to
+  the new value.
+- `_spawnvp` and `_spawnl` no longer leak the argv and environment strings they
+  build for the child; they are released once the child has been reaped.
 - `ZINE_WEB_HOST` and `ZINE_WEB_PORT` (native) and `ZINE_CWD` (WASI) are read
   and validated at startup. An empty or malformed value exits with status 2
   before the guest loads, matching how `ZINE_LOG_LEVEL` already behaved. Unset

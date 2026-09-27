@@ -629,7 +629,16 @@ pub fn SetEnvironmentVariableA(lpName: usize, lpValue: usize) callconv(w32cc.WIN
         }
 
         const key_dupe = std.heap.page_allocator.dupe(u8, name) catch return 0;
+        errdefer std.heap.page_allocator.free(key_dupe);
         const val_dupe = std.heap.page_allocator.dupe(u8, value) catch return 0;
+        errdefer std.heap.page_allocator.free(val_dupe);
+        // A delete empties the entry it used, so the name no longer matches it
+        // and this set would append a second one. Reclaim that entry instead:
+        // set/delete cycling costs one slot rather than one per cycle.
+        if (msvcrt.takeEnvTombstone(msvcrt.msvcrt_env_vars.items)) |slot| {
+            slot.* = .{ .key = key_dupe, .val = val_dupe };
+            return 1;
+        }
         msvcrt.msvcrt_env_vars.append(std.heap.page_allocator, .{ .key = key_dupe, .val = val_dupe }) catch return 0;
 
         return 1;
@@ -650,6 +659,11 @@ pub fn SetEnvironmentVariableA(lpName: usize, lpValue: usize) callconv(w32cc.WIN
         }
     }
     const key_dupe = std.heap.page_allocator.dupe(u8, name) catch return 0;
+    errdefer std.heap.page_allocator.free(key_dupe);
+    if (msvcrt.takeEnvTombstone(msvcrt.msvcrt_env_vars.items)) |slot| {
+        slot.* = .{ .key = key_dupe, .val = "", .deleted = true };
+        return 1;
+    }
     msvcrt.msvcrt_env_vars.append(std.heap.page_allocator, .{ .key = key_dupe, .val = "", .deleted = true }) catch return 0;
     return 1;
 }
@@ -2156,4 +2170,41 @@ test "SetEnvironmentVariableA NULL value deletes and shadows inherited vars" {
     // Delete via lpValue == NULL (Win32 contract).
     try std.testing.expectEqual(@as(i32, 1), SetEnvironmentVariableA(@intFromPtr(&name_buf), 0));
     try std.testing.expect(getEnvValue("PATH") == null);
+}
+
+test "cycling an environment variable reuses its slot" {
+    const msvcrt = @import("../msvcrt.zig");
+    const saved_vars = msvcrt.msvcrt_env_vars;
+    const saved_envp = msvcrt.global_envp;
+    var empty_envp: [1]?[*:0]const u8 = .{null};
+    msvcrt.msvcrt_env_vars = .empty;
+    msvcrt.global_envp = &empty_envp;
+    defer {
+        for (msvcrt.msvcrt_env_vars.items) |v| {
+            if (v.key.len > 0) std.heap.page_allocator.free(v.key);
+            if (v.val.len > 0) std.heap.page_allocator.free(v.val);
+        }
+        msvcrt.msvcrt_env_vars.deinit(std.heap.page_allocator);
+        msvcrt.msvcrt_env_vars = saved_vars;
+        msvcrt.global_envp = saved_envp;
+    }
+
+    var name_buf: [8]u8 = undefined;
+    @memcpy(name_buf[0..4], "ZINE");
+    name_buf[4] = 0;
+    var val_buf: [16]u8 = undefined;
+    @memcpy(val_buf[0..6], "value1");
+    val_buf[6] = 0;
+
+    // A guest that sets and deletes the same name over and over must not grow
+    // the override list by one entry per cycle: a delete empties the entry it
+    // used, so the next set has to reclaim it rather than append.
+    for (0..8) |_| {
+        try std.testing.expectEqual(@as(i32, 1), SetEnvironmentVariableA(@intFromPtr(&name_buf), @intFromPtr(&val_buf)));
+        try std.testing.expectEqual(@as(usize, 1), msvcrt.msvcrt_env_vars.items.len);
+        try std.testing.expectEqualStrings("value1", getEnvValue("zine").?);
+        try std.testing.expectEqual(@as(i32, 1), SetEnvironmentVariableA(@intFromPtr(&name_buf), 0));
+        try std.testing.expectEqual(@as(usize, 1), msvcrt.msvcrt_env_vars.items.len);
+        try std.testing.expect(getEnvValue("ZINE") == null);
+    }
 }

@@ -458,8 +458,17 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         if (trace.enable_tracing) trace.print("MSVCRT: _spawnvp not supported on this platform\n", .{});
         return -1;
     }
+    // Every string below is built for the child's argv/envp and dies with the
+    // call: the slices are re-sliced (quote and drive-letter stripping), so a
+    // per-string free cannot name the right pointer. One arena releases them
+    // together once the child has been reaped, instead of leaking a page per
+    // spawn for the life of the emulator.
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
     var args: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer args.deinit(std.heap.page_allocator);
+    defer args.deinit(alloc);
 
     if (cmdname_ptr == 0) return -1;
     const cmdname = trace.c_span(cmdname_ptr);
@@ -472,18 +481,18 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         const rl = std.os.linux.readlink("/proc/self/exe", &exe_buf, exe_buf.len);
         const rl_signed: isize = @bitCast(rl);
         if (rl_signed > 0) {
-            const loader_exe2 = std.fmt.allocPrint(std.heap.page_allocator, "{s}\x00", .{exe_buf[0..@intCast(rl_signed)]}) catch return -1;
-            args.append(std.heap.page_allocator, loader_exe2[0 .. loader_exe2.len - 1]) catch return -1;
+            const loader_exe2 = std.fmt.allocPrint(alloc, "{s}\x00", .{exe_buf[0..@intCast(rl_signed)]}) catch return -1;
+            args.append(alloc, loader_exe2[0 .. loader_exe2.len - 1]) catch return -1;
         } else {
-            args.append(std.heap.page_allocator, "zine") catch return -1;
+            args.append(alloc, "zine") catch return -1;
         }
     } else {
-        const raw_loader_exe = std.process.executablePathAlloc(runtime.io(), std.heap.page_allocator) catch "zine";
-        const loader_exe = std.fmt.allocPrint(std.heap.page_allocator, "{s}\x00", .{raw_loader_exe}) catch return -1;
-        args.append(std.heap.page_allocator, loader_exe[0 .. loader_exe.len - 1]) catch return -1;
+        const raw_loader_exe = std.process.executablePathAlloc(runtime.io(), alloc) catch "zine";
+        const loader_exe = std.fmt.allocPrint(alloc, "{s}\x00", .{raw_loader_exe}) catch return -1;
+        args.append(alloc, loader_exe[0 .. loader_exe.len - 1]) catch return -1;
     }
     if (trace.enable_tracing) {
-        args.append(std.heap.page_allocator, "--trace") catch return -1;
+        args.append(alloc, "--trace") catch return -1;
     }
 
     if (argv_ptr != 0) {
@@ -492,7 +501,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         const argv = @as([*]const ArgPtrType, @ptrFromInt(argv_ptr));
         if (argv[0] != 0) {
             const arg0 = trace.c_span(@as(usize, argv[0]));
-            var clean_arg0 = std.heap.page_allocator.dupe(u8, arg0) catch return -1;
+            var clean_arg0 = alloc.dupe(u8, arg0) catch return -1;
             std.mem.replaceScalar(u8, clean_arg0, '/', '\\');
             // Strip surrounding quotes (the CRT/tool may pass argv[0] quoted).
             if (clean_arg0.len >= 2 and clean_arg0[0] == '"' and clean_arg0[clean_arg0.len - 1] == '"') {
@@ -506,8 +515,8 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
                 clean_arg0 = clean_arg0[0 .. clean_arg0.len - 4];
             }
 
-            args.append(std.heap.page_allocator, "--argv0") catch return -1;
-            args.append(std.heap.page_allocator, clean_arg0) catch return -1;
+            args.append(alloc, "--argv0") catch return -1;
+            args.append(alloc, clean_arg0) catch return -1;
         }
     }
 
@@ -520,9 +529,9 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     if (!has_sep and msvcrt.global_argc > 0 and msvcrt.global_argv[0] != null) {
         const exe_path = trace.c_span(@intFromPtr(msvcrt.global_argv[0].?));
         if (std.fs.path.dirname(exe_path)) |dir| {
-            const full_cmd = std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}", .{ dir, cmdname }) catch null;
+            const full_cmd = std.fmt.allocPrint(alloc, "{s}/{s}", .{ dir, cmdname }) catch null;
             if (full_cmd) |fc| {
-                args.append(std.heap.page_allocator, fc) catch return -1;
+                args.append(alloc, fc) catch return -1;
                 resolved = true;
             }
         }
@@ -531,7 +540,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     // Let standard PATH resolution handle it if it wasn't a relative sibling
     if (!resolved) {
         // Sanitize Windows paths for the host OS: strip drive letter (C:) and convert backslashes
-        var clean_cmd = std.heap.page_allocator.dupe(u8, cmdname) catch return -1;
+        var clean_cmd = alloc.dupe(u8, cmdname) catch return -1;
         std.mem.replaceScalar(u8, clean_cmd, '\\', '/');
         // Strip Windows drive prefix (e.g. "C:/./path" -> "./path")
         if (clean_cmd.len >= 2 and clean_cmd[1] == ':' and std.ascii.isAlphabetic(clean_cmd[0])) {
@@ -542,7 +551,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
             }
         }
         if (trace.enable_tracing) trace.print("spawnvp resolved: {s}\n", .{clean_cmd});
-        args.append(std.heap.page_allocator, clean_cmd) catch return -1;
+        args.append(alloc, clean_cmd) catch return -1;
     }
 
     if (argv_ptr != 0) {
@@ -559,16 +568,17 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
                 // Copy to host-owned memory: the slice points into guest memory
                 // (the parent's heap), which is not stable across the fork/exec
                 // used to launch the child.
-                const owned = std.heap.page_allocator.dupe(u8, clean_arg) catch return -1;
-                args.append(std.heap.page_allocator, owned) catch return -1;
+                const owned = alloc.dupe(u8, clean_arg) catch return -1;
+                args.append(alloc, owned) catch return -1;
             }
         }
     }
 
     // Prepare argv array for execvpe
     var c_args: std.ArrayListUnmanaged(?[*:0]const u8) = .empty;
+    defer c_args.deinit(alloc);
     for (args.items) |arg| {
-        c_args.append(std.heap.page_allocator, @as([*:0]const u8, @ptrCast(arg.ptr))) catch return -1;
+        c_args.append(alloc, @as([*:0]const u8, @ptrCast(arg.ptr))) catch return -1;
 
         if (arg.len > 1 and arg[0] == '@') {
             const rsp_file = arg[1 .. arg.len - 1]; // remove null char? arg is [*:0] but arg.len doesn't include null
@@ -600,7 +610,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     }
 
     const rt_io = runtime.io();
-    var new_env_map = std.process.Environ.Map.init(std.heap.page_allocator);
+    var new_env_map = std.process.Environ.Map.init(alloc);
     defer new_env_map.deinit();
 
     // An override with different letter-case than the inherited entry must
@@ -637,14 +647,14 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         // (TLS), which faults inside the compat-mode SIGSEGV dispatch handler.
         // All allocations happen before fork; the child only calls execve.
         var envp_items: std.ArrayListUnmanaged(?[*:0]const u8) = .empty;
-        defer envp_items.deinit(std.heap.page_allocator);
+        defer envp_items.deinit(alloc);
         var env_it = new_env_map.iterator();
         while (env_it.next()) |entry| {
-            const kv = std.fmt.allocPrint(std.heap.page_allocator, "{s}={s}", .{ entry.key_ptr.*, entry.value_ptr.* }) catch continue;
-            envp_items.append(std.heap.page_allocator, @as([*:0]const u8, @ptrCast(kv.ptr))) catch {};
+            const kv = std.fmt.allocPrint(alloc, "{s}={s}", .{ entry.key_ptr.*, entry.value_ptr.* }) catch continue;
+            envp_items.append(alloc, @as([*:0]const u8, @ptrCast(kv.ptr))) catch {};
         }
-        envp_items.append(std.heap.page_allocator, null) catch return -1;
-        c_args.append(std.heap.page_allocator, null) catch return -1;
+        envp_items.append(alloc, null) catch return -1;
+        c_args.append(alloc, null) catch return -1;
 
         const pid = std.os.linux.fork();
         const pid_signed: isize = @bitCast(pid);
@@ -770,6 +780,11 @@ pub fn putenv(envstring_ptr: usize) callconv(.c) i32 {
         }
         // Not overridden: tombstone it so inherited entries are shadowed.
         const key_dupe = std.heap.page_allocator.dupe(u8, key) catch return -1;
+        errdefer std.heap.page_allocator.free(key_dupe);
+        if (msvcrt.takeEnvTombstone(msvcrt_mod.msvcrt_env_vars.items)) |slot| {
+            slot.* = .{ .key = key_dupe, .val = "", .deleted = true };
+            return 0;
+        }
         msvcrt_mod.msvcrt_env_vars.append(std.heap.page_allocator, .{ .key = key_dupe, .val = "", .deleted = true }) catch return -1;
         return 0;
     }
@@ -792,7 +807,13 @@ pub fn putenv(envstring_ptr: usize) callconv(.c) i32 {
     }
 
     const key_dupe = std.heap.page_allocator.dupe(u8, key) catch return -1;
+    errdefer std.heap.page_allocator.free(key_dupe);
     const val_dupe = std.heap.page_allocator.dupe(u8, val) catch return -1;
+    errdefer std.heap.page_allocator.free(val_dupe);
+    if (msvcrt.takeEnvTombstone(msvcrt_mod.msvcrt_env_vars.items)) |slot| {
+        slot.* = .{ .key = key_dupe, .val = val_dupe };
+        return 0;
+    }
     msvcrt_mod.msvcrt_env_vars.append(std.heap.page_allocator, .{ .key = key_dupe, .val = val_dupe }) catch return -1;
     return 0;
 }

@@ -68,6 +68,17 @@ pub const EnvVar = struct { key: []const u8, val: []const u8, deleted: bool = fa
 /// List of environment variables.
 pub var msvcrt_env_vars: std.ArrayListUnmanaged(EnvVar) = .empty;
 
+/// The first entry a delete emptied: it keeps its slot but has no name, so a
+/// later set or delete of any name cannot match it and would append a second
+/// entry. Handing it back lets the caller overwrite in place, which keeps a
+/// guest cycling one variable's value to a single slot.
+pub fn takeEnvTombstone(vars: []EnvVar) ?*EnvVar {
+    for (vars) |*v| {
+        if (v.deleted and v.key.len == 0) return v;
+    }
+    return null;
+}
+
 const string = @import("msvcrt/string.zig");
 const process = @import("msvcrt/process.zig");
 const mem = @import("msvcrt/mem.zig");

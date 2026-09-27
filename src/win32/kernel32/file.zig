@@ -413,34 +413,46 @@ pub fn UnmapViewOfFile(lpBaseAddress: usize) callconv(w32cc.WINAPI) i32 {
     // Native host: release the real mapping.
     unregisterNativeMap(lpBaseAddress);
     for (0..MAX_VIEWS) |vi| {
-        if (view_fds[vi] != -1 and view_addrs[vi] == lpBaseAddress) {
-            if (view_writable[vi]) {
-                const gmem = kernel32_mem.guest_memory() orelse {
-                    kernel32_error.SetLastError(ERROR_INVALID_ADDRESS);
-                    return 0;
-                };
-                if (lpBaseAddress < gmem.base_addr) {
-                    kernel32_error.SetLastError(ERROR_INVALID_ADDRESS);
-                    return 0;
-                }
-                const offset = lpBaseAddress - gmem.base_addr;
-                if (offset > gmem.base.len or view_sizes[vi] > gmem.base.len - offset) {
-                    kernel32_error.SetLastError(ERROR_INVALID_ADDRESS);
-                    return 0;
-                }
-                const slice = gmem.base[offset..][0..view_sizes[vi]];
-                const map_file = host_io.fileFromFd(view_fds[vi]);
-                host_io.writePositional(map_file, slice, view_offsets[vi]) catch |err| {
-                    trace.print("KERNEL32: UnmapViewOfFile({x}) writeback failed (fd={d}, offset={d}, bytes={d}): {}\n", .{ lpBaseAddress, view_fds[vi], view_offsets[vi], slice.len, err });
-                    kernel32_error.SetLastError(ERROR_WRITE_FAULT);
-                    return 0;
-                };
+        if (view_fds[vi] == -1 or view_addrs[vi] != lpBaseAddress) continue;
+
+        // The view is unmapped whether or not the writeback below succeeds:
+        // Windows hands the address range back either way. Release the slot
+        // first, so a failed flush reports the error without stranding the
+        // entry and, once MAX_VIEWS of them are stranded, denying every
+        // later MapViewOfFile its only table.
+        const fd = view_fds[vi];
+        const writable = view_writable[vi];
+        const view_size = view_sizes[vi];
+        const file_offset = view_offsets[vi];
+        view_fds[vi] = -1;
+        view_addrs[vi] = 0;
+        view_sizes[vi] = 0;
+        view_offsets[vi] = 0;
+        view_writable[vi] = false;
+
+        if (writable) {
+            const gmem = kernel32_mem.guest_memory() orelse {
+                kernel32_error.SetLastError(ERROR_INVALID_ADDRESS);
+                return 0;
+            };
+            if (lpBaseAddress < gmem.base_addr) {
+                kernel32_error.SetLastError(ERROR_INVALID_ADDRESS);
+                return 0;
             }
-            view_fds[vi] = -1;
-            view_addrs[vi] = 0;
-            view_sizes[vi] = 0;
-            break;
+            const offset = lpBaseAddress - gmem.base_addr;
+            if (offset > gmem.base.len or view_size > gmem.base.len - offset) {
+                kernel32_error.SetLastError(ERROR_INVALID_ADDRESS);
+                return 0;
+            }
+            const slice = gmem.base[offset..][0..view_size];
+            const map_file = host_io.fileFromFd(fd);
+            host_io.writePositional(map_file, slice, file_offset) catch |err| {
+                trace.print("KERNEL32: UnmapViewOfFile({x}) writeback failed (fd={d}, offset={d}, bytes={d}): {}\n", .{ lpBaseAddress, fd, file_offset, slice.len, err });
+                kernel32_error.SetLastError(ERROR_WRITE_FAULT);
+                return 0;
+            };
         }
+        return 1;
     }
     return 1;
 }
@@ -1675,7 +1687,7 @@ test "CloseHandle frees file mapping slots" {
     }
 }
 
-test "guest view writeback failure preserves the view for retry" {
+test "guest view writeback failure reports the error and releases the view" {
     const x86_memory = @import("../../x86/memory.zig");
     const saved_memory = x86_memory.guest_memory;
     const saved_error = kernel32_error.GetLastError();
@@ -1717,10 +1729,17 @@ test "guest view writeback failure preserves the view for retry" {
     try std.testing.expectEqual(@as(usize, 8), try host_io.readPositional(read_only, &contents, 0));
     try std.testing.expectEqualStrings("original", &contents);
 
-    const vi = std.mem.indexOfScalar(usize, &view_addrs, address) orelse return error.TestUnexpectedResult;
+    // The view is gone whatever the writeback did, so its slot is available
+    // again and a guest that hits a permanent flush failure cannot fill the
+    // table and deny itself every later mapping.
+    try std.testing.expect(std.mem.indexOfScalar(usize, &view_addrs, address) == null);
+    const retry_address = MapViewOfFileEx(mapping, 2, 0, 0, 8, 0);
+    try std.testing.expect(retry_address != 0);
+    const vi = std.mem.indexOfScalar(usize, &view_addrs, retry_address) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 8), view_sizes[vi]);
+    @memcpy(backing[retry_address - memory.base_addr ..][0..8], "modified");
     view_fds[vi] = @intCast(writable.handle);
-    try std.testing.expectEqual(@as(i32, 1), UnmapViewOfFile(address));
+    try std.testing.expectEqual(@as(i32, 1), UnmapViewOfFile(retry_address));
     try std.testing.expectEqual(@as(i32, -1), view_fds[vi]);
     try std.testing.expectEqual(@as(usize, 8), try host_io.readPositional(read_only, &contents, 0));
     try std.testing.expectEqualStrings("modified", &contents);
