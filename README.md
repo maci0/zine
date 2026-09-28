@@ -38,6 +38,8 @@ promise between versions, so a breaking change takes the next minor.
 
 ### Unreleased
 
+### 0.4.0 (2026-09-28)
+
 ### 0.3.0 (2026-09-27)
 
 #### Breaking and migration
