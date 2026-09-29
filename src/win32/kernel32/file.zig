@@ -75,7 +75,7 @@ pub fn GetFileSize(hFile: usize, lpFileSizeHigh: usize) callconv(w32cc.WINAPI) u
     const file = host_io.fileFromFd(fd);
     if (host_io.statFile(file)) |stat| {
         if (lpFileSizeHigh != 0) {
-            const high = @as(*u32, @ptrFromInt(lpFileSizeHigh));
+            const high = @as(*u32, @ptrFromInt(trace.addr(lpFileSizeHigh)));
             high.* = @intCast(stat.size >> 32);
         }
         if (trace.enable_tracing) trace.print("KERNEL32: GetFileSize -> {d}\n", .{stat.size});
@@ -577,7 +577,10 @@ pub fn GetStdHandle(nStdHandle: u32) callconv(w32cc.WINAPI) usize {
 pub fn GetTempPathA(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.WINAPI) u32 {
     const temp_path = ".\\\x00";
     if (trace.enable_tracing) trace.print("KERNEL32: GetTempPathA(len={d})\n", .{nBufferLength});
-    if (lpBuffer != 0 and nBufferLength > temp_path.len) {
+    // temp_path already counts its NUL, so a buffer of exactly temp_path.len
+    // bytes is the right size. Demanding one more made the common
+    // "pass a 3-byte MAX_PATH-ish buffer" call report the required size forever.
+    if (lpBuffer != 0 and nBufferLength >= temp_path.len) {
         // lpBuffer is a guest VA (usize param — not auto-translated).
         // Without translation the path landed at the raw guest VA in linear
         // memory, leaving the guest's buffer garbage → GetTempFileNameA built
@@ -1108,7 +1111,11 @@ pub fn FindClose(hFindFile: usize) callconv(w32cc.WINAPI) i32 {
         state.close();
         return 1; // TRUE
     }
-    return 1; // Still return TRUE even if not found
+    // A handle that names no search is an error, as it is for CloseHandle in
+    // this file. Reporting TRUE hid a double close and a stale handle behind
+    // a success the guest could not check.
+    kernel32_error.SetLastError(ERROR_INVALID_HANDLE);
+    return 0; // FALSE
 }
 
 /// Retrieves the full path of the system directory.
@@ -1213,10 +1220,11 @@ pub fn GetDiskFreeSpaceA(
         const path = if (lpRootPathName >= 0x10000) trace.c_span(lpRootPathName) else "NULL";
         trace.print("KERNEL32: GetDiskFreeSpaceA('{s}')\n", .{path});
     }
-    if (lpSectorsPerCluster != 0) @as(*u32, @ptrFromInt(lpSectorsPerCluster)).* = 8;
-    if (lpBytesPerSector != 0) @as(*u32, @ptrFromInt(lpBytesPerSector)).* = 512;
-    if (lpNumberOfFreeClusters != 0) @as(*u32, @ptrFromInt(lpNumberOfFreeClusters)).* = 1024 * 1024;
-    if (lpTotalNumberOfClusters != 0) @as(*u32, @ptrFromInt(lpTotalNumberOfClusters)).* = 2 * 1024 * 1024;
+    // These are guest VAs (usize params, not auto-translated).
+    if (lpSectorsPerCluster != 0) @as(*u32, @ptrFromInt(trace.addr(lpSectorsPerCluster))).* = 8;
+    if (lpBytesPerSector != 0) @as(*u32, @ptrFromInt(trace.addr(lpBytesPerSector))).* = 512;
+    if (lpNumberOfFreeClusters != 0) @as(*u32, @ptrFromInt(trace.addr(lpNumberOfFreeClusters))).* = 1024 * 1024;
+    if (lpTotalNumberOfClusters != 0) @as(*u32, @ptrFromInt(trace.addr(lpTotalNumberOfClusters))).* = 2 * 1024 * 1024;
     return 1; // TRUE = success
 }
 
@@ -1230,7 +1238,7 @@ pub fn GetFileSizeEx(hFile: usize, lpFileSize: usize) callconv(w32cc.WINAPI) i32
     const file = host_io.fileFromFd(fd);
     if (host_io.statFile(file)) |stat_result| {
         // LARGE_INTEGER: 64-bit signed int
-        @as(*i64, @ptrFromInt(lpFileSize)).* = @intCast(stat_result.size);
+        @as(*i64, @ptrFromInt(trace.addr(lpFileSize))).* = @intCast(stat_result.size);
         return 1; // TRUE
     }
     return 0; // FALSE

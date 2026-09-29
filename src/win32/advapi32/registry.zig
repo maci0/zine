@@ -353,10 +353,15 @@ pub fn stub_RegEnumKeyExA(hKey: usize, dwIndex: u32, lpName: usize, lpcchName: u
     _ = lpftLastWriteTime;
     // For CPU registry key, report one subkey "0" (processor 0)
     if (hKey == CPU_REG_HANDLE and dwIndex == 0) {
+        // lpcchName is the caller's buffer size in characters. The name needs
+        // two of them ('0' and the NUL), so anything smaller cannot be stored
+        // and Win32 reports ERROR_MORE_DATA.
         if (lpName != 0 and lpcchName != 0) {
-            @as([*]u8, @ptrFromInt(lpName))[0] = '0';
-            @as([*]u8, @ptrFromInt(lpName))[1] = 0;
-            @as(*u32, @ptrFromInt(lpcchName)).* = 1;
+            if (lpcchName < 2) return 234; // ERROR_MORE_DATA
+            const name = @as([*]u8, @ptrFromInt(trace.addr(lpName)));
+            name[0] = '0';
+            name[1] = 0;
+            @as(*u32, @ptrFromInt(trace.addr(lpcchName))).* = 1;
         }
         return 0; // ERROR_SUCCESS
     }

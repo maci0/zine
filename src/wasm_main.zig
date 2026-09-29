@@ -186,7 +186,10 @@ pub fn main(init: std.process.Init) !void {
                 \\
                 \\  -h, --help          Show this help message
                 \\  -v, --version       Show version information
-                \\  --                  Stop processing options
+                \\  --                  Stop processing options, except in first
+                \\                      position: a leading `--` is the separator
+                \\                      wasmtime forwards, so options behind it
+                \\                      still parse
                 \\
                 \\Environment:
                 \\  ZINE_TRACE          Set to any value to enable API tracing

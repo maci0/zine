@@ -1198,23 +1198,27 @@ fn stub_DefMDIChildProcA(hWnd: usize, uMsg: u32, wParam: usize, lParam: isize) c
 }
 
 // --- CharToOemBuffA / OemToCharBuffA ---
-// For Latin-1 (Western European), these are identity copies
+// For Latin-1 (Western European), these are identity copies. cchDstLength is
+// the size of the destination in characters, so the copy stops at whichever
+// comes first: the source terminator or the destination size. Copying the full
+// destination length read past the end of the source and filled the caller's
+// buffer with whatever followed it. Win32 returns the number of characters
+// converted, not TRUE.
+fn oemToCharBuff(lpszSrc: usize, lpszDst: usize, cchDstLength: u32) callconv(w32cc.WINAPI) i32 {
+    if (lpszSrc == 0 or lpszDst == 0 or cchDstLength == 0) return 0;
+    const src = @as([*]const u8, @ptrFromInt(trace.addr(lpszSrc)));
+    const dst = @as([*]u8, @ptrFromInt(trace.addr(lpszDst)));
+    var i: u32 = 0;
+    while (i < cchDstLength and src[i] != 0) : (i += 1) dst[i] = src[i];
+    return @intCast(i);
+}
+
 fn stub_CharToOemBuffA(lpszSrc: usize, lpszDst: usize, cchDstLength: u32) callconv(w32cc.WINAPI) i32 {
-    if (lpszSrc != 0 and lpszDst != 0 and cchDstLength > 0) {
-        const src = @as([*]const u8, @ptrFromInt(lpszSrc));
-        const dst = @as([*]u8, @ptrFromInt(lpszDst));
-        for (0..cchDstLength) |i| dst[i] = src[i];
-    }
-    return 1; // TRUE
+    return oemToCharBuff(lpszSrc, lpszDst, cchDstLength);
 }
 
 fn stub_OemToCharBuffA(lpszSrc: usize, lpszDst: usize, cchDstLength: u32) callconv(w32cc.WINAPI) i32 {
-    if (lpszSrc != 0 and lpszDst != 0 and cchDstLength > 0) {
-        const src = @as([*]const u8, @ptrFromInt(lpszSrc));
-        const dst = @as([*]u8, @ptrFromInt(lpszDst));
-        for (0..cchDstLength) |i| dst[i] = src[i];
-    }
-    return 1; // TRUE
+    return oemToCharBuff(lpszSrc, lpszDst, cchDstLength);
 }
 
 // --- GetLastActivePopup ---

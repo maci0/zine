@@ -13,18 +13,21 @@ pub fn CharPrevA(lpszStart: usize, lpszCurrent: usize) callconv(w32cc.WINAPI) us
     return 0;
 }
 
+/// Converts a single character to the OEM code page and writes it to lpszDst.
+/// Implementation status: Partially implemented (identity: we don't distinguish
+/// ANSI and OEM code pages, so every character maps to itself)
 pub fn CharToOemA(lpszSrc: usize, lpszDst: usize) callconv(w32cc.WINAPI) i32 {
     if (lpszSrc == 0 or lpszDst == 0) return 0;
-    if (lpszSrc != lpszDst) {
-        const src = trace.c_span(lpszSrc);
-        const dst = @as([*]u8, @ptrFromInt(lpszDst));
-        @memcpy(dst[0..src.len], src);
-        dst[src.len] = 0;
-    }
-    return 1;
+    // Exactly one character is converted: lpszDst is a one-byte destination the
+    // guest commonly keeps on its own stack frame, so copying the whole string
+    // overwrote whatever followed it.
+    const ch = trace.c_span(lpszSrc)[0];
+    const dst = @as([*]u8, @ptrFromInt(trace.addr(lpszDst)));
+    dst[0] = ch;
+    return @as(i32, ch);
 }
 
-// Identity copy — we don't distinguish ANSI and OEM codepages.
+// Identity — we don't distinguish ANSI and OEM codepages.
 pub fn OemToCharA(lpszSrc: usize, lpszDst: usize) callconv(w32cc.WINAPI) i32 {
     return CharToOemA(lpszSrc, lpszDst);
 }

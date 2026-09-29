@@ -133,7 +133,7 @@ pub fn GetClassNameA(hWnd: usize, lpClassName: usize, nMaxCount: i32) callconv(w
     _ = hWnd;
     if (trace.enable_tracing) trace.print("USER32: GetClassNameA -> 0\n", .{});
     if (lpClassName != 0 and nMaxCount > 0) {
-        @as(*u8, @ptrFromInt(lpClassName)).* = 0;
+        @as(*u8, @ptrFromInt(trace.addr(lpClassName))).* = 0;
     }
     return 0;
 }

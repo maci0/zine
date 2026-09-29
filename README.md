@@ -50,6 +50,40 @@ promise between versions, so a breaking change takes the next minor.
   `--help` said so, and only for `--jit-max-eip`.
 
 #### Fixed
+- `CharToOemA` and `OemToCharA` copied the whole source string into `lpszDst`,
+  which Win32 gives one byte, so a guest holding the character on its own stack
+  frame had its frame overwritten past the character. Both convert one
+  character now and return it, as Win32 specifies.
+  `CharToOemBuffA` and `OemToCharBuffA` filled the caller's whole destination
+  with `cchDstLength` bytes, reading past the end of a shorter source string;
+  they stop at the source terminator or the destination size, whichever comes
+  first, and return the number of characters converted.
+- `GetFullPathNameA` returned the length of the *input* name from its sizing
+  call, so a guest following the two-call pattern sized a buffer for `foo.txt`
+  and never got the resolved `C:\...` path. It measures the resolved path, and
+  a buffer too small now returns the required size rather than copying the
+  unresolved name back as a success. `GetFullPathNameW` resolves like its `A`
+  twin instead of echoing a relative name, `GetLongPathNameW` reports the size
+  needed when given no destination and fails on a short one, and
+  `SetCurrentDirectoryW`/`GetLongPathNameW` translate their input guest
+  address, which the `W` path stubs elsewhere already did.
+- `GetTempPathA` demanded one byte more than the path it writes, so the exact
+  3-byte buffer was rejected and a caller that retried on the returned size
+  never got a result.
+- `FindClose` returned TRUE for a handle that named no search, hiding a double
+  close behind a success the guest could not check. It returns FALSE and sets
+  `ERROR_INVALID_HANDLE`, as `CloseHandle` already did.
+- `RegEnumKeyExA` wrote its two-byte subkey name without checking
+  `lpcchName`, storing a NUL past the end of a one-character buffer and
+  reporting `ERROR_SUCCESS`. A buffer that short now returns
+  `ERROR_MORE_DATA`.
+- `GetDiskFreeSpaceA`, `GetFileSizeEx`, `GetFileSize` and `GetClassNameA`
+  dereferenced their `usize` out-pointers without translating the guest
+  address, so on the WASM builds they wrote to the wrong place. They go
+  through `trace.addr` like the sibling stubs.
+- The WASI `--help` said `--` stops option processing. A leading `--` is the
+  separator wasmtime forwards, so it deliberately does not; the help now says
+  so.
 - In the web UI, Escape dismissed the Find and Replace dialog with the modal
   `cancel_dialog` instead of the `find_action` close its Cancel button sends,
   so the guest kept the dialog registered. Both now dismiss through the

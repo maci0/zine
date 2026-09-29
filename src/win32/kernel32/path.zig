@@ -73,7 +73,8 @@ pub fn SetCurrentDirectoryA(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
 /// Implementation status: Partially implemented (handles basic path conversion)
 pub fn SetCurrentDirectoryW(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
     if (lpPathName == 0) return 0;
-    const wstr = @as([*]const u16, @ptrFromInt(lpPathName));
+    // lpPathName is a guest VA (usize param, not auto-translated).
+    const wstr = @as([*]const u16, @ptrFromInt(trace.addr(lpPathName)));
     var narrow: [1024]u8 = undefined;
     var i: usize = 0;
     while (i < 1023 and wstr[i] != 0) : (i += 1) {
@@ -119,20 +120,15 @@ pub fn GetFullPathNameA(lpFileName: usize, nBufferLength: u32, lpBuffer: usize, 
     if (lpFileName == 0) return 0;
     const name = trace.c_span(lpFileName);
     if (trace.enable_tracing) trace.print("KERNEL32: GetFullPathNameA('{s}')\n", .{name});
-    if (lpBuffer == 0 or nBufferLength == 0) return @intCast(name.len + 1);
+    const host_io = @import("../host_io.zig");
+
+    if (lpBuffer == 0 or nBufferLength == 0) return @intCast(requiredLen(name));
 
     const host_buf = trace.addr(lpBuffer);
     const buf = @as([*]u8, @ptrFromInt(host_buf));
-    const host_io = @import("../host_io.zig");
     const resolved_len = host_io.getFullPath(name, buf[0..nBufferLength]);
 
-    const result_len = if (resolved_len > 0) resolved_len else blk: {
-        // Fallback: copy as-is
-        if (nBufferLength <= name.len) break :blk @as(usize, 0);
-        @memcpy(buf[0..name.len], name);
-        buf[name.len] = 0;
-        break :blk name.len;
-    };
+    const result_len = resolved_len;
 
     if (result_len > 0 and lpFilePart != 0) {
         var last_sep: usize = 0;
@@ -145,32 +141,64 @@ pub fn GetFullPathNameA(lpFileName: usize, nBufferLength: u32, lpBuffer: usize, 
     return @intCast(result_len);
 }
 
+/// Buffer size a caller must pass to hold the resolved path, NUL included.
+/// This is what Win32 returns from the sizing call, so it has to measure the
+/// resolved path rather than the input name.
+fn requiredLen(name: []const u8) usize {
+    const host_io = @import("../host_io.zig");
+    var scratch: [1024]u8 = undefined;
+    const resolved = host_io.getFullPath(name, &scratch);
+    if (resolved > 0) return resolved + 1;
+    return name.len + 1;
+}
+
 /// Retrieves the full path and file name of the specified file (Unicode version).
 /// Implementation status: Partially implemented
 pub fn GetFullPathNameW(lpFileName: usize, nBufferLength: u32, lpBuffer: usize, lpFilePart: usize) callconv(w32cc.WINAPI) u32 {
     if (lpFileName == 0) return 0;
-    const src = @as([*]const u16, @ptrFromInt(lpFileName));
-    var len: u32 = 0;
+    const src = @as([*]const u16, @ptrFromInt(trace.addr(lpFileName)));
+    var len: usize = 0;
     while (src[len] != 0) : (len += 1) {
         if (len >= 1024) break;
     }
     if (trace.enable_tracing) trace.print("KERNEL32: GetFullPathNameW(len={d})\n", .{len});
-    if (lpBuffer != 0 and nBufferLength > len) {
-        const host_buf = trace.addr(lpBuffer);
-        const buf = @as([*]u16, @ptrFromInt(host_buf));
+
+    // The A twin resolves a relative name against the current directory.
+    // Resolving here too keeps a program that calls both from seeing a relative
+    // path from one and an absolute path from the other.
+    const host_io = @import("../host_io.zig");
+    const text_utils = @import("../../text_utils.zig");
+    var narrow: [1024]u8 = undefined;
+    const n_name = text_utils.wideToUtf8(src[0..len], &narrow);
+    var scratch: [1024]u8 = undefined;
+    const resolved = host_io.getFullPath(n_name, &scratch);
+
+    var wide_need: [1024]u16 = undefined;
+    const need: u32 = if (resolved > 0)
+        @intCast(text_utils.utf8ToWide(scratch[0..resolved], &wide_need) + 1)
+    else
+        @intCast(len + 1);
+
+    if (lpBuffer == 0 or nBufferLength < need) return need;
+
+    const buf = @as([*]u16, @ptrFromInt(trace.addr(lpBuffer)));
+    const written: u32 = if (resolved > 0)
+        @intCast(text_utils.utf8ToWide(scratch[0..resolved], buf[0..nBufferLength]))
+    else blk: {
         for (0..len) |i| buf[i] = src[i];
-        buf[len] = 0;
-        if (lpFilePart != 0) {
-            var last_sep: u32 = 0;
-            for (0..len) |i| {
-                if (src[i] == '\\' or src[i] == '/') last_sep = @intCast(i + 1);
-            }
-            const host_fp = trace.addr(lpFilePart);
-            @as(*align(1) u32, @ptrFromInt(host_fp)).* = @intCast(lpBuffer + last_sep * 2);
+        break :blk @intCast(len);
+    };
+    buf[written] = 0;
+
+    if (lpFilePart != 0) {
+        var last_sep: u32 = 0;
+        for (0..written) |i| {
+            if (buf[i] == '\\' or buf[i] == '/') last_sep = @intCast(i + 1);
         }
-        return len;
+        const host_fp = trace.addr(lpFilePart);
+        @as(*align(1) u32, @ptrFromInt(host_fp)).* = @truncate(lpBuffer + last_sep * 2);
     }
-    return len + 1;
+    return written;
 }
 
 /// Creates a new directory.
@@ -244,14 +272,18 @@ pub fn stub_GetDriveTypeW(lpRootPathName: usize) callconv(w32cc.WINAPI) u32 {
 /// Implementation status: Partially implemented (currently performs identity mapping)
 pub fn GetLongPathNameW(lpszShortPath: usize, lpszLongPath: usize, cchBuffer: u32) callconv(w32cc.WINAPI) u32 {
     if (lpszShortPath == 0) return 0;
-    const src = @as([*]const u16, @ptrFromInt(lpszShortPath));
+    // lpszShortPath is a guest VA (usize param, not auto-translated).
+    const src = @as([*]const u16, @ptrFromInt(trace.addr(lpszShortPath)));
     var len: usize = 0;
     while (len < 4096 and src[len] != 0) len += 1;
-    if (lpszLongPath != 0 and cchBuffer > len) {
-        const host_buf = trace.addr(lpszLongPath);
-        const dst = @as([*]u16, @ptrFromInt(host_buf));
-        for (0..len) |i| dst[i] = src[i];
-        dst[len] = 0;
-    }
+    // Sizing call (no destination) reports the size needed, NUL included. A
+    // destination too small is a failure, not a silent success that copied
+    // nothing, so the caller can tell the two apart.
+    if (lpszLongPath == 0) return @intCast(len + 1);
+    if (cchBuffer <= len) return 0;
+    const host_buf = trace.addr(lpszLongPath);
+    const dst = @as([*]u16, @ptrFromInt(host_buf));
+    for (0..len) |i| dst[i] = src[i];
+    dst[len] = 0;
     return @intCast(len);
 }
