@@ -332,6 +332,30 @@ fn cacheControlUpdate(json: []const u8) void {
 
 // --- Lifecycle ---
 
+/// The COLOR_BTNFACE gray one BGRA pixel is, as little-endian bytes: the three
+/// color channels are 0xC0 and alpha is 0xFF.
+const btnface_pixel = [4]u8{ 0xC0, 0xC0, 0xC0, 0xFF };
+
+/// Fills the first `len` bytes of the framebuffer with `btnface_pixel`,
+/// rounding down to whole pixels so a partial trailing pixel is left alone.
+///
+/// The framebuffer is 4 MiB and `setResolution` refills the visible area every
+/// time the guest picks new dimensions, so a byte-at-a-time loop is a million
+/// iterations per fill. Seeding one pixel and doubling the written prefix with
+/// `memcpy` covers the same whole pixels in log2 steps, each one a vectorized
+/// block copy.
+fn fillBtnface(len: usize) void {
+    const whole = len - len % btnface_pixel.len;
+    if (whole < btnface_pixel.len) return;
+    @memcpy(global_framebuf[0..btnface_pixel.len], &btnface_pixel);
+    var filled: usize = btnface_pixel.len;
+    while (filled < whole) {
+        const n = @min(filled, whole - filled);
+        @memcpy(global_framebuf[filled..][0..n], global_framebuf[0..n]);
+        filled += n;
+    }
+}
+
 /// Initializes the renderer and the active backend.
 pub fn init(allocator: std.mem.Allocator) !void {
     g_allocator = allocator;
@@ -340,13 +364,7 @@ pub fn init(allocator: std.mem.Allocator) !void {
     // Initialize to COLOR_BTNFACE gray (0xC0C0C0) with full alpha (BGRA pixel order).
     // This ensures any unpainted areas default to the correct Win32
     // button face background color instead of black.
-    var i: usize = 0;
-    while (i + 3 < global_framebuf.len) : (i += 4) {
-        global_framebuf[i + 0] = 0xC0; // B
-        global_framebuf[i + 1] = 0xC0; // G
-        global_framebuf[i + 2] = 0xC0; // R
-        global_framebuf[i + 3] = 0xFF; // A
-    }
+    fillBtnface(global_framebuf.len);
     switch (active_backend) {
         .web_ui => try web_ui.init(),
         .fltk => try fltk_ui.init(allocator),
@@ -430,13 +448,7 @@ pub fn setResolution(w_in: u32, h_in: u32) void {
     // changes to prevent stale pixels from a previous stride causing stagger artifacts.
     const area = @as(usize, w) * @as(usize, h) * 4;
     if (area <= global_framebuf.len) {
-        var i: usize = 0;
-        while (i + 3 < area) : (i += 4) {
-            global_framebuf[i + 0] = 0xC0; // B
-            global_framebuf[i + 1] = 0xC0; // G
-            global_framebuf[i + 2] = 0xC0; // R
-            global_framebuf[i + 3] = 0xFF; // A
-        }
+        fillBtnface(area);
     }
 
     switch (active_backend) {
@@ -1499,6 +1511,27 @@ test "closeDialog frees the dialog it drops from the cache" {
         closeDialog();
         try std.testing.expect(active_dialog == null);
     }
+}
+
+test "fillBtnface covers every whole pixel and stops at a partial tail" {
+    const saved = global_framebuf;
+    defer global_framebuf = saved;
+    // 3002 bytes is 750 whole pixels plus a 2-byte tail, and it is past the
+    // point where the doubling copy has to take a partial final block, so it
+    // exercises both the fill and the round-down.
+    global_framebuf = try std.testing.allocator.alloc(u8, 3002);
+    defer std.testing.allocator.free(global_framebuf);
+    @memset(global_framebuf, 0);
+
+    fillBtnface(3002);
+    for (global_framebuf[0..3000], 0..) |byte, i| {
+        try std.testing.expectEqual(btnface_pixel[i % 4], byte);
+    }
+    for (global_framebuf[3000..3002]) |byte| try std.testing.expectEqual(@as(u8, 0), byte);
+    // A length below one pixel writes nothing at all.
+    @memset(global_framebuf, 0);
+    fillBtnface(3);
+    for (global_framebuf[0..3]) |byte| try std.testing.expectEqual(@as(u8, 0), byte);
 }
 
 test "clampResolution keeps guest dimensions inside the framebuffer" {
