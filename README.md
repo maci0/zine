@@ -38,6 +38,15 @@ promise between versions, so a breaking change takes the next minor.
 
 ### Unreleased
 
+- `FindFirstFileW` and `FindNextFileW` reported `cFileName` one UTF-16 unit per
+  byte, so enumerating a directory holding `café.txt` handed the guest `cafÃ©`
+  and a name it could not reopen. Both now widen the host name from UTF-8.
+- Listbox items, tooltip text, popup menu item text, and recorded window class
+  names were cut at a byte boundary, which can land inside a UTF-8 sequence and
+  store undecodable text. They cut on a character boundary now, and a class
+  name too long for the table is dropped rather than truncated into a different
+  name that would answer for another control.
+
 ### 0.4.0 (2026-09-28)
 
 ### 0.3.0 (2026-09-27)

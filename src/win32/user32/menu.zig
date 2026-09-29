@@ -81,9 +81,7 @@ fn addPopupItem(hMenu: usize, id: i32, text: []const u8, flags: u32) void {
     const it = &pm.items[pm.count];
     pm.count += 1;
     it.* = .{ .id = id, .text = undefined, .len = 0, .flags = flags };
-    const n = @min(text.len, it.text.len);
-    @memcpy(it.text[0..n], text[0..n]);
-    it.len = @intCast(n);
+    it.len = @intCast(text_utils.copyCString(&it.text, text));
 }
 
 pub fn stub_AppendMenuA(hMenu: usize, uFlags: u32, uIDNewItem: usize, lpNewItem: usize) callconv(w32cc.WINAPI) i32 {

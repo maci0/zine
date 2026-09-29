@@ -8,6 +8,7 @@ const w32cc = @import("../calling_convention.zig");
 const platform = @import("../../platform.zig");
 const host_io = @import("../host_io.zig");
 const ansi = @import("../ansi.zig");
+const text_utils = @import("../../text_utils.zig");
 const kernel32_error = @import("error.zig");
 const log = @import("../../log.zig");
 
@@ -28,6 +29,17 @@ fn narrowWide(wide: []const u16, buf: []u8) []const u8 {
     const n = ansi.wideToAnsi(wide, buf[0 .. buf.len - 1]);
     buf[n.len] = 0;
     return buf[0..n.len];
+}
+
+/// Widen one `WIN32_FIND_DATAA` name field into the fixed `WIN32_FIND_DATAW`
+/// field next to it. The narrow field carries the host name as UTF-8, so
+/// giving each byte its own code unit would split every non-ASCII character
+/// into one unit per byte and hand the guest a name it cannot reopen. The
+/// field is a fixed-size array, so whatever the name does not fill stays zero.
+fn widenFindName(narrow: []const u8, wide: []u16) void {
+    const text = std.mem.sliceTo(narrow, 0);
+    const n = text_utils.utf8ToWide(text, wide[0..@min(text.len + 1, wide.len)]);
+    @memset(wide[n..], 0);
 }
 
 // KERNEL32.dll file I/O functions.
@@ -1550,16 +1562,12 @@ pub fn FindFirstFileW(lpFileName: usize, lpFindFileData: usize) callconv(w32cc.W
     // Widen cFileName (260 bytes narrow -> 260 u16 = 520 bytes wide)
     const narrow_name = nfd_bytes[44..304]; // 260 bytes
     const wide_name = @as([*]u16, @ptrCast(@alignCast(out + 44)));
-    for (0..260) |i| {
-        wide_name[i] = narrow_name[i];
-    }
+    widenFindName(narrow_name, wide_name[0..260]);
 
     // Widen cAlternateFileName (14 bytes narrow -> 14 u16 = 28 bytes wide)
     const narrow_alt = nfd_bytes[304..318];
     const wide_alt = @as([*]u16, @ptrCast(@alignCast(out + 44 + 520)));
-    for (0..14) |i| {
-        wide_alt[i] = narrow_alt[i];
-    }
+    widenFindName(narrow_alt, wide_alt[0..14]);
 
     if (trace.enable_tracing) trace.print("KERNEL32: FindFirstFileW -> {d}\n", .{result});
     return result;
@@ -1581,15 +1589,11 @@ pub fn FindNextFileW(hFindFile: usize, lpFindFileData: usize) callconv(w32cc.WIN
 
     const narrow_name = nfd_b[44..304];
     const wide_name = @as([*]u16, @ptrCast(@alignCast(out + 44)));
-    for (0..260) |i| {
-        wide_name[i] = narrow_name[i];
-    }
+    widenFindName(narrow_name, wide_name[0..260]);
 
     const narrow_alt = nfd_b[304..318];
     const wide_alt = @as([*]u16, @ptrCast(@alignCast(out + 44 + 520)));
-    for (0..14) |i| {
-        wide_alt[i] = narrow_alt[i];
-    }
+    widenFindName(narrow_alt, wide_alt[0..14]);
 
     return 1;
 }
@@ -1835,4 +1839,38 @@ test "CloseHandle releases a mapping slot and rejects one that was never allocat
     // a live mapping, so neither may report success.
     try std.testing.expectEqual(@as(i32, 0), CloseHandle(handle));
     try std.testing.expectEqual(@as(i32, 0), CloseHandle(0x40000000 | MAX_MAPPINGS));
+}
+
+test "widenFindName gives a non-ASCII host name one unit per character" {
+    var narrow: [260]u8 = undefined;
+    @memset(&narrow, 0);
+    const name = "café — ünïcode.txt";
+    @memcpy(narrow[0..name.len], name);
+
+    var wide: [260]u16 = undefined;
+    widenFindName(&narrow, &wide);
+
+    // A unit per byte would hand back 20 units of mojibake; the name has to
+    // survive as itself, or the guest cannot reopen what it just enumerated.
+    var want: [260]u16 = undefined;
+    const want_n = text_utils.utf8ToWide(name, want[0..]);
+    try std.testing.expectEqual(want_n, @as(usize, std.mem.len(@as([*:0]const u16, @ptrCast(&wide)))));
+    try std.testing.expectEqualSlices(u16, want[0..want_n], wide[0..want_n]);
+    // The rest of the fixed field stays zeroed, as the struct expects.
+    try std.testing.expectEqual(@as(u16, 0), wide[want_n]);
+}
+
+test "widenFindName stops at the field width and stays terminated" {
+    var narrow: [260]u8 = undefined;
+    @memset(&narrow, 0);
+    // 200 CJK characters are 600 UTF-8 bytes, far past the 260-byte field the
+    // narrow struct holds, so the name is already cut there. What must not
+    // happen is a unit past the field or a missing terminator.
+    @memcpy(narrow[0..259], "你" ** 86 ++ "x");
+
+    var wide: [260]u16 = undefined;
+    widenFindName(&narrow, &wide);
+    const written = std.mem.len(@as([*:0]const u16, @ptrCast(&wide)));
+    try std.testing.expect(written <= 260);
+    try std.testing.expectEqualSlices(u16, wide[0..written], wide[0..written]);
 }

@@ -705,15 +705,19 @@ fn editSetSel(start: i32, end: i32) void {
 // numbers, so dispatch must know the control's class. Recorded at creation
 // time by CreateWindowExA / CreateStatusWindowA.
 const ControlClass = struct { hwnd: usize, class: [32]u8, len: u8 };
+/// Width of a recorded class name, terminator included.
+const max_control_class_len = @sizeOf(@TypeOf(ControlClass.class));
 var control_classes: [64]ControlClass = undefined;
 var control_class_count: usize = 0;
 
 pub fn setControlClass(hwnd: usize, class: []const u8) void {
     if (hwnd == 0 or control_class_count >= control_classes.len) return;
+    // A name that does not fit is dropped, not cut: a cut name is a different
+    // name, and dispatch would then answer for whichever control shares the
+    // truncated prefix.
+    if (class.len + 1 > max_control_class_len) return;
     var entry = ControlClass{ .hwnd = hwnd, .class = undefined, .len = 0 };
-    const n = @min(class.len, entry.class.len);
-    @memcpy(entry.class[0..n], class[0..n]);
-    entry.len = @intCast(n);
+    entry.len = @intCast(text_utils.copyCString(&entry.class, class));
     control_classes[control_class_count] = entry;
     control_class_count += 1;
 }
@@ -961,9 +965,7 @@ fn listBoxAddString(st: *ListBoxState, idx: i32, text: []const u8) i32 {
         st.items[i] = st.items[i - 1];
         st.item_lens[i] = st.item_lens[i - 1];
     }
-    const n = @min(text.len, MAX_LB_ITEM_LEN - 1);
-    @memcpy(st.items[insert_idx][0..n], text[0..n]);
-    st.items[insert_idx][n] = 0;
+    const n = text_utils.copyCString(&st.items[insert_idx], text);
     st.item_lens[insert_idx] = @intCast(n);
     st.count += 1;
     notifyListboxItems(st);
@@ -1096,10 +1098,7 @@ fn handleListBoxMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) ?isize 
             const psz = std.mem.readInt(u32, item[20..24], .little);
             if (psz != 0) {
                 const text = trace.c_span(psz);
-                const n = @min(text.len, MAX_LB_ITEM_LEN - 1);
-                @memcpy(st.items[idx][0..n], text[0..n]);
-                st.items[idx][n] = 0;
-                st.item_lens[idx] = @intCast(n);
+                st.item_lens[idx] = @intCast(text_utils.copyCString(&st.items[idx], text));
                 notifyListboxItems(st);
             }
             return 1;
@@ -1751,10 +1750,7 @@ var tooltip_state_count: usize = 0;
 fn setTooltipText(hwnd: usize, text: []const u8) void {
     for (tooltip_states[0..tooltip_state_count]) |*e| {
         if (e.hwnd == hwnd) {
-            const n = @min(text.len, e.text.len - 1);
-            @memcpy(e.text[0..n], text[0..n]);
-            e.text[n] = 0;
-            e.len = @intCast(n);
+            e.len = @intCast(text_utils.copyCString(&e.text, text));
             return;
         }
     }
@@ -1762,10 +1758,7 @@ fn setTooltipText(hwnd: usize, text: []const u8) void {
         const e = &tooltip_states[tooltip_state_count];
         tooltip_state_count += 1;
         e.hwnd = hwnd;
-        const n = @min(text.len, e.text.len - 1);
-        @memcpy(e.text[0..n], text[0..n]);
-        e.text[n] = 0;
-        e.len = @intCast(n);
+        e.len = @intCast(text_utils.copyCString(&e.text, text));
     }
 }
 
