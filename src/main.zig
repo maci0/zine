@@ -168,7 +168,8 @@ pub fn main(init: std.process.Init) !void {
                 \\Options:
                 \\  -i, --interpret     Use x86 software interpreter instead of native execution
                 \\      --jit           Use JIT compiler (x86-to-WASM translation)
-                \\      --argv0 <name>  Override argv[0] passed to the target
+                \\      --argv0 <name>  Override argv[0] passed to the target; also
+                \\                      accepted as --argv0=<name>
                 \\  -t, --trace         Enable all tracing (API + instructions)
                 \\      --trace-api     Enable API tracing only
                 \\      --trace-insn    Enable x86 instruction tracing only
@@ -200,6 +201,13 @@ pub fn main(init: std.process.Init) !void {
                 \\  zine --trace myapp.exe input.txt
                 \\  zine --argv0 editor notepad.exe file.txt
                 \\  zine -- -weird-name.exe
+                \\
+                \\Exit status:
+                \\  0  the guest ran and reported success
+                \\  1  the target could not be run, or the guest exited with this
+                \\     status
+                \\  2  usage error: an unknown option, a missing <target.exe>, or a
+                \\     rejected ZINE_* setting
                 \\
             );
             std.process.exit(0);

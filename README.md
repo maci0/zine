@@ -38,6 +38,19 @@ promise between versions, so a breaking change takes the next minor.
 
 ### Unreleased
 
+#### Added
+
+- Every `--help` now ends with the exit-status contract, so a script knows what
+  a status means without reading the source: 0 the guest reported success, 1 the
+  target could not be run or the guest exited with that status, 2 a usage error.
+  The same three statuses were already used by `zine`, `zine-host`, and the
+  WASI entry point; only the wording was missing.
+- `--argv0=<name>` is listed in the help of every build, beside
+  `--argv0 <name>`. Every parser accepted both spellings, but only the WASI
+  `--help` said so, and only for `--jit-max-eip`.
+
+#### Fixed
+
 - `FindFirstFileW` and `FindNextFileW` reported `cFileName` one UTF-16 unit per
   byte, so enumerating a directory holding `café.txt` handed the guest `cafÃ©`
   and a name it could not reopen. Both now widen the host name from UTF-8.
@@ -46,6 +59,17 @@ promise between versions, so a breaking change takes the next minor.
   store undecodable text. They cut on a character boundary now, and a class
   name too long for the table is dropped rather than truncated into a different
   name that would answer for another control.
+- `zine-host --help` enumerated four of the `ZINE_*` settings the module reads
+  and presented the list as the whole set. It now names none of them, because
+  the module's own `--help` is what lists them.
+- `--quiet` silences the GUI backends. The web UI and the FLTK backend printed
+  their startup banner with a raw write to stderr, so a run promised to report
+  "only warnings and errors" still announced itself, and the web UI repeated
+  the URL the startup line already carries. The banner is gone; the URL is in
+  the startup line, which honors the log level. The same raw writes on the
+  failure paths (a bind that fails, a client request that errors) now go
+  through the log, so they carry its level, its timestamp, and its color
+  policy.
 
 ### 0.4.0 (2026-09-28)
 

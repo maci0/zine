@@ -176,7 +176,8 @@ pub fn main(init: std.process.Init) !void {
                 \\                      Only JIT blocks below this EIP (decimal or
                 \\                      0x-prefixed hex; debugging). Also accepted
                 \\                      as --jit-max-eip=<u32>
-                \\      --argv0 <name>  Override argv[0] passed to the target
+                \\      --argv0 <name>  Override argv[0] passed to the target; also
+                \\                      accepted as --argv0=<name>
                 \\  -t, --trace         Enable all tracing (API + instructions)
                 \\      --trace-api     Enable API tracing only
                 \\      --trace-insn    Enable x86 instruction tracing only
@@ -204,6 +205,13 @@ pub fn main(init: std.process.Init) !void {
                 \\  wasmtime --dir=. zine.wasm32.wasm -- myapp.exe
                 \\  wasmtime --dir=. zine.wasm32.wasm -- --trace myapp.exe
                 \\  wasmtime --dir=. zine.wasm32.wasm -- --argv0 editor notepad.exe
+                \\
+                \\Exit status:
+                \\  0  the guest ran and reported success
+                \\  1  the target could not be run, or the guest exited with this
+                \\     status
+                \\  2  usage error: an unknown option, a missing <target.exe>, or a
+                \\     rejected ZINE_* setting
                 \\
             );
             std.process.exit(0);

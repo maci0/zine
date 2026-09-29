@@ -15,6 +15,7 @@
 
 const std = @import("std");
 const runtime = @import("../runtime.zig");
+const log = @import("../log.zig");
 const renderer = @import("renderer.zig");
 const text_utils = @import("../text_utils.zig");
 const build_options = @import("build_options");
@@ -576,7 +577,7 @@ pub fn init(allocator: std.mem.Allocator) !void {
     g_allocator = allocator;
 
     if (!build_options.use_fltk) {
-        std.debug.print("\n>>> FLTK backend initialized (stub — not compiled with -Dfltk) <<<\n\n", .{});
+        log.warn("FLTK backend is a stub: this build was not compiled with -Dfltk", .{});
         return;
     }
 
@@ -608,7 +609,7 @@ pub fn init(allocator: std.mem.Allocator) !void {
         if (spins > 10_000_000) break; // safety: don't hang forever
     }
 
-    std.debug.print("\n>>> FLTK native GUI backend initialized <<<\n\n", .{});
+    log.info("FLTK native GUI backend initialized", .{});
 }
 
 // --- Framebuffer ---

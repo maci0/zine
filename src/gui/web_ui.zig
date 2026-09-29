@@ -151,19 +151,20 @@ fn replayCachedState(allocator: std.mem.Allocator) void {
 fn serverLoop() void {
     const io = runtime.io();
     const web = config.web_server;
+    var url_buf: [config.max_url_len]u8 = undefined;
     const address: std.Io.net.IpAddress = std.Io.net.IpAddress.parse(web.host(), web.port) catch |err| {
-        std.debug.print("WebUI: failed to parse address: {}\n", .{err});
+        log.err("WebUI: failed to parse address: {}", .{err});
         return;
     };
     var server = address.listen(io, .{ .reuse_address = true }) catch |err| {
-        var url_buf: [config.max_url_len]u8 = undefined;
-        std.debug.print("WebUI: failed to listen on {s}: {}\n", .{ web.url(&url_buf), err });
+        log.err("WebUI: failed to listen on {s}: {}", .{ web.url(&url_buf), err });
         return;
     };
     defer server.deinit(io);
 
-    var url_buf: [config.max_url_len]u8 = undefined;
-    std.debug.print("\n>>> Zine Web UI running on {s} <<<\n\n", .{web.url(&url_buf)});
+    // The URL is announced by the startup line, which honors the log level; a
+    // second banner here would print it again on a path --quiet promises to
+    // stay silent.
 
     var consecutive_failures: u32 = 0;
     while (true) {
@@ -223,7 +224,7 @@ fn handleClient(stream: std.Io.net.Stream) void {
     // return (failed respond, handshake, or file read) nothing else owns the
     // fd: close it here or every failed request leaks one until exit.
     handleClientInner(stream) catch |err| {
-        std.debug.print("Error in handleClientInner: {}\n", .{err});
+        log.err("WebUI: request failed: {}", .{err});
         stream.close(runtime.io());
     };
 }
