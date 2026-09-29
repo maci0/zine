@@ -13,7 +13,7 @@ Run Win98/Win2K-era 32-bit Windows executables on Linux and in the browser witho
 
 ## Verification
 
-Run `bash tests/check.sh` from the repository root before a pull request. It first requires the listed tools and exactly the Zig version pinned in `build.zig.zon`, then runs the CI gate in order and stops at the first failure. `bash tests/check.sh --list` prints the step names, and that is the gate order; one step runs on its own with `bash tests/check.sh <name>`. Single steps, when bisecting:
+Run `bash tests/check.sh` from the repository root before a pull request. It first requires the listed tools, a git work tree (a source archive has none), and exactly the Zig version pinned in `build.zig.zon`, then runs the CI gate in order and stops at the first failure. `bash tests/check.sh --list` prints the step names, and that is the gate order; one step runs on its own with `bash tests/check.sh <name>`. The gate also runs `check_shell` (every tracked script through shellcheck), `check_c` (the tracked C sources through `zig cc`, warning-free), and `reproducible` (two install trees of the native targets, compared byte for byte). Single steps, when bisecting:
 
 - Unit tests: `zig build test` (also checks formatting). Tests run on the host; `-Darch` does not change the test target.
 - Native CLI tests: `zig build test-cli`, then `zig build test-cli -Darch=x86_64`; no guest binaries required.
