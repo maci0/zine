@@ -1297,12 +1297,24 @@ function connect() {
                         upBtn.style.pointerEvents = atRoot ? 'none' : 'auto';
                     }
 
+                    // The rendered item for each name, and the one carrying the
+                    // selection. A directory listing can run to thousands of
+                    // entries, so selecting walks the map rather than querying
+                    // every row the list holds.
+                    const itemEls = new Map();
+                    let selectedItemEl = null;
+
+                    function markSelected(el) {
+                        if (selectedItemEl === el) return;
+                        if (selectedItemEl) selectedItemEl.classList.remove('selected');
+                        selectedItemEl = el;
+                        if (el) el.classList.add('selected');
+                    }
+
                     function selectFile(f) {
                         filenameInput.value = f;
                         hideNameError();
-                        fileListEl.querySelectorAll('.file-item').forEach(el => {
-                            el.classList.toggle('selected', el.dataset.name === f);
-                        });
+                        markSelected(itemEls.get(f));
                     }
 
                     function openSelectedFile() {
@@ -1349,27 +1361,41 @@ function connect() {
                         navigateTo(parentPath);
                     }
 
+                    // The patterns depend only on the "Files of type" selection,
+                    // so they are compiled when it changes instead of once per
+                    // name. A directory of a few thousand files used to rebuild
+                    // the same handful of expressions that many times on every
+                    // filter change and every listing, on the main thread.
+                    let filterSource = null;
+                    let filterRegexps = [];
+                    function activeFilter() {
+                        const value = ftSel.value || '';
+                        if (value === filterSource) return filterRegexps;
+                        filterSource = value;
+                        const paren = /\(([^)]*)\)/.exec(value);
+                        filterRegexps = (paren ? paren[1].split(';').map(p => p.trim()).filter(Boolean) : [])
+                            .map(p => new RegExp('^' + p.toLowerCase()
+                                .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+                                .replace(/\*/g, '.*')
+                                .replace(/\?/g, '.') + '$'));
+                        return filterRegexps;
+                    }
+
                     /** Does a name pass the active "Files of type" description?
                      * The pattern list is the parenthesized part, e.g.
                      * "Text files (*.txt;*.asc)". A description without one
                      * (or "*.*") shows everything. */
                     function filterMatches(name) {
-                        const paren = /\(([^)]*)\)/.exec(ftSel.value || '');
-                        if (!paren) return true;
-                        const patterns = paren[1].split(';').map(p => p.trim()).filter(Boolean);
+                        const patterns = activeFilter();
                         if (patterns.length === 0) return true;
                         const lower = name.toLowerCase();
-                        return patterns.some(p => {
-                            const re = new RegExp('^' + p.toLowerCase()
-                                .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-                                .replace(/\*/g, '.*')
-                                .replace(/\?/g, '.') + '$');
-                            return re.test(lower);
-                        });
+                        return patterns.some(re => re.test(lower));
                     }
 
                     function renderFileList() {
                         fileListEl.innerHTML = '';
+                        itemEls.clear();
+                        selectedItemEl = null;
                         if (listingPending) {
                             van.add(fileListEl, div({class: 'comdlg-empty'}, 'Loading...'));
                             return;
@@ -1395,16 +1421,19 @@ function connect() {
                                 ondblclick: () => navigateTo(currentPath + '/' + f)
                             }, img({src: 'assets/folder.svg', width: 16, height: 16}), span({class: 'file-item-name'}, f));
                             van.add(fileListEl, item);
+                            itemEls.set(f, item);
                         });
                         files.forEach(f => {
-                            van.add(fileListEl, div({
+                            const item = div({
                                 class: 'file-item',
                                 dir: 'auto',
                                 'data-name': f,
                                 'data-type': 'file',
                                 onclick: () => selectFile(f),
                                 ondblclick: () => { selectFile(f); openSelectedFile(); }
-                            }, img({src: 'assets/file.svg', width: 16, height: 16}), span({class: 'file-item-name'}, f)));
+                            }, img({src: 'assets/file.svg', width: 16, height: 16}), span({class: 'file-item-name'}, f));
+                            van.add(fileListEl, item);
+                            itemEls.set(f, item);
                         });
                     }
                     ftSel.addEventListener('change', renderFileList);
@@ -1465,8 +1494,8 @@ function connect() {
                                 button({class: 'win2k-button', 'data-dialog-default': '', onclick: () => {
                                     // If a folder name is typed, navigate into it
                                     const val = filenameInput.value.trim();
-                                    const folderItem = Array.from(fileListEl.querySelectorAll('.file-item[data-type="folder"]')).find(el => el.dataset.name === val);
-                                    if (folderItem) {
+                                    const folderItem = itemEls.get(val);
+                                    if (folderItem && folderItem.dataset.type === 'folder') {
                                         navigateTo(currentPath + '/' + val);
                                         return;
                                     }

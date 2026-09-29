@@ -1608,19 +1608,23 @@ test "static asset responses carry an etag and 304 on a matching If-None-Match" 
 }
 
 /// Ceiling on each precompressed asset, shared by the negotiation test and the
-/// transfer-budget test so the two cannot drift apart. Measured 2026-09-27 from
+/// transfer-budget test so the two cannot drift apart. Measured 2026-09-29 from
 /// the bytes this build embeds, each transferred as gzip: the document 2072
-/// bytes, the stylesheet 14405, the script 22991, and the van 1481, 40949 in
-/// all against the 44 KiB ceiling. The document and the script grew by the
-/// digested icon names they now carry (99 and 573 bytes); the icons
-/// themselves are a few hundred bytes each, are cached under a URL that cannot
-/// change, and so cost a first visit nothing after. Each limit leaves a KiB
-/// over the measured size, enough to absorb a deflate encoder change. Past a
-/// limit is weight a reload re-transfers.
+/// bytes, the stylesheet 10222, the script 22991, and the van 1481, 36766 in
+/// all against the 40 KiB ceiling. The document and the script carry the
+/// digested icon names the build rewrites into them (99 and 573 bytes); the
+/// stylesheet names no asset, so its bytes are the file's. The icons themselves
+/// are a few hundred bytes each, are cached under a URL that cannot change, and
+/// so cost a first visit nothing after. Each limit leaves a KiB over the
+/// measured size, enough to absorb a deflate encoder change. Past a limit is
+/// weight a reload re-transfers.
 const budget_document: usize = 3 * 1024;
-const budget_stylesheet: usize = 15 * 1024;
+const budget_stylesheet: usize = 11 * 1024;
 const budget_script: usize = 24 * 1024;
 const budget_van: usize = 2 * 1024;
+/// Ceiling on what a first visit transfers before the UI is interactive, the
+/// sum of the per-asset limits' measured sizes.
+const budget_total: usize = 40 * 1024;
 
 test "static assets negotiate gzip without changing decoded content" {
     const built = @import("web_assets");
@@ -1702,7 +1706,7 @@ test "precompressed assets stay inside their transfer budget" {
         };
         total += budget.bytes.len;
     }
-    try std.testing.expect(total <= 44 * 1024);
+    try std.testing.expect(total <= budget_total);
 }
 
 test "static asset encoding negotiation preserves identity and edited files" {
