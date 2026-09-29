@@ -83,6 +83,11 @@ promise between versions, so a breaking change takes the next minor.
   failure paths (a bind that fails, a client request that errors) now go
   through the log, so they carry its level, its timestamp, and its color
   policy.
+- A number in an `.rc` script longer than its field could reach, a coordinate
+  or a `#define` value of 4294967296 bytes, aborted the resource compiler
+  with an integer overflow. Numbers now saturate at the field's maximum, and a
+  coordinate or point size that does not fit the format it is written into
+  clamps to that field's range.
 
 ### 0.4.0 (2026-09-28)
 
@@ -874,8 +879,8 @@ zig build test-cli -Dhost       # also checks zine-host; requires Wasmer headers
 
 `zig build fuzz` mutates the seed corpora of the menu, dialog, icon, and PE
 header parsers, the string-table, resource-directory, and export-directory
-walks, and the batch script interpreter, and feeds every input to the parser
-under Zig's safety checks.
+walks, the batch script interpreter, and the `.rc` resource compiler, and
+feeds every input to the parser under Zig's safety checks.
 A failing input is written to `zig-out/fuzz/<target>-<n>.bin`; minimize it, fix
 the cause, and add its bytes to the `seeds` array of that target's harness in
 `src/fuzz/`.
@@ -890,6 +895,8 @@ crashes: a menu that parses must render as a valid JSON menu object, a
 successful `PEParser.parse` must place its headers inside the file, and a
 resource or export lookup that resolves must hand back bytes the mapped image
 actually holds, the same way twice.
+A compiled `.rc` script must emit a `.res` image whose records all fit, and
+must emit the same one twice, since the `#define` table lives in the process.
 `zig build test` replays the same seeds plus a fixed mutation sweep under
 `std.testing.allocator`, so a leak or a broken contract fails the normal gate.
 libFuzzer or AFL++ can drive the same harnesses by calling `harness` in

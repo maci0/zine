@@ -17,6 +17,7 @@ const menu_fuzz = @import("menu.zig");
 const pe_fuzz = @import("pe.zig");
 const export_fuzz = @import("export.zig");
 const resource_fuzz = @import("resource.zig");
+const rc_fuzz = @import("rc.zig");
 
 /// Mutations replayed per target in CI. Small enough to keep the unit-test
 /// gate fast, large enough to reach the truncation and boundary paths.
@@ -105,6 +106,26 @@ test "resource: the seed tree resolves by id and by name" {
 
 test "fuzz: bat seeds and mutations hold the interpreter contract" {
     try replay(&bat_fuzz.seeds, bat_fuzz.harness);
+}
+
+test "fuzz: rc seeds and mutations hold the resource image contract" {
+    try replay(&rc_fuzz.seeds, rc_fuzz.harness);
+}
+
+test "rc: a script with resource data compiles to a loadable image" {
+    // The mutations only reach the emitters if the seeds do, so pin what a
+    // well-formed script produces: a STRINGTABLE record the loader can walk.
+    const rcdll = @import("../win32/rcdll.zig");
+    const allocator = testing.allocator;
+    const buf = try allocator.alloc(u8, rcdll.res_capacity);
+    defer allocator.free(buf);
+    const len = rcdll.buildResImage(rc_fuzz.seeds[0], buf).?;
+    try testing.expectEqual(@as(u32, 0x20), std.mem.readInt(u32, buf[4..8], .little));
+    try testing.expectEqual(@as(u32, 6), std.mem.readInt(u32, buf[8..12], .little)); // RT_STRING
+    try testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, buf[12..16], .little)); // block 1
+    try testing.expect(len > 32 + 2 + 5 * 2);
+    // `hello` lands in slot 1 of block 1, right behind the block's slot 0.
+    try testing.expectEqualSlices(u8, "h\x00e\x00l\x00l\x00o\x00", buf[32 + 2 + 2 .. 32 + 2 + 2 + 10]);
 }
 
 test "loadstring: a well-formed string table yields its strings" {

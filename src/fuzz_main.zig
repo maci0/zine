@@ -25,6 +25,7 @@ const menu_fuzz = @import("fuzz/menu.zig");
 const pe_fuzz = @import("fuzz/pe.zig");
 const export_fuzz = @import("fuzz/export.zig");
 const resource_fuzz = @import("fuzz/resource.zig");
+const rc_fuzz = @import("fuzz/rc.zig");
 
 /// Where failing inputs are written, relative to the working directory.
 const crash_dir = "zig-out/fuzz";
@@ -44,6 +45,7 @@ const targets = [_]Target{
     .{ .name = "resource", .seeds = &resource_fuzz.seeds, .run = resource_fuzz.harness },
     .{ .name = "export", .seeds = &export_fuzz.seeds, .run = export_fuzz.harness },
     .{ .name = "bat", .seeds = &bat_fuzz.seeds, .run = bat_fuzz.harness },
+    .{ .name = "rc", .seeds = &rc_fuzz.seeds, .run = rc_fuzz.harness },
 };
 
 pub fn main(init: std.process.Init) !void {

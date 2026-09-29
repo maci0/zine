@@ -56,6 +56,35 @@ const DlgItem = struct {
 
 const RcMenuItem = struct { name: []const u8 = "", id: u16 = 0, flags: u16 = 0 };
 
+/// The .rc script is guest-supplied, so a decimal run is however long the
+/// script makes it. Both accumulators stop at the field's maximum instead of
+/// overflowing, which would panic in a checked build and wrap to a different
+/// number in a fast one.
+fn accumulateI32(acc: i32, digit: u8) i32 {
+    const shifted = std.math.mul(i32, acc, 10) catch return std.math.maxInt(i32);
+    return std.math.add(i32, shifted, @as(i32, digit)) catch std.math.maxInt(i32);
+}
+
+fn accumulateU32(acc: u32, digit: u32) u32 {
+    return accumulateBase(acc, 10, digit);
+}
+
+fn accumulateBase(acc: u32, base: u32, digit: u32) u32 {
+    const shifted = std.math.mul(u32, acc, base) catch return std.math.maxInt(u32);
+    return std.math.add(u32, shifted, digit) catch std.math.maxInt(u32);
+}
+
+/// A coordinate or point size the resource format stores in fewer bits than
+/// the script writes: the value saturates rather than wrapping or panicking.
+fn clampI16(value: i32) i16 {
+    return std.math.cast(i16, value) orelse
+        if (value < 0) std.math.minInt(i16) else std.math.maxInt(i16);
+}
+
+fn clampU16(value: u32) u16 {
+    return std.math.cast(u16, value) orelse std.math.maxInt(u16);
+}
+
 /// Parses one MENUITEM clause at *pos: `MENUITEM SEPARATOR` or
 /// `MENUITEM "text", id[, CHECKED|GRAYED|INACTIVE|HELP]` (flags only when
 /// `with_flags`). Advances *pos past the consumed text even on failure.
@@ -75,7 +104,7 @@ fn parseRcMenuitem(rc_text: []const u8, pos: *usize, with_flags: bool) ?RcMenuIt
         var have_num = false;
         if (ci < rc_text.len and rc_text[ci] >= '0' and rc_text[ci] <= '9') {
             while (ci < rc_text.len and rc_text[ci] >= '0' and rc_text[ci] <= '9') {
-                val = val * 10 + @as(u32, rc_text[ci] - '0');
+                val = accumulateU32(val, rc_text[ci] - '0');
                 ci += 1;
             }
             have_num = true;
@@ -176,7 +205,6 @@ fn compileResources(arg_list: []const []const u8) i32 {
 
     // Read the .rc file (Win32 path → host path).
     const path_utils = @import("../path_utils.zig");
-    const runtime = @import("../runtime.zig");
     var rc_host_buf: [1024]u8 = undefined;
     const rc_host_len = path_utils.toHostPath(input.?, &rc_host_buf);
     if (rc_host_len == 0) return 1;
@@ -204,6 +232,69 @@ fn compileResources(arg_list: []const []const u8) i32 {
     const rc_text = rc_data[0..rc_len];
 
     if (trace.enable_tracing) trace.print("RCDLL: input '{s}' ({d} bytes)\n", .{ rc_host_path, rc_len });
+    return compileRcText(rc_text, output);
+}
+
+/// Upper bound on the .res image: 16 string blocks of 16 slots (a slot is a
+/// WORD length plus 128 UTF-16 chars), 8 dialogs, 8 menus and 4 icons, each
+/// behind a 32-byte resource header. The .rc file is guest-supplied, so the
+/// buffer is sized from the counts the parser can hold rather than a fixed
+/// stack array the emitters would run past.
+pub const res_capacity = 16 * (32 + 16 * (2 + 128 * 2) + 4) +
+    8 * (32 + 4096) +
+    8 * (32 + 2048) +
+    4 * (32 + 32 + 32 + 4096);
+
+/// Compiles one `.rc` script and writes the `.res` to `output`. The script text
+/// comes from the guest, so nothing here trusts its shape.
+fn compileRcText(rc_text: []const u8, output: ?[]const u8) i32 {
+    const path_utils = @import("../path_utils.zig");
+    const out_alloc = std.heap.page_allocator.alloc(u8, res_capacity) catch return 1;
+    defer std.heap.page_allocator.free(out_alloc);
+    const ob = buildResImage(rc_text, out_alloc) orelse return 1;
+
+    if (output == null) {
+        if (trace.enable_tracing) trace.print("RCDLL: no output file\n", .{});
+        return 1;
+    }
+    var res_host_buf: [1024]u8 = undefined;
+    const res_host_len = path_utils.toHostPath(output.?, &res_host_buf);
+    if (res_host_len == 0) return 1;
+    const posix_fs = @import("msvcrt/posix_fs.zig");
+    const out_fd = posix_fs.open(@as([*:0]const u8, @ptrCast(&res_host_buf)), 64 | 2 | 512, 0o666); // O_CREAT|O_RDWR|O_TRUNC
+    if (out_fd < 0) {
+        if (trace.enable_tracing) trace.print("RCDLL: cannot create '{s}'\n", .{res_host_buf[0..res_host_len]});
+        return 1;
+    }
+    const host_io = @import("host_io.zig");
+    const out_file = host_io.fileFromFd(@intCast(out_fd));
+    // Raw close — std.Io's close(runtime.io()) hits TLS (%fs:0x308) and
+    // faults inside the native64 compat dispatch context.
+    defer host_io.closeFile(out_file);
+
+    // The output file was already created and truncated by the open above, so
+    // a failed write leaves a partial .res on disk that a later build step
+    // would link as if it were complete. Say which file and how much is
+    // missing, then fail.
+    host_io.writeAllToFile(out_file, out_alloc[0..ob]) catch |err| {
+        log.err("RCDLL: writing {d} bytes to '{s}' failed: {t}; the output file is truncated", .{ ob, res_host_buf[0..res_host_len], err });
+        return 1;
+    };
+    if (trace.enable_tracing) trace.print("RCDLL: wrote {d} bytes to '{s}'\n", .{ ob, res_host_buf[0..res_host_len] });
+    return 0; // success
+}
+
+/// Builds the .res image for one `.rc` script into `out`, which must hold
+/// `res_capacity` bytes. Returns the number of bytes written, or null when the
+/// script holds no resource data. The whole parse and emit path runs from
+/// `rc_text` alone, so the fuzzer and the tests drive it without a file.
+pub fn buildResImage(rc_text: []const u8, out: []u8) ?usize {
+    const path_utils = @import("../path_utils.zig");
+    const runtime = @import("../runtime.zig");
+    const out_buf = out;
+    // A second compile in the same process must not resolve a name the
+    // previous script defined, so the table starts empty on every run.
+    define_count = 0;
 
     // Minimal preprocessor: collect `#define NAME value` numeric defines so
     // dialog/control IDs can use symbolic names (as real .rc files do).
@@ -230,7 +321,7 @@ fn compileResources(arg_list: []const []const u8) i32 {
                     while (li < rc_text.len) {
                         const ch = rc_text[li];
                         const dv: u32 = if (ch >= '0' and ch <= '9') @as(u32, ch - '0') else if (is_hex and ch >= 'a' and ch <= 'f') @as(u32, ch - 'a' + 10) else if (is_hex and ch >= 'A' and ch <= 'F') @as(u32, ch - 'A' + 10) else break;
-                        val = val * (if (is_hex) @as(u32, 16) else @as(u32, 10)) + dv;
+                        val = accumulateBase(val, if (is_hex) 16 else 10, dv);
                         li += 1;
                     }
                     if (define_count < define_names.len and name.len > 0 and name.len < 32) {
@@ -297,7 +388,8 @@ fn compileResources(arg_list: []const []const u8) i32 {
                     const ch = rc_text[idx];
                     const dv: u32 = if (ch >= '0' and ch <= '9') @as(u32, ch - '0') else if (is_hex and ch >= 'a' and ch <= 'f') @as(u32, ch - 'a' + 10) else if (is_hex and ch >= 'A' and ch <= 'F') @as(u32, ch - 'A' + 10) else break;
                     const mult: u32 = if (is_hex) 16 else 10;
-                    id_val = id_val * mult + dv;
+                    id_val = std.math.mul(u32, id_val, mult) catch std.math.maxInt(u32);
+                    id_val = std.math.add(u32, id_val, dv) catch std.math.maxInt(u32);
                     idx += 1;
                 }
                 // Skip whitespace/comma to the string
@@ -384,7 +476,7 @@ fn compileResources(arg_list: []const []const u8) i32 {
             var is_menu = false;
             if (rc_text[mi] >= '0' and rc_text[mi] <= '9') {
                 while (mi < rc_text.len and rc_text[mi] >= '0' and rc_text[mi] <= '9') {
-                    mid = mid * 10 + @as(u32, rc_text[mi] - '0');
+                    mid = accumulateU32(mid, rc_text[mi] - '0');
                     mi += 1;
                 }
                 have_mid = true;
@@ -526,7 +618,7 @@ fn compileResources(arg_list: []const []const u8) i32 {
             var have_id = false;
             if (rc_text[idx2] >= '0' and rc_text[idx2] <= '9') {
                 while (idx2 < rc_text.len and rc_text[idx2] >= '0' and rc_text[idx2] <= '9') {
-                    did = did * 10 + @as(u32, rc_text[idx2] - '0');
+                    did = accumulateU32(did, rc_text[idx2] - '0');
                     idx2 += 1;
                 }
                 have_id = true;
@@ -590,7 +682,7 @@ fn compileResources(arg_list: []const []const u8) i32 {
                 }
                 var val: i32 = 0;
                 while (idx2 < rc_text.len and rc_text[idx2] >= '0' and rc_text[idx2] <= '9') {
-                    val = val * 10 + @as(i32, rc_text[idx2] - '0');
+                    val = accumulateI32(val, rc_text[idx2] - '0');
                     idx2 += 1;
                 }
                 coords[coord_count] = if (neg) -val else val;
@@ -614,10 +706,10 @@ fn compileResources(arg_list: []const []const u8) i32 {
                     exstyle = @bitCast(coords[0]);
                     cx_i = 1;
                 }
-                dlg_x = @intCast(coords[cx_i]);
-                dlg_y = @intCast(coords[cx_i + 1]);
-                dlg_cx = @intCast(coords[cx_i + 2]);
-                dlg_cy = @intCast(coords[cx_i + 3]);
+                dlg_x = clampI16(coords[cx_i]);
+                dlg_y = clampI16(coords[cx_i + 1]);
+                dlg_cx = clampI16(coords[cx_i + 2]);
+                dlg_cy = clampI16(coords[cx_i + 3]);
             }
 
             // Parse option keywords until BEGIN/{: STYLE, EXSTYLE, CAPTION, FONT, MENU, CLASS
@@ -644,10 +736,10 @@ fn compileResources(arg_list: []const []const u8) i32 {
                     while (idx2 < rc_text.len and std.ascii.isWhitespace(rc_text[idx2])) idx2 += 1;
                     var pt: u32 = 0;
                     while (idx2 < rc_text.len and rc_text[idx2] >= '0' and rc_text[idx2] <= '9') {
-                        pt = pt * 10 + @as(u32, rc_text[idx2] - '0');
+                        pt = accumulateU32(pt, rc_text[idx2] - '0');
                         idx2 += 1;
                     }
-                    font_pt = @intCast(pt);
+                    font_pt = clampU16(pt);
                     have_font = true;
                     while (idx2 < rc_text.len and (std.ascii.isWhitespace(rc_text[idx2]) or rc_text[idx2] == ',')) idx2 += 1;
                     font_name = parseQuotedString(rc_text, &idx2);
@@ -826,7 +918,7 @@ fn compileResources(arg_list: []const []const u8) i32 {
                     var v: u32 = 0;
                     var dg = ii;
                     while (dg < name_end and rc_text[dg] >= '0' and rc_text[dg] <= '9') {
-                        v = v * 10 + @as(u32, rc_text[dg] - '0');
+                        v = accumulateU32(v, rc_text[dg] - '0');
                         dg += 1;
                     }
                     iid = v;
@@ -859,21 +951,21 @@ fn compileResources(arg_list: []const []const u8) i32 {
             const ico_host_len = path_utils.toHostPath(ico_path, &ico_host_buf);
             if (ico_host_len == 0) {
                 trace.print("RCDLL: cannot resolve icon '{s}'\n", .{ico_path});
-                return 1;
+                return null;
             }
             var ico_file = std.Io.Dir.cwd().openFile(runtime.io(), ico_host_buf[0..ico_host_len], .{}) catch |err| {
                 trace.print("RCDLL: cannot open icon '{s}': {s}\n", .{ ico_host_buf[0..ico_host_len], @errorName(err) });
-                return 1;
+                return null;
             };
             defer ico_file.close(runtime.io());
             var ico_data: [8192]u8 = undefined;
             const ico_len = ico_file.readStreaming(runtime.io(), &.{&ico_data}) catch |err| {
                 trace.print("RCDLL: cannot read icon '{s}': {s}\n", .{ ico_host_buf[0..ico_host_len], @errorName(err) });
-                return 1;
+                return null;
             };
             if (ico_len < 22) {
                 trace.print("RCDLL: icon '{s}' too short ({d} bytes)\n", .{ ico_host_buf[0..ico_host_len], ico_len });
-                return 1;
+                return null;
             }
             // ICONDIR: reserved(2) type(2) count(2); first entry at offset 6.
             const count = std.mem.readInt(u16, ico_data[4..6], .little);
@@ -914,44 +1006,13 @@ fn compileResources(arg_list: []const []const u8) i32 {
 
     if (block_count == 0 and dlg_count == 0 and menu_count == 0 and icon_count == 0) {
         if (trace.enable_tracing) trace.print("RCDLL: no resource data\n", .{});
-        return 1;
+        return null;
     }
-
-    // Emit the .res file.
-    if (output == null) {
-        if (trace.enable_tracing) trace.print("RCDLL: no output file\n", .{});
-        return 1;
-    }
-    var res_host_buf: [1024]u8 = undefined;
-    const res_host_len = path_utils.toHostPath(output.?, &res_host_buf);
-    if (res_host_len == 0) return 1;
-    const posix_fs = @import("msvcrt/posix_fs.zig");
-    const out_fd = posix_fs.open(@as([*:0]const u8, @ptrCast(&res_host_buf)), 64 | 2 | 512, 0o666); // O_CREAT|O_RDWR|O_TRUNC
-    if (out_fd < 0) {
-        if (trace.enable_tracing) trace.print("RCDLL: cannot create '{s}'\n", .{res_host_buf[0..res_host_len]});
-        return 1;
-    }
-    const host_io = @import("host_io.zig");
-    const out_file = host_io.fileFromFd(@intCast(out_fd));
-    // Raw close — std.Io's close(runtime.io()) hits TLS (%fs:0x308) and
-    // faults inside the native64 compat dispatch context.
-    defer host_io.closeFile(out_file);
 
     if (trace.enable_tracing) trace.print("RCDLL: parsed {d} icons\n", .{icon_count});
 
-    // Upper bound on the .res image: 16 string blocks of 16 slots (a slot is a
-    // WORD length plus 128 UTF-16 chars), 8 dialogs, 8 menus and 4 icons, each
-    // behind a 32-byte resource header. The .rc file is guest-supplied, so the
-    // buffer is sized from the counts the parser can hold rather than a fixed
-    // stack array the emitters would run past.
+    // A slot is a WORD length plus up to 128 UTF-16 chars.
     const string_block_bytes = 16 * (2 + 128 * 2) + 4;
-    const out_capacity = 16 * (32 + string_block_bytes) +
-        8 * (32 + 4096) +
-        8 * (32 + 2048) +
-        4 * (32 + 32 + 32 + 4096);
-    const out_alloc = std.heap.page_allocator.alloc(u8, out_capacity) catch return 1;
-    defer std.heap.page_allocator.free(out_alloc);
-    const out_buf = out_alloc;
     var ob: usize = 0;
 
     for (0..block_count) |bi| {
@@ -1126,16 +1187,7 @@ fn compileResources(arg_list: []const []const u8) i32 {
         ob += gb;
     }
 
-    // The output file was already created and truncated by the open above, so
-    // a failed write leaves a partial .res on disk that a later build step
-    // would link as if it were complete. Say which file and how much is
-    // missing, then fail.
-    host_io.writeAllToFile(out_file, out_buf[0..ob]) catch |err| {
-        log.err("RCDLL: writing {d} bytes to '{s}' failed: {t}; the output file is truncated", .{ ob, res_host_buf[0..res_host_len], err });
-        return 1;
-    };
-    if (trace.enable_tracing) trace.print("RCDLL: wrote {d} bytes to '{s}'\n", .{ ob, res_host_buf[0..res_host_len] });
-    return 0; // success
+    return ob;
 }
 
 /// Parses a double-quoted string starting at `*idx` (which must point at the
@@ -1160,7 +1212,7 @@ fn parseStyleExpr(text: []const u8, idx: *usize) u32 {
         if (text[idx.*] >= '0' and text[idx.*] <= '9') {
             var v: u32 = 0;
             while (idx.* < text.len and text[idx.*] >= '0' and text[idx.*] <= '9') {
-                v = v * 10 + @as(u32, text[idx.*] - '0');
+                v = accumulateU32(v, text[idx.*] - '0');
                 idx.* += 1;
             }
             result |= v;
@@ -1339,7 +1391,7 @@ fn parseDialogControl(text: []const u8, idx: *usize, out: *DlgItem) bool {
     var id: u32 = 0;
     var have_numeric = false;
     while (idx.* < text.len and text[idx.*] >= '0' and text[idx.*] <= '9') {
-        id = id * 10 + @as(u32, text[idx.*] - '0');
+        id = accumulateU32(id, text[idx.*] - '0');
         idx.* += 1;
         have_numeric = true;
     }
@@ -1351,7 +1403,7 @@ fn parseDialogControl(text: []const u8, idx: *usize, out: *DlgItem) bool {
             idx.* = look + 1;
             var neg: u32 = 0;
             while (idx.* < text.len and text[idx.*] >= '0' and text[idx.*] <= '9') {
-                neg = neg * 10 + @as(u32, text[idx.*] - '0');
+                neg = accumulateU32(neg, text[idx.*] - '0');
                 idx.* += 1;
             }
             id = (~neg) +% 1; // two's complement
@@ -1383,7 +1435,7 @@ fn parseDialogControl(text: []const u8, idx: *usize, out: *DlgItem) bool {
             idx.* += 1;
         }
         while (idx.* < text.len and text[idx.*] >= '0' and text[idx.*] <= '9') {
-            v = v * 10 + @as(i32, text[idx.*] - '0');
+            v = accumulateI32(v, text[idx.*] - '0');
             idx.* += 1;
         }
         vals[vi] = if (neg) -v else v;
@@ -1414,10 +1466,10 @@ fn parseDialogControl(text: []const u8, idx: *usize, out: *DlgItem) bool {
 
     out.st = style;
     out.ex = 0;
-    out.x = @intCast(vals[0]);
-    out.y = @intCast(vals[1]);
-    out.cx = @intCast(vals[2]);
-    out.cy = @intCast(vals[3]);
+    out.x = clampI16(vals[0]);
+    out.y = clampI16(vals[1]);
+    out.cx = clampI16(vals[2]);
+    out.cy = clampI16(vals[3]);
     out.id = @intCast(id & 0xFFFF);
     out.class_atom = ct.class_atom;
     out.tlen = 0;
