@@ -1,9 +1,15 @@
 //! Compact 5x7 bitmap font for GDI text rendering.
 //!
-//! Covers ASCII 32..126 (95 glyphs). Each glyph is 7 rows; each row packs 5
-//! pixels into the low 5 bits of a byte (bit 0 = leftmost pixel). Row 0 is the
-//! top of the glyph. This is the classic "Tom Thumb"-style 5x7 face that maps
-//! well to the Win2K-era MS Sans Serif look at small sizes.
+//! Covers ASCII 32..126 (95 glyphs) plus the CP1252 range 0x80..0xFF, the
+//! Windows ANSI code page, so text in the Western European, Nordic, Turkish and
+//! Latin American languages renders as letters instead of '?'. Each glyph is 7
+//! rows; each row packs 5 pixels into the low 5 bits of a byte (bit 0 =
+//! leftmost pixel). Row 0 is the top of the glyph. This is the classic "Tom
+//! Thumb"-style 5x7 face that maps well to the Win2K-era MS Sans Serif look at
+//! small sizes. Code points outside ASCII and CP1252 (Cyrillic, Greek, Hebrew,
+//! Arabic, CJK) have no glyphs and still fall back to '?'.
+
+const std = @import("std");
 
 /// Glyph table indexed by (ASCII - 32). Row 7 (the descender row) is always 0
 /// so the renderer can draw 8 rows uniformly.
@@ -119,13 +125,314 @@ const glyphs = [_][7]u8{
     .{ 0x08, 0x15, 0x02, 0x00, 0x00, 0x00, 0x00 },
 };
 
+// --- CP1252 (0x80..0xFF) ---
+//
+// An accented letter needs room above the body, so the body gives up a row:
+// caps use their top five rows, lowercase their bottom five (its x-height
+// block starts at row 2). The bodies that lose a closing stroke (B D G O P R
+// S U) get a five-row shape that keeps it.
+
+const mark_grave = [2]u8{ 0x08, 0x04 };
+const mark_acute = [2]u8{ 0x02, 0x04 };
+const mark_circumflex = [2]u8{ 0x0A, 0x04 };
+const mark_tilde = [2]u8{ 0x0A, 0x15 };
+const mark_diaeresis = [2]u8{ 0x0A, 0x00 };
+const mark_ring = [2]u8{ 0x0A, 0x0A };
+
+/// The five rows an accented capital is drawn from.
+fn capBody(letter: u8) [5]u8 {
+    const closed = [_]struct { c: u8, body: [5]u8 }{
+        .{ .c = 'B', .body = .{ 0x1E, 0x11, 0x11, 0x1E, 0x11 } },
+        .{ .c = 'D', .body = .{ 0x1E, 0x11, 0x11, 0x11, 0x1E } },
+        .{ .c = 'G', .body = .{ 0x0E, 0x11, 0x17, 0x11, 0x0F } },
+        .{ .c = 'I', .body = .{ 0x0E, 0x04, 0x04, 0x04, 0x0E } },
+        .{ .c = 'O', .body = .{ 0x0E, 0x11, 0x11, 0x11, 0x0E } },
+        .{ .c = 'P', .body = .{ 0x1E, 0x11, 0x11, 0x1E, 0x10 } },
+        .{ .c = 'Q', .body = .{ 0x0E, 0x11, 0x11, 0x15, 0x0D } },
+        .{ .c = 'R', .body = .{ 0x1E, 0x11, 0x11, 0x1E, 0x14 } },
+        .{ .c = 'S', .body = .{ 0x0F, 0x10, 0x10, 0x0E, 0x1E } },
+        .{ .c = 'U', .body = .{ 0x11, 0x11, 0x11, 0x11, 0x0E } },
+    };
+    for (closed) |e| {
+        if (e.c == letter) return e.body;
+    }
+    const full = glyphs[letter - 32];
+    return .{ full[0], full[1], full[2], full[3], full[4] };
+}
+
+fn accentedCap(letter: u8, mark: [2]u8) [7]u8 {
+    const body = capBody(letter);
+    return .{ mark[0], mark[1], body[0], body[1], body[2], body[3], body[4] };
+}
+
+fn accentedLower(letter: u8, mark: [2]u8) [7]u8 {
+    const full = glyphs[letter - 32];
+    return .{ mark[0], mark[1], full[2], full[3], full[4], full[5], full[6] };
+}
+
+/// Appends the cedilla tail below a body whose last row is free.
+fn withCedilla(g: [7]u8) [7]u8 {
+    var out = g;
+    out[6] = (out[6] & ~@as(u8, 0x0C)) | 0x04;
+    return out;
+}
+
+/// Glyph table indexed by (CP1252 byte - 0x80).
+const cp1252 = [_][7]u8{
+    // 0x80 EURO, 0x81 undefined (blank)
+    .{ 0x07, 0x05, 0x0F, 0x19, 0x1F, 0x19, 0x0F },
+    .{ 0, 0, 0, 0, 0, 0, 0 },
+    // 0x82 SINGLE LOW-9 QUOTATION MARK
+    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x08 },
+    // 0x83 LATIN SMALL LETTER F WITH HOOK
+    .{ 0x04, 0x04, 0x1F, 0x09, 0x06, 0x00, 0x00 },
+    // 0x84 DOUBLE LOW-9 QUOTATION MARK
+    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x0A },
+    // 0x85 HORIZONTAL ELLIPSIS
+    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x15, 0x00 },
+    // 0x86 DAGGER, 0x87 DOUBLE DAGGER
+    .{ 0x04, 0x04, 0x1F, 0x04, 0x04, 0x04, 0x00 },
+    .{ 0x0A, 0x0A, 0x1F, 0x0A, 0x1F, 0x0A, 0x00 },
+    // 0x88 CIRCUMFLEX ACCENT, 0x89 PER MILLE SIGN
+    .{ 0x0A, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00 },
+    .{ 0x11, 0x12, 0x14, 0x08, 0x08, 0x10, 0x11 },
+    // 0x8A S-CARON, 0x8B SINGLE LEFT-POINTING ANGLE QUOTATION MARK
+    accentedCap('S', mark_circumflex),
+    .{ 0x00, 0x04, 0x08, 0x10, 0x08, 0x04, 0x00 },
+    // 0x8C OE, 0x8D undefined (blank)
+    .{ 0x0E, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x0E },
+    .{ 0, 0, 0, 0, 0, 0, 0 },
+    // 0x8E Z-CARON
+    accentedCap('Z', mark_circumflex),
+    // 0x8F undefined (blank)
+    .{ 0, 0, 0, 0, 0, 0, 0 },
+    // 0x90 undefined (blank)
+    .{ 0, 0, 0, 0, 0, 0, 0 },
+    // 0x91 LEFT SINGLE QUOTATION MARK, 0x92 RIGHT SINGLE QUOTATION MARK
+    .{ 0x00, 0x02, 0x04, 0x00, 0x00, 0x00, 0x00 },
+    .{ 0x00, 0x08, 0x04, 0x00, 0x00, 0x00, 0x00 },
+    // 0x93 LEFT DOUBLE QUOTATION MARK, 0x94 RIGHT DOUBLE QUOTATION MARK
+    .{ 0x00, 0x0A, 0x0A, 0x00, 0x00, 0x00, 0x00 },
+    .{ 0x00, 0x0A, 0x0A, 0x00, 0x00, 0x00, 0x00 },
+    // 0x95 BULLET, 0x96 EN DASH, 0x97 EM DASH
+    .{ 0x00, 0x0E, 0x0E, 0x0E, 0x00, 0x00, 0x00 },
+    .{ 0x00, 0x00, 0x00, 0x00, 0x1F, 0x00, 0x00 },
+    .{ 0x00, 0x00, 0x00, 0x00, 0x1F, 0x00, 0x00 },
+    // 0x98 SMALL TILDE, 0x99 TRADE MARK SIGN
+    .{ 0x0A, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00 },
+    .{ 0x11, 0x1F, 0x15, 0x11, 0x11, 0x11, 0x00 },
+    // 0x9A s-CARON, 0x9B SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
+    accentedLower('s', mark_circumflex),
+    .{ 0x00, 0x08, 0x10, 0x08, 0x00, 0x00, 0x00 },
+    // 0x9C oe
+    .{ 0x00, 0x00, 0x0E, 0x1B, 0x1E, 0x1B, 0x0E },
+    // 0x9D undefined (blank)
+    .{ 0, 0, 0, 0, 0, 0, 0 },
+    // 0x9E z-CARON
+    accentedLower('z', mark_circumflex),
+    // 0x9F Y-DIAERESIS
+    accentedCap('Y', mark_diaeresis),
+    // 0xA0 NO-BREAK SPACE
+    .{ 0, 0, 0, 0, 0, 0, 0 },
+    // 0xA1 INVERTED EXCLAMATION MARK
+    .{ 0x00, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04 },
+    // 0xA2 CENT SIGN
+    .{ 0x00, 0x02, 0x0E, 0x12, 0x12, 0x0E, 0x00 },
+    // 0xA3 POUND SIGN
+    .{ 0x06, 0x08, 0x1C, 0x08, 0x08, 0x08, 0x1F },
+    // 0xA4 CURRENCY SIGN
+    .{ 0x00, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x00 },
+    // 0xA5 YEN SIGN
+    .{ 0x11, 0x11, 0x0A, 0x04, 0x0A, 0x1F, 0x04 },
+    // 0xA6 BROKEN BAR
+    .{ 0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00 },
+    // 0xA7 SECTION SIGN
+    .{ 0x04, 0x0A, 0x11, 0x0A, 0x04, 0x0A, 0x11 },
+    // 0xA8 DIAERESIS
+    .{ 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+    // 0xA9 COPYRIGHT SIGN
+    .{ 0x0E, 0x11, 0x17, 0x15, 0x17, 0x11, 0x0E },
+    // 0xAA FEMININE ORDINAL INDICATOR
+    .{ 0x00, 0x0E, 0x01, 0x0F, 0x11, 0x0F, 0x00 },
+    // 0xAB LEFT-POINTING DOUBLE ANGLE QUOTATION MARK
+    .{ 0x00, 0x00, 0x0A, 0x15, 0x0A, 0x00, 0x00 },
+    // 0xAC NOT SIGN
+    .{ 0x00, 0x00, 0x1F, 0x04, 0x00, 0x00, 0x00 },
+    // 0xAD SOFT HYPHEN
+    .{ 0, 0, 0, 0, 0, 0, 0 },
+    // 0xAE REGISTERED SIGN
+    .{ 0x0E, 0x11, 0x17, 0x11, 0x0E, 0x00, 0x00 },
+    // 0xAF MACRON
+    .{ 0x04, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00 },
+    // 0xB0 DEGREE SIGN
+    .{ 0x00, 0x0E, 0x0A, 0x0E, 0x00, 0x00, 0x00 },
+    // 0xB1 PLUS-MINUS SIGN
+    .{ 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00, 0x1F },
+    // 0xB2 SUPERSCRIPT TWO, 0xB3 SUPERSCRIPT THREE
+    .{ 0x0C, 0x02, 0x06, 0x08, 0x1F, 0x00, 0x00 },
+    .{ 0x0C, 0x04, 0x0C, 0x00, 0x1F, 0x00, 0x00 },
+    // 0xB4 ACUTE ACCENT
+    .{ 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00 },
+    // 0xB5 MICRO SIGN
+    .{ 0x00, 0x00, 0x11, 0x11, 0x11, 0x1F, 0x10 },
+    // 0xB6 PILCROW SIGN
+    .{ 0x0E, 0x1F, 0x1F, 0x0E, 0x04, 0x04, 0x00 },
+    // 0xB7 MIDDLE DOT
+    .{ 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00 },
+    // 0xB8 CEDILLA
+    .{ 0x0C, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00 },
+    // 0xB9 SUPERSCRIPT ONE
+    .{ 0x0C, 0x04, 0x1F, 0x00, 0x00, 0x00, 0x00 },
+    // 0xBA MASCULINE ORDINAL INDICATOR
+    .{ 0x0E, 0x0A, 0x0E, 0x00, 0x0E, 0x00, 0x00 },
+    // 0xBB RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
+    .{ 0x00, 0x00, 0x0A, 0x15, 0x0A, 0x00, 0x00 },
+    // 0xBC VULGAR FRACTION ONE QUARTER
+    .{ 0x0C, 0x04, 0x08, 0x1F, 0x08, 0x08, 0x08 },
+    // 0xBD VULGAR FRACTION ONE HALF
+    .{ 0x0C, 0x04, 0x08, 0x1F, 0x08, 0x08, 0x1F },
+    // 0xBE VULGAR FRACTION THREE QUARTERS
+    .{ 0x0C, 0x0C, 0x08, 0x04, 0x18, 0x00, 0x00 },
+    // 0xBF INVERTED QUESTION MARK
+    .{ 0x04, 0x00, 0x0E, 0x11, 0x01, 0x02, 0x0C },
+    // 0xC0 A-GRAVE .. 0xC5 A-RING
+    accentedCap('A', mark_grave),
+    accentedCap('A', mark_acute),
+    accentedCap('A', mark_circumflex),
+    accentedCap('A', mark_tilde),
+    accentedCap('A', mark_diaeresis),
+    .{ 0x0A, 0x0A, 0x0E, 0x11, 0x11, 0x1F, 0x11 },
+    // 0xC6 AE
+    .{ 0x0E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x0E },
+    // 0xC7 C-CEDILLA
+    withCedilla(glyphs['C' - 32]),
+    // 0xC8 E-GRAVE .. 0xCB E-DIAERESIS
+    accentedCap('E', mark_grave),
+    accentedCap('E', mark_acute),
+    accentedCap('E', mark_circumflex),
+    accentedCap('E', mark_diaeresis),
+    // 0xCC I-GRAVE .. 0xCF I-DIAERESIS
+    accentedCap('I', mark_grave),
+    accentedCap('I', mark_acute),
+    accentedCap('I', mark_circumflex),
+    accentedCap('I', mark_diaeresis),
+    // 0xD0 ETH
+    .{ 0x1C, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1C },
+    // 0xD1 N-TILDE
+    accentedCap('N', mark_tilde),
+    // 0xD2 O-GRAVE .. 0xD6 O-DIAERESIS
+    accentedCap('O', mark_grave),
+    accentedCap('O', mark_acute),
+    accentedCap('O', mark_circumflex),
+    accentedCap('O', mark_tilde),
+    accentedCap('O', mark_diaeresis),
+    // 0xD7 MULTIPLICATION SIGN
+    .{ 0x00, 0x00, 0x11, 0x0A, 0x04, 0x0A, 0x11 },
+    // 0xD8 O-STROKE
+    .{ 0x03, 0x04, 0x0E, 0x11, 0x11, 0x0E, 0x0C },
+    // 0xD9 U-GRAVE .. 0xDC U-DIAERESIS
+    accentedCap('U', mark_grave),
+    accentedCap('U', mark_acute),
+    accentedCap('U', mark_circumflex),
+    accentedCap('U', mark_diaeresis),
+    // 0xDD Y-ACUTE
+    accentedCap('Y', mark_acute),
+    // 0xDE THORN
+    .{ 0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10 },
+    // 0xDF sharp s
+    .{ 0x0C, 0x12, 0x14, 0x08, 0x15, 0x12, 0x0D },
+    // 0xE0 a-GRAVE .. 0xE5 a-RING
+    accentedLower('a', mark_grave),
+    accentedLower('a', mark_acute),
+    accentedLower('a', mark_circumflex),
+    accentedLower('a', mark_tilde),
+    accentedLower('a', mark_diaeresis),
+    .{ 0x0A, 0x0A, 0x0E, 0x01, 0x0F, 0x11, 0x0F },
+    // 0xE6 ae
+    .{ 0x00, 0x00, 0x0E, 0x1B, 0x1E, 0x1B, 0x0E },
+    // 0xE7 c-CEDILLA
+    withCedilla(glyphs['c' - 32]),
+    // 0xE8 e-GRAVE .. 0xEB e-DIAERESIS
+    accentedLower('e', mark_grave),
+    accentedLower('e', mark_acute),
+    accentedLower('e', mark_circumflex),
+    accentedLower('e', mark_diaeresis),
+    // 0xEC i-GRAVE .. 0xEF i-DIAERESIS
+    accentedLower('i', mark_grave),
+    accentedLower('i', mark_acute),
+    accentedLower('i', mark_circumflex),
+    accentedLower('i', mark_diaeresis),
+    // 0xF0 eth
+    .{ 0x00, 0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11 },
+    // 0xF1 n-TILDE
+    accentedLower('n', mark_tilde),
+    // 0xF2 o-GRAVE .. 0xF6 o-DIAERESIS
+    accentedLower('o', mark_grave),
+    accentedLower('o', mark_acute),
+    accentedLower('o', mark_circumflex),
+    accentedLower('o', mark_tilde),
+    accentedLower('o', mark_diaeresis),
+    // 0xF7 DIVISION SIGN
+    .{ 0x00, 0x04, 0x00, 0x1F, 0x00, 0x04, 0x00 },
+    // 0xF8 o-STROKE
+    .{ 0x00, 0x02, 0x0E, 0x11, 0x11, 0x0E, 0x04 },
+    // 0xF9 u-GRAVE .. 0xFC u-DIAERESIS
+    accentedLower('u', mark_grave),
+    accentedLower('u', mark_acute),
+    accentedLower('u', mark_circumflex),
+    accentedLower('u', mark_diaeresis),
+    // 0xFD y-ACUTE
+    accentedLower('y', mark_acute),
+    // 0xFE thorn
+    .{ 0x00, 0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10 },
+    // 0xFF y-DIAERESIS
+    accentedLower('y', mark_diaeresis),
+};
+
 /// Renders one 5x7 glyph for the given ASCII character into the framebuffer
 /// at (x, y) using `color`, optionally filling an opaque background.
 pub const glyph_width: i32 = 6; // 5 columns + 1 spacing column
 pub const glyph_height: i32 = 7;
 
-/// Returns the 7-row bit pattern for an ASCII character (32..126), or a '?'.
+/// Returns the 7-row bit pattern for a byte of Windows ANSI text (CP1252) or
+/// ASCII, or a '?' for anything the face does not cover.
 pub fn glyphForChar(c: u8) [7]u8 {
     if (c >= 32 and c <= 126) return glyphs[c - 32];
+    if (c >= 0x80) return cp1252[c - 0x80];
     return glyphs['?' - 32];
+}
+
+const testing = std.testing;
+
+test "CP1252 letters differ from the unmapped fallback" {
+    // Every accented letter must carry its mark, so none of them may render as
+    // the '?' that non-CP1252 code points still fall back to.
+    const fallback = glyphForChar('?');
+    for ([_]u8{ 0xC0, 0xC1, 0xC4, 0xC7, 0xC9, 0xD1, 0xD6, 0xDC, 0xDF, 0xE0, 0xE9, 0xF1, 0xFC, 0xFF }) |c| {
+        try testing.expect(!std.meta.eql(glyphForChar(c), fallback));
+    }
+}
+
+test "an accented letter keeps the body of its base" {
+    // 'é' is 'e' with an acute above it, and 'Ø' keeps the O outline.
+    try testing.expectEqual(@as(u8, 0x04), glyphForChar(0xE9)[1]);
+    try testing.expectEqual(glyphs['e' - 32][2], glyphForChar(0xE9)[2]);
+    try testing.expectEqual(glyphs['E' - 32][1], glyphForChar(0xC9)[3]);
+    try testing.expect(glyphForChar(0xD8)[3] & 0x11 == 0x11); // the O body
+    // The space characters stay blank.
+    const blank = [_]u8{0} ** 7;
+    try testing.expect(std.meta.eql(blank, glyphForChar(0xA0)));
+}
+
+test "unmapped code points render as '?' and undefined CP1252 bytes as blank" {
+    const fallback = glyphs['?' - 32];
+    const blank = [_]u8{0} ** 7;
+    for ([_]u8{ 0x01, 0x1F, 0x7F }) |c| {
+        try testing.expect(std.meta.eql(fallback, glyphForChar(c)));
+    }
+    // CP1252 leaves 0x81, 0x8D, 0x8F, 0x90 and 0x9D unassigned; the face has
+    // nothing to draw for them and must not invent a '?'.
+    for ([_]u8{ 0x81, 0x8D, 0x8F, 0x90, 0x9D }) |c| {
+        try testing.expect(std.meta.eql(blank, glyphForChar(c)));
+    }
 }

@@ -588,14 +588,16 @@ pub fn TextOutA(hdc: usize, x: i32, y: i32, lpString: usize, c: i32) callconv(w3
 }
 
 pub fn TextOutW(hdc: usize, x: i32, y: i32, lpString: usize, c: i32) callconv(w32cc.WINAPI) i32 {
-    // Widen ASCII-compatible wide strings by narrowing each wchar to its
-    // low byte, then reuse the A renderer. Non-ASCII wchars render as '?'.
+    // Narrow each wchar that the 5x7 face covers (CP1252) to its byte, then
+    // reuse the A renderer. A wchar above that range has no glyph: mapping it
+    // to '?' keeps a Cyrillic or CJK run from drawing the low byte of an
+    // unrelated letter.
     if (lpString == 0 or c <= 0) return 1;
     var narrow_buf: [4096]u8 = undefined;
     const count: usize = @intCast(@min(c, 4096));
     const wsrc = @as([*]const u16, @ptrFromInt(trace.addr(lpString)));
     for (0..count) |i| {
-        narrow_buf[i] = @intCast(wsrc[i] & 0xFF);
+        narrow_buf[i] = if (wsrc[i] <= 0xFF) @intCast(wsrc[i]) else '?';
     }
     return TextOutA(hdc, x, y, @intFromPtr(&narrow_buf), @intCast(count));
 }
