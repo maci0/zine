@@ -1411,19 +1411,7 @@ pub fn CopyFileW(lpExistingFileName_ptr: usize, lpNewFileName_ptr: usize, bFailI
     const src_name = narrowWide(trace.c_span_w(lpExistingFileName_ptr), &src_narrow);
     const dst_name = narrowWide(trace.c_span_w(lpNewFileName_ptr), &dst_narrow);
     if (trace.enable_tracing) trace.print("KERNEL32: CopyFileW -> CopyFileA\n", .{});
-
-    const path_utils = @import("../../path_utils.zig");
-    var src_buf: [1024]u8 = undefined;
-    const src_len = path_utils.toHostPath(src_name, &src_buf);
-    if (src_len == 0) return 0;
-    var dst_buf: [1024]u8 = undefined;
-    const dst_len = path_utils.toHostPath(dst_name, &dst_buf);
-    if (dst_len == 0) return 0;
-
-    // Win32 contract: fail when the destination exists and bFailIfExists is TRUE
-    if (bFailIfExists != 0 and fileExistsPosix(dst_buf[0..dst_len])) return 0;
-
-    return copyFileHost(src_buf[0..src_len], dst_buf[0..dst_len]);
+    return CopyFileA(@intFromPtr(src_name.ptr), @intFromPtr(dst_name.ptr), bFailIfExists);
 }
 
 /// Check existence of a host POSIX path.

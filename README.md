@@ -58,6 +58,10 @@ promise between versions, so a breaking change takes the next minor.
   resizing now keep it on screen. Host errors are shown in the words the host
   wrote for the person at the keyboard, without an "API Error:" label in
   front of them.
+- `zig build -Darch=x86_64` no longer fails to compile: two `log.err` calls in
+  the compat-mode thunk path passed no argument tuple, and a module's entry
+  point was annotated `?u32` while the field it initializes is `?usize`, which
+  only compiled where `usize` is 32 bits.
 - `RegisterWindowMessageW`, `RegisterClipboardFormatA` and
   `RegisterClipboardFormatW` minted a fresh id on every call and kept no name,
   so a guest that registers the same string twice never got the same id back

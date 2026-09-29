@@ -249,8 +249,10 @@ pub const DeviceContext = struct {
     map_mode: i32,
 };
 
-/// Global table of active Device Contexts.
-pub var dc_entries: [128]DeviceContext = [_]DeviceContext{.{
+/// A DC slot that belongs to no handle: handle 0 with the Win32 defaults for
+/// every selection and mode. Registering a DC overwrites this, and freeing one
+/// puts it back.
+pub const empty_dc: DeviceContext = .{
     .handle = 0,
     .bitmap = 0,
     .brush = 0,
@@ -263,7 +265,10 @@ pub var dc_entries: [128]DeviceContext = [_]DeviceContext{.{
     .stretch_mode = 1,
     .text_align = 0,
     .map_mode = 1,
-}} ** 128;
+};
+
+/// Global table of active Device Contexts.
+pub var dc_entries: [128]DeviceContext = [_]DeviceContext{empty_dc} ** 128;
 /// Current number of registered DCs.
 pub var dc_count: usize = 0;
 
@@ -280,20 +285,7 @@ pub fn unregisterDc(handle: usize) bool {
     for (dc_entries[0..dc_count], 0..) |*dc_entry, i| {
         if (dc_entry.handle == handle) {
             dc_entries[i] = dc_entries[dc_count - 1];
-            dc_entries[dc_count - 1] = .{
-                .handle = 0,
-                .bitmap = 0,
-                .brush = 0,
-                .pen = 0,
-                .font = 0,
-                .bk_mode = 2,
-                .bk_color = 0x00FFFFFF,
-                .text_color = 0x00000000,
-                .rop2 = 13,
-                .stretch_mode = 1,
-                .text_align = 0,
-                .map_mode = 1,
-            };
+            dc_entries[dc_count - 1] = empty_dc;
             dc_count -= 1;
             return true;
         }

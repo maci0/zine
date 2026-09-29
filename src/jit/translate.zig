@@ -92,6 +92,25 @@ pub fn emitEffectiveAddress(body: *Body, insn: *const decoder.Instruction, idx: 
     }
 }
 
+/// Masks the value on top of the Wasm stack down to the operand size, so a
+/// byte or word operand never sees the 32 bits above it (`or al, al` looks at
+/// AL alone). A dword operand already holds the full 32 bits.
+pub fn emitTruncateToSize(body: *Body, op_size: cpu_mod.OpSize) !void {
+    switch (op_size) {
+        .byte => {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0xFF);
+            try body.appendOpcode(.i32_and);
+        },
+        .word => {
+            try body.appendOpcode(.i32_const);
+            try body.appendIleb128(0xFFFF);
+            try body.appendOpcode(.i32_and);
+        },
+        .dword => {},
+    }
+}
+
 /// Load operand value onto Wasm stack.
 pub fn emitLoadOperand(body: *Body, insn: *const decoder.Instruction, idx: u1) !void {
     const kind = if (idx == 0) insn.op0_kind else insn.op1_kind;
@@ -114,19 +133,7 @@ pub fn emitLoadOperand(body: *Body, insn: *const decoder.Instruction, idx: u1) !
                 try body.appendUleb128(reg);
                 // Byte/word register operands read only the low 8/16 bits
                 // (e.g. `cmp al, [mem]` must not see the full EAX).
-                switch (insn.op_size) {
-                    .byte => {
-                        try body.appendOpcode(.i32_const);
-                        try body.appendIleb128(0xFF);
-                        try body.appendOpcode(.i32_and);
-                    },
-                    .word => {
-                        try body.appendOpcode(.i32_const);
-                        try body.appendIleb128(0xFFFF);
-                        try body.appendOpcode(.i32_and);
-                    },
-                    .dword => {},
-                }
+                try emitTruncateToSize(body, insn.op_size);
             }
         },
         .mem => {
@@ -283,19 +290,7 @@ pub fn emitUpdateZfSf(body: *Body, op_size: cpu_mod.OpSize) !void {
     try body.appendOpcode(.local_tee);
     try body.appendUleb128(LOCAL_SCRATCH);
     // Truncate to the operand size (dword is already full 32-bit).
-    switch (op_size) {
-        .byte => {
-            try body.appendOpcode(.i32_const);
-            try body.appendIleb128(0xFF);
-            try body.appendOpcode(.i32_and);
-        },
-        .word => {
-            try body.appendOpcode(.i32_const);
-            try body.appendIleb128(0xFFFF);
-            try body.appendOpcode(.i32_and);
-        },
-        .dword => {},
-    }
+    try emitTruncateToSize(body, op_size);
     // Store the truncated result back so SF reads the masked value.
     try body.appendOpcode(.local_set);
     try body.appendUleb128(LOCAL_SCRATCH);

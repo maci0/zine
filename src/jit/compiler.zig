@@ -299,73 +299,22 @@ pub const JitCompiler = struct {
         try body.appendUleb128(t.LOCAL_SCRATCH);
 
         // CF = (eflags >> 0) & 1
-        try body.appendOpcode(.local_get);
-        try body.appendUleb128(t.LOCAL_SCRATCH);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(1);
-        try body.appendOpcode(.i32_and);
-        try body.appendOpcode(.local_set);
-        try body.appendUleb128(t.LOCAL_CF);
+        try emitFlagFromEflags(body, t.LOCAL_CF, 0);
 
         // PF = (eflags >> 2) & 1
-        try body.appendOpcode(.local_get);
-        try body.appendUleb128(t.LOCAL_SCRATCH);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(2);
-        try body.appendOpcode(.i32_shr_u);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(1);
-        try body.appendOpcode(.i32_and);
-        try body.appendOpcode(.local_set);
-        try body.appendUleb128(t.LOCAL_PF);
+        try emitFlagFromEflags(body, t.LOCAL_PF, 2);
 
         // ZF = (eflags >> 6) & 1
-        try body.appendOpcode(.local_get);
-        try body.appendUleb128(t.LOCAL_SCRATCH);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(6);
-        try body.appendOpcode(.i32_shr_u);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(1);
-        try body.appendOpcode(.i32_and);
-        try body.appendOpcode(.local_set);
-        try body.appendUleb128(t.LOCAL_ZF);
+        try emitFlagFromEflags(body, t.LOCAL_ZF, 6);
 
         // SF = (eflags >> 7) & 1
-        try body.appendOpcode(.local_get);
-        try body.appendUleb128(t.LOCAL_SCRATCH);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(7);
-        try body.appendOpcode(.i32_shr_u);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(1);
-        try body.appendOpcode(.i32_and);
-        try body.appendOpcode(.local_set);
-        try body.appendUleb128(t.LOCAL_SF);
+        try emitFlagFromEflags(body, t.LOCAL_SF, 7);
 
         // DF = (eflags >> 10) & 1
-        try body.appendOpcode(.local_get);
-        try body.appendUleb128(t.LOCAL_SCRATCH);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(10);
-        try body.appendOpcode(.i32_shr_u);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(1);
-        try body.appendOpcode(.i32_and);
-        try body.appendOpcode(.local_set);
-        try body.appendUleb128(t.LOCAL_DF);
+        try emitFlagFromEflags(body, t.LOCAL_DF, 10);
 
         // OF = (eflags >> 11) & 1
-        try body.appendOpcode(.local_get);
-        try body.appendUleb128(t.LOCAL_SCRATCH);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(11);
-        try body.appendOpcode(.i32_shr_u);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(1);
-        try body.appendOpcode(.i32_and);
-        try body.appendOpcode(.local_set);
-        try body.appendUleb128(t.LOCAL_OF);
+        try emitFlagFromEflags(body, t.LOCAL_OF, 11);
     }
 
     /// Emit epilogue: store all CPU registers and flags back to the state struct.
@@ -387,39 +336,12 @@ pub const JitCompiler = struct {
 
         try body.appendOpcode(.i32_const);
         try body.appendIleb128(0x202); // reserved + IF
-        try body.appendOpcode(.local_get);
-        try body.appendUleb128(t.LOCAL_CF);
-        try body.appendOpcode(.i32_or); // CF at bit 0
-        try body.appendOpcode(.local_get);
-        try body.appendUleb128(t.LOCAL_PF);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(2);
-        try body.appendOpcode(.i32_shl);
-        try body.appendOpcode(.i32_or); // PF at bit 2
-        try body.appendOpcode(.local_get);
-        try body.appendUleb128(t.LOCAL_ZF);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(6);
-        try body.appendOpcode(.i32_shl);
-        try body.appendOpcode(.i32_or); // ZF at bit 6
-        try body.appendOpcode(.local_get);
-        try body.appendUleb128(t.LOCAL_SF);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(7);
-        try body.appendOpcode(.i32_shl);
-        try body.appendOpcode(.i32_or); // SF at bit 7
-        try body.appendOpcode(.local_get);
-        try body.appendUleb128(t.LOCAL_DF);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(10);
-        try body.appendOpcode(.i32_shl);
-        try body.appendOpcode(.i32_or); // DF at bit 10
-        try body.appendOpcode(.local_get);
-        try body.appendUleb128(t.LOCAL_OF);
-        try body.appendOpcode(.i32_const);
-        try body.appendIleb128(11);
-        try body.appendOpcode(.i32_shl);
-        try body.appendOpcode(.i32_or); // OF at bit 11
+        try emitFlagIntoEflags(body, t.LOCAL_CF, 0);
+        try emitFlagIntoEflags(body, t.LOCAL_PF, 2);
+        try emitFlagIntoEflags(body, t.LOCAL_ZF, 6);
+        try emitFlagIntoEflags(body, t.LOCAL_SF, 7);
+        try emitFlagIntoEflags(body, t.LOCAL_DF, 10);
+        try emitFlagIntoEflags(body, t.LOCAL_OF, 11);
 
         try body.appendOpcode(.i32_store);
         try body.appendUleb128(2);
@@ -621,12 +543,7 @@ pub const JitCompiler = struct {
                 // Sign-extend AX/AL into EAX (simplified: sign-extend low 16 to 32)
                 try body.appendOpcode(.local_get);
                 try body.appendUleb128(t.REG_EAX);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(16);
-                try body.appendOpcode(.i32_shl);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(16);
-                try body.appendOpcode(.i32_shr_s);
+                try emitSignExtendFrom(body, 16);
                 try body.appendOpcode(.local_set);
                 try body.appendUleb128(t.REG_EAX);
             },
@@ -648,91 +565,29 @@ pub const JitCompiler = struct {
                 // Synthesize EFLAGS from flag locals and push
                 try body.appendOpcode(.i32_const);
                 try body.appendIleb128(0x202); // Reserved + IF
-                try body.appendOpcode(.local_get);
-                try body.appendUleb128(t.LOCAL_CF);
-                try body.appendOpcode(.i32_or); // CF at bit 0
-                try body.appendOpcode(.local_get);
-                try body.appendUleb128(t.LOCAL_ZF);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(6);
-                try body.appendOpcode(.i32_shl);
-                try body.appendOpcode(.i32_or); // ZF at bit 6
-                try body.appendOpcode(.local_get);
-                try body.appendUleb128(t.LOCAL_SF);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(7);
-                try body.appendOpcode(.i32_shl);
-                try body.appendOpcode(.i32_or); // SF at bit 7
-                try body.appendOpcode(.local_get);
-                try body.appendUleb128(t.LOCAL_OF);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(11);
-                try body.appendOpcode(.i32_shl);
-                try body.appendOpcode(.i32_or); // OF at bit 11
-                try body.appendOpcode(.local_get);
-                try body.appendUleb128(t.LOCAL_DF);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(10);
-                try body.appendOpcode(.i32_shl);
-                try body.appendOpcode(.i32_or); // DF at bit 10
+                try emitFlagIntoEflags(body, t.LOCAL_CF, 0);
+                try emitFlagIntoEflags(body, t.LOCAL_ZF, 6);
+                try emitFlagIntoEflags(body, t.LOCAL_SF, 7);
+                try emitFlagIntoEflags(body, t.LOCAL_OF, 11);
+                try emitFlagIntoEflags(body, t.LOCAL_DF, 10);
                 try t.emitPush32(body);
             },
 
             // ===== POPFD (9D) =====
             0x9D => {
                 try t.emitPop32(body);
-                try body.appendOpcode(.local_tee);
+                try body.appendOpcode(.local_set);
                 try body.appendUleb128(t.LOCAL_SCRATCH);
                 // Extract CF (bit 0)
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(1);
-                try body.appendOpcode(.i32_and);
-                try body.appendOpcode(.local_set);
-                try body.appendUleb128(t.LOCAL_CF);
+                try emitFlagFromEflags(body, t.LOCAL_CF, 0);
                 // ZF (bit 6)
-                try body.appendOpcode(.local_get);
-                try body.appendUleb128(t.LOCAL_SCRATCH);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(6);
-                try body.appendOpcode(.i32_shr_u);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(1);
-                try body.appendOpcode(.i32_and);
-                try body.appendOpcode(.local_set);
-                try body.appendUleb128(t.LOCAL_ZF);
+                try emitFlagFromEflags(body, t.LOCAL_ZF, 6);
                 // SF (bit 7)
-                try body.appendOpcode(.local_get);
-                try body.appendUleb128(t.LOCAL_SCRATCH);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(7);
-                try body.appendOpcode(.i32_shr_u);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(1);
-                try body.appendOpcode(.i32_and);
-                try body.appendOpcode(.local_set);
-                try body.appendUleb128(t.LOCAL_SF);
+                try emitFlagFromEflags(body, t.LOCAL_SF, 7);
                 // OF (bit 11)
-                try body.appendOpcode(.local_get);
-                try body.appendUleb128(t.LOCAL_SCRATCH);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(11);
-                try body.appendOpcode(.i32_shr_u);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(1);
-                try body.appendOpcode(.i32_and);
-                try body.appendOpcode(.local_set);
-                try body.appendUleb128(t.LOCAL_OF);
+                try emitFlagFromEflags(body, t.LOCAL_OF, 11);
                 // DF (bit 10)
-                try body.appendOpcode(.local_get);
-                try body.appendUleb128(t.LOCAL_SCRATCH);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(10);
-                try body.appendOpcode(.i32_shr_u);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(1);
-                try body.appendOpcode(.i32_and);
-                try body.appendOpcode(.local_set);
-                try body.appendUleb128(t.LOCAL_DF);
+                try emitFlagFromEflags(body, t.LOCAL_DF, 10);
             },
 
             // ===== SAHF (9E) / LAHF (9F) — not translatable; fail the block =====
@@ -851,7 +706,7 @@ pub const JitCompiler = struct {
             },
 
             // ===== LOOP/LOOPcc/JECXZ (E0-E3) =====
-            0xE0 => { // LOOPNE: ECX-=1, jump if ECX!=0 && ZF=0
+            0xE0, 0xE1 => { // LOOPNE/LOOPE: ECX-=1, jump if ECX!=0 && ZF matches
                 try body.appendOpcode(.local_get);
                 try body.appendUleb128(t.REG_ECX);
                 try body.appendOpcode(.i32_const);
@@ -861,21 +716,7 @@ pub const JitCompiler = struct {
                 try body.appendUleb128(t.REG_ECX);
                 try body.appendOpcode(.local_get);
                 try body.appendUleb128(t.LOCAL_ZF);
-                try body.appendOpcode(.i32_eqz);
-                try body.appendOpcode(.i32_and);
-                try body.appendOpcode(.br_if);
-                try body.appendUleb128(0);
-            },
-            0xE1 => { // LOOPE: ECX-=1, jump if ECX!=0 && ZF=1
-                try body.appendOpcode(.local_get);
-                try body.appendUleb128(t.REG_ECX);
-                try body.appendOpcode(.i32_const);
-                try body.appendIleb128(1);
-                try body.appendOpcode(.i32_sub);
-                try body.appendOpcode(.local_tee);
-                try body.appendUleb128(t.REG_ECX);
-                try body.appendOpcode(.local_get);
-                try body.appendUleb128(t.LOCAL_ZF);
+                if (insn.opcode == 0xE0) try body.appendOpcode(.i32_eqz);
                 try body.appendOpcode(.i32_and);
                 try body.appendOpcode(.br_if);
                 try body.appendUleb128(0);
@@ -1000,12 +841,7 @@ pub const JitCompiler = struct {
             0x0FBE => {
                 if (insn.has_modrm) {
                     try t.emitLoadOperand(body, insn, 1);
-                    try body.appendOpcode(.i32_const);
-                    try body.appendIleb128(24);
-                    try body.appendOpcode(.i32_shl);
-                    try body.appendOpcode(.i32_const);
-                    try body.appendIleb128(24);
-                    try body.appendOpcode(.i32_shr_s);
+                    try emitSignExtendFrom(body, 24);
                     try body.appendOpcode(.local_set);
                     try body.appendUleb128(insn.modrm_reg);
                 }
@@ -1014,12 +850,7 @@ pub const JitCompiler = struct {
             0x0FBF => {
                 if (insn.has_modrm) {
                     try t.emitLoadOperand(body, insn, 1);
-                    try body.appendOpcode(.i32_const);
-                    try body.appendIleb128(16);
-                    try body.appendOpcode(.i32_shl);
-                    try body.appendOpcode(.i32_const);
-                    try body.appendIleb128(16);
-                    try body.appendOpcode(.i32_shr_s);
+                    try emitSignExtendFrom(body, 16);
                     try body.appendOpcode(.local_set);
                     try body.appendUleb128(insn.modrm_reg);
                 }
@@ -1212,6 +1043,42 @@ pub const JitCompiler = struct {
 // Sub-translators (factored out to keep the main switch readable)
 // =======================================================================
 
+/// Shifts a flag local into place and ORs it into the EFLAGS value on the
+/// wasm stack. The caller must have pushed the EFLAGS base value first.
+fn emitFlagIntoEflags(body: *Body, flag_local: u32, bit: u8) !void {
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(flag_local);
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(bit);
+    try body.appendOpcode(.i32_shl);
+    try body.appendOpcode(.i32_or);
+}
+
+/// Extracts bit `bit` of the EFLAGS value in LOCAL_SCRATCH into a flag local.
+fn emitFlagFromEflags(body: *Body, flag_local: u32, bit: u8) !void {
+    try body.appendOpcode(.local_get);
+    try body.appendUleb128(t.LOCAL_SCRATCH);
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(bit);
+    try body.appendOpcode(.i32_shr_u);
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(1);
+    try body.appendOpcode(.i32_and);
+    try body.appendOpcode(.local_set);
+    try body.appendUleb128(flag_local);
+}
+
+/// Sign-extends the low `bits` of the value on the Wasm stack to 32 bits, by
+/// shifting the sign bit up to the top and back down arithmetically.
+fn emitSignExtendFrom(body: *Body, bits: u8) !void {
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(bits);
+    try body.appendOpcode(.i32_shl);
+    try body.appendOpcode(.i32_const);
+    try body.appendIleb128(bits);
+    try body.appendOpcode(.i32_shr_s);
+}
+
 /// Translates basic arithmetic and logic instructions (ADD, OR, ADC, SBB, AND, SUB, XOR, CMP)
 /// covering the 8/32-bit reg/mem to reg/mem variants, as well as AL/EAX immediate forms.
 fn translateAlu(body: *Body, insn: *const decoder.Instruction) !void {
@@ -1235,19 +1102,7 @@ fn translateAlu(body: *Body, insn: *const decoder.Instruction) !void {
 
     // Mask the result to the operand size — byte/word ALU flags must be
     // computed from the truncated result (e.g. `or al,al` sees only AL).
-    switch (insn.op_size) {
-        .byte => {
-            try body.appendOpcode(.i32_const);
-            try body.appendIleb128(0xFF);
-            try body.appendOpcode(.i32_and);
-        },
-        .word => {
-            try body.appendOpcode(.i32_const);
-            try body.appendIleb128(0xFFFF);
-            try body.appendOpcode(.i32_and);
-        },
-        .dword => {},
-    }
+    try t.emitTruncateToSize(body, insn.op_size);
 
     // CMP/TEST don't store — just update flags
     if (group == 7) {
@@ -1297,19 +1152,7 @@ fn translateGroup1(body: *Body, insn: *const decoder.Instruction) !void {
     try body.appendOpcode(wasm_op);
 
     // Mask the result to the operand size (byte/word ALU flags).
-    switch (insn.op_size) {
-        .byte => {
-            try body.appendOpcode(.i32_const);
-            try body.appendIleb128(0xFF);
-            try body.appendOpcode(.i32_and);
-        },
-        .word => {
-            try body.appendOpcode(.i32_const);
-            try body.appendIleb128(0xFFFF);
-            try body.appendOpcode(.i32_and);
-        },
-        .dword => {},
-    }
+    try t.emitTruncateToSize(body, insn.op_size);
 
     if (sub_op == 7) { // CMP
         try t.emitUpdateZfSf(body, insn.op_size);

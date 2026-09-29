@@ -346,7 +346,7 @@ pub const Module = struct {
         // name an address outside the image. Callers turn it straight into an
         // EIP or a host function pointer, so require it to be mapped.
         const entry_rva = opt_header.AddressOfEntryPoint;
-        const entry_point: ?u32 = if (entry_rva != 0 and
+        const entry_point: ?usize = if (entry_rva != 0 and
             @as(u64, entry_rva) < mapped_slice.len)
             actual_base + entry_rva
         else

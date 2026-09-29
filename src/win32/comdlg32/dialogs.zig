@@ -579,10 +579,24 @@ pub fn PrintDlgW(lppd: usize) callconv(w32cc.WINAPI) i32 {
     return commonPrintDlg(lppd, true);
 }
 
-/// Parse a Win32 ANSI lpstrFilter (double-null-terminated pairs: "desc\0pattern\0...\0\0")
+/// Parse a Win32 lpstrFilter (double-null-terminated pairs: "desc\0pattern\0...\0\0")
 /// Returns a JSON array string like: ["Text Documents (*.txt)","All Files (*.*)"]
 fn parseFilterStringA(filter_ptr: u32) ?[]const u8 {
-    const ptr = @as([*]const u8, @ptrFromInt(filter_ptr));
+    return parseFilterString(u8, filter_ptr);
+}
+
+fn parseFilterStringW(filter_ptr: u32) ?[]const u8 {
+    return parseFilterString(u16, filter_ptr);
+}
+
+/// The JSON output is ASCII, so a wide code unit above 127 is reported as '?'.
+fn filterChar(comptime C: type, wc: C) u8 {
+    if (C == u16) return if (wc < 128) @intCast(wc) else '?';
+    return wc;
+}
+
+fn parseFilterString(comptime C: type, filter_ptr: u32) ?[]const u8 {
+    const ptr = @as([*]const C, @ptrFromInt(filter_ptr));
     var result: std.ArrayListUnmanaged(u8) = .empty;
     const alloc = std.heap.page_allocator;
 
@@ -609,52 +623,8 @@ fn parseFilterStringA(filter_ptr: u32) ?[]const u8 {
         first = false;
         result.appendSlice(alloc, "\"") catch {};
         // JSON-escape the description
-        for (desc) |c| {
-            if (c == '"') {
-                result.appendSlice(alloc, "\\\"") catch {};
-            } else if (c == '\\') {
-                result.appendSlice(alloc, "\\\\") catch {};
-            } else {
-                result.append(alloc, c) catch {};
-            }
-        }
-        result.appendSlice(alloc, "\"") catch {};
-    }
-
-    result.appendSlice(alloc, "]") catch {};
-    return result.items;
-}
-
-/// Parse a Win32 Wide lpstrFilter (double-null-terminated UTF-16LE pairs)
-fn parseFilterStringW(filter_ptr: u32) ?[]const u8 {
-    const ptr = @as([*]const u16, @ptrFromInt(filter_ptr));
-    var result: std.ArrayListUnmanaged(u8) = .empty;
-    const alloc = std.heap.page_allocator;
-
-    result.appendSlice(alloc, "[") catch return null;
-    var pos: usize = 0;
-    var first = true;
-    const max_len: usize = 4096;
-
-    while (pos < max_len) {
-        // Read description
-        const desc_start = pos;
-        while (pos < max_len and ptr[pos] != 0) : (pos += 1) {}
-        if (pos == desc_start) break;
-        const desc = ptr[desc_start..pos];
-        pos += 1;
-
-        // Read pattern
-        const pat_start = pos;
-        while (pos < max_len and ptr[pos] != 0) : (pos += 1) {}
-        _ = ptr[pat_start..pos];
-        pos += 1;
-
-        if (!first) result.appendSlice(alloc, ",") catch {};
-        first = false;
-        result.appendSlice(alloc, "\"") catch {};
         for (desc) |wc| {
-            const c: u8 = if (wc < 128) @intCast(wc) else '?';
+            const c = filterChar(C, wc);
             if (c == '"') {
                 result.appendSlice(alloc, "\\\"") catch {};
             } else if (c == '\\') {

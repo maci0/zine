@@ -24,11 +24,10 @@ pub const g_commode: u32 = 16; // u16 padded to u32
 pub const g_initenv: u32 = 20; // u32
 pub const g_pgmptr: u32 = 24; // u32
 pub const g_acmdln: u32 = 28; // u32 (pointer to acmdln string)
-// Phase 3 additions: static return values that x86 code dereferences
+// Static return value slots that x86 code dereferences
 pub const g_errno: u32 = 32; // i32
 pub const g_doserrno: u32 = 36; // u32
 pub const g_setlocale: u32 = 40; // 2 bytes ("C\0") padded
-// Phase 18 additions:
 pub const g_timezone: u32 = 44; // i32
 pub const g_daylight: u32 = 48; // i32
 pub const g_tzname: u32 = 52; // [2]u32
