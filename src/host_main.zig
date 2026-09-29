@@ -59,7 +59,10 @@ fn jitCompile(args: [*c]const c.wasm_val_vec_t, results: [*c]c.wasm_val_vec_t) c
 
     const mem_data = c.wasm_memory_data(mem);
     const mem_size = c.wasm_memory_data_size(mem);
-    if (wasm_ptr + wasm_len > mem_size) {
+    // Widened before the compare: both operands are u32, so the sum wraps
+    // for a ptr near 0xFFFFFFFF and the check passes with a range that starts
+    // past the end of linear memory.
+    if (@as(u64, wasm_ptr) + @as(u64, wasm_len) > mem_size) {
         results.*.data[0] = .{ .kind = c.WASM_I32, .of = .{ .i32 = -1 } };
         return null;
     }
@@ -122,6 +125,23 @@ fn jitCall(args: [*c]const c.wasm_val_vec_t, results: [*c]c.wasm_val_vec_t) call
     var call_results = c.wasm_val_vec_t{ .size = 0, .data = null };
     const trap = c.wasm_func_call(run_fn, &call_args, &call_results);
     if (trap) |t| {
+        // The block aborted part-way: its stores landed but the CPU state it
+        // would have written back never did, so the interpreter resumes from
+        // whatever the block left behind. `jit_call` has no result channel, so
+        // the trap text is the only record that this happened at all.
+        writeErr("Warning: JIT block ");
+        var block_buf: [12]u8 = undefined;
+        writeErr(std.fmt.bufPrint(&block_buf, "{d}", .{block_id}) catch "?");
+        writeErr(" trapped and did not run to completion: ");
+        var msg: c.wasm_message_t = undefined;
+        c.wasm_trap_message(t, &msg);
+        if (msg.size > 0) {
+            writeErr(msg.data[0..msg.size]);
+            c.wasm_byte_vec_delete(&msg);
+        } else {
+            writeErr("(no message)");
+        }
+        writeErr("\n");
         c.wasm_trap_delete(t);
     }
     return null;
@@ -303,7 +323,17 @@ pub fn main(init: std.process.Init) !void {
             writeErr(".\n");
         }
         const cwd = if (cwd_len > 0) cwd_buf[0..cwd_len] else ".";
-        const cwd_z = std.heap.page_allocator.dupeZ(u8, cwd) catch ".";
+        // A "." fallback would silently rebind the preopen every relative
+        // guest path resolves against, so the run would look like the guest
+        // lost its files. Name the failure and stop instead.
+        const cwd_z = std.heap.page_allocator.dupeZ(u8, cwd) catch |err| {
+            writeErr("Error: cannot copy the current directory '");
+            writeErr(cwd);
+            writeErr("': ");
+            writeErr(@errorName(err));
+            writeErr(".\n");
+            std.process.exit(1);
+        };
         // First preopen = fd 3 = the WASI cwd (Zig's Dir.cwd() on WASI uses
         // fd 3), mirroring wasmtime's `--dir=.`. The "/" preopen then serves
         // absolute paths, mirroring `--dir=/`.

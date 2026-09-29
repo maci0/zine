@@ -862,7 +862,10 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
 
     // Set up child CPU
     const ep_rva = child_module.parser.getNtHeaders().OptionalHeader.AddressOfEntryPoint;
-    if (ep_rva == 0) return -1;
+    if (ep_rva == 0) {
+        log.err("wasm: spawn handler: '{s}' has no entry point, cannot start it", .{exe_name});
+        return -1;
+    }
 
     var child_cpu = x86_cpu.Cpu{};
     child_cpu.memory = x86_memory.GuestMemory{

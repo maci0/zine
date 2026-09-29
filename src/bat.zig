@@ -270,7 +270,15 @@ pub const BatEnv = struct {
                 defer self.allocator.free(unix_target);
                 std.mem.replaceScalar(u8, unix_target, '\\', '/');
 
-                _ = try self.parseFile(unix_target, &[_][]const u8{});
+                // cmd.exe runs the called script but launches the calling
+                // script's own final command, so the result is not what this
+                // run executes. It is still owned here, and a CALL inside a
+                // loop would otherwise leak the called script's argv on every
+                // pass.
+                if (try self.parseFile(unix_target, &[_][]const u8{})) |argv| {
+                    for (argv) |arg| self.allocator.free(arg);
+                    self.allocator.free(argv);
+                }
                 continue;
             }
 

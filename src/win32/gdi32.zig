@@ -128,11 +128,17 @@ pub const GdiObject = struct {
 pub var gdi_objects: [512]GdiObject = [_]GdiObject{.{ .handle = 0, .obj_type = .Bitmap, .data = .{ .none = {} } }} ** 512;
 pub var gdi_object_count: usize = 0;
 
-pub fn registerObject(obj: GdiObject) void {
+/// Adds an object to the table. False when all 512 slots are live: the caller
+/// must report the failure to the guest rather than hand out a handle no
+/// lookup can resolve, which would leave FindObject and SelectObject disagreeing
+/// about an object the guest was told exists.
+pub fn registerObject(obj: GdiObject) bool {
     if (gdi_object_count < gdi_objects.len) {
         gdi_objects[gdi_object_count] = obj;
         gdi_object_count += 1;
+        return true;
     }
+    return false;
 }
 
 pub fn findObject(handle: usize) ?*const GdiObject {
@@ -161,7 +167,7 @@ pub fn unregisterObject(handle: usize) bool {
 /// is full so callers can release their buffer instead of leaking it.
 pub fn registerDib(handle: usize, buffer: usize, width: u32, height: u32, bpp: u16, alloc_len: usize, owned: bool) bool {
     if (gdi_object_count >= gdi_objects.len) return false;
-    registerObject(.{
+    return registerObject(.{
         .handle = handle,
         .obj_type = .Bitmap,
         .data = .{ .bitmap = .{
@@ -174,7 +180,6 @@ pub fn registerDib(handle: usize, buffer: usize, width: u32, height: u32, bpp: u
             .owned = owned,
         } },
     });
-    return true;
 }
 
 /// Largest pixel buffer GDI allocates for a bitmap, in bytes. Win32 documents
@@ -296,8 +301,11 @@ pub fn unregisterDc(handle: usize) bool {
     return false;
 }
 
-/// Registers a new DeviceContext handle in the global table.
-pub fn registerDc(handle: usize) void {
+/// Registers a new DeviceContext handle in the global table. False when all
+/// 128 slots are live: the caller must return NULL rather than a handle that
+/// names no entry, or SelectObject and TextOut would silently do nothing while
+/// reporting success.
+pub fn registerDc(handle: usize) bool {
     if (dc_count < dc_entries.len) {
         // A new DC starts with the BLACK_PEN and WHITE_BRUSH selected (like
         // real Windows). These stock handles must be registered objects so
@@ -322,7 +330,9 @@ pub fn registerDc(handle: usize) void {
             .map_mode = 1,
         };
         dc_count += 1;
+        return true;
     }
+    return false;
 }
 
 /// Binds a bitmap to a device context.

@@ -1,5 +1,6 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
+const log = @import("../../log.zig");
 const ansi = @import("../ansi.zig");
 const text_utils = @import("../../text_utils.zig");
 const user32 = @import("../user32.zig");
@@ -64,7 +65,10 @@ fn findPopupMenu(hMenu: usize) ?*PopupMenu {
     return null;
 }
 
-fn getOrCreatePopupMenu(hMenu: usize) *PopupMenu {
+/// Null when the table holds its 16 menus already. Handing back the last one
+/// instead would alias a new menu onto an unrelated one, and every item the
+/// guest appended to it would appear in the other menu.
+fn getOrCreatePopupMenu(hMenu: usize) ?*PopupMenu {
     if (findPopupMenu(hMenu)) |pm| return pm;
     if (popup_menu_count < popup_menus.len) {
         const pm = &popup_menus[popup_menu_count];
@@ -72,16 +76,18 @@ fn getOrCreatePopupMenu(hMenu: usize) *PopupMenu {
         pm.* = .{ .hMenu = hMenu, .items = undefined, .count = 0 };
         return pm;
     }
-    return &popup_menus[popup_menu_count - 1];
+    log.err("USER32: cannot track popup menu 0x{x}, the {d}-menu table is full", .{ hMenu, popup_menus.len });
+    return null;
 }
 
-fn addPopupItem(hMenu: usize, id: i32, text: []const u8, flags: u32) void {
-    const pm = getOrCreatePopupMenu(hMenu);
-    if (pm.count >= pm.items.len) return;
+fn addPopupItem(hMenu: usize, id: i32, text: []const u8, flags: u32) bool {
+    const pm = getOrCreatePopupMenu(hMenu) orelse return false;
+    if (pm.count >= pm.items.len) return false;
     const it = &pm.items[pm.count];
     pm.count += 1;
     it.* = .{ .id = id, .text = undefined, .len = 0, .flags = flags };
     it.len = @intCast(text_utils.copyCString(&it.text, text));
+    return true;
 }
 
 pub fn stub_AppendMenuA(hMenu: usize, uFlags: u32, uIDNewItem: usize, lpNewItem: usize) callconv(w32cc.WINAPI) i32 {
@@ -91,10 +97,10 @@ pub fn stub_AppendMenuA(hMenu: usize, uFlags: u32, uIDNewItem: usize, lpNewItem:
     const MF_DISABLED: u32 = 0x0002;
     if (trace.enable_tracing) trace.print("USER32: AppendMenuA(menu={X}, id={d}, flags={x})\n", .{ hMenu, uIDNewItem, uFlags });
     if ((uFlags & MF_SEPARATOR) != 0) {
-        addPopupItem(hMenu, -1, "", uFlags);
+        if (!addPopupItem(hMenu, -1, "", uFlags)) return 0;
     } else if (lpNewItem != 0) {
         var text_buf: [256]u8 = undefined;
-        addPopupItem(hMenu, @intCast(uIDNewItem & 0xFFFF), ansi.toUtf8(trace.c_span(lpNewItem), &text_buf), uFlags);
+        if (!addPopupItem(hMenu, @intCast(uIDNewItem & 0xFFFF), ansi.toUtf8(trace.c_span(lpNewItem), &text_buf), uFlags)) return 0;
         // Mirror CHECKED/GRAYED/DISABLED into the item-state table so
         // GetMenuState reports them (like real Win32 menu construction).
         const key = menuItemKey(hMenu, @as(u32, @intCast(uIDNewItem & 0xFFFF)));
@@ -110,12 +116,12 @@ pub fn AppendMenuW(hMenu: usize, uFlags: u32, uIDNewItem: usize, lpNewItem: usiz
     const MF_GRAYED: u32 = 0x0001;
     const MF_DISABLED: u32 = 0x0002;
     if ((uFlags & MF_SEPARATOR) != 0) {
-        addPopupItem(hMenu, -1, "", uFlags);
+        if (!addPopupItem(hMenu, -1, "", uFlags)) return 0;
     } else if (lpNewItem != 0) {
         const w = trace.c_span_w(lpNewItem);
         var buf: [256]u8 = undefined;
         const name = text_utils.wideToUtf8(w, &buf);
-        addPopupItem(hMenu, @intCast(uIDNewItem & 0xFFFF), name, uFlags);
+        if (!addPopupItem(hMenu, @intCast(uIDNewItem & 0xFFFF), name, uFlags)) return 0;
         const key = menuItemKey(hMenu, @as(u32, @intCast(uIDNewItem & 0xFFFF)));
         const slot = findOrAllocMenuSlot(key);
         slot.flags = (slot.flags & ~(MF_CHECKED | MF_GRAYED | MF_DISABLED)) | (uFlags & (MF_CHECKED | MF_GRAYED | MF_DISABLED));

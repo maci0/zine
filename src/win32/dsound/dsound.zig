@@ -4,6 +4,7 @@ const runtime = @import("../../runtime.zig");
 const env = @import("../../loader/env.zig");
 const ordinals = @import("../ordinals.zig");
 const trace = @import("../../trace.zig");
+const log = @import("../../log.zig");
 const renderer = @import("../../gui/renderer.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
@@ -230,9 +231,16 @@ fn dsound_CreateSoundBuffer(this: usize, pcDSBufferDesc: usize, ppDSBuffer: usiz
             // Allocate audio data
             if (@import("../kernel32.zig").global_env) |genv| {
                 const data = genv.allocator.alloc(u8, buf_size) catch {
-                    if (ppDSBuffer != 0) @as(*align(1) u32, @ptrFromInt(ppDSBuffer)).* = @truncate(@intFromPtr(&buf.com_obj));
-                    if (is_fresh_slot) buffer_pool_count += 1;
-                    return 0;
+                    // The slot goes back to the pool: leaving it marked
+                    // allocated, and advancing the high-water mark on a fresh
+                    // one, spends a slot per failed create and starves every
+                    // later call. Reporting S_OK with no buffer behind it
+                    // would have the guest write into nothing.
+                    buf.allocated = false;
+                    if (is_fresh_slot) buffer_pool_count -= 1;
+                    if (ppDSBuffer != 0) @as(*align(1) u32, @ptrFromInt(ppDSBuffer)).* = 0;
+                    log.err("DSOUND: CreateSoundBuffer: cannot allocate {d} bytes for a secondary buffer", .{buf_size});
+                    return @bitCast(@as(u32, 0x8007000E)); // E_OUTOFMEMORY
                 };
                 @memset(data, 0);
                 buf.data = data.ptr;

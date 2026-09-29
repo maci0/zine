@@ -4,6 +4,10 @@ const trace = @import("../../trace.zig");
 const gdi32 = @import("../gdi32.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
+const kernel32_error = @import("../kernel32/error.zig");
+const log = @import("../../log.zig");
+
+const ERROR_NOT_ENOUGH_MEMORY = 8;
 
 /// Retrieves device-specific information for the specified device.
 /// Implementation status: Partially implemented (returns fixed values for a 1024x768 32bpp display)
@@ -31,7 +35,11 @@ pub fn GetDeviceCaps(hdc: usize, nIndex: i32) callconv(w32cc.WINAPI) i32 {
 pub fn CreateCompatibleDC(hdc: usize) callconv(w32cc.WINAPI) usize {
     _ = hdc;
     const handle = gdi32.nextHandle();
-    gdi32.registerDc(handle);
+    if (!gdi32.registerDc(handle)) {
+        log.err("GDI32: CreateCompatibleDC: cannot create the DC, the {d}-entry DC table is full", .{gdi32.dc_entries.len});
+        kernel32_error.SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    }
     if (trace.enable_tracing) trace.print("GDI32: CreateCompatibleDC -> 0x{x}\n", .{handle});
     return handle;
 }
@@ -238,7 +246,11 @@ pub fn CreateDCA(lpszDriver: usize, lpszDevice: usize, lpszOutput: usize, lpInit
     _ = lpInitData;
     if (trace.enable_tracing) trace.print("GDI32: CreateDCA\n", .{});
     const handle = gdi32.nextHandle();
-    gdi32.registerDc(handle);
+    if (!gdi32.registerDc(handle)) {
+        log.err("GDI32: CreateDCA: cannot create the DC, the {d}-entry DC table is full", .{gdi32.dc_entries.len});
+        kernel32_error.SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    }
     return handle;
 }
 

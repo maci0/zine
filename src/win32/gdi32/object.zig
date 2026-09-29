@@ -2,8 +2,21 @@
 const std = @import("std");
 const trace = @import("../../trace.zig");
 const gdi32 = @import("../gdi32.zig");
+const kernel32_error = @import("../kernel32/error.zig");
+
+const ERROR_NOT_ENOUGH_MEMORY = 8;
+const log = @import("../../log.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
+
+/// NULL for an object creation that found the table full, with the API named
+/// and the limit reported: a handle that no lookup resolves is worse for the
+/// guest than a plain failure it can check.
+fn nullGdiObject(api: []const u8) usize {
+    log.err("GDI32: {s}: cannot create the object, the {d}-entry GDI object table is full", .{ api, gdi32.gdi_objects.len });
+    kernel32_error.SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+    return 0;
+}
 
 /// Retrieve a handle to one of the stock GDI objects.
 /// Implementation status: Partially implemented
@@ -98,7 +111,7 @@ pub fn stub_DeleteObject(h: usize) callconv(w32cc.WINAPI) i32 {
 /// Implementation status: Partially implemented
 pub fn CreateSolidBrush(crColor: u32) callconv(w32cc.WINAPI) usize {
     const handle = gdi32.nextHandle();
-    gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = crColor, .style = 0 } } });
+    if (!gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = crColor, .style = 0 } } })) return nullGdiObject("CreateSolidBrush");
     return handle;
 }
 
@@ -157,7 +170,7 @@ test "DeleteObject frees owned DIB buffers but not caller-owned ones" {
 /// Implementation status: Partially implemented
 pub fn CreatePen(iStyle: i32, cWidth: i32, crColor: u32) callconv(w32cc.WINAPI) usize {
     const handle = gdi32.nextHandle();
-    gdi32.registerObject(.{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = crColor, .width = cWidth, .style = iStyle } } });
+    if (!gdi32.registerObject(.{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = crColor, .width = cWidth, .style = iStyle } } })) return nullGdiObject("CreatePen");
     return handle;
 }
 
@@ -185,7 +198,7 @@ pub fn CreateFontIndirectA(lplf: usize) callconv(w32cc.WINAPI) usize {
         if (trace.enable_tracing) trace.print("GDI32: CreateFontIndirectA(NULL)\n", .{});
     }
     const handle = gdi32.nextHandle();
-    gdi32.registerObject(.{ .handle = handle, .obj_type = .Font, .data = .{ .font = fd } });
+    if (!gdi32.registerObject(.{ .handle = handle, .obj_type = .Font, .data = .{ .font = fd } })) return nullGdiObject("CreateFontIndirectA");
     return handle;
 }
 
@@ -407,7 +420,7 @@ pub fn CreateBrushIndirect(lplb: usize) callconv(w32cc.WINAPI) usize {
         style = @bitCast(lb_style);
         color = lb_color;
     }
-    gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = color, .style = style } } });
+    if (!gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = color, .style = style } } })) return nullGdiObject("CreateBrushIndirect");
     return handle;
 }
 
@@ -427,7 +440,7 @@ pub fn CreatePenIndirect(lplgpn: usize) callconv(w32cc.WINAPI) usize {
         width = pen_width;
         color = pen_color;
     }
-    gdi32.registerObject(.{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = color, .width = width, .style = style } } });
+    if (!gdi32.registerObject(.{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = color, .width = width, .style = style } } })) return nullGdiObject("CreatePenIndirect");
     return handle;
 }
 
@@ -457,7 +470,7 @@ pub fn CreateFontA(nHeight: i32, nWidth: i32, nEscapement: i32, nOrientation: i3
     }
     if (trace.enable_tracing) trace.print("GDI32: CreateFontA(h={d}, face='{s}')\n", .{ nHeight, fd.face_name[0..fd.face_len] });
     const handle = gdi32.nextHandle();
-    gdi32.registerObject(.{ .handle = handle, .obj_type = .Font, .data = .{ .font = fd } });
+    if (!gdi32.registerObject(.{ .handle = handle, .obj_type = .Font, .data = .{ .font = fd } })) return nullGdiObject("CreateFontA");
     return handle;
 }
 
@@ -483,7 +496,7 @@ pub fn stub_UnrealizeObject(h: usize) callconv(w32cc.WINAPI) i32 {
 pub fn CreateHalftonePalette(hdc: usize) callconv(w32cc.WINAPI) usize {
     _ = hdc;
     const handle = gdi32.nextHandle();
-    gdi32.registerObject(.{ .handle = handle, .obj_type = .Palette, .data = .{ .none = {} } });
+    if (!gdi32.registerObject(.{ .handle = handle, .obj_type = .Palette, .data = .{ .none = {} } })) return nullGdiObject("CreateHalftonePalette");
     if (trace.enable_tracing) trace.print("GDI32: CreateHalftonePalette -> 0x{x}\n", .{handle});
     return handle;
 }
@@ -493,7 +506,8 @@ pub fn CreateHalftonePalette(hdc: usize) callconv(w32cc.WINAPI) usize {
 pub fn CreatePatternBrush(hBitmap: usize) callconv(w32cc.WINAPI) usize {
     _ = hBitmap;
     const handle = gdi32.nextHandle();
-    gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0, .style = 3 } } }); // style 3 = pattern
+    // style 3 = pattern
+    if (!gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0, .style = 3 } } })) return nullGdiObject("CreatePatternBrush");
     if (trace.enable_tracing) trace.print("GDI32: CreatePatternBrush -> 0x{x}\n", .{handle});
     return handle;
 }

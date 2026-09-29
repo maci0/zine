@@ -318,7 +318,11 @@ pub const PEParser = struct {
         const dos_header_ptr: *align(1) const IMAGE_DOS_HEADER = @ptrCast(data.ptr);
         if (dos_header_ptr.e_magic != IMAGE_DOS_SIGNATURE) return error.InvalidDOSSignature;
 
-        if (dos_header_ptr.e_lfanew >= data.len or dos_header_ptr.e_lfanew + @sizeOf(IMAGE_NT_HEADERS32) > data.len) {
+        // The second bound is computed in usize: e_lfanew is a u32 from the
+        // file, and adding the header size in u32 wraps for a value near
+        // 0xFFFFFFFF, so the check would pass and the cast below would read a
+        // header from an arbitrary offset.
+        if (dos_header_ptr.e_lfanew >= data.len or @as(usize, dos_header_ptr.e_lfanew) + @sizeOf(IMAGE_NT_HEADERS32) > data.len) {
             return error.BufferTooSmall;
         }
 

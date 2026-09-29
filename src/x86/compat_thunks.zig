@@ -307,7 +307,13 @@ pub noinline fn callCompat32(target: u32, arg0: u32, arg1: u32, arg2: u32) u32 {
 
 pub noinline fn callCompat32_4(target: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32) u32 {
     if (comptime !platform.is_x86_64) return 0;
-    if (pool_base == null) return 0;
+    // Each guard below reports itself: the caller records this return value as
+    // a thread exit code, so a silent 0 is a thread that never ran and the
+    // guest reads as a clean exit.
+    if (pool_base == null) {
+        log.err("compat: no thunk pool, cannot call a 32-bit target");
+        return 0;
+    }
     // Allocate return stub (INT 0xFE) if not yet done
     if (return_thunk_id == 0) {
         return_thunk_id = thunks.registerThunk(.{
@@ -320,7 +326,10 @@ pub noinline fn callCompat32_4(target: u32, arg0: u32, arg1: u32, arg2: u32, arg
             }.handler,
         });
     }
-    const ret_stub = allocThunk(return_thunk_id) orelse return 0;
+    const ret_stub = allocThunk(return_thunk_id) orelse {
+        log.err("compat: thunk pool exhausted, cannot allocate a return stub");
+        return 0;
+    };
 
     // Use a shared 1MB guest stack for all compat calls (avoid C1063 stack
     // overflow errors from CRT stack checks). The stack is allocated once
@@ -329,14 +338,20 @@ pub noinline fn callCompat32_4(target: u32, arg0: u32, arg1: u32, arg2: u32, arg
         var stack_mem: ?[]align(4096) u8 = null;
     };
     if (S.stack_mem == null) {
-        S.stack_mem = platform.mmap(null, 1024 * 1024, true, -1, 0, false, false) catch return 0;
+        S.stack_mem = platform.mmap(null, 1024 * 1024, true, -1, 0, false, false) catch |err| {
+            log.err("compat: cannot map the {d}-byte compat call stack: {}", .{ 1024 * 1024, err });
+            return 0;
+        };
     }
     const call_stack_mem = S.stack_mem.?;
     // Each nesting level uses a different region of the 1MB stack to avoid
     // overwriting the outer call's stack frame. Each level gets 128KB.
     const level_size: usize = 128 * 1024;
     const level_offset = saved_depth * level_size;
-    if (level_offset + level_size > call_stack_mem.len) return 0;
+    if (level_offset + level_size > call_stack_mem.len) {
+        log.err("compat: 32-bit call nested {d} deep, past the {d}-byte compat call stack", .{ saved_depth, call_stack_mem.len });
+        return 0;
+    }
     const esp: u32 = @intCast(@intFromPtr(call_stack_mem.ptr) + level_offset + level_size - 64);
 
     // Build stdcall frame: [ret_stub] [arg0] [arg1] [arg2] [arg3]
@@ -348,7 +363,10 @@ pub noinline fn callCompat32_4(target: u32, arg0: u32, arg1: u32, arg2: u32, arg
     stack_ptr[4] = arg3;
 
     // Save state for nesting
-    if (saved_depth >= MAX_COMPAT_DEPTH) return 0;
+    if (saved_depth >= MAX_COMPAT_DEPTH) {
+        log.err("compat: 32-bit call nested past the limit of {d}", .{MAX_COMPAT_DEPTH});
+        return 0;
+    }
     const depth = saved_depth;
     const save_entry = &saved_stack[depth];
     save_entry.result = 0;

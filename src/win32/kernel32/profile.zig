@@ -25,7 +25,13 @@ fn readIniValue(lpFileName: usize, lpAppName: usize, lpKeyName: usize) ?[]const 
     const file = @import("../host_io.zig").fileFromFd(@intCast(fd));
     defer file.close(runtime.io());
 
-    const bytes_read = file.readPositionalAll(runtime.io(), &ini_content_buf, 0) catch return null;
+    // A read fault is not an absent key: the caller substitutes lpDefault on
+    // null, so reporting null here would run the guest on default settings
+    // with nothing saying the file could not be read.
+    const bytes_read = file.readPositionalAll(runtime.io(), &ini_content_buf, 0) catch |err| {
+        log.err("KERNEL32: GetPrivateProfileString: cannot read '{s}': {}", .{ file_path_raw, err });
+        return null;
+    };
     const content = ini_content_buf[0..bytes_read];
 
     // Parse INI: find [section] then key=value
