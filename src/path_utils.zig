@@ -23,6 +23,33 @@ pub var current_directory: [1024]u8 = undefined;
 /// Length in bytes of the valid prefix of `current_directory` (0 = unset).
 pub var current_directory_len: usize = 0;
 
+/// Guards the two fields above. Any guest thread can call SetCurrentDirectory
+/// or open a relative path, and `toHostPath` reads the buffer across a
+/// `win32ToPosix` conversion, so an unsynchronized writer hands the reader a
+/// path spliced from two different directories. Every section is a memcpy of
+/// at most 1 KiB and touches nothing else.
+pub var current_directory_mutex: runtime.Mutex = .{};
+
+/// Replaces the virtual current directory. The length and the bytes are
+/// published together so a reader never sees a new length over old bytes.
+pub fn setCurrentDirectory(path: []const u8) void {
+    const copy_len = @min(path.len, current_directory.len - 1);
+    current_directory_mutex.lock();
+    defer current_directory_mutex.unlock();
+    @memcpy(current_directory[0..copy_len], path[0..copy_len]);
+    current_directory[copy_len] = 0;
+    current_directory_len = copy_len;
+}
+
+/// Copies the virtual current directory out. The caller gets its own storage,
+/// so it can read and convert the bytes without the lock held.
+pub fn copyCurrentDirectory(out: *[current_directory.len]u8) usize {
+    current_directory_mutex.lock();
+    defer current_directory_mutex.unlock();
+    @memcpy(out[0..current_directory_len], current_directory[0..current_directory_len]);
+    return current_directory_len;
+}
+
 const builtin = @import("builtin");
 const is_wasi = builtin.os.tag == .wasi;
 
@@ -436,8 +463,10 @@ pub fn toHostPath(win_path: []const u8, out: []u8) usize {
     }
 
     // Step 6: Relative path — resolve against virtual CWD
-    if (current_directory_len > 0) {
-        const cwd_win = current_directory[0..current_directory_len];
+    var cwd_snapshot: [1024]u8 = undefined;
+    const current_len = copyCurrentDirectory(&cwd_snapshot);
+    if (current_len > 0) {
+        const cwd_win = cwd_snapshot[0..current_len];
         var cwd_posix: [1024]u8 = undefined;
         const cwd_len = win32ToPosix(cwd_win, &cwd_posix) catch return 0;
         // Strip trailing slash

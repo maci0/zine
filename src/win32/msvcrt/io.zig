@@ -163,6 +163,15 @@ var file_ptrs: [max_files]usize = [_]usize{0} ** max_files;
 var file_ptr_free_list: [max_files]usize = [_]usize{0} ** max_files;
 var file_ptr_free_count: usize = 0;
 
+/// Guards the two tables and the free list above. Every guest thread reaches
+/// fopen/fclose, and both allocateFileSlot (scan for a free index) and
+/// takeFileSlotPtr (pop the free list) are check-then-act: two threads opening
+/// files at once were handed the same slot and the same FILE struct, so one
+/// fclose closed the other's stream and both wrote into one struct. Sections
+/// hold nothing but table edits and a close/raw_alloc call, and nothing
+/// re-enters this module while one is held.
+var file_table_mutex: runtime.Mutex = .{};
+
 fn takeFileSlotPtr() usize {
     if (file_ptr_free_count > 0) {
         file_ptr_free_count -= 1;
@@ -207,6 +216,8 @@ pub fn getFile(ptr: ?*anyopaque) ?std.Io.File {
         }
 
         // Check dynamically opened files
+        file_table_mutex.lock();
+        defer file_table_mutex.unlock();
         for (0..max_files) |idx| {
             if (file_ptrs[idx] == ptr_val and file_handles[idx] != null) {
                 return file_handles[idx];
@@ -227,6 +238,8 @@ fn stdFileFromIobIndex(idx: usize) ?std.Io.File {
     };
 }
 
+/// Finds a free slot index. The caller claims it under `file_table_mutex`
+/// before the next thread can scan: returning an index is not a claim.
 fn allocateFileSlot() ?usize {
     for (0..max_files) |i| {
         if (file_handles[i] == null) {
@@ -379,6 +392,11 @@ pub fn fopen(filename_ptr: usize, mode_ptr: usize) callconv(.c) ?*anyopaque {
         file = @import("../host_io.zig").fileFromFd(@intCast(rc));
     }
 
+    // The slot scan, the FILE* acquisition, and the struct init are one
+    // critical section, so a second fopen cannot claim the same slot or the
+    // same struct while this one is still filling it in.
+    file_table_mutex.lock();
+    defer file_table_mutex.unlock();
     if (allocateFileSlot()) |idx| {
         file_handles[idx] = file;
 
@@ -426,6 +444,10 @@ pub fn fclose(f: ?*anyopaque) callconv(.c) i32 {
     trace.print("MSVCRT_IO: fclose\n", .{});
     if (getFile(f)) |file| {
         const ptr_val = @intFromPtr(f.?);
+        // getFile took and released the table lock; the scan below mutates it,
+        // so the claim of this slot and its release are one section.
+        file_table_mutex.lock();
+        defer file_table_mutex.unlock();
         for (0..max_files) |idx| {
             if (file_ptrs[idx] == ptr_val) {
                 if (comptime @import("builtin").os.tag == .linux) {
@@ -460,6 +482,8 @@ pub fn fflush(f: ?*anyopaque) callconv(.c) i32 {
 /// Flushes all streams; returns the number of streams open.
 pub fn _flushall() callconv(.c) i32 {
     var n: i32 = 3; // stdin/stdout/stderr always open
+    file_table_mutex.lock();
+    defer file_table_mutex.unlock();
     for (0..max_files) |idx| {
         if (file_handles[idx] != null) n += 1;
     }
@@ -476,6 +500,8 @@ pub fn setvbuf(stream: ?*anyopaque, buffer: ?*anyopaque, mode: i32, size: usize)
 /// Closes all open streams (except the standard streams); returns the count.
 pub fn _fcloseall() callconv(.c) i32 {
     var closed: i32 = 0;
+    file_table_mutex.lock();
+    defer file_table_mutex.unlock();
     for (0..max_files) |idx| {
         if (file_handles[idx]) |file| {
             if (comptime @import("builtin").os.tag == .linux) {

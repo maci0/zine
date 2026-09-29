@@ -427,12 +427,25 @@ fn eventCallback(event_type: c_int, param1: c_int, param2: c_int) callconv(.c) v
             if (renderer.on_key_event) |cb| cb(@intCast(param1), true);
             // Update keyboard state table
             const vk: usize = @intCast(param1);
-            if (vk < 256) renderer.keyboard_state[vk] = 0x80;
+            if (vk < 256) {
+                // This callback runs on the FLTK thread while the guest thread
+                // reads the table under input_mutex, so the write takes the
+                // same lock: an unsynchronized byte here is a half-updated
+                // table for GetKeyboardState and the shift lookup in
+                // charFromVk.
+                renderer.input_mutex.lock();
+                renderer.keyboard_state[vk] = 0x80;
+                renderer.input_mutex.unlock();
+            }
         },
         c.FLTK_EVT_KEY_UP => {
             if (renderer.on_key_event) |cb| cb(@intCast(param1), false);
             const vk: usize = @intCast(param1);
-            if (vk < 256) renderer.keyboard_state[vk] = 0;
+            if (vk < 256) {
+                renderer.input_mutex.lock();
+                renderer.keyboard_state[vk] = 0;
+                renderer.input_mutex.unlock();
+            }
         },
         c.FLTK_EVT_CLOSE => {
             if (renderer.on_close) |cb| cb();

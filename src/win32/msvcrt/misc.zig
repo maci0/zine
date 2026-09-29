@@ -13,17 +13,29 @@ pub fn log_call(comptime name: []const u8) void {
 
 var rand_seed: u32 = 1;
 
+/// The LCG step is `seed * 214013 + 2531011`, a read-modify-write on
+/// `rand_seed` that any guest thread can reach. The multiply and the add
+/// cannot be one atomic op, so this is a CAS loop: without it two threads
+/// advancing the seed at once returned the same value twice and advanced the
+/// state once.
+fn nextRandSeed() u32 {
+    var current = @atomicLoad(u32, &rand_seed, .monotonic);
+    while (true) {
+        const next = current *% 214013 +% 2531011;
+        current = @cmpxchgWeak(u32, &rand_seed, current, next, .monotonic, .monotonic) orelse return next;
+    }
+}
+
 /// --- rand / srand (MSVC LCG) ---
 /// Implementation status: Partially implemented
 pub fn srand(seed: u32) callconv(.c) void {
-    rand_seed = seed;
+    @atomicStore(u32, &rand_seed, seed, .monotonic);
     if (trace.enable_tracing) trace.print("MSVCRT: srand({d})\n", .{seed});
 }
 
 /// Implementation status: Partially implemented
 pub fn rand() callconv(.c) i32 {
-    rand_seed = rand_seed *% 214013 +% 2531011;
-    const result = @as(i32, @intCast((rand_seed >> 16) & 0x7fff));
+    const result = @as(i32, @intCast((nextRandSeed() >> 16) & 0x7fff));
     if (trace.enable_tracing) trace.print("MSVCRT: rand() -> {d}\n", .{result});
     return result;
 }

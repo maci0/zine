@@ -209,7 +209,11 @@ pub fn TranslateMessage(lpMsg: ?*user32.MSG) callconv(w32cc.WINAPI) i32 {
 /// the Shift state tracked in renderer.keyboard_state.
 fn charFromVk(vk: u8) ?usize {
     const renderer = @import("../../gui/renderer.zig");
+    // The FLTK thread updates the shift byte from its own event callback, so
+    // the read takes the lock the table's contract names.
+    renderer.input_mutex.lock();
     const shift = (renderer.keyboard_state[0x10] & 0x80) != 0; // VK_SHIFT
+    renderer.input_mutex.unlock();
 
     if (vk >= 0x30 and vk <= 0x39) {
         // Digits: unshifted '0'-'9', shifted ")!@#$%^&*("

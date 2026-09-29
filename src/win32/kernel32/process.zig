@@ -1187,6 +1187,10 @@ fn guestThreadId(handle: usize) u32 {
 fn currentGuestThreadId() u32 {
     if (comptime platform.is_native) {
         const host_id = std.Thread.getCurrentId();
+        // `handle` is plain storage that CreateThread and CloseHandle write
+        // under this lock, so the scan has to take it too.
+        thread_registry_mutex.lock();
+        defer thread_registry_mutex.unlock();
         for (&thread_registry) |*ti| {
             if (ti.handle != 0 and ti.isRunning() and ti.hostThreadId() == host_id) return guestThreadId(ti.handle);
         }
@@ -1561,6 +1565,10 @@ pub fn ExitThread(dwExitCode: u32) callconv(w32cc.WINAPI) void {
     // from overwriting another's exit code.
     if (comptime platform.is_native) {
         const tid = std.Thread.getCurrentId();
+        // Same reason as currentGuestThreadId: the scan reads `handle`, which
+        // CreateThread and CloseHandle mutate under the registry lock.
+        thread_registry_mutex.lock();
+        defer thread_registry_mutex.unlock();
         for (&thread_registry) |*ti| {
             if (ti.handle != 0 and ti.isRunning() and ti.hostThreadId() == tid) {
                 ti.setExitCode(dwExitCode);

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const trace = @import("../../trace.zig");
+const runtime = @import("../../runtime.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
 const x86_memory = @import("../../x86/memory.zig");
@@ -220,6 +221,14 @@ var win32_heap_base: ?[*]u8 = null;
 var win32_heap_pos: usize = 0;
 var win32_heap_cap: usize = 0;
 
+/// Guards the cursor above. HeapAlloc/LocalAlloc/GlobalAlloc are reachable
+/// from every guest thread (Delphi's FastMM calls them per allocation), and
+/// `win32_heap_pos += total` is a read-modify-write: two threads allocating
+/// at once are handed the same block, and the 16-byte size header one writes
+/// lands in memory the other is already using. Held across the new-chunk
+/// mapping too, so two threads cannot pick the same hint range.
+var win32_heap_mutex: runtime.Mutex = .{};
+
 fn win32HeapAlloc(size: usize, zero: bool) ?*anyopaque {
     _ = zero; // mmap'd chunks are already zeroed
     const actual = if (size == 0) @as(usize, 16) else size;
@@ -236,6 +245,8 @@ fn win32HeapAlloc(size: usize, zero: bool) ?*anyopaque {
         return @ptrCast(result);
     }
 
+    win32_heap_mutex.lock();
+    defer win32_heap_mutex.unlock();
     if (win32_heap_base == null or win32_heap_pos + total > win32_heap_cap) {
         // Allocate a new chunk via VirtualAlloc (MEM_COMMIT | MEM_RESERVE)
         // Uses the guest VirtualAlloc hint range so addresses are in the

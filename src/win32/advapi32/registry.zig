@@ -2,6 +2,7 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
 const reg_config = @import("registry_config.zig");
+const runtime = @import("../../runtime.zig");
 
 fn wideEqualsAsciiIgnoreCase(wide: []const u16, ascii: []const u8) bool {
     if (wide.len != ascii.len) return false;
@@ -61,10 +62,10 @@ pub fn RegOpenKeyExA(hKey: usize, lpSubKey: usize, ulOptions: u32, samDesired: u
         if (trace.enable_tracing) trace.print("ADVAPI32: RegOpenKeyExA(0x{X}, '{s}') -> OK (config)\n", .{ hKey, key });
         if (phkResult != 0) {
             // phkResult is a guest pointer (usize param — not auto-translated).
-            @as(*u32, @ptrFromInt(trace.addr(phkResult))).* = next_reg_handle;
+            const handle = allocRegHandle();
+            @as(*u32, @ptrFromInt(trace.addr(phkResult))).* = handle;
             // Store the path for later RegQueryValueEx lookups
-            storeHandlePath(next_reg_handle, full_path);
-            next_reg_handle +%= 1;
+            storeHandlePath(handle, full_path);
         }
         return 0; // ERROR_SUCCESS
     }
@@ -90,7 +91,27 @@ const HandleEntry = struct { handle: u32 = 0, path: [512]u8 = undefined, len: u1
 var handle_paths: [MAX_HANDLES]HandleEntry = [_]HandleEntry{.{}} ** MAX_HANDLES;
 var handle_count: usize = 0;
 
+/// Guards `next_reg_handle` and the handle table below. Any guest thread can
+/// open or create a key, and both the counter bump and the append here are
+/// read-modify-write: two threads were handed the same handle, and two
+/// concurrent appends raced on `handle_count` and overwrote one entry's
+/// handle, so a later RegQueryValueEx resolved a path belonging to another
+/// key. Each section is a counter bump or a 512-byte copy.
+var registry_mutex: runtime.Mutex = .{};
+
+/// Reserves the next key handle. Unique across threads, so a handle paired
+/// with its path in a separate section cannot be claimed twice.
+fn allocRegHandle() u32 {
+    registry_mutex.lock();
+    defer registry_mutex.unlock();
+    const handle = next_reg_handle;
+    next_reg_handle +%= 1;
+    return handle;
+}
+
 fn storeHandlePath(handle: u32, path: []const u8) void {
+    registry_mutex.lock();
+    defer registry_mutex.unlock();
     if (handle_count >= MAX_HANDLES) return;
     var entry = &handle_paths[handle_count];
     entry.handle = handle;
@@ -100,7 +121,11 @@ fn storeHandlePath(handle: u32, path: []const u8) void {
     handle_count += 1;
 }
 
+/// Returns a slice into the (static) table, valid after the lock is dropped:
+/// appends only ever write past `handle_count`, never over a live entry.
 fn lookupHandlePath(handle: u32) ?[]const u8 {
+    registry_mutex.lock();
+    defer registry_mutex.unlock();
     for (handle_paths[0..handle_count]) |*entry| {
         if (entry.handle == handle) return entry.path[0..entry.len];
     }
@@ -235,8 +260,7 @@ pub fn RegCreateKeyExA(hKey: usize, lpSubKey: usize, reserved: u32, lpClass: usi
         trace.print("ADVAPI32: RegCreateKeyExA('{s}')\n", .{key});
     }
     if (phkResult != 0) {
-        @as(*u32, @ptrFromInt(phkResult)).* = next_reg_handle;
-        next_reg_handle +%= 1;
+        @as(*u32, @ptrFromInt(phkResult)).* = allocRegHandle();
     }
     if (lpdwDisposition != 0) {
         @as(*u32, @ptrFromInt(lpdwDisposition)).* = 1; // REG_CREATED_NEW_KEY (no persisted values)
@@ -422,8 +446,7 @@ pub fn stub_RegCreateKeyA(hKey: usize, lpSubKey: usize, phkResult: usize) callco
         trace.print("ADVAPI32: RegCreateKeyA('{s}')\n", .{key});
     }
     if (phkResult != 0) {
-        @as(*u32, @ptrFromInt(phkResult)).* = next_reg_handle;
-        next_reg_handle +%= 1;
+        @as(*u32, @ptrFromInt(phkResult)).* = allocRegHandle();
     }
     return 0; // ERROR_SUCCESS
 }
@@ -434,8 +457,7 @@ pub fn stub_RegCreateKeyW(hKey: usize, lpSubKey: usize, phkResult: usize) callco
     _ = lpSubKey;
     if (trace.enable_tracing) trace.print("ADVAPI32: RegCreateKeyW\n", .{});
     if (phkResult != 0) {
-        @as(*u32, @ptrFromInt(phkResult)).* = next_reg_handle;
-        next_reg_handle +%= 1;
+        @as(*u32, @ptrFromInt(phkResult)).* = allocRegHandle();
     }
     return 0; // ERROR_SUCCESS
 }
@@ -476,8 +498,7 @@ pub fn RegCreateKeyExW(hKey: usize, lpSubKey: usize, reserved: u32, lpClass: usi
     _ = lpSecurityAttributes;
     if (trace.enable_tracing) trace.print("ADVAPI32: RegCreateKeyExW\n", .{});
     if (phkResult != 0) {
-        @as(*u32, @ptrFromInt(phkResult)).* = next_reg_handle;
-        next_reg_handle +%= 1;
+        @as(*u32, @ptrFromInt(phkResult)).* = allocRegHandle();
     }
     if (lpdwDisposition != 0) {
         @as(*u32, @ptrFromInt(lpdwDisposition)).* = 1; // REG_CREATED_NEW_KEY (no persisted values)

@@ -14,23 +14,26 @@ pub fn GetCurrentDirectoryA(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.
     if (path_utils.current_directory_len == 0) {
         // Initialize from actual host CWD in Win32 format
         const host_io = @import("../host_io.zig");
-        const len = host_io.getCwd(&path_utils.current_directory);
-        if (trace.enable_tracing) trace.print("KERNEL32: getCwd retrieved '{s}'\n", .{path_utils.current_directory[0..len]});
-        path_utils.current_directory_len = if (len > 0) len else blk: {
-            const cwd = "C:\\";
-            @memcpy(path_utils.current_directory[0..cwd.len], cwd);
-            break :blk cwd.len;
-        };
+        var host_cwd: [1024]u8 = undefined;
+        const len = host_io.getCwd(&host_cwd);
+        if (trace.enable_tracing) trace.print("KERNEL32: getCwd retrieved '{s}'\n", .{host_cwd[0..len]});
+        if (len > 0) {
+            path_utils.setCurrentDirectory(host_cwd[0..len]);
+        } else {
+            path_utils.setCurrentDirectory("C:\\");
+        }
     }
 
-    if (lpBuffer != 0 and nBufferLength > path_utils.current_directory_len) {
+    var snapshot: [1024]u8 = undefined;
+    const len = path_utils.copyCurrentDirectory(&snapshot);
+    if (lpBuffer != 0 and nBufferLength > len) {
         const host_buf = trace.addr(lpBuffer);
         const buf = @as([*]u8, @ptrFromInt(host_buf));
-        @memcpy(buf[0..path_utils.current_directory_len], path_utils.current_directory[0..path_utils.current_directory_len]);
-        buf[path_utils.current_directory_len] = 0;
-        return @intCast(path_utils.current_directory_len);
+        @memcpy(buf[0..len], snapshot[0..len]);
+        buf[len] = 0;
+        return @intCast(len);
     }
-    return @intCast(path_utils.current_directory_len + 1);
+    return @intCast(len + 1);
 }
 
 /// Retrieves the current directory for the current process (Unicode version).
@@ -38,20 +41,20 @@ pub fn GetCurrentDirectoryA(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.
 pub fn GetCurrentDirectoryW(nBufferLength: u32, lpBuffer: usize) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("KERNEL32: GetCurrentDirectoryW(len={d})\n", .{nBufferLength});
     if (path_utils.current_directory_len == 0) {
-        const cwd = "C:\\";
-        @memcpy(path_utils.current_directory[0..cwd.len], cwd);
-        path_utils.current_directory_len = cwd.len;
+        path_utils.setCurrentDirectory("C:\\");
     }
-    if (lpBuffer != 0 and nBufferLength > path_utils.current_directory_len) {
+    var snapshot: [1024]u8 = undefined;
+    const len = path_utils.copyCurrentDirectory(&snapshot);
+    if (lpBuffer != 0 and nBufferLength > len) {
         const host_buf = trace.addr(lpBuffer);
         const buf = @as([*]u16, @ptrFromInt(host_buf));
-        for (0..path_utils.current_directory_len) |i| {
-            buf[i] = path_utils.current_directory[i];
+        for (0..len) |i| {
+            buf[i] = snapshot[i];
         }
-        buf[path_utils.current_directory_len] = 0;
-        return @intCast(path_utils.current_directory_len);
+        buf[len] = 0;
+        return @intCast(len);
     }
-    return @intCast(path_utils.current_directory_len + 1);
+    return @intCast(len + 1);
 }
 
 /// Changes the current directory for the current process.
@@ -62,9 +65,7 @@ pub fn SetCurrentDirectoryA(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("KERNEL32: SetCurrentDirectoryA('{s}')\n", .{path});
 
     const copy_len = @min(path.len, 1023);
-    @memcpy(path_utils.current_directory[0..copy_len], path[0..copy_len]);
-    path_utils.current_directory_len = copy_len;
-    path_utils.current_directory[path_utils.current_directory_len] = 0;
+    path_utils.setCurrentDirectory(path[0..copy_len]);
     return 1;
 }
 
@@ -80,9 +81,7 @@ pub fn SetCurrentDirectoryW(lpPathName: usize) callconv(w32cc.WINAPI) i32 {
     }
     narrow[i] = 0;
     if (trace.enable_tracing) trace.print("KERNEL32: SetCurrentDirectoryW('{s}')\n", .{narrow[0..i]});
-    @memcpy(path_utils.current_directory[0..i], narrow[0..i]);
-    path_utils.current_directory_len = i;
-    path_utils.current_directory[i] = 0;
+    path_utils.setCurrentDirectory(narrow[0..i]);
     return 1;
 }
 

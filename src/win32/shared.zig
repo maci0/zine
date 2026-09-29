@@ -36,14 +36,29 @@ pub var child_cpu: ?*@import("../x86/cpu.zig").Cpu = null;
 /// Triggered during execution rights modification (e.g. VirtualProtect or FlushInstructionCache).
 pub var smc_invalidate_cache: ?*const fn () callconv(.c) void = null;
 
+const runtime = @import("../runtime.zig");
+
 const heap_chunk_size: usize = 16 * 1024 * 1024; // 16 MB per chunk
 var heap_base: ?[*]u8 = null;
 var heap_pos: usize = 0;
 var heap_cap: usize = 0;
 
+/// Guards the bump-allocator cursor above. Every guest thread reaches
+/// `heapAlloc` through malloc/strdup, and `pos += aligned` is a
+/// read-modify-write: two threads allocating at once both read the same `pos`
+/// and are handed the same address, so the two blocks alias and the guest
+/// overwrites live data. The critical section covers only the cursor and the
+/// new-chunk mapping, and no allocation path takes another lock inside it.
+var heap_mutex: runtime.Mutex = .{};
+
 // Guest VirtualAlloc allocations use a separate address range from the
 // zine internal heap to prevent Delphi's FastMM from confusing them.
 var next_alloc_hint: usize = 0x02000000;
+
+/// Guards `next_alloc_hint` and `internal_heap_hint`, whose increments are
+/// the same read-modify-write as the bump cursor: unsynchronized, two threads
+/// get one 64KB range and the second mapping lands on the first.
+var hint_mutex: runtime.Mutex = .{};
 
 /// Returns a 64KB aligned memory address hint for allocations.
 ///
@@ -55,6 +70,8 @@ var next_alloc_hint: usize = 0x02000000;
 /// Keeps a rolling hint for 64KB aligned allocations to satisfy Windows memory assumptions.
 /// Implementation status: Partially implemented
 pub fn get_aligned_hint(size: usize) usize {
+    hint_mutex.lock();
+    defer hint_mutex.unlock();
     const hint = next_alloc_hint;
     const aligned_size = (size + 0xFFFF) & ~@as(usize, 0xFFFF);
     next_alloc_hint += aligned_size;
@@ -80,12 +97,19 @@ fn allocHeapChunk(size: usize) ?[]align(4096) u8 {
         return @alignCast(std.heap.page_allocator.alloc(u8, size) catch null);
     }
     const plt = @import("../platform.zig");
-    const hint = internal_heap_hint;
-    internal_heap_hint += (size + 0xFFFF) & ~@as(usize, 0xFFFF);
+    const hint = blk: {
+        hint_mutex.lock();
+        defer hint_mutex.unlock();
+        const h = internal_heap_hint;
+        internal_heap_hint += (size + 0xFFFF) & ~@as(usize, 0xFFFF);
+        break :blk h;
+    };
     return plt.mmap(@ptrFromInt(hint), size, false, -1, 0, false, false) catch null;
 }
 
 fn heapAlloc(size: usize) ?[*]u8 {
+    heap_mutex.lock();
+    defer heap_mutex.unlock();
     const aligned = (size + 7) & ~@as(usize, 7); // 8-byte align
     if (heap_base == null or heap_pos + aligned > heap_cap) {
         const chunk_size = @max(aligned + 4096, heap_chunk_size);
