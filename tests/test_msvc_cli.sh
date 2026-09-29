@@ -87,7 +87,7 @@ if [ "$MODE" = "--all" ] || [ "$MODE" = "all" ]; then
         "$0" "$m" ${FILTER:+--filter "$FILTER"} || all_rc=1
         echo ""
     done
-    exit $all_rc
+    exit "$all_rc"
 fi
 
 # Parse mode flag
@@ -303,7 +303,7 @@ fail() {
 run() {
     local outfile="$1"; shift
     local rc=0
-    timeout $TIMEOUT_SECS "$@" > "$outfile" 2>&1 || rc=$?
+    timeout "$TIMEOUT_SECS" "$@" > "$outfile" 2>&1 || rc=$?
     echo "$rc"
 }
 
@@ -1372,7 +1372,7 @@ fi
 if [ -f cxt_app.exe ]; then
     no_gui=""
     [ "$IS_WASM" = "false" ] && no_gui="--no-gui"
-    rc=$(run cxt_out.txt "${WINLOADER_CMD[@]}" ${ZINE_FLAGS[@]+${ZINE_FLAGS[@]}} $no_gui ./cxt_app.exe)
+    rc=$(run cxt_out.txt "${WINLOADER_CMD[@]}" ${ZINE_FLAGS[@]+${ZINE_FLAGS[@]}} "$no_gui" ./cxt_app.exe)
     if grep -q "cxt-check: ok" cxt_out.txt 2>/dev/null; then
         pass "CXT: run cxt_app.exe" "(popup menu + flags, TrackPopupMenu non-blocking)"
     elif [ "$WASM_RUNS_OUTPUT" = "true" ]; then
@@ -3216,7 +3216,7 @@ if [ -f cc_gui.exe ]; then
         CC_APP_PID=$!
         sleep 4
         timeout 20 python3 ws_cc.py >> cc_out.txt 2>&1
-        wait $CC_APP_PID
+        wait "$CC_APP_PID"
         if grep -q "cc-check: ok" cc_out.txt 2>/dev/null; then
             pass "CC: run cc_gui.exe" "(ChooseColor round-trip via web client)"
         else
@@ -3347,7 +3347,7 @@ if [ -f cf_gui.exe ]; then
         CF_APP_PID=$!
         sleep 4
         timeout 20 python3 ws_cf.py >> cf_out.txt 2>&1
-        wait $CF_APP_PID
+        wait "$CF_APP_PID"
         if grep -q "cf-check: ok" cf_out.txt 2>/dev/null; then
             pass "CF: run cf_gui.exe" "(ChooseFont round-trip via web client)"
         else
@@ -3725,7 +3725,7 @@ if [ -f pd_gui.exe ]; then
         PD_APP_PID=$!
         sleep 4
         timeout 20 python3 ws_pd.py >> pd_out.txt 2>&1
-        wait $PD_APP_PID
+        wait "$PD_APP_PID"
         if grep -q "pd-check: ok" pd_out.txt 2>/dev/null; then
             pass "PD: run pd_gui.exe" "(PrintDlg round-trip via web client)"
         else
@@ -3871,7 +3871,7 @@ if [ -f ft_gui.exe ]; then
         FT_APP_PID=$!
         sleep 4
         timeout 20 python3 ws_ft.py >> ft_out.txt 2>&1
-        wait $FT_APP_PID
+        wait "$FT_APP_PID"
         if grep -q "ft-check: ok" ft_out.txt 2>/dev/null; then
             pass "FT: run ft_gui.exe" "(FindText FINDMSG round-trip via web client)"
         else
@@ -4011,7 +4011,7 @@ if [ -f ps_gui.exe ]; then
         PS_APP_PID=$!
         sleep 4
         timeout 20 python3 ws_ps.py >> ps_out.txt 2>&1
-        wait $PS_APP_PID
+        wait "$PS_APP_PID"
         if grep -q "ps-check: ok" ps_out.txt 2>/dev/null; then
             pass "PS: run ps_gui.exe" "(PageSetupDlg round-trip via web client)"
         else
@@ -4529,7 +4529,7 @@ echo "  PASSED:  $PASSED"
 echo "  FAILED:  $FAILED"
 echo "==============================="
 
-if [ $FAILED -gt 0 ]; then
+if [ "$FAILED" -gt 0 ]; then
     echo ""
     echo "Failure details:"
     printf '%b\n' "$FAILURES"

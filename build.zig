@@ -12,12 +12,20 @@ const fltk_lib_dir = "/usr/lib/fltk1.3";
 // the other means a warning can merge while the gate stays green. The FLTK
 // headers reach the compiler as a system include, so their own warnings do
 // not fail either compile.
+// -Wimplicit-fallthrough joins the set because a switch case falling through
+// without a break is a defect class the C gate already runs (check_c in
+// tests/check.sh) and the C++ side did not. -Wconversion,
+// -Wsign-conversion and -Wdouble-promotion are deliberately absent: the
+// bridge does not compile clean under them yet (19 findings in the font
+// table lookup and the input replace, src/gui/fltk_bridge.cpp lines 999 and
+// 1145). Enable them with the fix.
 const fltk_bridge_cxx_flags = [_][]const u8{
-    "-std=c++11",    "-fno-exceptions",    "-Werror",
-    "-Wall",         "-Wextra",            "-Wpedantic",
-    "-Wshadow",      "-Wnon-virtual-dtor", "-Woverloaded-virtual",
-    "-Wcast-qual",   "-Wundef",            "-Wformat=2",
-    "-Wswitch-enum", "-Wnull-dereference", "-I" ++ fltk_include_dir,
+    "-std=c++11",             "-fno-exceptions",    "-Werror",
+    "-Wall",                  "-Wextra",            "-Wpedantic",
+    "-Wshadow",               "-Wnon-virtual-dtor", "-Woverloaded-virtual",
+    "-Wcast-qual",            "-Wundef",            "-Wformat=2",
+    "-Wswitch-enum",          "-Wnull-dereference", "-Wimplicit-fallthrough",
+    "-I" ++ fltk_include_dir,
 };
 
 comptime {
