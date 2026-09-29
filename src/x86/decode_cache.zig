@@ -104,7 +104,10 @@ test "decode_cache: hit after store" {
     try testing.expect(result != null);
     try testing.expectEqual(insn.opcode, result.?.opcode);
     try testing.expectEqual(insn.length, result.?.length);
-    try testing.expectEqual(insn.imm, result.?.imm);
+    // The decoded MOV EAX immediate, pinned so the entry cannot pass by
+    // echoing back whatever store was handed.
+    try testing.expectEqual(@as(u32, 0x1234_5678), result.?.imm);
+    try testing.expectEqual(@as(u8, 5), result.?.length);
     try testing.expectEqual(@as(u64, 1), cache.hits);
 }
 
@@ -217,5 +220,17 @@ test "decode_cache: short code slice handled" {
     cache.store(0x500000, &short_code, insn);
     const result = cache.lookup(0x500000, &short_code);
     try testing.expect(result != null);
-    try testing.expectEqual(insn.opcode, result.?.opcode);
+    // Assert the NOP the one-byte slice decodes to, not the Instruction just
+    // handed to store: an entry that came back with a stale or zeroed opcode
+    // of the right length would pass a comparison against `insn`.
+    try testing.expectEqual(@as(u16, 0x90), result.?.opcode);
+    try testing.expectEqual(@as(u8, 1), result.?.length);
+
+    // A different instruction at the same EIP must not answer with the
+    // cached one, so the entry above came from this EIP's bytes.
+    const other = [_]u8{0xCC};
+    cache.store(0x500000, &other, decoder.decode(&other));
+    const replaced = cache.lookup(0x500000, &other);
+    try testing.expect(replaced != null);
+    try testing.expectEqual(@as(u16, 0xCC), replaced.?.opcode);
 }

@@ -345,6 +345,10 @@ test "SystemTimeToFileTime rejects invalid dates without changing output" {
         .{ .wYear = 2024, .wMonth = 1, .wDay = 1, .wMilliseconds = 1000 },
     };
     const sentinel: w32.FILETIME = .{ .dwLowDateTime = 123, .dwHighDateTime = 456 };
+    // Last error is process-wide; leaving ERROR_INVALID_PARAMETER set would
+    // decide what a later test that reads it without setting it first sees.
+    const saved_error = kernel32_error.GetLastError();
+    defer kernel32_error.SetLastError(saved_error);
     for (invalid) |st| {
         var ft = sentinel;
         kernel32_error.SetLastError(0);
@@ -376,6 +380,8 @@ test "FileTimeToSystemTime rejects high-bit timestamps without changing output" 
         .{ .dwLowDateTime = 0xFFFFFFFF, .dwHighDateTime = 0xFFFFFFFF },
     };
     const sentinel: w32.SYSTEMTIME = .{ .wYear = 2024, .wMonth = 2, .wDay = 29 };
+    const saved_error = kernel32_error.GetLastError();
+    defer kernel32_error.SetLastError(saved_error);
     for (invalid) |ft| {
         var st = sentinel;
         kernel32_error.SetLastError(0);

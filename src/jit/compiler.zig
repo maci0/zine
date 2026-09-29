@@ -1820,6 +1820,16 @@ fn expectCodeSectionContains(wasm_bin: []const u8, opcodes: []const u8) !void {
     }
 }
 
+/// Assert the second module's code section is strictly larger than the first's.
+/// A body that translated to nothing, or a translator that stopped at the
+/// first instruction, leaves the two equal, so a byte scan of the code section
+/// (which the prologue and epilogue already fill) cannot stand in for this.
+fn expectCodeSectionGrows(base: []const u8, longer: []const u8) !void {
+    const base_code = findSection(base, 10) orelse return error.TestUnexpectedResult;
+    const longer_code = findSection(longer, 10) orelse return error.TestUnexpectedResult;
+    try testing.expect(longer_code.len > base_code.len);
+}
+
 test "jit compiler basic structure" {
     var compiler = JitCompiler.init(std.testing.allocator, 0);
     defer compiler.deinit();
@@ -1834,6 +1844,17 @@ test "jit compiler basic structure" {
     defer std.testing.allocator.free(wasm_bin);
 
     try expectValidWasmModule(wasm_bin);
+
+    // The body has to hold the three instructions, not just a valid prologue
+    // and epilogue. Compiling the first instruction alone and comparing code
+    // section sizes catches a translator that returns early on the second
+    // instruction or on the register-register form.
+    compiler.module.deinit();
+    compiler.module = @import("emitter.zig").WasmModule.init(std.testing.allocator);
+    const first_only = [_]u8{ 0xB8, 0x01, 0x00, 0x00, 0x00 };
+    const wasm_first = try compiler.compile(0x1000, &first_only);
+    defer std.testing.allocator.free(wasm_first);
+    try expectCodeSectionGrows(wasm_first, wasm_bin);
 }
 
 test "jit compiler push/pop" {
@@ -1851,6 +1872,16 @@ test "jit compiler push/pop" {
     try expectValidWasmModule(wasm_bin);
     // PUSH stores through the stack pointer; POP loads back.
     try expectCodeSectionContains(wasm_bin, &.{ @intFromEnum(wasm.Opcode.i32_store), @intFromEnum(wasm.Opcode.i32_load) });
+
+    // The prologue and epilogue emit i32_store and i32_load themselves, so the
+    // byte scan above holds even if PUSH and POP translate to nothing. Each
+    // instruction has to grow the body past the one that precedes it.
+    compiler.module.deinit();
+    compiler.module = @import("emitter.zig").WasmModule.init(std.testing.allocator);
+    const push_only = [_]u8{0x50};
+    const wasm_push = try compiler.compile(0x2000, &push_only);
+    defer std.testing.allocator.free(wasm_push);
+    try expectCodeSectionGrows(wasm_push, wasm_bin);
 }
 
 test "jit compiler group1 sub imm" {

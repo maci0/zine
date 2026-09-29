@@ -181,10 +181,16 @@ pub fn readParam(cpu: *const Cpu, index: u32) u32 {
     return cpu.memory.read32(cpu.esp +% index * 4);
 }
 
-/// Reset the thunk table (for testing).
+/// Reset the thunk tables (for testing). The import registry goes with the
+/// thunk table: isNativeImport consults it on every interpreted instruction,
+/// so entries a test registered would otherwise outlive it and answer for an
+/// address the rest of the run never registered.
 pub fn reset() void {
     thunk_entries = .{null} ** MAX_THUNKS;
     thunk_count = 0;
+    import_count = 0;
+    imports_sorted = false;
+    import_filter = [_]u64{0} ** FILTER_WORDS;
 }
 
 // -----------------------------------------------------------------------

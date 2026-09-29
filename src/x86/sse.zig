@@ -1215,6 +1215,9 @@ test "execUnaryFloat: reciprocal of zero yields zero, not IEEE inf" {
     var cpu = Cpu{ .memory = undefined };
     var mem: [64]u8 = .{0} ** 64;
     cpu.memory = .{ .base = &mem };
+    // The PS path reads its source through getRegIdx(insn, 1), which is
+    // op1_reg whatever op1_kind says, so the source register has to be named
+    // here or the lane under test comes from the destination register.
     const insn = &decoder.Instruction{
         .opcode = 0x0F53,
         .length = 4,
@@ -1222,14 +1225,50 @@ test "execUnaryFloat: reciprocal of zero yields zero, not IEEE inf" {
         .modrm_reg = 1,
         .op0_kind = .reg,
         .op0_reg = 0,
-        .op1_kind = .mem,
-        .mem_seg = .ds,
+        .op1_kind = .reg,
+        .op1_reg = 1,
     };
     cpu.xmm[1] = @bitCast(@as(u128, 0)); // all-zero source: +0.0 in every lane
+    // The destination is written in full, so seeding it proves the zeros come
+    // from the zero branch rather than from a register that was never touched.
+    cpu.xmm[0] = @bitCast([4]f32{ std.math.nan(f32), 1.0, 2.0, 3.0 });
     execUnaryFloat(&cpu, insn, .none, .rcp);
     const r: [4]f32 = @bitCast(cpu.xmm[0]);
     for (r) |lane| try testing.expectEqual(@as(f32, 0), lane);
     execUnaryFloat(&cpu, insn, .none, .rsqrt);
     const q: [4]f32 = @bitCast(cpu.xmm[0]);
     for (q) |lane| try testing.expectEqual(@as(f32, 0), lane);
+}
+
+test "execUnaryFloat: reciprocal and rsqrt of a non-zero lane compute it" {
+    var cpu = Cpu{ .memory = undefined };
+    var mem: [64]u8 = .{0} ** 64;
+    cpu.memory = .{ .base = &mem };
+    const insn = &decoder.Instruction{
+        .opcode = 0x0F53,
+        .length = 4,
+        .has_modrm = true,
+        .modrm_reg = 1,
+        .op0_kind = .reg,
+        .op0_reg = 0,
+        .op1_kind = .reg,
+        .op1_reg = 1,
+    };
+    const src = [4]f32{ 4.0, -0.5, 0.25, 16.0 };
+    cpu.xmm[1] = @bitCast(src);
+    cpu.xmm[0] = 0;
+
+    execUnaryFloat(&cpu, insn, .none, .rcp);
+    const r: [4]f32 = @bitCast(cpu.xmm[0]);
+    try testing.expectEqual(@as(f32, 0.25), r[0]);
+    try testing.expectEqual(@as(f32, -2.0), r[1]);
+    try testing.expectEqual(@as(f32, 4.0), r[2]);
+    try testing.expectEqual(@as(f32, 0.0625), r[3]);
+
+    execUnaryFloat(&cpu, insn, .none, .rsqrt);
+    const q: [4]f32 = @bitCast(cpu.xmm[0]);
+    try testing.expectEqual(@as(f32, 0.5), q[0]);
+    try testing.expect(std.math.isNan(q[1])); // 1/sqrt of a negative is NaN
+    try testing.expectEqual(@as(f32, 2.0), q[2]);
+    try testing.expectEqual(@as(f32, 0.25), q[3]);
 }

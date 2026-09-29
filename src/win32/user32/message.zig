@@ -1871,6 +1871,38 @@ test "every dispatched MSG carries the tick count GetMessageTime reports" {
     try testing.expect(after - before < 1000);
 }
 
+test "PostMessageA and PostQuitMessage stamp the queued MSG, not just the helper" {
+    // The test above stamps an MSG with msgTime() and then compares it against
+    // GetMessageTime(), so it holds whatever msgTime returns. These two go
+    // through the ring buffer, where a producer that left .time at its zero
+    // default would pass that test and hand the guest a zero age.
+    const saved_head = user32.pending_messages_head;
+    const saved_tail = user32.pending_messages_tail;
+    defer {
+        user32.pending_messages_head = saved_head;
+        user32.pending_messages_tail = saved_tail;
+    }
+    user32.pending_messages_head = 0;
+    user32.pending_messages_tail = 0;
+
+    const posted_slot = user32.pending_messages_head;
+    try testing.expectEqual(@as(i32, 1), PostMessageA(0x1234, w32.WM_USER, 0xAAAA, 0xBBBB));
+    try testing.expectEqual(@as(usize, 1), user32.pending_messages_head);
+    const posted = user32.pending_messages[posted_slot];
+    try testing.expectEqual(w32.WM_USER, posted.message);
+    try testing.expectEqual(@as(usize, 0x1234), @as(usize, posted.hwnd));
+    try testing.expectEqual(@as(usize, 0xAAAA), @as(usize, posted.wParam));
+    try testing.expect(posted.time != 0);
+    try testing.expect(@as(u32, @bitCast(GetMessageTime())) -% posted.time < 1000);
+
+    const quit_slot = user32.pending_messages_head;
+    PostQuitMessage(3);
+    const quit = user32.pending_messages[quit_slot];
+    try testing.expectEqual(w32.WM_QUIT, quit.message);
+    try testing.expect(quit.time != 0);
+    try testing.expect(@as(u32, @bitCast(GetMessageTime())) -% quit.time < 1000);
+}
+
 test "a stored date keeps the weekday its calendar gives, not the caller's" {
     var st: DtpState = .{};
     // A zeroed wDayOfWeek (0 = Sunday) is what a Delphi caller sends with a

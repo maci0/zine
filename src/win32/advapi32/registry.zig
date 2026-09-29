@@ -31,8 +31,51 @@ test "wide registry key names preserve non-ASCII code units" {
     try std.testing.expectEqual(@as(u32, 0), handle);
 }
 
-var next_reg_handle: u32 = 0xDE000001;
+test "RegQueryValueExW copies the value out and reports a short buffer" {
+    // The tests above pass lpData = 0, so they only ever reach the size query.
+    // A guest reads the string through a real buffer, so the copy, the
+    // NUL-terminator, the REG_SZ type, and the ERROR_MORE_DATA branch all need
+    // their own assertions.
+    const name = std.unicode.utf8ToUtf16LeStringLiteral("ProcessorNameString");
+    var size: u32 = 0;
+    try std.testing.expectEqual(@as(u32, 0), RegQueryValueExW(CPU_REG_HANDLE, @intFromPtr(name), 0, 0, 0, @intFromPtr(&size)));
+    // "Intel Pentium III" plus its NUL, two bytes each.
+    try std.testing.expectEqual(@as(u32, 36), size);
 
+    // A buffer one byte short must fail and still report the size needed.
+    var short_buf: [16]u16 = undefined;
+    @memset(&short_buf, 0xAAAA);
+    size = short_buf.len * 2;
+    var reg_type: u32 = 0;
+    try std.testing.expectEqual(
+        @as(u32, 234), // ERROR_MORE_DATA
+        RegQueryValueExW(CPU_REG_HANDLE, @intFromPtr(name), 0, @intFromPtr(&reg_type), @intFromPtr(&short_buf), @intFromPtr(&size)),
+    );
+    try std.testing.expectEqual(@as(u32, 36), size);
+    // The failed call must not have written the value.
+    try std.testing.expectEqual(@as(u16, 0xAAAA), short_buf[0]);
+
+    var buf: [64]u16 = undefined;
+    @memset(&buf, 0xAAAA);
+    size = buf.len * 2;
+    reg_type = 0;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        RegQueryValueExW(CPU_REG_HANDLE, @intFromPtr(name), 0, @intFromPtr(&reg_type), @intFromPtr(&buf), @intFromPtr(&size)),
+    );
+    try std.testing.expectEqual(@as(u32, 1), reg_type); // REG_SZ
+    try std.testing.expectEqual(@as(u32, 36), size);
+    try std.testing.expectEqualSlices(
+        u16,
+        std.unicode.utf8ToUtf16LeStringLiteral("Intel Pentium III"),
+        buf[0..17],
+    );
+    try std.testing.expectEqual(@as(u16, 0), buf[17]); // NUL terminator
+    // Nothing past the terminator was touched.
+    try std.testing.expectEqual(@as(u16, 0xAAAA), buf[18]);
+}
+
+var next_reg_handle: u32 = 0xDE000001;
 const CPU_REG_HANDLE: u32 = 0xDE00C000;
 
 /// Initialize the registry from the embedded TOML config.

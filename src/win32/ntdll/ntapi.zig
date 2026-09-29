@@ -484,8 +484,8 @@ test "RtlInitUnicodeString fills struct correctly" {
 }
 
 test "RtlInitUnicodeString with null source" {
-    if (needs_32bit_address) return error.SkipZigTest;
-
+    // A null source is the one case that never reaches the 32-bit Buffer
+    // truncation, so this branch is asserted on the gate host too.
     var buf: [8]u8 align(4) = undefined;
     @memset(&buf, 0xFF);
 

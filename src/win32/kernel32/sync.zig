@@ -1151,6 +1151,19 @@ test "WaitForSingleObject times out on a mutex held by another thread" {
 test "TLS values belong to the thread that set them and end with the thread" {
     if (comptime builtin.os.tag == .wasi) return error.SkipZigTest;
 
+    // TlsAlloc advances the module-global slot counter and each spawned thread
+    // takes an entry from the shared thread table; both outlive the test unless
+    // they are put back, so a later test that counts slots or expects a given
+    // index would see whatever this one left behind.
+    const saved_next = tls_next;
+    const saved_threads = tls_threads;
+    defer {
+        tls_next = saved_next;
+        tls_threads = saved_threads;
+    }
+    tls_next = 0;
+    for (&tls_threads) |*entry| entry.* = .{ .thread_id = 0, .slots = [_]usize{0} ** MAX_TLS_SLOTS };
+
     const idx = TlsAlloc();
     try std.testing.expect(idx < MAX_TLS_SLOTS);
 
