@@ -65,6 +65,7 @@ fi
 # same to keep peak memory at one wasm compile. Each name is the handle a
 # caller passes to run that step alone; the order below is the gate's order.
 step_names=(
+    check_ci
     fmt
     check_shell
     check_c
@@ -89,6 +90,7 @@ step_names=(
     fuzz
 )
 step_commands=(
+    'check_ci'
     'zig fmt --check src build.zig build.zig.zon'
     'check_shell'
     'check_c'
@@ -111,6 +113,33 @@ step_commands=(
     # in this file.
     'fuzz'
 )
+
+# The gate and CI have to run the same steps. .github/workflows/ci.yml names
+# them one per CI step so a failure names the target that broke, which is a
+# second list to keep: a step added to step_names below reaches neither a pull
+# request nor a push to main until the workflow names it, and every other step
+# still passes, so the check silently stops existing. This compares the two
+# lists and fails on any step the workflow never invokes. AGENTS.md asks for a
+# new gate to land in both files; this is what makes that ask enforceable
+# rather than a rule a reviewer has to remember.
+check_ci() {
+    local workflow=.github/workflows/ci.yml name missing=()
+    if [[ ! -f "$workflow" ]]; then
+        printf 'check_ci: %s is missing, so the gate cannot be matched against CI\n' "$workflow" >&2
+        return 1
+    fi
+    for name in "${step_names[@]}"; do
+        # Anchored at the end of the line: a step named by prefix, or named in
+        # a comment, does not run it.
+        grep -qE "^ *run: bash tests/check\.sh $name\$" "$workflow" || missing+=("$name")
+    done
+    if ((${#missing[@]} > 0)); then
+        printf 'check_ci: the gate runs these steps and CI never invokes them: %s\n' "${missing[*]}" >&2
+        printf 'add one "run: bash tests/check.sh <step>" line per step to %s\n' "$workflow" >&2
+        return 1
+    fi
+    printf 'check_ci: CI invokes all %d gate steps\n' "${#step_names[@]}"
+}
 
 # Every tracked script, wherever it lives, must stay shellcheck-clean. This
 # matches the CI command so a script outside tests/ cannot slip through locally.

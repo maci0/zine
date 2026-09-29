@@ -24,7 +24,7 @@ Run `bash tests/check.sh` from the repository root before a pull request. It fir
 - Stub DLLs: `zig build -Ddll=all` compiles `src/dll/` and `src/win32_dll_api.zig` for x86-windows. `zig build -Dexternal-stubs` covers the other half of the embed/external stub switch.
 - The FLTK bridge: `zig build check-cxx` compiles `src/gui/fltk_bridge.cpp` alone, with the flags and include paths `zig build -Darch=x86_64 -Dfltk` gives it, and links nothing. It needs the FLTK development headers (`libfltk1.3-dev`); the FLTK executable additionally needs the X11 runtime, which the gate does not install.
 
-Formatting also gates the install and test steps inside `build.zig`. A new gate belongs in `tests/check.sh` and `.github/workflows/ci.yml` together; fix failing code rather than weakening checks or dropping targets. CI calls the script for the helper steps, so their commands and file lists are defined there alone. `ZINE_FUZZ_SECONDS` overrides the seconds each fuzz target runs; CI sets it to 60.
+Formatting also gates the install and test steps inside `build.zig`. A new gate belongs in `tests/check.sh` and `.github/workflows/ci.yml` together; the `check_ci` step compares the two step lists and fails when one has a step the other does not. Fix failing code rather than weakening checks or dropping targets. CI calls the script for the helper steps, so their commands and file lists are defined there alone. `ZINE_FUZZ_SECONDS` overrides the seconds each fuzz target runs; CI sets it to 60.
 
 See `README.md` for optional FLTK/Wasmer builds, run commands, and integration suites, and `CONTRIBUTING.md` for the gate and commit conventions. Integration tests require guest binaries and runtime dependencies beyond the unit-test setup.
 

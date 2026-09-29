@@ -61,17 +61,19 @@ embeds. Pass `-Doptimize=Debug` when stepping through code.
 
 `tests/check.sh` is the single pre-pull-request gate. It runs the same checks,
 in the same order, as the `static-analysis` job in `.github/workflows/ci.yml`:
-`zig fmt --check`, shellcheck over every tracked script, a warning-free
+the `check_ci` match between the two step lists, `zig fmt --check`,
+shellcheck over every tracked script, a warning-free
 `zig cc` compile of every tracked C source, a warning-free compile of the C++
 FLTK bridge, a parse of every tracked JavaScript file, all four architecture
 builds, the linked-artifact hardening check,
 the external-stub DLL and
 `-Dexternal-stubs` builds, the byte-identical rebuild, the unit tests, both
 native `test-cli` runs, and the fuzz budget. If you add a check,
-add it in both places or local runs stop predicting CI.
+add it in both places or local runs stop predicting CI; `check_ci` fails
+locally and in CI when one file has a step the other does not.
 
 Each check is a named step, and `bash tests/check.sh <step> [step...]` runs
-just those, still in gate order: `fmt`, `check_shell`, `check_c`, `check_cxx`,
+just those, still in gate order: `check_ci`, `fmt`, `check_shell`, `check_c`, `check_cxx`,
 `check_web`, `build`, `build-x86_64`, `hardening`, `build-wasm32`, `build-wasm64`, `dll`,
 `external-stubs`, `reproducible`, `test`, `test-cli`, `test-cli-x86_64`, `fuzz`.
 `bash tests/check.sh --list` prints the names, and

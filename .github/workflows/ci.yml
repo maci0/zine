@@ -63,10 +63,13 @@ jobs:
       # runs anything, and every step below goes through it.
       #
       # Every gate step below runs out of tests/check.sh, so each command and
-      # each file list has one home: a step added to the script's step list
-      # reaches CI without a second copy. The step names here are the script's
-      # step names, kept one per CI step so a failure names the target that
-      # broke; the script runs them in gate order whatever order they are in.
+      # each file list has one home. The step names here are the script's step
+      # names, kept one per CI step so a failure names the target that broke;
+      # the script runs them in gate order whatever order they are in. Naming
+      # them here is the second list, so the first step below compares the two
+      # and fails on a step the script has and this workflow does not.
+      - name: Gate steps are all wired into CI
+        run: bash tests/check.sh check_ci
       #
       # Canonical formatter check (mirrors the in-build gate; kept explicit so
       # a formatting failure is reported before any compile work).
