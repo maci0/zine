@@ -26,7 +26,7 @@ pub fn GetStockObject(fnObject: i32) callconv(w32cc.WINAPI) usize {
 
     // Lazy registration of stock objects
     if (gdi32.findObject(handle) == null) {
-        switch (fnObject) {
+        _ = switch (fnObject) {
             0 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0x00FFFFFF, .style = 0 } } }), // WHITE_BRUSH
             1 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0x00C0C0C0, .style = 0 } } }), // LTGRAY_BRUSH
             2 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0x00808080, .style = 0 } } }), // GRAY_BRUSH
@@ -38,7 +38,7 @@ pub fn GetStockObject(fnObject: i32) callconv(w32cc.WINAPI) usize {
             8 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = 0, .width = 0, .style = 5 } } }), // NULL_PEN
             10...17 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Font, .data = .{ .font = gdi32.FontData{} } }),
             else => return 0,
-        }
+        };
     }
     return handle;
 }

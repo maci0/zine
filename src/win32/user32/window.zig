@@ -870,7 +870,7 @@ pub fn stub_GetDC(hWnd: usize) callconv(w32cc.WINAPI) usize {
     // Ensure the window DC is registered in the GDI DC table so that
     // SelectObject, SaveDC, and drawing functions can find its state.
     if (!window_dc_registered) {
-        gdi32.registerDc(0xDC123);
+        _ = gdi32.registerDc(0xDC123);
         window_dc_registered = true;
     }
     return 0xDC123;
@@ -889,7 +889,7 @@ pub fn stub_BeginPaint(hWnd: usize, lpPaint: usize) callconv(w32cc.WINAPI) usize
     // its selected pen/brush/font. GetDC does this; BeginPaint must too —
     // without it every drawing call silently fell back to default colors.
     if (!window_dc_registered) {
-        gdi32.registerDc(0xDC123);
+        _ = gdi32.registerDc(0xDC123);
         window_dc_registered = true;
     }
 
