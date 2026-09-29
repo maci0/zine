@@ -5,10 +5,11 @@
 //! the variable and the accepted values; nothing falls back to a default
 //! behind the operator's back. A `ZINE_*` variable this module does not know is
 //! a typo, and a typo leaves the default in place while the run looks
-//! configured, so it is reported at startup too. The parsed result is the
-//! single source of truth for the value (the listen address, the URL printed at
-//! startup, the CSP header, the WebSocket origin allowlist), so the values
-//! cannot drift apart.
+//! configured, so it is reported at startup too. A setting a build does not
+//! read (`ZINE_WEB_HOST` and `ZINE_WEB_PORT` under WASI) is reported the same
+//! way. The parsed result is the single source of truth for the value (the
+//! listen address, the URL printed at startup, the CSP header, the WebSocket
+//! origin allowlist), so the values cannot drift apart.
 
 const std = @import("std");
 const log = @import("log.zig");
@@ -238,12 +239,41 @@ fn isKnownVar(name: []const u8) bool {
     return false;
 }
 
+/// The settings only a build with a web server reads. Set in the environment
+/// of a WASI run, they name a knob the build never looks at, so the run would
+/// look configured and serve nothing.
+const web_only_vars = [_][]const u8{
+    "ZINE_WEB_HOST",
+    "ZINE_WEB_PORT",
+};
+
+/// The web-only variables present in `env`.
+pub fn findWebOnlyVars(env: *const std.process.Environ.Map, allocator: std.mem.Allocator) ![][]const u8 {
+    var found: std.ArrayListUnmanaged([]const u8) = .empty;
+    for (web_only_vars) |name| {
+        if (env.get(name) != null) try found.append(allocator, name);
+    }
+    return found.toOwnedSlice(allocator);
+}
+
 /// Reports each unknown variable once, after the settings are validated.
 fn warnUnknownVars(env: *const std.process.Environ.Map) void {
     const unknown = findUnknownVars(env, std.heap.page_allocator) catch return;
     defer std.heap.page_allocator.free(unknown);
     for (unknown) |name| {
         log.warn("ignoring {s}: no such setting, the default stands", .{name});
+    }
+}
+
+/// Reports each web-only variable once, for a build with no web server. The
+/// name is a known one, so the unknown-variable pass stays quiet about it, and
+/// an operator who exported it for a native run would otherwise get a WASI run
+/// with no UI and no explanation.
+fn warnWebOnlyVars(env: *const std.process.Environ.Map) void {
+    const set = findWebOnlyVars(env, std.heap.page_allocator) catch return;
+    defer std.heap.page_allocator.free(set);
+    for (set) |name| {
+        log.warn("ignoring {s}: this build has no web server", .{name});
     }
 }
 
@@ -309,11 +339,12 @@ fn applyShared(shared: Shared) void {
 
 /// Parses the settings a build with no web server still has: the guest clock,
 /// the instrumentation toggles, and `ZINE_CWD`. `ZINE_WEB_HOST` and
-/// `ZINE_WEB_PORT` are left unread. Leaves the globals untouched when a value
-/// is rejected.
+/// `ZINE_WEB_PORT` are left unread, and setting either is reported at startup.
+/// Leaves the globals untouched when a value is rejected.
 pub fn initClockFromEnv(env: *const std.process.Environ.Map) InitError!void {
     const shared = try parseShared(env);
     warnUnknownVars(env);
+    warnWebOnlyVars(env);
     applyShared(shared);
 }
 
@@ -612,4 +643,35 @@ test "only unknown ZINE_ variables are collected" {
     const none = try findUnknownVars(&env, allocator);
     defer allocator.free(none);
     try std.testing.expectEqual(@as(usize, 0), none.len);
+}
+
+test "only the web settings are reported to a build with no web server" {
+    const allocator = std.testing.allocator;
+    var env = std.process.Environ.Map.init(allocator);
+    defer env.deinit();
+    try env.put("ZINE_CWD", "/work");
+    try env.put("ZINE_LOG_LEVEL", "warn");
+
+    const none = try findWebOnlyVars(&env, allocator);
+    defer allocator.free(none);
+    try std.testing.expectEqual(@as(usize, 0), none.len);
+
+    try env.put("ZINE_WEB_PORT", "3000");
+    const port_only = try findWebOnlyVars(&env, allocator);
+    defer allocator.free(port_only);
+    try std.testing.expectEqual(@as(usize, 1), port_only.len);
+    try std.testing.expectEqualStrings("ZINE_WEB_PORT", port_only[0]);
+
+    try env.put("ZINE_WEB_HOST", "0.0.0.0");
+    const both = try findWebOnlyVars(&env, allocator);
+    defer allocator.free(both);
+    try std.testing.expectEqual(@as(usize, 2), both.len);
+    try std.testing.expectEqualStrings("ZINE_WEB_HOST", both[0]);
+    try std.testing.expectEqualStrings("ZINE_WEB_PORT", both[1]);
+
+    // A web setting the build does not read is not an unknown one either: the
+    // two passes report different mistakes and must not both name it.
+    const unknown = try findUnknownVars(&env, allocator);
+    defer allocator.free(unknown);
+    try std.testing.expectEqual(@as(usize, 0), unknown.len);
 }

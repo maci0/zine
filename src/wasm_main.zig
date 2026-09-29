@@ -314,6 +314,19 @@ pub fn main(init: std.process.Init) !void {
     }
     const target_exe = target_exe_opt.?;
 
+    // The settings the run resolved, on one line, matching the native startup
+    // line: an operator reads the active configuration here rather than
+    // reconstructing it from the environment the runtime passed in.
+    log.info("zine {s} | exe={s} | mode={s} | trace={s} | profile={s} | log={s} | cwd={s}", .{
+        version.string,
+        std.fs.path.basename(target_exe),
+        if (use_jit) "jit" else "interpret",
+        if (trace.enable_tracing and trace.enable_instructions) "all" else if (trace.enable_tracing) "api" else if (trace.enable_instructions) "insn" else "off",
+        if (profiler.enabled) "on" else "off",
+        @tagName(log.min_level),
+        config.guest.cwd() orelse ".",
+    });
+
     log.info("wasm: loading PE from '{s}'", .{target_exe});
 
     var environment = Environment.init(allocator);

@@ -190,6 +190,10 @@ pub fn main(init: std.process.Init) !void {
                 \\  ZINE_LOG_LEVEL      fatal, error, err, warn, info, trace (default: trace)
                 \\  ZINE_WEB_HOST       Web UI bind address, IP literal (default: 127.0.0.1)
                 \\  ZINE_WEB_PORT       Web UI port, 1-65535 (default: 1995)
+                \\  ZINE_CWD            Absolute POSIX path validated at startup;
+                \\                      the native build resolves relative guest
+                \\                      paths against its own working directory,
+                \\                      so only the WASI build consults it
                 \\  ZINE_VIRTUAL_CLOCK_NS
                 \\                      Guest clock start in ns since the Unix
                 \\                      epoch; unset uses the host clock
@@ -488,7 +492,11 @@ pub fn main(init: std.process.Init) !void {
 
     var web_url_buf: [config.max_url_len]u8 = undefined;
     const web_url = config.web_server.url(&web_url_buf);
-    log.info("zine {s} | exe={s} | mode={s} | gui={s} | web={s} | trace={s} | profile={s}", .{
+    // The settings the run resolved, on one line: an operator reads the active
+    // configuration here rather than reconstructing it from the environment it
+    // exported. The guest working directory is reported for every build, which
+    // only the WASI build reads.
+    log.info("zine {s} | exe={s} | mode={s} | gui={s} | web={s} | trace={s} | profile={s} | log={s} | cwd={s}", .{
         version.string,
         exe_name,
         if (use_jit) "jit" else if (use_interpreter) "interpret" else if (platform.is_x86_64) "compat64" else "native",
@@ -496,6 +504,8 @@ pub fn main(init: std.process.Init) !void {
         if (renderer.active_backend == .none) "off" else web_url,
         if (trace.enable_tracing and trace.enable_instructions) "all" else if (trace.enable_tracing) "api" else if (trace.enable_instructions) "insn" else "off",
         if (profiler.enabled) "on" else "off",
+        @tagName(log.min_level),
+        config.guest.cwd() orelse ".",
     });
 
     if (final_envp) |envp| {

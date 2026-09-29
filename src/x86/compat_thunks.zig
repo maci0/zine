@@ -311,7 +311,7 @@ pub noinline fn callCompat32_4(target: u32, arg0: u32, arg1: u32, arg2: u32, arg
     // a thread exit code, so a silent 0 is a thread that never ran and the
     // guest reads as a clean exit.
     if (pool_base == null) {
-        log.err("compat: no thunk pool, cannot call a 32-bit target");
+        log.err("compat: no thunk pool, cannot call a 32-bit target", .{});
         return 0;
     }
     // Allocate return stub (INT 0xFE) if not yet done
@@ -327,7 +327,7 @@ pub noinline fn callCompat32_4(target: u32, arg0: u32, arg1: u32, arg2: u32, arg
         });
     }
     const ret_stub = allocThunk(return_thunk_id) orelse {
-        log.err("compat: thunk pool exhausted, cannot allocate a return stub");
+        log.err("compat: thunk pool exhausted, cannot allocate a return stub", .{});
         return 0;
     };
 

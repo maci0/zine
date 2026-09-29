@@ -88,6 +88,23 @@ promise between versions, so a breaking change takes the next minor.
   with an integer overflow. Numbers now saturate at the field's maximum, and a
   coordinate or point size that does not fit the format it is written into
   clamps to that field's range.
+- The native `--help` listed no `ZINE_CWD` while the native build validated it
+  and pointed a rejected value at `--help` for the accepted values. It is
+  listed now, with the note that only the WASI build consults it.
+- `ZINE_WEB_HOST` and `ZINE_WEB_PORT` under a WASI run were read by no code
+  path, and the misspelling check stayed quiet because the names are known. A
+  WASI run that finds either set logs `ignoring <name>: this build has no web
+  server`, so exporting it for a native run no longer leaves a run with no web
+  UI and no explanation.
+- The startup line reports the active log level and guest working directory
+  alongside the version, mode, and web address, on both the native and the
+  WASI build, so the resolved configuration is readable from the run itself.
+- `GetStockObject` ignored a failed registration and returned a handle no
+  lookup resolves. It reports the failure the way every other object creator
+  does now.
+- The build failed to compile the unit tests, the x86_64 executable, and the
+  `zine-host` help: an ignored `registerDc` result, a `@TypeOf` of a struct
+  field, and a `log.err` call with no argument tuple.
 
 ### 0.4.0 (2026-09-28)
 

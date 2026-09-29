@@ -26,19 +26,20 @@ pub fn GetStockObject(fnObject: i32) callconv(w32cc.WINAPI) usize {
 
     // Lazy registration of stock objects
     if (gdi32.findObject(handle) == null) {
-        _ = switch (fnObject) {
-            0 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0x00FFFFFF, .style = 0 } } }), // WHITE_BRUSH
-            1 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0x00C0C0C0, .style = 0 } } }), // LTGRAY_BRUSH
-            2 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0x00808080, .style = 0 } } }), // GRAY_BRUSH
-            3 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0x00404040, .style = 0 } } }), // DKGRAY_BRUSH
-            4 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0x00000000, .style = 0 } } }), // BLACK_BRUSH
-            5 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0, .style = 1 } } }), // NULL_BRUSH
-            6 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = 0x00FFFFFF, .width = 1, .style = 0 } } }), // WHITE_PEN
-            7 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = 0x00000000, .width = 1, .style = 0 } } }), // BLACK_PEN
-            8 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = 0, .width = 0, .style = 5 } } }), // NULL_PEN
-            10...17 => gdi32.registerObject(.{ .handle = handle, .obj_type = .Font, .data = .{ .font = gdi32.FontData{} } }),
+        const stock: gdi32.GdiObject = switch (fnObject) {
+            0 => .{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0x00FFFFFF, .style = 0 } } }, // WHITE_BRUSH
+            1 => .{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0x00C0C0C0, .style = 0 } } }, // LTGRAY_BRUSH
+            2 => .{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0x00808080, .style = 0 } } }, // GRAY_BRUSH
+            3 => .{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0x00404040, .style = 0 } } }, // DKGRAY_BRUSH
+            4 => .{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0x00000000, .style = 0 } } }, // BLACK_BRUSH
+            5 => .{ .handle = handle, .obj_type = .Brush, .data = .{ .brush = .{ .color = 0, .style = 1 } } }, // NULL_BRUSH
+            6 => .{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = 0x00FFFFFF, .width = 1, .style = 0 } } }, // WHITE_PEN
+            7 => .{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = 0x00000000, .width = 1, .style = 0 } } }, // BLACK_PEN
+            8 => .{ .handle = handle, .obj_type = .Pen, .data = .{ .pen = .{ .color = 0, .width = 0, .style = 5 } } }, // NULL_PEN
+            10...17 => .{ .handle = handle, .obj_type = .Font, .data = .{ .font = gdi32.FontData{} } },
             else => return 0,
         };
+        if (!gdi32.registerObject(stock)) return nullGdiObject("GetStockObject");
     }
     return handle;
 }

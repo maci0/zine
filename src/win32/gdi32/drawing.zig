@@ -1133,9 +1133,9 @@ test "StretchBlt: 2x upscale maps source by floor(dx*wSrc/wd)" {
     // Caller-owned stack buffers: owned=false so DeleteObject never frees them.
     _ = gdi.registerDib(0xBEEF0001, @intFromPtr(&src_px), 2, 1, 32, 0, false);
     _ = gdi.registerDib(0xBEEF0002, @intFromPtr(&dest_px), 4, 2, 32, 0, false);
-    _ = gdi.registerDc(0xCAFE0001);
+    try testing.expect(gdi.registerDc(0xCAFE0001));
     gdi.bindDcBitmap(0xCAFE0001, 0xBEEF0001);
-    _ = gdi.registerDc(0xCAFE0002);
+    try testing.expect(gdi.registerDc(0xCAFE0002));
     gdi.bindDcBitmap(0xCAFE0002, 0xBEEF0002);
 
     const rc = StretchBlt(0xCAFE0002, 0, 0, 4, 2, 0xCAFE0001, 0, 0, 2, 1);
@@ -1169,9 +1169,9 @@ test "StretchBlt: negative source origin is a no-op" {
 
     _ = gdi.registerDib(0xBEEF0003, @intFromPtr(&src_px), 1, 1, 32, 0, false);
     _ = gdi.registerDib(0xBEEF0004, @intFromPtr(&dest_px), 2, 2, 32, 0, false);
-    _ = gdi.registerDc(0xCAFE0003);
+    try testing.expect(gdi.registerDc(0xCAFE0003));
     gdi.bindDcBitmap(0xCAFE0003, 0xBEEF0003);
-    _ = gdi.registerDc(0xCAFE0004);
+    try testing.expect(gdi.registerDc(0xCAFE0004));
     gdi.bindDcBitmap(0xCAFE0004, 0xBEEF0004);
 
     const rc = StretchBlt(0xCAFE0004, 0, 0, 2, 2, 0xCAFE0003, -4, -4, 1, 1);

@@ -54,6 +54,28 @@ grep -q 'unknown option' "$workdir/stderr"
 
 if [[ "$expected_version" == zine\ * ]]; then
     timeout 60 "$@" --help >"$workdir/stdout" 2>"$workdir/stderr"
+    # Every setting the build validates is named in its --help, since a
+    # rejected value sends the operator there for the accepted values. A
+    # setting the build does not read is left out: listing it would promise a
+    # knob the run ignores.
+    for name in ZINE_LOG_LEVEL ZINE_TRACE ZINE_TRACE_INSN ZINE_PROFILE ZINE_CWD ZINE_VIRTUAL_CLOCK_NS ZINE_CLOCK_STEP_NS; do
+        if ! grep --quiet -- "$name" "$workdir/stdout"; then
+            printf '%s --help must document %s\n' "$expected_version" "$name" >&2
+            exit 1
+        fi
+    done
+    if grep --quiet -- 'ZINE_WEB_' "$workdir/stdout"; then
+        if [[ "$1" == wasmtime ]]; then
+            printf '%s --help must not list a web setting: this build has no web server\n' "$expected_version" >&2
+            exit 1
+        fi
+        for name in ZINE_WEB_HOST ZINE_WEB_PORT; do
+            if ! grep --quiet -- "$name" "$workdir/stdout"; then
+                printf '%s --help must document %s\n' "$expected_version" "$name" >&2
+                exit 1
+            fi
+        done
+    fi
     if grep --quiet -- '--jit-max-eip=' "$workdir/stdout"; then
         for value in '' invalid 0x 0x100000000 4294967296 -1 ' 42' '42 '; do
             status=0
@@ -181,6 +203,20 @@ if [[ "$expected_version" == zine\ * ]]; then
                 cat "$workdir/stderr" >&2
                 exit 1
             fi
+        done
+        # A web setting is a known name this build never reads, so the
+        # misspelling pass stays quiet about it. The run reports it itself, or
+        # an operator who exported it for a native run gets no web UI and no
+        # explanation for it.
+        for name in ZINE_WEB_HOST ZINE_WEB_PORT; do
+            status=0
+            timeout 60 "$1" "$2" --env "$name=127.0.0.1" "${@:3}" --version >"$workdir/stdout" 2>"$workdir/stderr" || status=$?
+            if [[ "$status" != 0 || ! -s "$workdir/stdout" ]]; then
+                printf '%s must not change the run (got %s)\n' "$name" "$status" >&2
+                cat "$workdir/stderr" >&2
+                exit 1
+            fi
+            grep -q "ignoring $name: this build has no web server" "$workdir/stderr"
         done
         # The runtime's own `--` separator reaches the guest as the first
         # argument; options behind it must still parse.
