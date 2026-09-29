@@ -260,7 +260,7 @@ On real Windows, the CRT handles argv/envp natively. On our loader, we set up `g
 
 ### 4. Environment
 
-`getenv(name)` receives a `[*:0]const u8` name, searches the environment, returns a `[*:0]u8` value. The return value must be a host-accessible pointer.
+The target shape for `getenv(name)`: a `[*:0]const u8` name, a `[*:0]u8` value returned. The return value must be a host-accessible pointer. The current stub in `msvcrt/process.zig` still takes `name_ptr: usize` and returns `?*anyopaque`.
 
 On WASM, the return pointer needs to be in guest memory. This is handled by `raw_alloc` which allocates from guest heap on WASM. The return type `?[*:0]u8` ensures the thunk handler converts it back to a guest VA via `toU32`.
 
@@ -468,12 +468,12 @@ as separate APIs (`FindFirstFileA`/`FindNextFileA` keep their own handle pool in
 
 Goal: Stubs use `[*]u8`, `*T`, `?[*:0]const u8` instead of `usize`. The comptime thunk handler auto-translates pointer types. All `trace.addr()` calls removed from stubs.
 
-Status: NOT fully done. 114 `trace.addr()` call sites remain across
-`src/win32/` (concentrated in `user32/message.zig`, `kernel32/locale.zig`,
+Status: NOT fully done. 135 `trace.addr()` call sites remain across
+`src/win32/` (concentrated in `kernel32/locale.zig`, `user32/message.zig`,
 `comdlg32/dialogs.zig`, `advapi32/registry.zig`, `kernel32/path.zig`/`mem.zig`,
-and the msvcrt modules below; count checked 2026-09-27). The other four sites
+and the msvcrt modules below; count checked 2026-09-29). The other four sites
 in the tree are loader or entry-point code: 3 in `src/wasm_main.zig`, 1 in
-`src/loader/env.zig`, for 118 across `src/`.
+`src/loader/env.zig`, for 139 across `src/`.
 Verify current counts with: `rg -c "trace\.addr\(" src/win32` (this counts
 lines, so it also counts the one mention in a `shared.zig` doc comment).
 
@@ -513,7 +513,7 @@ an exception to the target design.
 - [ ] `msvcrt/fmt.zig`: `printf`, `sprintf`, `sscanf`, etc. — the WASM and x86_64 stubs already take `fmt: [*:0]const u8` and a typed `[*]u8` output buffer; the native cdecl variants still take `fmt_ptr: usize` and `buf_ptr: usize` because the variadic path needs the raw guest pointer
 - [x] `msvcrt/mem.zig`: `memcpy`, `memset`, `memmove`
   - `dest_ptr: usize` → `dest: [*]u8`
-- [ ] `msvcrt/io.zig`: done for `fclose`, `fread`, `fwrite`; still `usize`: `fopen`, `fgets`, `fsopen`, `freopen`, `fprintf` (wasm path), `fwprintf`
+- [ ] `msvcrt/io.zig`: done for `fclose`, `fread`, `fwrite`; still `usize`: `fopen`, `fgets`, `fsopen`, `freopen`, `fwprintf`, and the native cdecl `fprintf` (`src/win32/io.zig` already types the WASM `fprintf` format)
   - File pointers, buffers: pointer types
 - [ ] `msvcrt/time.zig`: done for `time`, `localtime`, `ctime`, `ftime`, `mktime`; still `usize`: `stub_utime`, `stub_futime`, `asctime`, `localtime64`
   - Output pointers: `*i32`, `*Tm`, etc.
@@ -535,7 +535,7 @@ an exception to the target design.
 **Sub-phase 2d: Convert remaining DLL stubs** [PARTIAL — several groups still contain `trace.addr()`]
 - [ ] `advapi32/registry.zig` (6 sites remain); `advapi32/security.zig`, `advapi32/services.zig` clean
 - [ ] `user32/message.zig` (27 sites), `user32/dialog.zig` (4), `user32.zig` (1) remain; `user32/window.zig`, `user32/resource.zig` clean
-- [ ] `kernel32/locale.zig` (13 sites), `kernel32/path.zig` (9), `kernel32/mem.zig` (6), `kernel32/process.zig` (3), `kernel32/file.zig` (2) remain
+- [ ] `kernel32/locale.zig` (34 sites), `kernel32/path.zig` (9), `kernel32/mem.zig` (6), `kernel32/process.zig` (3), `kernel32/file.zig` (2) remain
 - [ ] `gdi32/drawing.zig` (2 sites remain); `gdi32/object.zig` clean
 - [ ] `rpcrt4.zig` (4 sites), `ole32/com.zig` (1 site), `comdlg32/dialogs.zig` (11 sites) remain; `shell32.zig` clean
 - [ ] `msvcrt/path.zig` (3), `msvcrt/io.zig` (3), `msvcrt/process.zig` (3), `msvcrt/except.zig` (3), `msvcrt/time.zig` (2), `msvcrt/string.zig` (2), `msvcrt/misc.zig` (2), `msvcrt/fmt.zig` (2), `msvcrt/file.zig` (2) remain
@@ -742,7 +742,7 @@ baseline.
 | `ws2_32/winsock.zig:628` | `inet_ntoa()` | `inet_ntoa_buf` | 16 bytes |
 | `ws2_32/winsock.zig:668` | `gethostbyname()` | `hostent_buf` | 256 bytes |
 | `d3d8.zig:1006` | `Direct3DCreate8()` | `global_d3d8` | vtable struct |
-| `mss32/miles.zig:14` | `AIL_last_error()` | `no_error_str` | 16 bytes |
+| `mss32/miles.zig` | `stub_last_error()`, registered as `_AIL_last_error@0` | `no_error_str` | 16 bytes |
 
 ### D. Files reaching for guest memory (9 sites)
 

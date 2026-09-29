@@ -205,10 +205,11 @@ continues with 13 more entries (49 total):
 | 48 | 0xC0 | GetLOD |
 
 In the DirectDraw tables above, a slot the emulator does not implement holds a tracing dummy
-that returns `DD_OK` rather than a null pointer, so an unexpected call does not jump to EIP 0.
-Which slots are real is visible in the source: the vtable structs declare unimplemented entries
-as `usize` and `register` fills them with those dummies. The d3d7 tables use the same scheme
-with per-arity no-op stubs.
+rather than a null pointer, so an unexpected call does not jump to EIP 0. The `IDirectDrawVtbl`
+and `IDirectDrawClipperVtbl` dummies return `DD_OK`; the `IDirectDrawSurfaceVtbl` ones
+(`surf_tn1`..`surf_tn6`) return a plain `0`. Which slots are real is visible in the source:
+the vtable structs declare unimplemented entries as `usize` and `register` fills them with
+those dummies. The d3d7 tables use the same scheme with per-arity no-op stubs.
 
 ## D3DPRIMCAPS (56 bytes / 14 DWORDs)
 

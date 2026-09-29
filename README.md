@@ -7,8 +7,8 @@ No Windows installation, no Wine.
 
 ## What works
 
-- Full MSVC 6.0 toolchain: CL.EXE, LINK.EXE, RC.EXE, NMAKE.EXE, and 8 more utilities run to completion
-- 459 unit tests pass (2 skipped, 461 total) on the host with `zig build test`; the gate in
+- Full MSVC 6.0 toolchain: CL.EXE, LINK.EXE, RC.EXE, NMAKE.EXE, and 17 more utilities run to completion
+- 516 unit tests pass (1 skipped, 517 total) on the host with `zig build test`; the gate in
   `tests/check.sh` adds the CLI suites on native x86 and x86_64
 - 158/128 integration checks on native/WASM, 20 FLTK smoke tests (these need guest
   binaries and are not part of `tests/check.sh`)
@@ -976,9 +976,10 @@ checking log-level validation.
 ### Before opening a pull request
 
 Run from the repository root on x86_64 Linux with 32-bit executable support.
-Besides Zig 0.16.0, the CI checks require Bash, Git, ShellCheck, `sed`, `awk`,
-`cmp`, `readelf`, `grep`, `diff`, and GNU coreutils (including `timeout`, `find`
-and `sort`). Zig fetches the pinned TOML dependency on the first build; no
+Besides Zig 0.16.0, the CI checks require Bash, Git, ShellCheck, `node` (for
+`check_web`), `sed`, `awk`, `cmp`, `readelf`, `grep`, `diff`, and GNU coreutils
+(including `timeout`, `find` and `sort`). Zig fetches the pinned TOML
+dependency on the first build; no
 Windows fixtures or WASM runtime are needed for these checks. One system
 package is: the `check_cxx` step compiles `src/gui/fltk_bridge.cpp`, so the
 FLTK 1.3 development headers have to be installed (`libfltk1.3-dev` on
@@ -1004,11 +1005,13 @@ bash tests/check.sh check_c        # warning-free compile of every tracked C sou
 bash tests/check.sh check_cxx      # the FLTK bridge, compiled without linking it
 bash tests/check.sh build build-x86_64 build-wasm32 build-wasm64
 bash tests/check.sh hardening       # static link and non-executable stack, read from the binaries
+bash tests/check.sh check_web       # every tracked JavaScript file parses under node --check
 bash tests/check.sh dll external-stubs
 bash tests/check.sh reproducible  # two builds of one source tree, byte-identical
 bash tests/check.sh test
 bash tests/check.sh test-cli test-cli-x86_64
 bash tests/check.sh fuzz
+bash tests/check.sh check_ci       # the gate step list and ci.yml agree
 ```
 
 Named steps run in gate order, whatever order you pass them in. The

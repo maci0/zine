@@ -85,9 +85,9 @@ The WASM entry point runs under a WASI runtime (e.g. wasmtime). It always uses t
 
 [`src/pe.zig`](../src/pe.zig) · [`src/pe_resources.zig`](../src/pe_resources.zig)
 
-Defines all PE/COFF (Common Object File Format) data structures (`IMAGE_DOS_HEADER`, `IMAGE_NT_HEADERS32`, `IMAGE_SECTION_HEADER`, etc.) and provides the `PEParser` struct for parsing PE files from raw byte buffers. The parser validates the MZ (Mark Zbikowski, the DOS signature `0x5A4D`) and PE signatures, extracts section headers, and provides accessors for the DOS header, NT headers, and sections.
+Defines all PE/COFF (Common Object File Format) data structures (`IMAGE_DOS_HEADER`, `IMAGE_NT_HEADERS32`, `IMAGE_SECTION_HEADER`, etc.) and provides the `PEParser` struct for parsing PE files from raw byte buffers. The parser validates the MZ (Mark Dziewulski, the DOS signature `0x5A4D`) and PE signatures, extracts section headers, and provides accessors for the NT headers and sections.
 
-The resource module handles the three-level resource directory tree (Type → Name → Language) used by `Module.getResource()` to extract icons, menus, dialogs, and other embedded resources.
+`pe_resources.zig` declares the three-level resource directory structs (Type → Name → Language) and the `RT_*` constants. The walk that `Module.getResource()` performs over them lives in `src/loader/module.zig`; it extracts icons, menus, dialogs, and other embedded resources.
 
 ---
 
@@ -163,7 +163,7 @@ On WASM and x86_64, Win32 API calls can't be dispatched by jumping to native fun
 
 [`src/win32/`](../src/win32/)
 
-Zine implements 37 DLL stub modules that provide Win32 API compatibility: 36 registered on every target, plus `mspdb60` (WASM only), for 37 in total. `rcdll` is registered on every target because the real RCDLL.DLL fails to compile DIALOG templates on native. Each module exports a `register()` function that adds its exports to the `Environment`. Unresolved functions fall back to `not_implemented`, which prints a diagnostic and exits.
+Zine implements 37 DLL stub modules that provide Win32 API compatibility: 36 registered on every target, plus `mspdb60` (WASM only), for 37 in total. `rcdll` is registered on every target because the real RCDLL.DLL fails to compile DIALOG templates on native. Each registered module exports a `register()` function that adds its exports to the `Environment`. The two entries the table below lists that are not registered modules of their own are `display_surface.zig` (state shared by `ddraw` and `d3d7`) and `d3d7/d3d7.zig`, whose `registerVtables` is called by `ddraw.zig`. Unresolved functions fall back to `not_implemented`, which prints a diagnostic and exits.
 
 | Category | Stubs |
 |----------|-------|
@@ -214,7 +214,7 @@ Zine allocates a page-aligned TEB struct, populates the critical fields, and cre
 | Platform | Mechanism | Details |
 |----------|-----------|---------|
 | **Native x86 (32-bit)** | `set_thread_area` syscall | Allocates a GDT (Global Descriptor Table) entry via syscall 243 (`__NR_set_thread_area`), sets its base address to the TEB, and loads the resulting selector into the FS register. |
-| **Native x86_64 (64-bit)** | `arch_prctl(ARCH_SET_FS, ...)` | On 64-bit Linux, `arch_prctl` with `ARCH_SET_FS` (0x1002) sets the FS base directly. Since 32-bit code running under a 64-bit kernel still uses FS for TEB access, this configures the base address the CPU uses when resolving FS-relative addresses. |
+| **Native x86_64 (64-bit)** | `arch_prctl(ARCH_SET_FS, ...)` and `modify_ldt` | On 64-bit Linux, `arch_prctl` with `ARCH_SET_FS` (0x1002) sets the FS base directly. Since 32-bit code running under a 64-bit kernel still uses FS for TEB access, this configures the base address the CPU uses when resolving FS-relative addresses. `setupFS` also writes a GDT-style entry for FS through the `modify_ldt` syscall (154) and loads selector `0x07`, so a guest that re-reads the FS selector sees a real descriptor. |
 | **WASM (interpreter)** | `cpu.fs_base` field | No hardware segment support exists. The interpreter's `resolveSegmentAddress(.fs, offset)` adds `cpu.fs_base + offset` to compute the effective address. The FS base is set to the TEB pointer during CPU initialization. |
 
 ---
@@ -313,7 +313,7 @@ On native targets, Zine installs a `SIGSEGV`/`SIGFPE`/`SIGILL` handler that impl
 | **runtime.zig** | [`src/runtime.zig`](../src/runtime.zig) | Process-global singletons (`std.Io`, allocator, environment, main-exe dir) for code that cannot take parameters: Win32 stubs called from guest code, signal handlers, and thunks. Also the seam the guest's time passes through: `installVirtualClock` swaps the wall and monotonic readings for a fixed cursor (`ZINE_VIRTUAL_CLOCK_NS`), `pauseOrAdvance` charges a guest wait or a host-waiting poll to that cursor instead of blocking the host, and `hostMonoNanoTimestamp` keeps emulator instrumentation on the real clock. |
 | **bat.zig** | [`src/bat.zig`](../src/bat.zig) | Parses `.bat`/`.cmd` launcher scripts, expands `%VARIABLE%` references, and extracts the final command to execute. |
 | **log.zig** | [`src/log.zig`](../src/log.zig) | Structured diagnostic logging with colored level prefixes (`[FATAL]`, `[ERROR]`, `[WARN]`, `[INFO]`, `[TRACE]`). Auto-detects TTY for color; respects `NO_COLOR` env var. Redacts the host home directory (`HOME`/`USERPROFILE`) from every record, and `redactEnvValue` withholds the value of the identity variables (`USER`, `USERNAME`, `LOGNAME`, `EMAIL`) from environment traces. |
-| **config.zig** | [`src/config.zig`](../src/config.zig) | Runtime configuration read from `ZINE_*` environment variables at startup. Validates each value before use and exits with status 2 on a rejected one. Owns the web UI bind address (`ZINE_WEB_HOST`, `ZINE_WEB_PORT`), the URL printed at startup, the CSP `connect-src` origin, and the WebSocket origin allowlist. Also parses the guest clock settings (`ZINE_VIRTUAL_CLOCK_NS`, `ZINE_CLOCK_STEP_NS`) that `main` hands to `runtime.installVirtualClock`, the instrumentation toggles (`ZINE_TRACE`, `ZINE_TRACE_INSN`, `ZINE_PROFILE`), and the WASI guest working directory (`ZINE_CWD`). A `ZINE_*` name that matches none of these is reported at startup instead of ignored. |
+| **config.zig** | [`src/config.zig`](../src/config.zig) | Runtime configuration read from `ZINE_*` environment variables at startup. Validates each value before use and exits with status 2 on a rejected one. Owns the web UI bind address (`ZINE_WEB_HOST`, `ZINE_WEB_PORT`), the URL printed at startup, the CSP `connect-src` origin, and the WebSocket origin allowlist. Also parses the guest clock settings (`ZINE_VIRTUAL_CLOCK_NS`, `ZINE_CLOCK_STEP_NS`) that `main` hands to `runtime.installConfiguredClock`, the instrumentation toggles (`ZINE_TRACE`, `ZINE_TRACE_INSN`, `ZINE_PROFILE`), and the WASI guest working directory (`ZINE_CWD`). A `ZINE_*` name that matches none of these is reported at startup instead of ignored. |
 | **trace.zig** | [`src/trace.zig`](../src/trace.zig) | Conditional debug printing. Activated by `--trace`, `--trace-api`, `--trace-insn` flags or `ZINE_TRACE`/`ZINE_TRACE_INSN` environment variables. |
 | **profiler.zig** | [`src/profiler.zig`](../src/profiler.zig) | Lightweight profiling: EIP heat map (per-4KB page), opcode frequency table, and stub call counters. Activated by `--profile` flag or `ZINE_PROFILE` environment variable. |
 | **path_utils.zig** | [`src/path_utils.zig`](../src/path_utils.zig) | Converts between POSIX and Win32 paths (`drive_c/... ↔ C:\...`). |
@@ -470,9 +470,10 @@ zine/
 │   │   └── thunks.zig       # INT 0xFE thunk dispatch
 │   ├── loader/
 │   │   ├── env.zig          # Environment (stubs + registry)
-│   │   ├── loader.zig       # Import resolution & DllMain calls
-│   │   ├── module.zig       # PE loading & memory mapping
+│   │   ├── loader.zig       # Import resolution (LoadLibraryA drives the DllMain call)
+│   │   ├── module.zig       # PE loading, memory mapping & resource walks
 │   │   ├── registry.zig     # Module name → Module* map
+│   │   ├── json_utils.zig   # Shared JSON reader for the resource parsers
 │   │   ├── dialog_parser.zig # PE dialog resource parser
 │   │   ├── icon_parser.zig  # PE icon resource parser
 │   │   └── menu_parser.zig  # PE menu resource parser
@@ -528,6 +529,7 @@ zine/
 │   │   ├── renderer.zig     # Rendering API surface & state cache
 │   │   ├── desktop_icons.zig # Desktop directory listing and PE icon extraction
 │   │   ├── web_ui.zig       # WebSocket server & HTTP file serving
+│   │   ├── web_asset_paths.zig # The embedded-and-precompressed asset list
 │   │   ├── fltk_ui.zig      # FLTK native GUI backend
 │   │   ├── fltk_bridge.h/.cpp # C/C++ bridge to FLTK 1.3 widgets
 │   │   ├── app.js           # Frontend JavaScript
@@ -538,7 +540,7 @@ zine/
 │   │   ├── van.LICENSE      # VanJS license, shipped alongside the vendored copy
 │   │   └── assets/          # SVGs used by the frontend
 │   ├── fuzz/                 # Fuzz harnesses for untrusted-input parsers
-│   │   ├── pe.zig, resource.zig, export.zig, menu.zig, dialog.zig, icon.zig, loadstring.zig, bat.zig
+│   │   ├── pe.zig, resource.zig, export.zig, menu.zig, dialog.zig, icon.zig, loadstring.zig, bat.zig, rc.zig
 │   │   └── mutation.zig, replay.zig, seed.zig
 │   └── dll/                 # Standalone DLL build sources (zig build -Ddll=all)
 │       ├── msvcrt_dll.zig, kernel32_dll.zig, user32_dll.zig, ...
@@ -580,10 +582,10 @@ zine/
 | **IAT** | Import Address Table — the PE table of function pointers patched by the loader at startup |
 | **INT** | Software Interrupt — an x86 instruction that triggers a handler (e.g. `INT 0xFE` for thunk dispatch) |
 | **JSON** | JavaScript Object Notation — lightweight data format used for WebSocket messages |
-| **LDT** | Local Descriptor Table — x86 per-process hardware table for custom segment descriptors (not used by Zine; see GDT) |
+| **LDT** | Local Descriptor Table — x86 per-process table of custom segment descriptors. Zine writes one FS entry on native x86_64 through `modify_ldt`; see GDT |
 | **ModR/M** | Mod-Register/Memory byte — encodes addressing mode, register, and memory operand in x86 instructions |
 | **MSVC** | Microsoft Visual C++ — the Windows C/C++ compiler toolchain |
-| **MZ** | Mark Zbikowski — the DOS executable signature (`0x5A4D`, the letters "MZ") at the start of every PE file |
+| **MZ** | Mark Dziewulski — the DOS executable signature (`0x5A4D`, the letters "MZ") at the start of every PE file |
 | **OLE** | Object Linking and Embedding — Windows COM-based framework (`ole32.dll`) |
 | **PE** | Portable Executable — the Windows executable format (`.exe`, `.dll`) |
 | **PEB** | Process Environment Block — per-process Windows structure with heap, image base, and parameters |

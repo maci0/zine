@@ -65,7 +65,9 @@ nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: no-referrer`. A 200
 adds a `Content-Security-Policy` of
 `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' <ws-url>; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`.
 
-Assets over 10 MiB are refused with 413.
+Assets read from disk over 10 MiB are refused with 413. The build-embedded
+assets (the HTML shell and the digested, precompressed files) are served
+without that check.
 
 ## WebSocket messages
 
@@ -77,9 +79,10 @@ pushes three kinds of frame:
 - Text, JSON: window chrome and state.
 
 On connect the server replays its cached state (resolution, window icon,
-desktop icons, window position, menu, title, dialog, controls, edit control,
-audio format) so a reconnecting client is immediately consistent. Both
-sides may then send text messages at any time.
+desktop icons, window position, menu, title, dialog, color dialog, controls,
+cached control text updates, edit control, audio format) so a reconnecting
+client is immediately consistent. Both sides may then send text messages at
+any time.
 
 ### Server to client
 
@@ -118,7 +121,7 @@ be resynchronized behind it.
 | --- | --- |
 | `command` | `id` (integer, required, u32 range) |
 | `keydown`, `keyup` | `key` (string, required; a `KeyboardEvent.code` with no Win32 equivalent is ignored, not an error) |
-| `mousedown`, `mouseup`, `mousemove` | `x`, `y` (integers, required), `button` (integer, default 0; only 0 and 2 reach the guest, and a button with no Win32 equivalent is dropped rather than delivered as the primary button) |
+| `mousedown`, `mouseup`, `mousemove` | `x`, `y` (integers, required), `button` (integer, default 0; for `mousedown`/`mouseup` only 0 and 2 reach the guest, and any other button is dropped rather than delivered as the primary button; `mousemove` is always delivered as `WM_MOUSEMOVE` regardless of `button`) |
 | `wheel` | `delta` (integer, required), `x`, `y` (integers, default 0; the pointer position the guest's `WM_MOUSEWHEEL` needs) |
 | `resize` | `clientW`, `clientH` (integers, required, both positive), `sizeType` (integer, default 0, negatives clamped to 0, refused with an `error` frame when it does not fit the host's `usize`) |
 | `close` | none |

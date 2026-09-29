@@ -40,7 +40,7 @@ The combined buffer is typically laid out as follows:
 
 ## Address Translation
 
-The `GuestMemory` structure uses a `base` pointer (to the host buffer) and a `base_addr`, the guest virtual address that maps to `base[0]`. In WASM mode `base_addr` is the PE's preferred `ImageBase`, so:
+The `GuestMemory` structure uses a `base` pointer (to the host buffer) and a `base_addr`, the guest virtual address that maps to `base[0]`. In WASM mode `base_addr` is the PE's preferred `ImageBase` for the main image, and the raw host address of the buffer for a relocatable child spawned in process, so:
 
 - `Host Address = Buffer Base + (Guest Virtual Address - base_addr)`
 - `Guest Virtual Address = base_addr + (Host Address - Buffer Base)`

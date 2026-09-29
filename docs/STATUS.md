@@ -157,7 +157,8 @@ each Win32 message/control op is implemented once and rendered by both.
 - **ChooseFont** — ChooseFontA/W with a host font chooser (web font picker /
   FLTK modal with font list + size + bold/italic + preview), writing LOGFONT
   (lfFaceName/lfHeight/lfWeight/lfItalic), iPointSize and nFontType back on
-  OK, honoring CF_INITTOLOGFONTSTRUCT + CF_LIMITSIZE.
+  OK. It reads the caller's initial LOGFONT unconditionally and honors
+  CF_LIMITSIZE; CF_INITTOLOGFONTSTRUCT is not implemented.
 - **PrintDlg** — PrintDlgA/W with a host print dialog (web page-range/copies
   form / FLTK modal), writing back nFromPage/nToPage/nCopies, returning a
   dummy printer DC on PD_RETURNDC, and short-circuiting on

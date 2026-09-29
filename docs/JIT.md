@@ -4,7 +4,7 @@ Status: partially implemented design and roadmap. Execution, block-cache, and lo
 
 Zine includes an experimental Just-In-Time (JIT) compiler designed to translate 32-bit x86 instructions into WebAssembly (WASM) bytecode at runtime.
 
-The JIT compiler is designed to be fully self-contained in the `src/jit` directory, operating without impacting the main interpreter loop.
+The JIT compiler lives in `src/jit` and shares the interpreter's x86 decoder (`src/x86/decoder.zig`) rather than decoding a second time. It does not change the main interpreter loop.
 
 ## Architecture and Components
 
@@ -71,7 +71,7 @@ A crucial component of any dynamic recompiler is avoiding re-translating the sam
 The interpreter uses a 1024-entry hash-indexed **instruction decode cache** (`decode_cache.zig`) that maps guest EIP addresses to previously decoded `Instruction` structs. Each entry is validated by the EIP tag, the fetch length, and every fetched byte (up to `MAX_CODE_BYTES`, 16), which provides self-modifying code detection — if code is modified, the comparison fails on the next lookup, causing a cache miss and re-decode from the modified bytes.
 
 ### JIT Block Caching Strategy (Partial)
-1. **Instruction Pointer Mapping (implemented):** `compiler.zig` tracks attempted compilation in fixed 4096-entry arrays (`JitCompiler.block_cache_keys`/`block_cache_vals`, suppressing recompilation of a block already emitted). `runWithJitHost` in `wasm_main.zig` maps guest EIP to a host block ID with `BlockIndex` (`compiler.zig`), a top-level 4096-entry direct-mapped struct that also stores the x86 bytes each block was compiled from. Both index by `eip & 4095` and check the full EIP tag; collisions replace the previous entry. These replaced unbounded hash maps in commit `a76c8eb`.
+1. **Instruction Pointer Mapping (implemented):** `compiler.zig` tracks attempted compilation in fixed 4096-entry arrays (`JitCompiler.block_cache_keys`/`block_cache_vals`, suppressing recompilation of a block already emitted). `runWithJitHost` in `wasm_main.zig` maps guest EIP to a host block ID with `BlockIndex` (`compiler.zig`), a top-level 4096-entry direct-mapped struct that also stores the x86 bytes each block was compiled from. Both index by `eip & 4095` and check the full EIP tag; collisions replace the previous entry. `block_cache_keys`/`block_cache_vals` replaced `JitCompiler.block_cache` (an `AutoHashMap`) in commit `a76c8eb`; `BlockIndex` arrived later, in `5c7ca91`.
 2. **Cache Invalidation (implemented, byte-validated):** See [Handling Self-Modifying Code](#handling-self-modifying-code-smc).
 3. **Trace Linking (planned):** Frequently executed blocks that jump to other known blocks could be linked without returning to the interpreter.
 
@@ -148,7 +148,7 @@ The final phase lifts the JIT from compiling one-off instruction structures into
 Manages CPU state transfer between the interpreter and JIT-compiled blocks:
 - **`JitCpuState`**: A 64-byte struct in linear memory containing all 8 GPRs, EIP, packed EFLAGS, an execution status code, `mem_base` (guest VA → linear memory offset adjustment), and the FS segment base — used to pass state between the host and compiled WASM modules.
 - **`host.zig`**: Defines the `JitCpuState` struct, its field offsets, the status codes, and the `BlockId` alias. The compile/call/reset entry points are the `jit_compile`/`jit_call`/`jit_reset_blocks` extern imports wrapped by `host_wasm.zig`. State transfer is written inline by the callers (`wasm_main.zig` for the host runtime, `runner.zig` for the compile-only loop), not by shared helpers.
-- **`host_wasm.zig`**: WASM-side imports for `jit_compile`, `jit_call`, and `jit_reset_blocks` that communicate with the host runtime (wasmer/wasmtime) to compile and execute JIT blocks. `jit_reset_blocks` releases every compiled block and makes the ids reusable; the guest calls it from the SMC flush path so a host that hands out ids from a fixed table does not run it out. Any host providing the `jit` namespace must supply all three imports.
+- **`host_wasm.zig`**: WASM-side imports for `jit_compile`, `jit_call`, and `jit_reset_blocks` that communicate with the host runtime (wasmer/wasmtime) to compile and execute JIT blocks. `resetAll` calls `jit_reset_blocks`, which releases every compiled block and makes the ids reusable, so a host that hands out ids from a fixed table does not run out. Nothing in `src/` calls `resetAll` yet, so the SMC flush path only invalidates the guest-side block index. Any host providing the `jit` namespace must supply all three imports.
 
 ## Usage
 
