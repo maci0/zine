@@ -15,6 +15,7 @@ const std = @import("std");
 const teb = @import("win32/teb.zig");
 const teb_layout = @import("win32/teb_layout.zig");
 const Module = @import("loader/module.zig").Module;
+const pe_resources = @import("pe_resources.zig");
 const Environment = @import("loader/env.zig").Environment;
 const loader = @import("loader/loader.zig");
 const stubs_msvcrt = @import("win32/msvcrt.zig");
@@ -437,7 +438,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Extract dynamic menu (GUI apps only)
     if (is_gui) {
-        if (main_module.getFirstResource(4)) |menu_data| { // RT_MENU = 4
+        if (main_module.getFirstResource(pe_resources.RT_MENU)) |menu_data| {
             const menu_parser = @import("loader/menu_parser.zig");
             if (menu_parser.parseMenuResource(allocator, menu_data)) |json_str| {
                 renderer.setMenu(json_str);

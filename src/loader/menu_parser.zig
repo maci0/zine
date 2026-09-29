@@ -4,6 +4,12 @@
 //! JSON structure suitable for the GUI backend.
 
 const std = @import("std");
+const json_utils = @import("json_utils.zig");
+
+/// The item is a popup submenu; a command item carries an id word instead.
+const MF_POPUP: u16 = 0x0010;
+/// The item is the last of its list.
+const MF_END: u16 = 0x0080;
 
 /// Represents a single item in a menu, which may be a command or a popup submenu.
 pub const MenuItem = struct {
@@ -37,7 +43,7 @@ pub fn parseMenuResource(allocator: std.mem.Allocator, data: []const u8) ![]cons
         var item = try parseItem(allocator, data, &offset, 0);
         errdefer freeMenuItem(allocator, &item);
         try root_items.append(allocator, item);
-        if ((item.flags & 0x0080) != 0) { // MF_END
+        if ((item.flags & MF_END) != 0) {
             break;
         }
     }
@@ -68,7 +74,7 @@ fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize, dep
     const flags = std.mem.readInt(u16, data[offset.*..][0..2], .little);
     offset.* += 2;
 
-    const is_popup = (flags & 0x0010) != 0;
+    const is_popup = (flags & MF_POPUP) != 0;
 
     var id: u16 = 0;
     if (!is_popup) {
@@ -111,7 +117,7 @@ fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize, dep
             var child = try parseItem(allocator, data, offset, depth + 1);
             errdefer freeMenuItem(allocator, &child);
             try children.append(allocator, child);
-            if ((child.flags & 0x0080) != 0) { // MF_END
+            if ((child.flags & MF_END) != 0) {
                 break;
             }
         }
@@ -123,22 +129,7 @@ fn parseItem(allocator: std.mem.Allocator, data: []const u8, offset: *usize, dep
 
 fn writeMenuItemJson(writer: anytype, item: MenuItem) !void {
     try writer.print("{{\"id\":{d},\"name\":\"", .{item.id});
-
-    // JSON string escape, including control characters: menu names come from
-    // PE resources, and an unescaped 0x00-0x1F byte produces JSON that
-    // JSON.parse rejects, breaking menu rendering.
-    for (item.name) |c| {
-        if (c == '"') {
-            try writer.writeAll("\\\"");
-        } else if (c == '\\') {
-            try writer.writeAll("\\\\");
-        } else if (c < 0x20) {
-            try writer.print("\\u{x:0>4}", .{c});
-        } else {
-            try writer.writeByte(c);
-        }
-    }
-
+    try json_utils.writeJsonString(writer, item.name);
     try writer.print("\",\"flags\":{d}", .{item.flags});
 
     if (item.popup) |popup| {
@@ -186,7 +177,6 @@ test "parseMenuResource: flat menu renders items in order" {
     defer data.deinit(testing.allocator);
     // MENUITEMTEMPLATEHEADER: version 0, cbHeader 0
     try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
-    const MF_END: u16 = 0x0080;
     try appendItem(&data, testing.allocator, MF_END, 0x1001, &.{ 'E', 'x', 'i', 't' });
 
     const json = try parseMenuResource(testing.allocator, data.items);
@@ -201,8 +191,6 @@ test "parseMenuResource: popup submenu nests children" {
     var data: std.ArrayListUnmanaged(u8) = .empty;
     defer data.deinit(testing.allocator);
     try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
-    const MF_POPUP: u16 = 0x0010;
-    const MF_END: u16 = 0x0080;
     // "&File" popup containing Open then Exit; root list ends after the
     // following Help item carries MF_END.
     try appendItem(&data, testing.allocator, MF_POPUP, null, &.{ '&', 'F', 'i', 'l', 'e' });
@@ -228,7 +216,7 @@ test "parseMenuResource: tabs widen and JSON metacharacters escape" {
     defer data.deinit(testing.allocator);
     try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
     const name = [_]u16{ 'O', '\t', '"', 'q', '\\', 0 };
-    try appendItem(&data, testing.allocator, 0x0080, 7, &name);
+    try appendItem(&data, testing.allocator, MF_END, 7, &name);
 
     const json = try parseMenuResource(testing.allocator, data.items);
     defer testing.allocator.free(json);
@@ -242,7 +230,7 @@ test "parseMenuResource: UTF-16 astral text survives as UTF-8" {
     var data: std.ArrayListUnmanaged(u8) = .empty;
     defer data.deinit(testing.allocator);
     try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
-    try appendItem(&data, testing.allocator, 0x0080, 9, &.{ 0xE9, 0xD801, 0xDC00, 'e', 0x301 });
+    try appendItem(&data, testing.allocator, MF_END, 9, &.{ 0xE9, 0xD801, 0xDC00, 'e', 0x301 });
 
     const json = try parseMenuResource(testing.allocator, data.items);
     defer testing.allocator.free(json);
@@ -265,9 +253,9 @@ test "parseMenuResource: malformed UTF-16 is rejected without leaking popup name
         var data: std.ArrayListUnmanaged(u8) = .empty;
         defer data.deinit(testing.allocator);
         try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
-        try appendItem(&data, testing.allocator, 0x0090, null, &.{0xE9});
+        try appendItem(&data, testing.allocator, MF_POPUP | MF_END, null, &.{0xE9});
         try appendItem(&data, testing.allocator, 0, 1, &.{'a'});
-        try appendItem(&data, testing.allocator, 0x0080, 2, case[0]);
+        try appendItem(&data, testing.allocator, MF_END, 2, case[0]);
         try testing.expectError(case[1], parseMenuResource(testing.allocator, data.items));
     }
 }
@@ -276,8 +264,8 @@ fn checkMenuAllocationFailures(allocator: std.mem.Allocator) !void {
     var data: std.ArrayListUnmanaged(u8) = .empty;
     defer data.deinit(allocator);
     try data.appendSlice(allocator, &.{ 0, 0, 0, 0 });
-    try appendItem(&data, allocator, 0x0090, null, &.{ 0xE9, '\t' });
-    try appendItem(&data, allocator, 0x0080, 1, &.{ 0xD801, 0xDC00 });
+    try appendItem(&data, allocator, MF_POPUP | MF_END, null, &.{ 0xE9, '\t' });
+    try appendItem(&data, allocator, MF_END, 1, &.{ 0xD801, 0xDC00 });
     const json = parseMenuResource(allocator, data.items) catch |err| switch (err) {
         error.WriteFailed => return error.OutOfMemory,
         else => return err,
@@ -304,14 +292,14 @@ test "parseMenuResource: truncated input is rejected" {
 }
 
 test "parseMenuResource: popup nesting past max_popup_depth is rejected" {
-    // A crafted resource nests one popup every four bytes (flags 0x0010, an
+    // A crafted resource nests one popup every four bytes (MF_POPUP, an
     // empty name). Left unbounded this recurses until the stack is gone.
     var data: std.ArrayListUnmanaged(u8) = .empty;
     defer data.deinit(testing.allocator);
     try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
     const levels = max_popup_depth + 8;
     for (0..levels) |_| {
-        try data.appendSlice(testing.allocator, &.{ 0x10, 0x00, 0x00, 0x00 });
+        try data.appendSlice(testing.allocator, &u16le(MF_POPUP) ++ &u16le(0));
     }
     try testing.expectError(error.MenuNestingTooDeep, parseMenuResource(testing.allocator, data.items));
 }
@@ -321,7 +309,7 @@ test "parseMenuResource: control characters are escaped as \\uXXXX" {
     defer data.deinit(testing.allocator);
     try data.appendSlice(testing.allocator, &.{ 0, 0, 0, 0 });
     // Name containing raw ESC (0x1B) and BEL (0x07) from a crafted resource.
-    try appendItem(&data, testing.allocator, 0x0080, 5, &.{ 'A', 0x1B, 'B', 0x07 });
+    try appendItem(&data, testing.allocator, MF_END, 5, &.{ 'A', 0x1B, 'B', 0x07 });
 
     const json = try parseMenuResource(testing.allocator, data.items);
     defer testing.allocator.free(json);

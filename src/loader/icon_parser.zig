@@ -4,7 +4,6 @@
 //! and convert them to ICO format or base64-encoded strings for the UI.
 
 const std = @import("std");
-const runtime = @import("../runtime.zig");
 const Module = @import("module.zig").Module;
 const log = @import("../log.zig");
 const trace = @import("../trace.zig");

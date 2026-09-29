@@ -4,8 +4,9 @@
 //! into a JSON structure for rendering on the GUI backend.
 
 const std = @import("std");
-const runtime = @import("../runtime.zig");
 const Module = @import("module.zig").Module;
+const pe_resources = @import("../pe_resources.zig");
+const json_utils = @import("json_utils.zig");
 
 /// Represents a single control within a dialog.
 pub const DialogItem = struct {
@@ -70,12 +71,9 @@ fn appendCodepoint(allocator: std.mem.Allocator, list: *std.ArrayListUnmanaged(u
 
 /// Parses a binary dialog resource from a PE module and returns its JSON representation.
 pub fn parseDialogResource(allocator: std.mem.Allocator, module: *Module, dialog_id: u32) !?[]const u8 {
-    const data = module.getResource(RT_DIALOG, dialog_id) orelse return null;
+    const data = module.getResource(pe_resources.RT_DIALOG, dialog_id) orelse return null;
     return parseDialogData(allocator, data);
 }
-
-/// The resource type a dialog is stored under.
-const RT_DIALOG = 5;
 
 /// Parses one raw RT_DIALOG resource blob and returns its JSON representation.
 /// `data` comes from the PE resource directory and is untrusted: every read is
@@ -255,9 +253,7 @@ pub fn parseDialogData(allocator: std.mem.Allocator, data: []const u8) !?[]const
         }
 
         const creation_data_len = try reader.takeInt(u16, .little);
-        if (creation_data_len > 0) {
-            try reader.discardAll(creation_data_len);
-        }
+        try reader.discardAll(creation_data_len);
 
         try items.append(allocator, .{
             .id = id,
@@ -276,15 +272,15 @@ pub fn parseDialogData(allocator: std.mem.Allocator, data: []const u8) !?[]const
     const w = &aw.writer;
 
     try w.writeAll("{\"type\": \"custom_dialog\", \"title\": \"");
-    try writeJsonString(w, title);
+    try json_utils.writeJsonString(w, title);
     try w.print("\", \"x\": {d}, \"y\": {d}, \"cx\": {d}, \"cy\": {d}, \"items\": [", .{ dlg_x, dlg_y, dlg_cx, dlg_cy });
 
     for (items.items, 0..) |item, idx| {
         if (idx > 0) try w.writeAll(", ");
         try w.print("{{\"id\": {d}, \"x\": {d}, \"y\": {d}, \"cx\": {d}, \"cy\": {d}, \"style\": {d}, \"class\": \"", .{ item.id, item.x, item.y, item.cx, item.cy, item.style });
-        try writeJsonString(w, item.class);
+        try json_utils.writeJsonString(w, item.class);
         try w.writeAll("\", \"text\": \"");
-        try writeJsonString(w, item.text);
+        try json_utils.writeJsonString(w, item.text);
         try w.writeAll("\"}");
     }
 
@@ -293,21 +289,4 @@ pub fn parseDialogData(allocator: std.mem.Allocator, data: []const u8) !?[]const
     var list = aw.toArrayList();
     const slice = try list.toOwnedSlice(allocator);
     return slice;
-}
-
-/// Writes `text` as the body of a JSON string, escaping quotes, backslashes
-/// and control characters. Every dialog string comes from a PE resource and
-/// none of them may be able to break the frontend's JSON.parse.
-fn writeJsonString(w: *std.Io.Writer, text: []const u8) !void {
-    for (text) |char| {
-        if (char == '"') {
-            try w.writeAll("\\\"");
-        } else if (char == '\\') {
-            try w.writeAll("\\\\");
-        } else if (char < 0x20) {
-            try w.print("\\u{x:0>4}", .{char});
-        } else {
-            try w.writeByte(char);
-        }
-    }
 }

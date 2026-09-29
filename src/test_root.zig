@@ -19,6 +19,7 @@ comptime {
     _ = @import("jit/host.zig");
 
     // Loader tests
+    _ = @import("loader/json_utils.zig");
     _ = @import("loader/menu_parser.zig");
     _ = @import("loader/module.zig");
     _ = @import("loader/registry.zig");
