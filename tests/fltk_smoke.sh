@@ -10,7 +10,7 @@
 #   ./fltk_smoke.sh            # build + run all apps under DISPLAY=:1
 #   ./fltk_smoke.sh --skip-build
 #   DISPLAY_NO=:2 ./fltk_smoke.sh
-set -u
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(realpath "$SCRIPT_DIR/..")"
@@ -33,7 +33,9 @@ FLTK="$ROOT/zig-out/bin/zine.x86_64"
 DISPLAY_NO="${DISPLAY_NO:-:1}"
 
 SKIP_BUILD="${SKIP_BUILD:-}"
-[ "${1:-}" = "--skip-build" ] && SKIP_BUILD=1
+# An `if` rather than `[ ... ] && VAR=1`: under `set -e` the standalone test is
+# the last command of its line and aborts the script when the flag is absent.
+if [ "${1:-}" = "--skip-build" ]; then SKIP_BUILD=1; fi
 
 if [ "$SKIP_BUILD" != "1" ]; then
     echo "== Building x86 + x86_64 FLTK =="
@@ -83,7 +85,16 @@ run_app() {
         FAIL=$((FAIL + 1))
         return
     fi
-    ( DISPLAY="$DISPLAY_NO" timeout 25 "$FLTK" --fltk "./$base.exe" > out.txt 2>&1 )
+    # The GUI apps are killed by the timeout or exit on their own, so the
+    # status is collected instead of required: the verdict is what out.txt
+    # says, and a nonzero exit here is the normal case.
+    status=0
+    ( DISPLAY="$DISPLAY_NO" timeout 25 "$FLTK" --fltk "./$base.exe" > out.txt 2>&1 ) || status=$?
+    if [ "$status" -eq 124 ]; then
+        echo "FAIL  $base: the app ran past its 25s timeout"
+        FAIL=$((FAIL + 1))
+        return
+    fi
     if grep -q "$expected" out.txt 2>/dev/null; then
         echo "PASS  $base ($expected)"
         PASS=$((PASS + 1))

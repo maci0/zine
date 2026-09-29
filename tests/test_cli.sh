@@ -12,6 +12,14 @@ done < <(compgen -A variable | command grep '^ZINE_')
 
 expected_version=$1
 shift
+# The wasm32 gate step runs the artifact through a runtime named here rather
+# than through the binary. Without one the first case reports a 127 status
+# from the shell and calls it a product failure, so the missing tool is named
+# before anything runs.
+if [[ "${1:-}" == wasmtime ]] && ! command -v wasmtime >/dev/null 2>&1; then
+    printf 'wasmtime is not on PATH; install it to run the wasm32 CLI suite\n' >&2
+    exit 1
+fi
 # Under the gitignored .scratch/ rather than TMPDIR, which on many hosts is a
 # tmpfs: a suite that writes its captures to RAM adds to the memory the
 # emulator under test is short of. The root comes from the script's own
