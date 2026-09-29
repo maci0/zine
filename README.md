@@ -38,6 +38,8 @@ promise between versions, so a breaking change takes the next minor.
 
 ### Unreleased
 
+### 0.5.0 (2026-09-29)
+
 #### Added
 
 - Every `--help` now ends with the exit-status contract, so a script knows what
