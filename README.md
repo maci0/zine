@@ -84,6 +84,20 @@ promise between versions, so a breaking change takes the next minor.
 - The WASI `--help` said `--` stops option processing. A leading `--` is the
   separator wasmtime forwards, so it deliberately does not; the help now says
   so.
+- A guest whose `SizeOfImage` was large enough to wrap the WASM build's
+  combined image+stack+heap buffer got a much smaller allocation than the
+  image needs, and the buffer was then written at the untruncated offsets. The
+  size is computed in u64 and an image with no 32-bit address is refused.
+- A base-relocation block declaring a `VirtualAddress` near the top of the
+  address space, or an import thunk table near it, wrapped the u32 sum that
+  located the patch target and the IAT range. Both are now computed in u64, so
+  the entry is dropped rather than patching a word the block never named.
+- A `.rsrc` section whose `VirtualSize` wrapped left the rest of the image
+  outside the write-protected window. The section bounds are now checked
+  against the image before the carve-outs are built.
+- The web UI served any readable file under `src/gui/`, which holds the
+  server's own source and the FLTK bridge, to any request that named it. The
+  request path is now a lookup in the embedded-asset list.
 - In the web UI, Escape dismissed the Find and Replace dialog with the modal
   `cancel_dialog` instead of the `find_action` close its Cancel button sends,
   so the guest kept the dialog registered. Both now dismiss through the

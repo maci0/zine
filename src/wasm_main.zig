@@ -387,7 +387,6 @@ pub fn main(init: std.process.Init) !void {
     });
 
     const preferred_base: u32 = main_module.parser.getNtHeaders().OptionalHeader.ImageBase;
-    const image_size: u32 = @truncate(main_module.mapped_memory.len);
 
     const STACK_SIZE: u32 = 64 * 1024;
     const THUNK_RESERVE: u32 = 32 * 1024;
@@ -396,8 +395,19 @@ pub fn main(init: std.process.Init) !void {
     // compiler reported C1076/C1063 "heap space exhausted". The WASM module
     // allows up to 2GB, so reserve plenty of room for the compiler heap.
     const HEAP_RESERVE: u32 = 512 * 1024 * 1024; // 512 MB guest heap
-    const combined_size = image_size + STACK_SIZE + THUNK_RESERVE + HEAP_RESERVE;
-    const combined_buf = try allocator.alloc(u8, combined_size);
+    // SizeOfImage is a field of the guest's header, and an anonymous mapping
+    // of a multi-gigabyte SizeOfImage succeeds, so the image really can be
+    // this large. The sum is therefore computed in u64 and checked: in u32 it
+    // wraps for a SizeOfImage above ~1.5GB, the wrapped allocation succeeds,
+    // and the memsets below then write at the untruncated offsets.
+    const mapped_len = main_module.mapped_memory.len;
+    const combined_size: u64 = @as(u64, mapped_len) + STACK_SIZE + THUNK_RESERVE + HEAP_RESERVE;
+    if (mapped_len > std.math.maxInt(u32) or combined_size > std.math.maxInt(u32)) {
+        log.warn("wasm: image of {d} bytes does not fit the 32-bit guest address space", .{mapped_len});
+        return error.ImageTooLarge;
+    }
+    const image_size: u32 = @intCast(mapped_len);
+    const combined_buf = try allocator.alloc(u8, @intCast(combined_size));
 
     @memset(combined_buf[image_size .. image_size + STACK_SIZE], 0);
 

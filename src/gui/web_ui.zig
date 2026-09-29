@@ -693,6 +693,16 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                 return stream.close(runtime.io());
             }
 
+            // Rejecting ".." only keeps the request inside `src/gui/`, which
+            // also holds the server's own source, the FLTK bridge, and the
+            // asset manifest. Serve the declared assets and nothing else, so
+            // the path is a lookup in that list rather than a read of
+            // whatever the directory happens to hold.
+            if (!isDeclaredAsset(asset_path)) {
+                try respondStatus(&req, .not_found, "Not found", null);
+                return stream.close(runtime.io());
+            }
+
             const full_path = std.fmt.bufPrint(&file_path_buf, "src/gui{s}", .{asset_path}) catch {
                 return stream.close(runtime.io());
             };
@@ -1143,6 +1153,19 @@ fn acceptsGzip(req: *const std.http.Server.Request) bool {
     }
     const quality = gzip_quality orelse wildcard_quality;
     return quality > 0 and quality >= identity_quality;
+}
+
+/// Whether `asset_path` ("/app.js") is one of the assets the build embeds.
+/// The disk branch reads out of `src/gui/`, which also holds the server's own
+/// source, so the request path has to be a lookup in that list.
+fn isDeclaredAsset(asset_path: []const u8) bool {
+    const list = @import("web_asset_paths.zig");
+    if (asset_path.len == 0 or asset_path[0] != '/') return false;
+    const name = asset_path[1..];
+    for (list.assets) |asset| {
+        if (std.mem.eql(u8, name, asset.path)) return true;
+    }
+    return false;
 }
 
 /// The content of the embedded asset `digest` names, or null when no embedded
@@ -1955,6 +1978,24 @@ test "the document and the script name the digested assets the build embedded" {
     try std.testing.expect(urlDigest("app.js") == null);
     try std.testing.expect(urlDigest("/start-0123456789abcdef.svg") == null);
     try std.testing.expect(urlDigest("/app-0000.js") == null);
+}
+
+test "the disk branch serves the declared assets and nothing else" {
+    const list = @import("web_asset_paths.zig");
+    for (list.assets) |asset| {
+        const url = try std.fmt.allocPrint(std.testing.allocator, "/{s}", .{asset.path});
+        defer std.testing.allocator.free(url);
+        try std.testing.expect(isDeclaredAsset(url));
+    }
+    // `src/gui/` also holds the server's own source, the FLTK bridge and the
+    // asset manifest. A request that reaches the disk must not read them.
+    try std.testing.expect(!isDeclaredAsset("/web_ui.zig"));
+    try std.testing.expect(!isDeclaredAsset("/web_asset_paths.zig"));
+    try std.testing.expect(!isDeclaredAsset("/fltk_bridge.cpp"));
+    try std.testing.expect(!isDeclaredAsset("/menu.json"));
+    try std.testing.expect(!isDeclaredAsset("/../build.zig"));
+    try std.testing.expect(!isDeclaredAsset("app.js"));
+    try std.testing.expect(!isDeclaredAsset(""));
 }
 
 test "a digested asset URL answers the content it names" {

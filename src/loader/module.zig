@@ -345,6 +345,9 @@ pub const Module = struct {
         // AddressOfEntryPoint is a header field with no lower bound, so it can
         // name an address outside the image. Callers turn it straight into an
         // EIP or a host function pointer, so require it to be mapped.
+        // The type matches `Module.entry_point` and the host-pointer-typed
+        // `image_base` beside it: the sum is a usize, which is only also a u32
+        // on a 32-bit host.
         const entry_rva = opt_header.AddressOfEntryPoint;
         const entry_point: ?usize = if (entry_rva != 0 and
             @as(u64, entry_rva) < mapped_slice.len)

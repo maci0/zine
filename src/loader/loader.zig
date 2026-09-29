@@ -72,6 +72,13 @@ pub fn copyModuleToGuest(mod: *Module) void {
     const guest_end = gmem.base_addr +% @as(u32, @intCast(gmem.base.len));
     if (mod.image_base >= gmem.base_addr and mod.image_base < guest_end) return;
 
+    // A SizeOfImage past 4GB has no 32-bit guest address, so the cast below
+    // would trap on a value taken from the file's header. Refuse the copy
+    // rather than abort the run over one.
+    if (mod.mapped_memory.len > std.math.maxInt(u32)) {
+        log.warn("copyModuleToGuest: {s} image of {d} bytes exceeds the 32-bit guest address space", .{ mod.name, mod.mapped_memory.len });
+        return;
+    }
     const image_size: u32 = @intCast(mod.mapped_memory.len);
     const guest_va = gmem.guestAlloc(image_size);
     if (guest_va == 0) {
@@ -122,14 +129,15 @@ pub fn applyReverseRelocations(
     const reverse_delta = preferred_base -% actual_base;
     const opt_header = &parser.getNtHeaders().OptionalHeader;
 
+    // Every RVA below comes from guest data, so each bound is computed in
+    // u64: `rva + n` in u32 wraps and lets a huge RVA pass a range check.
+    const img_end: u64 = image_size;
+
     // Collect IAT ranges to skip (resolveImports already wrote correct thunk addresses)
     const import_dir_entry = opt_header.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_IMPORT];
     var iat_ranges: [32][2]u32 = undefined;
     var iat_range_count: usize = 0;
     if (import_dir_entry.Size > 0) {
-        // Every RVA below comes from guest data, so each bound is computed in
-        // u64: `rva + n` in u32 wraps and lets a huge RVA pass a range check.
-        const img_end: u64 = image_size;
         var imp_off: u64 = import_dir_entry.VirtualAddress;
         while (imp_off + 20 <= img_end) {
             const imp_name = @as(*align(1) const u32, @ptrCast(buf[@intCast(imp_off + 12)..].ptr)).*;
@@ -148,9 +156,17 @@ pub fn applyReverseRelocations(
             if (iat_range_count < iat_ranges.len) {
                 // IAT RVAs in buf are in actual_base terms (from Module.load relocation),
                 // but .reloc entries use preferred_base terms. Adjust to match.
-                const adj_start = first_thunk_rva +% reverse_delta;
-                iat_ranges[iat_range_count] = .{ adj_start, adj_start + count * 4 };
-                iat_range_count += 1;
+                // The end of the range is computed in u64 and the range is kept
+                // only when it lands inside the image: a thunk table declared
+                // near the top of the address space would otherwise wrap
+                // `adj_start + count * 4` and produce a range no patch
+                // address can match, silently disabling the IAT skip.
+                const start: u64 = @as(u64, first_thunk_rva) +% @as(u64, reverse_delta);
+                const range_end: u64 = start + @as(u64, count) * 4;
+                if (range_end <= img_end) {
+                    iat_ranges[iat_range_count] = .{ @intCast(start), @intCast(range_end) };
+                    iat_range_count += 1;
+                }
             }
             imp_off += 20;
         }
@@ -172,17 +188,23 @@ pub fn applyReverseRelocations(
                 const entry = @as(*align(1) const u16, @ptrCast(buf[reloc_offset + 8 + e * 2 ..].ptr)).*;
                 const IMAGE_REL_BASED_HIGHLOW = 3;
                 if (entry >> 12 == IMAGE_REL_BASED_HIGHLOW) {
-                    const patch_addr = block_va + (entry & 0x0FFF);
+                    // u64 arithmetic: a block VA near the top of the address
+                    // space plus its entry offset wraps in u32, which traps
+                    // under the safety checks and, in a release build, patches
+                    // an address unrelated to the block the entry came from.
+                    const patch_addr: u64 = @as(u64, block_va) + (entry & 0x0FFF);
+                    if (patch_addr >= img_end) continue;
+                    const patch: u32 = @intCast(patch_addr);
                     var in_iat = false;
                     for (iat_ranges[0..iat_range_count]) |range| {
-                        if (patch_addr >= range[0] and patch_addr < range[1]) {
+                        if (patch >= range[0] and patch < range[1]) {
                             in_iat = true;
                             break;
                         }
                     }
                     if (in_iat) continue;
-                    if (patch_addr + 4 <= image_size) {
-                        const ptr = @as(*align(1) u32, @ptrCast(buf[patch_addr..].ptr));
+                    if (patch_addr + 4 <= img_end) {
+                        const ptr = @as(*align(1) u32, @ptrCast(buf[patch..].ptr));
                         ptr.* = ptr.* +% reverse_delta;
                     }
                 }
@@ -227,13 +249,19 @@ pub fn protectRsrc(
 ) void {
     for (sections) |sec| {
         if (std.mem.startsWith(u8, &sec.Name, ".rsrc")) {
-            memory.pe_image_end = preferred_base +% image_size;
-            const rsrc_start = preferred_base +% sec.VirtualAddress;
-            const rsrc_end = rsrc_start +% sec.Misc.VirtualSize;
+            // u64 arithmetic throughout: a .rsrc section whose VirtualAddress
+            // or VirtualSize is large enough to wrap makes the end of the
+            // section fall below its start, and the ranges built from it then
+            // leave the rest of the image writable.
+            const image_end: u64 = @as(u64, preferred_base) + image_size;
+            const rsrc_start: u64 = @as(u64, preferred_base) + sec.VirtualAddress;
+            const rsrc_end: u64 = rsrc_start + sec.Misc.VirtualSize;
+            if (rsrc_start > image_end or rsrc_end > image_end) return;
+            memory.pe_image_end = @intCast(image_end);
             if (rsrc_start > preferred_base)
-                protectFatal(memory.addWritableSection(preferred_base, rsrc_start));
-            if (rsrc_end < preferred_base +% image_size)
-                protectFatal(memory.addWritableSection(rsrc_end, preferred_base +% image_size));
+                protectFatal(memory.addWritableSection(preferred_base, @intCast(rsrc_start)));
+            if (rsrc_end < image_end)
+                protectFatal(memory.addWritableSection(@intCast(rsrc_end), @intCast(image_end)));
             break;
         }
     }
@@ -592,4 +620,124 @@ test "applyReverseRelocations: out-of-bounds HIGHLOW entry is skipped" {
     const expected = buf;
     applyReverseRelocations(&buf, &parser, buf.len, 0x0001_0000, 0x0002_0000);
     try testing.expectEqualSlices(u8, &expected, &buf);
+}
+
+test "applyReverseRelocations: a block VA that wraps past 32 bits is skipped" {
+    var nt = comptime makeNtHeaders();
+    const parser = FakeParser{ .nt = &nt };
+
+    // block_va + entry offset exceeds u32. The sum is computed in u64, so the
+    // entry is recognized as out of range and dropped rather than wrapping to
+    // a small address inside the image and patching bytes the block never
+    // named.
+    var buf = [_]u8{0} ** 16;
+    std.mem.writeInt(u32, buf[0..4], 0xFFFF_FF00, .little);
+    std.mem.writeInt(u32, buf[4..8], 10, .little); // SizeOfBlock (1 entry)
+    const entry: u16 = (3 << 12) | 0x200; // 0xFFFF_FF00 + 0x200 wraps
+    std.mem.writeInt(u16, buf[8..10], entry, .little);
+    std.mem.writeInt(u32, buf[4..8], 0xDEAD_BEEF, .little); // a word in the image
+
+    nt.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC] =
+        .{ .VirtualAddress = 0, .Size = 10 };
+
+    const expected = buf;
+    applyReverseRelocations(&buf, &parser, buf.len, 0x0001_0000, 0x0002_0000);
+    try testing.expectEqualSlices(u8, &expected, &buf);
+}
+
+test "applyReverseRelocations: an IAT range that wraps past 32 bits is dropped" {
+    const patch_rva = 0x58;
+    // The reloc block below patches the u32 at `patch_rva`. The two cases
+    // differ only in the import descriptor's FirstThunk, so the patch's fate
+    // shows whether the IAT range was recorded.
+    //
+    // FirstThunk near the top of the address space: adj_start plus the thunk
+    // table's length leaves u32, the range is dropped, and the patch is
+    // applied on its own terms rather than being matched against a wrapped,
+    // empty interval.
+    var wrapped = comptime blk: {
+        var buf = [_]u8{0} ** 0x60;
+        // Import descriptor at RVA 0x20: Name != 0, FirstThunk = 0xFFFFF000.
+        std.mem.writeInt(u32, buf[0x20..0x24], 0, .little); // OriginalFirstThunk
+        std.mem.writeInt(u32, buf[0x24..0x28], 0x1, .little); // TimeDateStamp
+        std.mem.writeInt(u32, buf[0x28..0x2C], 0, .little); // ForwarderChain
+        std.mem.writeInt(u32, buf[0x2C..0x30], 0x1, .little); // Name != 0
+        std.mem.writeInt(u32, buf[0x30..0x34], 0xFFFF_F000, .little); // FirstThunk
+        writePatch(&buf, patch_rva);
+        break :blk buf;
+    };
+    var nt = comptime makeNtHeaders();
+    const parser = FakeParser{ .nt = &nt };
+    nt.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_IMPORT] =
+        .{ .VirtualAddress = 0x20, .Size = 20 };
+    nt.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC] =
+        .{ .VirtualAddress = 0x38, .Size = 10 };
+
+    applyReverseRelocations(&wrapped, &parser, wrapped.len, 0x0001_0000, 0x0002_0000);
+    // reverse_delta = 0x10000, so the patched word advances by that much.
+    try testing.expectEqual(@as(u32, 0x0001_0001), std.mem.readInt(u32, wrapped[patch_rva..][0..4], .little));
+
+    // A FirstThunk inside the image produces a range the patch falls in, and
+    // the IAT slot is left for resolveImports rather than relocated again.
+    // reverse_delta is 0x10 here, so the adjusted range starts exactly at the
+    // patch target.
+    var in_image = comptime blk: {
+        var buf = [_]u8{0} ** 0x60;
+        std.mem.writeInt(u32, buf[0x20..0x24], 0, .little);
+        std.mem.writeInt(u32, buf[0x24..0x28], 0x1, .little);
+        std.mem.writeInt(u32, buf[0x28..0x2C], 0, .little);
+        std.mem.writeInt(u32, buf[0x2C..0x30], 0x1, .little);
+        // FirstThunk names a three-entry thunk table, so the adjusted range is
+        // [0x50, 0x5C) and the patch target at 0x58 falls inside it.
+        std.mem.writeInt(u32, buf[0x30..0x34], patch_rva - 0x18, .little);
+        for (0..3) |i| std.mem.writeInt(u32, buf[patch_rva - 0x18 + i * 4 ..][0..4], 0x20, .little);
+        writePatch(&buf, patch_rva);
+        break :blk buf;
+    };
+    var nt_in_image = comptime makeNtHeaders();
+    const parser_in_image = FakeParser{ .nt = &nt_in_image };
+    nt_in_image.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_IMPORT] =
+        .{ .VirtualAddress = 0x20, .Size = 20 };
+    nt_in_image.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC] =
+        .{ .VirtualAddress = 0x38, .Size = 10 };
+
+    const before = std.mem.readInt(u32, in_image[patch_rva..][0..4], .little);
+    applyReverseRelocations(&in_image, &parser_in_image, in_image.len, 0x0000_1000, 0x0000_1010);
+    try testing.expectEqual(before, std.mem.readInt(u32, in_image[patch_rva..][0..4], .little));
+}
+
+/// Lays down a one-entry base-relocation block at RVA 0x38 that patches the
+/// u32 at `patch_rva`, holding a word the caller can recognize. The block's
+/// own VirtualAddress is 0, so the patch target is the entry's offset alone.
+fn writePatch(buf: []u8, comptime patch_rva: usize) void {
+    std.mem.writeInt(u32, buf[0x38..0x3C], 0, .little); // block VirtualAddress
+    std.mem.writeInt(u32, buf[0x3C..0x40], 10, .little); // SizeOfBlock (1 entry)
+    const entry: u16 = (3 << 12) | @as(u16, @intCast(patch_rva));
+    std.mem.writeInt(u16, buf[0x38 + 8 ..][0..2], entry, .little);
+    std.mem.writeInt(u32, buf[patch_rva..][0..4], 0x0000_0001, .little);
+}
+
+test "protectRsrc: a VirtualSize that wraps past 32 bits leaves no writable range" {
+    var nt = comptime makeNtHeaders();
+    _ = &nt;
+
+    // A .rsrc section whose start + VirtualSize leaves the 32-bit guest
+    // address space. The ranges must not be built from the wrapped end, which
+    // would leave the whole image outside the write-protected window.
+    var section = std.mem.zeroes(pe.IMAGE_SECTION_HEADER);
+    section.Name = ".rsrc\x00\x00\x00".*;
+    section.Misc.VirtualSize = 0xFFFF_F000;
+    section.VirtualAddress = 0x1000;
+    var memory = x86_memory.GuestMemory{ .base = &[_]u8{}, .base_addr = 0x0040_0000 };
+    protectRsrc(&[_]pe.IMAGE_SECTION_HEADER{section}, &memory, 0x0040_0000, 0x1000);
+    try testing.expectEqual(@as(u8, 0), memory.writable_section_count);
+
+    // The ordinary shape still installs both carve-outs.
+    var sane = std.mem.zeroes(pe.IMAGE_SECTION_HEADER);
+    sane.Name = ".rsrc\x00\x00\x00".*;
+    sane.Misc.VirtualSize = 0x200;
+    sane.VirtualAddress = 0x1000;
+    var sane_memory = x86_memory.GuestMemory{ .base = &[_]u8{}, .base_addr = 0x0040_0000 };
+    protectRsrc(&[_]pe.IMAGE_SECTION_HEADER{sane}, &sane_memory, 0x0040_0000, 0x4000);
+    try testing.expectEqual(@as(u8, 2), sane_memory.writable_section_count);
 }
