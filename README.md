@@ -50,6 +50,14 @@ promise between versions, so a breaking change takes the next minor.
   `--help` said so, and only for `--jit-max-eip`.
 
 #### Fixed
+- In the web UI, Escape dismissed the Find and Replace dialog with the modal
+  `cancel_dialog` instead of the `find_action` close its Cancel button sends,
+  so the guest kept the dialog registered. Both now dismiss through the
+  dialog's own handler. A window dragged past the edge of the page also took
+  its titlebar, the only handle that moves it, out of reach; dragging and
+  resizing now keep it on screen. Host errors are shown in the words the host
+  wrote for the person at the keyboard, without an "API Error:" label in
+  front of them.
 - `RegisterWindowMessageW`, `RegisterClipboardFormatA` and
   `RegisterClipboardFormatW` minted a fresh id on every call and kept no name,
   so a guest that registers the same string twice never got the same id back

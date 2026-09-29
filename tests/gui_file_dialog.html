@@ -71,7 +71,10 @@
             block5();
             block6();
             block7();
-            document.getElementById('result').textContent = 'PASS: dialogs, filter, print range, font style, start menu, name error, enter key';
+            block8();
+            block9();
+            block10();
+            document.getElementById('result').textContent = 'PASS: dialogs, filter, print range, font style, start menu, name error, enter key, escape, window clamp, error text';
         } catch (error) {
             document.getElementById('result').textContent = 'FAIL: ' + error.message;
         }
@@ -216,6 +219,54 @@
             assert(document.querySelectorAll('#dialog-content .file-item').length === 1,
                 'The listing must appear when it arrives');
             closeDialog();
+        }
+
+        // Escape dismisses the find dialog the way its Cancel button does, and
+        // a modal dialog it cancels instead
+        function block8() {
+            const escape = () => document.dispatchEvent(
+                new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+
+            sent.length = 0;
+            receive({type: 'open_find_dialog', mode: 'find', findText: 'note'});
+            escape();
+            // Escape also reaches the guest as a keystroke, so the dialog's own
+            // report is what is checked.
+            assert(sent[0].type === 'find_action' && sent[0].action === 'close',
+                'Escape must report the find dialog closed, got ' + JSON.stringify(sent));
+            assert(!sent.some(m => m.type === 'cancel_dialog'),
+                'Escape must not cancel the modal path for the find dialog');
+            assert(document.getElementById('dialog-overlay').style.display === 'none',
+                'Escape must close the find dialog');
+
+            sent.length = 0;
+            receive({type: 'message_box', title: 'Zine', text: 'Ready.'});
+            escape();
+            assert(sent[0].type === 'cancel_dialog',
+                'Escape must cancel a modal dialog, got ' + JSON.stringify(sent));
+        }
+
+        // A window dragged off the page keeps its titlebar within reach
+        function block9() {
+            const vw = window.innerWidth;
+            assert(clampWindowPosition(-500, -40, 400).x === 120 - 400,
+                'A window dragged off the left must stop with its titlebar on screen');
+            assert(clampWindowPosition(vw + 500, 30, 400).x === vw - 120,
+                'A window dragged off the right must stop with its titlebar on screen');
+            assert(clampWindowPosition(300, -40, 400).y === 0,
+                'The title bar must stay below the top of the page');
+            assert(clampWindowPosition(300, 120, 400).x === 300,
+                'A window on screen must not move');
+        }
+
+        // A host error is shown in the words the host wrote for the user
+        function block10() {
+            receive({type: 'error', message: 'Zine runs one program at a time, so the browser cannot start this one. Run it on the host instead.'});
+            const status = document.getElementById('status');
+            assert(status.textContent.startsWith('Zine runs one program'),
+                'The status line must show the host message, got "' + status.textContent + '"');
+            assert(status.classList.contains('error'), 'A host error must be marked as one');
+            receive({type: 'set_resolution', width: 320, height: 200});
         }
     </script>
 </body>

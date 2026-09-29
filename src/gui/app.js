@@ -126,6 +126,19 @@ function updateClock() {
 updateClock();
 
 // --- Window Dragging ---
+// The titlebar is the only handle that moves a window, so a window dragged
+// past the edge of the page can be lost for good. Keep this much of it, and
+// the whole title bar, on screen.
+const TITLEBAR_ON_SCREEN = 120;
+
+function clampWindowPosition(x, y, width) {
+    const keep = Math.min(TITLEBAR_ON_SCREEN, width, window.innerWidth);
+    return {
+        x: Math.min(Math.max(x, keep - width), window.innerWidth - keep),
+        y: Math.max(0, y),
+    };
+}
+
 function makeDraggable(titlebar, windowElement) {
     let isDragging = false;
     let dragOffsetX = 0;
@@ -147,8 +160,10 @@ function makeDraggable(titlebar, windowElement) {
 
     document.addEventListener('mousemove', (e) => {
         if (isDragging) {
-            windowElement.style.left = (e.clientX - dragOffsetX) + 'px';
-            windowElement.style.top = (e.clientY - dragOffsetY) + 'px';
+            const rect = windowElement.getBoundingClientRect();
+            const pos = clampWindowPosition(e.clientX - dragOffsetX, e.clientY - dragOffsetY, rect.width);
+            windowElement.style.left = pos.x + 'px';
+            windowElement.style.top = pos.y + 'px';
         }
     });
 
@@ -223,6 +238,12 @@ function fitCanvasToContainer() {
             h = nh;
         }
 
+        // A drag of the top or left edge past the page would put the titlebar
+        // out of reach, so the window stays where it can be grabbed again.
+        const pos = clampWindowPosition(x, y, w);
+        x = pos.x;
+        y = pos.y;
+
         mainWindow.style.left = x + 'px';
         mainWindow.style.top = y + 'px';
         mainWindow.style.width = w + 'px';
@@ -249,6 +270,9 @@ function fitCanvasToContainer() {
 const DIALOG_VIEWPORT_MARGIN = 16;
 const DIALOG_MIN_WIDTH = 240;
 let dialogPreferredWidth = 0;
+// A modeless dialog the guest owns (Find and Replace) has to be told it is
+// closed; a modal one only has to be cancelled. The dialog in view says which.
+let dialogCancel = null;
 
 function setDialogWidth(px) {
     dialogPreferredWidth = px;
@@ -274,6 +298,7 @@ function showDialog(title, content) {
     dialogOverlay.style.top = '50%';
     dialogOverlay.style.width = '';
     dialogPreferredWidth = 0;
+    dialogCancel = null;
     dialogOverlay.style.zIndex = 3000;
 
     document.getElementById('main-titlebar').classList.add('inactive');
@@ -316,14 +341,31 @@ function showDialog(title, content) {
     });
 }
 
-function closeDialog(suppressBackend = false) {
+function hideDialog() {
     dialogOverlay.style.display = 'none';
     dialogOverlay.onkeydown = null;
     document.getElementById('main-titlebar').classList.remove('inactive');
     window._fileDialogUpdate = null; // Clean up file dialog navigation handler
+    dialogCancel = null;
+}
+
+function closeDialog(suppressBackend = false) {
+    hideDialog();
     if (!suppressBackend && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'cancel_dialog' }));
     }
+}
+
+// The Escape key and the titlebar close button dismiss the same dialog, so
+// they must reach the guest the same way the dialog's own buttons do.
+function dismissDialog() {
+    if (dialogCancel) {
+        const cancel = dialogCancel;
+        dialogCancel = null;
+        cancel();
+        return;
+    }
+    closeDialog();
 }
 
 // --- Window State (Minimize / Maximize / Close) ---
@@ -672,9 +714,9 @@ document.addEventListener('keydown', (e) => {
     });
     if (closedMenu) return;
 
-    // Same dismissal path as the dialog's Cancel button: one cancel_dialog.
+    // Same dismissal path as the dialog's Cancel button.
     if (window.getComputedStyle(dialogOverlay).display === 'flex') {
-        closeDialog();
+        dismissDialog();
     }
 });
 
@@ -981,9 +1023,13 @@ function connect() {
 
                 if (msg.type === "error") {
                     console.error("Zine API Error:", msg.message);
-                    // A reason to act on stays until the next message replaces
-                    // it, the way the disconnect notice does.
-                    setStatus("API Error: " + msg.message, true);
+                    // The host writes these for the person at the keyboard
+                    // ("Zine runs one program at a time..."), so it is shown
+                    // as it stands rather than behind a label about the
+                    // transport it arrived on. A reason to act on stays until
+                    // the next message replaces it, the way the disconnect
+                    // notice does.
+                    setStatus(msg.message, true);
                 } else if (msg.type === "set_resolution") {
                     currentRenderWidth = msg.width;
                     currentRenderHeight = msg.height;
@@ -1769,6 +1815,13 @@ function connect() {
                         }
                     }
 
+                    // The find dialog is the guest's, so closing it reports a
+                    // close the way its own Cancel button does.
+                    function closeFindDialog() {
+                        sendFindAction('close');
+                        hideDialog();
+                    }
+
                     const replaceRow = isReplace ? div({style: 'display:flex; align-items:center; gap:8px; margin-bottom:8px;'},
                         label({style: 'min-width:80px;'}, 'Replace with:'), replaceInput) : null;
 
@@ -1796,16 +1849,13 @@ function connect() {
                             div({style: 'display:flex; flex-direction:column; gap:4px;'},
                                 button({class: 'win2k-button', style: 'min-width:80px;', 'data-dialog-default': '', onclick: () => sendFindAction('find_next')}, 'Find Next'),
                                 ...replaceButtons,
-                                button({class: 'win2k-button', style: 'min-width:80px;', onclick: () => {
-                                    sendFindAction('close');
-                                    dialogOverlay.style.display = 'none';
-                                }}, 'Cancel')))
+                                button({class: 'win2k-button', style: 'min-width:80px;', onclick: closeFindDialog}, 'Cancel')))
                     );
+                    dialogCancel = closeFindDialog;
                     setDialogWidth(isReplace ? 420 : 380);
 
                 } else if (msg.type === "close_dialog") {
-                    dialogOverlay.style.display = 'none';
-                    document.getElementById('main-titlebar').classList.remove('inactive');
+                    hideDialog();
 
                 } else if (msg.type === "set_edit_font") {
                     // Apply font to a child control by hwnd, fallback to #edit-control
