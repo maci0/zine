@@ -406,7 +406,7 @@ pub fn main(init: std.process.Init) !void {
         thunk_guest_mem.heap_cursor = thunk_guest_mem.heap_start;
 
         // Relocate ALL data exports into guest memory in one call
-        environment.relocateDataExports(&thunk_guest_mem, combined_buf, preferred_base);
+        try environment.relocateDataExports(&thunk_guest_mem, combined_buf, preferred_base);
 
         // Post-relocation fixups for exports that need extra initialization:
 
@@ -846,7 +846,7 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
 
     child_guest_mem.heap_start = child_image_size + CHILD_STACK + CHILD_THUNK;
     child_guest_mem.heap_cursor = child_guest_mem.heap_start;
-    child_env.relocateDataExports(&child_guest_mem, child_mem, child_preferred);
+    child_env.relocateDataExports(&child_guest_mem, child_mem, child_preferred) catch return -1;
 
     runner.resolveAllImports(&child_env, child_alloc) catch return -1;
 

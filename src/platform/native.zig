@@ -217,21 +217,11 @@ fn readClock(clock_id: linux.clockid_t) linux.timespec {
     return ts;
 }
 
-/// Returns the current timestamp as a Unix epoch value (seconds).
+/// Returns the current timestamp as a Unix epoch value (seconds). This is a
+/// host reading, so a guest clock must come from `runtime`, which serves the
+/// virtual clock a simulated run installs.
 pub fn timestamp() i64 {
     return readClock(.REALTIME).sec;
-}
-
-/// Returns the current timestamp in milliseconds since Unix epoch.
-pub fn milliTimestamp() i64 {
-    const ts = readClock(.REALTIME);
-    return @as(i64, ts.sec) * std.time.ms_per_s + @divTrunc(ts.nsec, std.time.ns_per_ms);
-}
-
-/// Returns the current timestamp in nanoseconds since Unix epoch.
-pub fn nanoTimestamp() i128 {
-    const ts = readClock(.REALTIME);
-    return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
 }
 
 // -------------------------------------------------------------------------

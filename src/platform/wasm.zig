@@ -110,18 +110,6 @@ pub fn timestamp() i64 {
     return 0;
 }
 
-/// Returns the current timestamp in milliseconds since Unix epoch.
-/// Stubbed to 0 on WASM.
-pub fn milliTimestamp() i64 {
-    return 0;
-}
-
-/// Returns the current timestamp in nanoseconds since Unix epoch.
-/// Stubbed to 0 on WASM.
-pub fn nanoTimestamp() i128 {
-    return 0;
-}
-
 /// Returns the bounds of the current thread's stack.
 pub fn getStackBounds(frame_addr: usize) StackBounds {
     _ = frame_addr;

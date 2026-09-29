@@ -708,7 +708,9 @@ fn editSetSel(start: i32, end: i32) void {
 // SB_* (status bar) and PBM_* (progress bar) share the same WM_USER message
 // numbers, so dispatch must know the control's class. Recorded at creation
 // time by CreateWindowExA / CreateStatusWindowA.
-const ControlClass = struct { hwnd: usize, class: [32]u8, len: u8 };
+/// Length of a recorded control class name, terminator included.
+const control_class_name_max: usize = 32;
+const ControlClass = struct { hwnd: usize, class: [control_class_name_max]u8, len: u8 };
 /// Width of a recorded class name, terminator included.
 const max_control_class_len = @sizeOf(@FieldType(ControlClass, "class"));
 var control_classes: [64]ControlClass = undefined;

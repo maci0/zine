@@ -24,6 +24,7 @@ comptime {
     _ = @import("loader/module.zig");
     _ = @import("loader/registry.zig");
     _ = @import("loader/loader.zig");
+    _ = @import("loader/env.zig");
 
     // Profiler tests
     _ = @import("profiler.zig");

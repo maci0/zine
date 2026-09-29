@@ -137,26 +137,60 @@ pub const Environment = struct {
         try builtin.exports.put(name, .{ .addr = addr, .param_bytes = 0, .is_data = true, .data_size = size });
     }
 
+    /// One data export waiting to be relocated, tagged with the module and
+    /// export name that order it.
+    const PendingDataExport = struct {
+        dll_name: []const u8,
+        export_name: []const u8,
+        exp: *BuiltinExport,
+    };
+
     /// Relocate all data exports into guest memory. Call this on WASM before
     /// import resolution so that IAT entries point to guest-addressable data.
-    /// Iterates all builtin modules, finds is_data exports, allocates guest
-    /// memory, copies the host data, and updates the export address.
-    pub fn relocateDataExports(self: *Environment, gmem: anytype, combined_buf: []u8, base_addr: u32) void {
+    /// Finds is_data exports in every builtin module, allocates guest memory,
+    /// copies the host data, and updates the export address.
+    ///
+    /// Allocation follows (module name, export name) order rather than hash
+    /// order, because the guest reads these addresses back: a guest that dumps
+    /// a pointer, or whose data references another export, must see the same
+    /// layout on every run, and hash order changes with the export set.
+    pub fn relocateDataExports(self: *Environment, gmem: anytype, combined_buf: []u8, base_addr: u32) !void {
+        var pending: std.ArrayList(PendingDataExport) = .empty;
+        defer pending.deinit(self.allocator);
+
         var mod_it = self.builtins.iterator();
         while (mod_it.next()) |mod_entry| {
             var exp_it = mod_entry.value_ptr.exports.iterator();
             while (exp_it.next()) |exp_entry| {
                 const exp = exp_entry.value_ptr;
                 if (!exp.is_data or exp.data_size == 0) continue;
-
-                const guest_va = gmem.guestAlloc(exp.data_size);
-                if (guest_va == 0) continue;
-
-                const off = guest_va - base_addr;
-                const src = @as([*]const u8, @ptrFromInt(exp.addr))[0..exp.data_size];
-                @memcpy(combined_buf[off .. off + exp.data_size], src);
-                exp.addr = guest_va;
+                try pending.append(self.allocator, .{
+                    .dll_name = mod_entry.key_ptr.*,
+                    .export_name = exp_entry.key_ptr.*,
+                    .exp = exp,
+                });
             }
+        }
+
+        std.mem.sort(PendingDataExport, pending.items, {}, struct {
+            fn lessThan(_: void, lhs: PendingDataExport, rhs: PendingDataExport) bool {
+                return switch (std.mem.order(u8, lhs.dll_name, rhs.dll_name)) {
+                    .lt => true,
+                    .gt => false,
+                    .eq => std.mem.order(u8, lhs.export_name, rhs.export_name) == .lt,
+                };
+            }
+        }.lessThan);
+
+        for (pending.items) |item| {
+            const exp = item.exp;
+            const guest_va = gmem.guestAlloc(exp.data_size);
+            if (guest_va == 0) continue;
+
+            const off = guest_va - base_addr;
+            const src = @as([*]const u8, @ptrFromInt(exp.addr))[0..exp.data_size];
+            @memcpy(combined_buf[off .. off + exp.data_size], src);
+            exp.addr = guest_va;
         }
     }
 
@@ -794,3 +828,53 @@ pub const Environment = struct {
         return null;
     }
 };
+
+const testing = std.testing;
+
+/// Guest memory stand-in: hands out 16-byte-aligned addresses from a fixed
+/// base, so a test reads the address each export was given.
+const SequencedGuestMemory = struct {
+    next: u32,
+
+    pub fn guestAlloc(self: *@This(), size: u32) u32 {
+        const addr = self.next;
+        self.next += (size + 15) & ~@as(u32, 15);
+        return addr;
+    }
+};
+
+test "data exports relocate in module then name order, whatever order they registered" {
+    const guest_base: u32 = 0x0040_0000;
+    const names = [_]struct { dll: []const u8, name: []const u8, byte: u8 }{
+        .{ .dll = "MSVCRT.dll", .name = "_iob", .byte = 1 },
+        .{ .dll = "KERNEL32.dll", .name = "zz_data", .byte = 2 },
+        .{ .dll = "MSVCRT.dll", .name = "__pioinfo", .byte = 3 },
+        .{ .dll = "ADVAPI32.dll", .name = "mid_data", .byte = 4 },
+        .{ .dll = "MSVCRT.dll", .name = "_nhandle", .byte = 5 },
+        .{ .dll = "KERNEL32.dll", .name = "aa_data", .byte = 6 },
+    };
+
+    // Sorted by (dll, name), which is the order the addresses must follow.
+    const sorted = [_]usize{ 3, 5, 1, 2, 0, 4 };
+
+    var env = Environment.init(testing.allocator);
+    defer env.deinit();
+
+    var storage: [names.len][8]u8 = undefined;
+    for (names, 0..) |n, i| {
+        @memset(&storage[i], n.byte);
+        try env.addBuiltinDataExport(n.dll, n.name, @intFromPtr(&storage[i]), 8);
+    }
+
+    var buf: [names.len * 16]u8 = undefined;
+    var gmem = SequencedGuestMemory{ .next = guest_base };
+    try env.relocateDataExports(&gmem, &buf, guest_base);
+
+    for (sorted, 0..) |n, slot| {
+        const exp = env.resolveExport(names[n].dll, names[n].name).?;
+        try testing.expectEqual(guest_base + @as(u32, @intCast(slot * 16)), exp.addr);
+        // The host bytes travelled with the address.
+        const off: usize = exp.addr - guest_base;
+        try testing.expectEqualSlices(u8, &storage[n], buf[off..][0..8]);
+    }
+}
