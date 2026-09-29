@@ -342,6 +342,15 @@ pub const Module = struct {
         errdefer allocator.free(loaded_path);
         const mod = try allocator.create(Module);
         errdefer allocator.destroy(mod);
+        // AddressOfEntryPoint is a header field with no lower bound, so it can
+        // name an address outside the image. Callers turn it straight into an
+        // EIP or a host function pointer, so require it to be mapped.
+        const entry_rva = opt_header.AddressOfEntryPoint;
+        const entry_point: ?u32 = if (entry_rva != 0 and
+            @as(u64, entry_rva) < mapped_slice.len)
+            actual_base + entry_rva
+        else
+            null;
         mod.* = .{
             .allocator = allocator,
             .name = name,
@@ -349,7 +358,7 @@ pub const Module = struct {
             .file_data = file_data,
             .mapped_memory = mapped_slice,
             .image_base = actual_base,
-            .entry_point = if (opt_header.AddressOfEntryPoint != 0) actual_base + opt_header.AddressOfEntryPoint else null,
+            .entry_point = entry_point,
             .parser = parser,
         };
 

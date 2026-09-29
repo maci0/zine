@@ -25,8 +25,10 @@ pub fn guestToHost(guest_addr: usize) usize {
     if (guest_addr == 0) return 0;
     const gmem = guest_memory orelse return guest_addr;
     const base_addr: usize = gmem.base_addr;
-    const base_end = base_addr + gmem.base.len;
-    if (guest_addr >= base_addr and guest_addr < base_end) {
+    // 64-bit window: on wasm32 the sum of an ImageBase near the top of the
+    // address space and a half-gigabyte mapping would wrap a 32-bit usize.
+    const base_end = @as(u64, base_addr) + gmem.base.len;
+    if (@as(u64, guest_addr) >= base_addr and @as(u64, guest_addr) < base_end) {
         return @intFromPtr(gmem.base.ptr) + (guest_addr - base_addr);
     }
     return guest_addr;
@@ -57,9 +59,14 @@ pub const GuestMemory = struct {
     heap_start: u32 = 0,
     heap_cursor: u32 = 0,
 
-    /// Translate a virtual address to a buffer index.
-    inline fn translate(self: *const GuestMemory, addr: u32) usize {
-        return addr -% self.base_addr;
+    /// Translate a virtual address to a buffer index, or null when the
+    /// address is below the mapping. The subtraction must not wrap: a PE
+    /// whose ImageBase sits near the top of the 32-bit space would otherwise
+    /// alias low guest addresses (every null-pointer dereference) onto the
+    /// front of the image.
+    inline fn translate(self: *const GuestMemory, addr: u32) ?usize {
+        if (addr < self.base_addr) return null;
+        return addr - self.base_addr;
     }
 
     /// Allocate memory from the guest heap. Returns a guest virtual address
@@ -90,7 +97,7 @@ pub const GuestMemory = struct {
             if (addr < 4096) return 0;
             return @as(*const u8, @ptrFromInt(addr)).*;
         }
-        const a = self.translate(addr);
+        const a = self.translate(addr) orelse return 0;
         if (a >= self.base.len) return 0;
         return self.base[a];
     }
@@ -106,7 +113,7 @@ pub const GuestMemory = struct {
             if (addr < 4096) return 0;
             return @as(*align(1) const u16, @ptrFromInt(addr)).*;
         }
-        const a = self.translate(addr);
+        const a = self.translate(addr) orelse return 0;
         if (self.base.len < 2 or a > self.base.len - 2) return 0;
         if (comptime host_is_little) {
             return @as(*align(1) const u16, @ptrCast(self.base.ptr + a)).*;
@@ -120,7 +127,7 @@ pub const GuestMemory = struct {
             if (addr < 4096) return 0;
             return @as(*align(1) const u32, @ptrFromInt(addr)).*;
         }
-        const a = self.translate(addr);
+        const a = self.translate(addr) orelse return 0;
         if (self.base.len < 4 or a > self.base.len - 4) return 0;
         if (comptime host_is_little) {
             return @as(*align(1) const u32, @ptrCast(self.base.ptr + a)).*;
@@ -140,7 +147,7 @@ pub const GuestMemory = struct {
             return;
         }
         if (self.isWriteProtected(addr)) return;
-        const a = self.translate(addr);
+        const a = self.translate(addr) orelse return;
         if (a >= self.base.len) return;
         self.base[a] = val;
     }
@@ -152,7 +159,7 @@ pub const GuestMemory = struct {
             return;
         }
         if (self.isWriteProtected(addr)) return;
-        const a = self.translate(addr);
+        const a = self.translate(addr) orelse return;
         if (self.base.len < 2 or a > self.base.len - 2) return;
         if (comptime host_is_little) {
             @as(*align(1) u16, @ptrCast(self.base.ptr + a)).* = val;
@@ -169,7 +176,7 @@ pub const GuestMemory = struct {
             return;
         }
         if (self.isWriteProtected(addr)) return;
-        const a = self.translate(addr);
+        const a = self.translate(addr) orelse return;
         if (self.base.len < 4 or a > self.base.len - 4) return;
         if (comptime host_is_little) {
             @as(*align(1) u32, @ptrCast(self.base.ptr + a)).* = val;
@@ -212,7 +219,7 @@ pub const GuestMemory = struct {
     pub fn readSlice(self: *const GuestMemory, addr: u32, len: u32) ?[]const u8 {
         if (self.native_linear) return @as([*]const u8, @ptrFromInt(addr))[0..len];
         if (!self.readRangeInBounds(addr, len)) return null;
-        const a = self.translate(addr);
+        const a = self.translate(addr) orelse return null;
         return self.base[a..][0..len];
     }
 
@@ -222,7 +229,7 @@ pub const GuestMemory = struct {
     pub fn writeSlice(self: *GuestMemory, addr: u32, len: u32) ?[]u8 {
         if (self.native_linear) return @as([*]u8, @ptrFromInt(addr))[0..len];
         if (!self.writeRangeAllowed(addr, len)) return null;
-        const a = self.translate(addr);
+        const a = self.translate(addr) orelse return null;
         return self.base[a..][0..len];
     }
 
@@ -256,7 +263,8 @@ pub const GuestMemory = struct {
         // Reject ranges that wrap the 32-bit address space.
         if (@as(u64, addr) + len > 0x100000000) return false;
         if (self.native_linear) return addr >= 4096;
-        const a = addr -% self.base_addr;
+        if (addr < self.base_addr) return false;
+        const a = addr - self.base_addr;
         return a < self.base.len and len <= @as(u64, self.base.len) - a;
     }
 
@@ -267,7 +275,8 @@ pub const GuestMemory = struct {
         if (len == 0) return true;
         if (@as(u64, addr) + len > 0x100000000) return false;
         if (self.native_linear) return addr >= 4096;
-        const start = addr -% self.base_addr;
+        if (addr < self.base_addr) return false;
+        const start = addr - self.base_addr;
         if (start >= self.base.len) return false;
         if (len > self.base.len - start) return false;
         // Outside the protected image window everything is writable.
@@ -580,4 +589,21 @@ test "guest memory: writable section table reports overflow instead of dropping"
     try testing.expectEqual(@as(u8, MAX_WRITABLE_SECTIONS), mem.writable_section_count);
     try testing.expect(!mem.addWritableSection(0x0001_00F0, 0x0001_0100));
     try testing.expectEqual(@as(u8, MAX_WRITABLE_SECTIONS), mem.writable_section_count);
+}
+
+test "guest memory: an address below the base does not alias into the image" {
+    // A PE whose ImageBase sits near the top of the 32-bit space would fold
+    // a low guest address (a null-pointer dereference) onto a small offset
+    // inside the image if the subtraction wrapped.
+    var buf: [256]u8 = @splat(0xAB);
+    var gmem = GuestMemory{ .base = &buf, .base_addr = 0xFFFF0000 };
+    try testing.expectEqual(@as(u8, 0xAB), gmem.read8(0xFFFF0000));
+    try testing.expectEqual(@as(u32, 0), gmem.read32(0x00001000));
+    try testing.expectEqual(@as(u32, 0), gmem.read32(0));
+    gmem.write8(0x00001000, 0x11);
+    try testing.expectEqual(@as(u8, 0xAB), gmem.base[0]);
+    try testing.expect(!gmem.readRangeInBounds(0x00001000, 4));
+    try testing.expect(!gmem.writeRangeAllowed(0x00001000, 4));
+    try testing.expect(gmem.readSlice(0x00001000, 4) == null);
+    try testing.expect(gmem.writeSlice(0x00001000, 4) == null);
 }

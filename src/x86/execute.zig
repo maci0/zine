@@ -970,8 +970,10 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         // CDQ (99)
         0x99 => {
             if (insn.op_size == .word) {
-                // CWD: sign-extend AX into DX:AX
-                cpu.edx = if ((cpu.eax & 0x8000) != 0) 0xFFFF else 0;
+                // CWD: sign-extend AX into DX:AX, leaving the upper half of
+                // EDX alone as hardware does.
+                const ext: u32 = if ((cpu.eax & 0x8000) != 0) 0xFFFF else 0;
+                cpu.edx = (cpu.edx & 0xFFFF0000) | ext;
             } else {
                 // CDQ: sign-extend EAX into EDX:EAX
                 cpu.edx = if ((cpu.eax & 0x80000000) != 0) 0xFFFFFFFF else 0;
@@ -1030,29 +1032,34 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         },
 
         // String ops (A4-AF) — basic single-step implementation
-        0xA4 => execMovsb(cpu, insn),
-        0xA5 => execMovsd(cpu, insn),
+        0xA4 => execMovs(cpu, insn, 1),
+        0xA5 => execMovs(cpu, insn, stringElemSize(insn)),
         0xAA => execStosb(cpu, insn),
         0xAB => execStosd(cpu, insn),
         0xAC => { // LODSB
             cpu.setReg8(0, cpu.memory.read8(cpu.esi));
             if (cpu.flags.getDF()) cpu.esi -%= 1 else cpu.esi +%= 1;
         },
-        0xAD => { // LODSD
-            cpu.eax = cpu.memory.read32(cpu.esi);
-            if (cpu.flags.getDF()) cpu.esi -%= 4 else cpu.esi +%= 4;
+        0xAD => { // LODSW/LODSD
+            if (insn.op_size == .word) {
+                cpu.setReg16(0, cpu.memory.read16(cpu.esi));
+                if (cpu.flags.getDF()) cpu.esi -%= 2 else cpu.esi +%= 2;
+            } else {
+                cpu.eax = cpu.memory.read32(cpu.esi);
+                if (cpu.flags.getDF()) cpu.esi -%= 4 else cpu.esi +%= 4;
+            }
         },
-        0xA6, 0xA7 => { // CMPSB/CMPSD
-            const sz: u32 = if (insn.opcode == 0xA6) 1 else 4;
-            const os: OpSize = if (sz == 1) .byte else .dword;
+        0xA6, 0xA7 => { // CMPSB/CMPSW/CMPSD
+            const sz: u32 = if (insn.opcode == 0xA6) 1 else stringElemSize(insn);
+            const os: OpSize = stringOpSize(sz);
             const df = cpu.flags.getDF();
             if (insn.rep or insn.repne) {
                 // REPZ CMPS: loop while ECX > 0 AND ZF=1 (bytes equal)
                 // REPNZ CMPS: loop while ECX > 0 AND ZF=0 (bytes not equal)
                 const stop_on_zf = insn.repne; // REPNZ stops when ZF=1
                 while (cpu.ecx > 0) {
-                    const a = if (sz == 1) @as(u32, cpu.memory.read8(cpu.esi)) else cpu.memory.read32(cpu.esi);
-                    const b = if (sz == 1) @as(u32, cpu.memory.read8(cpu.edi)) else cpu.memory.read32(cpu.edi);
+                    const a = readStringElem(cpu, cpu.esi, sz);
+                    const b = readStringElem(cpu, cpu.edi, sz);
                     cpu.flags.update(.sub, os, a -% b, a, b);
                     cpu.ecx -= 1;
                     if (df) {
@@ -1067,8 +1074,8 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                     if (!stop_on_zf and !zf) break; // REPZ: stop when not equal
                 }
             } else {
-                const a = if (sz == 1) @as(u32, cpu.memory.read8(cpu.esi)) else cpu.memory.read32(cpu.esi);
-                const b = if (sz == 1) @as(u32, cpu.memory.read8(cpu.edi)) else cpu.memory.read32(cpu.edi);
+                const a = readStringElem(cpu, cpu.esi, sz);
+                const b = readStringElem(cpu, cpu.edi, sz);
                 cpu.flags.update(.sub, os, a -% b, a, b);
                 if (df) {
                     cpu.esi -%= sz;
@@ -1080,16 +1087,16 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             }
         },
         0xAE, 0xAF => { // SCASB / SCASD
-            const sz: u32 = if (insn.opcode == 0xAE) 1 else 4;
-            const os: OpSize = if (sz == 1) .byte else .dword;
+            const sz: u32 = if (insn.opcode == 0xAE) 1 else stringElemSize(insn);
+            const os: OpSize = stringOpSize(sz);
             const df = cpu.flags.getDF();
             if (insn.rep or insn.repne) {
                 // REPNZ SCAS: scan until AL/EAX matches [EDI] or ECX=0
                 // REPZ SCAS: scan until AL/EAX differs from [EDI] or ECX=0
                 const stop_on_zf = insn.repne; // REPNZ stops when ZF=1
                 while (cpu.ecx > 0) {
-                    const a = if (sz == 1) @as(u32, cpu.getReg8(0)) else cpu.eax;
-                    const b = if (sz == 1) @as(u32, cpu.memory.read8(cpu.edi)) else cpu.memory.read32(cpu.edi);
+                    const a = readAccumulator(cpu, sz);
+                    const b = readStringElem(cpu, cpu.edi, sz);
                     cpu.flags.update(.sub, os, a -% b, a, b);
                     cpu.ecx -= 1;
                     if (df) cpu.edi -%= sz else cpu.edi +%= sz;
@@ -1098,8 +1105,8 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                     if (!stop_on_zf and !zf) break; // REPZ: found mismatch
                 }
             } else {
-                const a = if (sz == 1) @as(u32, cpu.getReg8(0)) else cpu.eax;
-                const b = if (sz == 1) @as(u32, cpu.memory.read8(cpu.edi)) else cpu.memory.read32(cpu.edi);
+                const a = readAccumulator(cpu, sz);
+                const b = readStringElem(cpu, cpu.edi, sz);
                 cpu.flags.update(.sub, os, a -% b, a, b);
                 if (df) cpu.edi -%= sz else cpu.edi +%= sz;
             }
@@ -1419,15 +1426,30 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             const src = readOperand(cpu, insn, 1);
             const count: u5 = if (insn.opcode == 0x0FA4) @truncate(insn.imm) else @truncate(cpu.ecx);
             if (count != 0) {
-                const wide: u64 = (@as(u64, dst) << 32) | @as(u64, src);
-                const shifted = wide << count;
-                const result: u32 = @truncate(shifted >> 32);
-                writeOperand(cpu, insn, 0, result);
-                // CF is the last bit of the source to leave, at bit 32-count
-                // of it, not the bit a single-precision shift picks out of
-                // the destination.
-                const cf = ((src << @as(u5, count - 1)) & 0x8000_0000) != 0;
-                cpu.flags.updateWithCF(.shl, insn.op_size, result, dst, @as(u32, count), cf);
+                if (insn.op_size == .word) {
+                    // A 16-bit form counts in 0 to 15 and shifts a pair of
+                    // 16-bit values, not of 32-bit ones.
+                    const n: u4 = @truncate(count & 15);
+                    if (n != 0) {
+                        const d16: u32 = dst & 0xFFFF;
+                        const s16: u32 = src & 0xFFFF;
+                        const result: u32 = ((d16 << n) | (s16 >> @as(u5, 16 - @as(u5, n)))) & 0xFFFF;
+                        writeOperand(cpu, insn, 0, result);
+                        // CF is the last bit of the destination to leave.
+                        const cf = ((d16 >> @as(u5, 16 - @as(u5, n))) & 1) != 0;
+                        cpu.flags.updateWithCF(.shl, .word, result, d16, @as(u32, n), cf);
+                    }
+                } else {
+                    const wide: u64 = (@as(u64, dst) << 32) | @as(u64, src);
+                    const shifted = wide << count;
+                    const result: u32 = @truncate(shifted >> 32);
+                    writeOperand(cpu, insn, 0, result);
+                    // CF is the last bit of the source to leave, at bit
+                    // 32-count of it, not the bit a single-precision shift
+                    // picks out of the destination.
+                    const cf = ((src << @as(u5, count - 1)) & 0x8000_0000) != 0;
+                    cpu.flags.updateWithCF(.shl, insn.op_size, result, dst, @as(u32, count), cf);
+                }
             }
         },
         // SHRD imm8 (0F AC) / SHRD CL (0F AD)
@@ -1436,11 +1458,24 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             const src = readOperand(cpu, insn, 1);
             const count: u5 = if (insn.opcode == 0x0FAC) @truncate(insn.imm) else @truncate(cpu.ecx);
             if (count != 0) {
-                const wide: u64 = (@as(u64, src) << 32) | @as(u64, dst);
-                const shifted = wide >> count;
-                const result: u32 = @truncate(shifted);
-                writeOperand(cpu, insn, 0, result);
-                cpu.flags.update(.shr, insn.op_size, result, dst, @as(u32, count));
+                if (insn.op_size == .word) {
+                    // A 16-bit form counts in 0 to 15 and shifts a pair of
+                    // 16-bit values, not of 32-bit ones.
+                    const n: u4 = @truncate(count & 15);
+                    if (n != 0) {
+                        const d16: u32 = dst & 0xFFFF;
+                        const s16: u32 = src & 0xFFFF;
+                        const result: u32 = ((d16 >> n) | (s16 << @as(u5, 16 - @as(u5, n)))) & 0xFFFF;
+                        writeOperand(cpu, insn, 0, result);
+                        cpu.flags.update(.shr, .word, result, d16, @as(u32, n));
+                    }
+                } else {
+                    const wide: u64 = (@as(u64, src) << 32) | @as(u64, dst);
+                    const shifted = wide >> count;
+                    const result: u32 = @truncate(shifted);
+                    writeOperand(cpu, insn, 0, result);
+                    cpu.flags.update(.shr, insn.op_size, result, dst, @as(u32, count));
+                }
             }
         },
 
@@ -1592,7 +1627,9 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         0x0FBA => {
             if (insn.has_modrm) {
                 const val = readOperand(cpu, insn, 0);
-                const bit: u5 = @truncate(insn.imm);
+                // The immediate index is masked to the operand size, so on a
+                // 16-bit operand bits 16 and up fold into bits 0 to 15.
+                const bit: u5 = if (insn.op_size == .word) @truncate(insn.imm & 15) else @truncate(insn.imm);
                 var ef = cpu.flags.toEflags();
                 if ((val >> bit) & 1 != 0) ef |= flags_mod.FLAG_CF else ef &= ~flags_mod.FLAG_CF;
                 cpu.flags.fromEflags(ef);
@@ -2048,7 +2085,14 @@ fn execGroup3(cpu: *Cpu, insn: *const Instruction) void {
                     return;
                 }
                 const v16: u16 = @truncate(val);
-                cpu.setReg8(0, @truncate(dividend / v16));
+                // A quotient wider than AL raises #DE, so compute wide enough
+                // to see it (AX/1) instead of truncating it to zero.
+                const quot: u32 = dividend / v16;
+                if (quot > std.math.maxInt(u8)) {
+                    cpu.halted = true;
+                    return;
+                }
+                cpu.setReg8(0, @truncate(quot));
                 cpu.setReg8(4, @truncate(dividend % v16));
             } else {
                 const dividend: u64 = (@as(u64, cpu.edx) << 32) | cpu.eax;
@@ -2056,7 +2100,12 @@ fn execGroup3(cpu: *Cpu, insn: *const Instruction) void {
                     cpu.halted = true;
                     return;
                 }
-                cpu.eax = @truncate(dividend / val);
+                const quot: u64 = dividend / val;
+                if (quot > std.math.maxInt(u32)) {
+                    cpu.halted = true;
+                    return;
+                }
+                cpu.eax = @truncate(quot);
                 cpu.edx = @truncate(dividend % val);
             }
         },
@@ -2251,53 +2300,16 @@ fn execRotate(cpu: *Cpu, insn: *const Instruction, sub_op: u3, val: u32, count: 
     if (of_final) cpu.flags.setFlag(flags_mod.FLAG_OF) else cpu.flags.clearFlag(flags_mod.FLAG_OF);
 }
 
-/// Executes the MOVSB string instruction (copy byte from ESI to EDI).
-fn execMovsb(cpu: *Cpu, insn: *const Instruction) void {
+/// Executes a MOVS variant: MOVSB, MOVSW, or MOVSD copies sz bytes
+/// from ESI to EDI.
+fn execMovs(cpu: *Cpu, insn: *const Instruction, sz: u32) void {
     const df = cpu.flags.getDF();
     if (insn.rep) {
-        // Bulk path: forward REP MOVSB is a byte copy; when the whole range
-        // is in-bounds and writable, one memcpy replaces ECX checked bytes.
-        // copyForwards preserves the forward-copy overlap semantics.
-        if (!df and cpu.memory.readRangeInBounds(cpu.esi, cpu.ecx) and
-            cpu.memory.writeRangeAllowed(cpu.edi, cpu.ecx))
-        {
-            const dst = cpu.memory.mutRange(cpu.edi, @intCast(cpu.ecx));
-            const src = cpu.memory.range(cpu.esi, @intCast(cpu.ecx));
-            std.mem.copyForwards(u8, dst, src);
-            cpu.esi +%= cpu.ecx;
-            cpu.edi +%= cpu.ecx;
-            cpu.ecx = 0;
-            return;
-        }
-        while (cpu.ecx > 0) : (cpu.ecx -= 1) {
-            cpu.memory.write8(cpu.edi, cpu.memory.read8(cpu.esi));
-            if (df) {
-                cpu.esi -%= 1;
-                cpu.edi -%= 1;
-            } else {
-                cpu.esi +%= 1;
-                cpu.edi +%= 1;
-            }
-        }
-    } else {
-        cpu.memory.write8(cpu.edi, cpu.memory.read8(cpu.esi));
-        if (df) {
-            cpu.esi -%= 1;
-            cpu.edi -%= 1;
-        } else {
-            cpu.esi +%= 1;
-            cpu.edi +%= 1;
-        }
-    }
-}
-
-/// Executes the MOVSD string instruction (copy dword from ESI to EDI).
-fn execMovsd(cpu: *Cpu, insn: *const Instruction) void {
-    const df = cpu.flags.getDF();
-    if (insn.rep) {
-        // Bulk path for the common forward case (see execMovsb).
+        // Bulk path for the common forward case: one copy replaces ECX
+        // checked elements. copyForwards preserves the forward-overlap
+        // semantics REP MOVS has.
         if (!df) {
-            const total: u64 = @as(u64, cpu.ecx) * 4;
+            const total: u64 = @as(u64, cpu.ecx) * sz;
             if (cpu.memory.readRangeInBounds(cpu.esi, total) and
                 cpu.memory.writeRangeAllowed(cpu.edi, total))
             {
@@ -2311,25 +2323,69 @@ fn execMovsd(cpu: *Cpu, insn: *const Instruction) void {
             }
         }
         while (cpu.ecx > 0) : (cpu.ecx -= 1) {
-            cpu.memory.write32(cpu.edi, cpu.memory.read32(cpu.esi));
+            execMovsElement(cpu, cpu.edi, cpu.esi, sz);
             if (df) {
-                cpu.esi -%= 4;
-                cpu.edi -%= 4;
+                cpu.esi -%= sz;
+                cpu.edi -%= sz;
             } else {
-                cpu.esi +%= 4;
-                cpu.edi +%= 4;
+                cpu.esi +%= sz;
+                cpu.edi +%= sz;
             }
         }
     } else {
-        cpu.memory.write32(cpu.edi, cpu.memory.read32(cpu.esi));
+        execMovsElement(cpu, cpu.edi, cpu.esi, sz);
         if (df) {
-            cpu.esi -%= 4;
-            cpu.edi -%= 4;
+            cpu.esi -%= sz;
+            cpu.edi -%= sz;
         } else {
-            cpu.esi +%= 4;
-            cpu.edi +%= 4;
+            cpu.esi +%= sz;
+            cpu.edi +%= sz;
         }
     }
+}
+
+/// Moves one element of a MOVS variant, at the operand size the 0x66
+/// prefix selected (2 for MOVSW, 4 for MOVSD).
+fn execMovsElement(cpu: *Cpu, dst: u32, src: u32, sz: u32) void {
+    switch (sz) {
+        1 => cpu.memory.write8(dst, cpu.memory.read8(src)),
+        2 => cpu.memory.write16(dst, cpu.memory.read16(src)),
+        else => cpu.memory.write32(dst, cpu.memory.read32(src)),
+    }
+}
+
+/// Element size of a string instruction: 2 for the W forms under a 0x66
+/// prefix, 4 for the D forms.
+fn stringElemSize(insn: *const Instruction) u32 {
+    return if (insn.op_size == .word) 2 else 4;
+}
+
+/// Reads one element of a string instruction at the given width.
+fn readStringElem(cpu: *Cpu, addr: u32, sz: u32) u32 {
+    return switch (sz) {
+        1 => @as(u32, cpu.memory.read8(addr)),
+        2 => @as(u32, cpu.memory.read16(addr)),
+        else => cpu.memory.read32(addr),
+    };
+}
+
+/// Reads the accumulator a SCAS variant compares against: AL at 1 byte,
+/// AX at 2, EAX at 4.
+fn readAccumulator(cpu: *Cpu, sz: u32) u32 {
+    return switch (sz) {
+        1 => @as(u32, cpu.getReg8(0)),
+        2 => @as(u32, cpu.getReg16(0)),
+        else => cpu.eax,
+    };
+}
+
+/// Flag-mask width matching an element size, for the flag helpers.
+fn stringOpSize(sz: u32) OpSize {
+    return switch (sz) {
+        1 => .byte,
+        2 => .word,
+        else => .dword,
+    };
 }
 
 /// Executes the STOSB string instruction (store AL at EDI).
@@ -2354,18 +2410,20 @@ fn execStosb(cpu: *Cpu, insn: *const Instruction) void {
     }
 }
 
-/// Executes the STOSD string instruction (store EAX at EDI).
+/// Executes a STOS variant: STOSW or STOSD stores sz bytes from the
+/// accumulator at EDI.
 fn execStosd(cpu: *Cpu, insn: *const Instruction) void {
+    const sz = stringElemSize(insn);
     const df = cpu.flags.getDF();
     if (insn.rep) {
-        // Bulk path: forward REP STOSD fills with the repeated EAX pattern.
+        // Bulk path: forward REP STOS fills with the repeated accumulator.
         if (!df) {
-            const total: u64 = @as(u64, cpu.ecx) * 4;
+            const total: u64 = @as(u64, cpu.ecx) * sz;
             if (total > 0 and cpu.memory.writeRangeAllowed(cpu.edi, total)) {
                 const buf = cpu.memory.mutRange(cpu.edi, @intCast(total));
                 std.mem.writeInt(u32, buf[0..4], cpu.eax, .little);
-                var off: usize = 4;
                 // Double the known prefix; copy it forward for the remainder.
+                var off: usize = 4;
                 while (off < buf.len) {
                     const chunk = @min(off, buf.len - off);
                     @memcpy(buf[off..][0..chunk], buf[0..chunk]);
@@ -2377,12 +2435,21 @@ fn execStosd(cpu: *Cpu, insn: *const Instruction) void {
             }
         }
         while (cpu.ecx > 0) : (cpu.ecx -= 1) {
-            cpu.memory.write32(cpu.edi, cpu.eax);
-            if (df) cpu.edi -%= 4 else cpu.edi +%= 4;
+            execStosElement(cpu, sz);
+            if (df) cpu.edi -%= sz else cpu.edi +%= sz;
         }
     } else {
-        cpu.memory.write32(cpu.edi, cpu.eax);
-        if (df) cpu.edi -%= 4 else cpu.edi +%= 4;
+        execStosElement(cpu, sz);
+        if (df) cpu.edi -%= sz else cpu.edi +%= sz;
+    }
+}
+
+/// Stores one element of a STOS variant, at the width the 0x66 prefix
+/// selected (AX at 2 bytes, EAX at 4).
+fn execStosElement(cpu: *Cpu, sz: u32) void {
+    switch (sz) {
+        2 => cpu.memory.write16(cpu.edi, cpu.getReg16(0)),
+        else => cpu.memory.write32(cpu.edi, cpu.eax),
     }
 }
 
@@ -2721,4 +2788,82 @@ test "execute: LEA" {
 
     // Expected: 0x100 + 0x08*4 + 0x10 = 0x100 + 0x20 + 0x10 = 0x130
     try testing.expectEqual(@as(u32, 0x130), cpu.eax);
+}
+
+test "execute: DIV stops on a quotient wider than the destination" {
+    // F6 F1 = DIV CL. AX / CL with CL = 1 and AX = 0xFFFF has a quotient of
+    // 0xFFFF, which does not fit in AL, so hardware raises #DE.
+    var mem: [256]u8 = .{0} ** 256;
+    @memcpy(mem[0..8], &[_]u8{ 0xB9, 0x01, 0x00, 0x00, 0x00, 0xF6, 0xF1, 0xF4 });
+    var cpu = makeCpu(&mem);
+    cpu.eax = 0xFFFF;
+    run(&cpu);
+    try testing.expect(cpu.halted);
+    // Stopped on the DIV itself, not on the HLT that follows it at 7.
+    try testing.expectEqual(@as(u32, 7), cpu.eip);
+    try testing.expectEqual(@as(u32, 0xFFFF), cpu.eax & 0xFFFF);
+
+    // The in-range case still divides: AX = 0x0100, CL = 2 gives AL = 0x80.
+    var mem2: [256]u8 = .{0} ** 256;
+    @memcpy(mem2[0..8], &[_]u8{ 0xB9, 0x02, 0x00, 0x00, 0x00, 0xF6, 0xF1, 0xF4 });
+    var cpu2 = makeCpu(&mem2);
+    cpu2.eax = 0x0100;
+    run(&cpu2);
+    try testing.expectEqual(@as(u32, 0x80), cpu2.eax & 0xFF);
+    try testing.expectEqual(@as(u32, 0x00), (cpu2.eax >> 8) & 0xFF);
+}
+
+test "execute: CWD writes only DX" {
+    // 66 99 = CWD, which sign-extends AX into DX and leaves the upper half
+    // of EDX alone.
+    var mem: [256]u8 = .{0} ** 256;
+    @memcpy(mem[0..3], &[_]u8{ 0x66, 0x99, 0xF4 });
+    var cpu = makeCpu(&mem);
+    cpu.eax = 0x00008000;
+    cpu.edx = 0xDEADBEEF;
+    run(&cpu);
+    try testing.expectEqual(@as(u32, 0xDEADFFFF), cpu.edx);
+}
+
+test "execute: BT r/m16, imm8 masks the bit index to 16" {
+    // 66 0F BA F0 11 = BTR AX, 17, which addresses bit 1 of a 16-bit operand.
+    var mem: [256]u8 = .{0} ** 256;
+    @memcpy(mem[0..6], &[_]u8{ 0x66, 0x0F, 0xBA, 0xF0, 0x11, 0xF4 });
+    var cpu = makeCpu(&mem);
+    cpu.eax = 0x0000FFFF;
+    run(&cpu);
+    try testing.expectEqual(@as(u32, 0x0000FFFD), cpu.eax);
+}
+
+test "execute: SHLD word form counts in 0 to 15" {
+    // 66 0F A4 C8 14 = SHLD AX, CX, 20. A 16-bit form masks the count to 4.
+    var mem: [256]u8 = .{0} ** 256;
+    @memcpy(mem[0..6], &[_]u8{ 0x66, 0x0F, 0xA4, 0xC8, 0x14, 0xF4 });
+    var cpu = makeCpu(&mem);
+    cpu.eax = 0x00001234;
+    cpu.ecx = 0x000000FF;
+    run(&cpu);
+    // (AX << 4) | (CX >> 12) = 0x2340.
+    try testing.expectEqual(@as(u32, 0x00002340), cpu.eax);
+}
+
+test "execute: MOVSW moves a word, not a dword" {
+    // 66 A5 = MOVSW. The 0x66 prefix halves the element size.
+    var mem: [256]u8 = .{0} ** 256;
+    @memcpy(mem[0..3], &[_]u8{ 0x66, 0xA5, 0xF4 });
+    mem[0x10] = 0xBB;
+    mem[0x11] = 0xAA;
+    var cpu = makeCpu(&mem);
+    cpu.esi = 0x10;
+    cpu.edi = 0x20;
+    cpu.ecx = 1;
+    run(&cpu);
+    try testing.expectEqual(@as(u8, 0xBB), mem[0x20]);
+    try testing.expectEqual(@as(u8, 0xAA), mem[0x21]);
+    // The third and fourth source bytes must not be copied.
+    try testing.expectEqual(@as(u8, 0x00), mem[0x22]);
+    try testing.expectEqual(@as(u32, 0x12), cpu.esi);
+    try testing.expectEqual(@as(u32, 0x22), cpu.edi);
+    // Without a REP prefix MOVSW does not touch ECX.
+    try testing.expectEqual(@as(u32, 1), cpu.ecx);
 }
