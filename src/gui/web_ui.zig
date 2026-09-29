@@ -7,6 +7,7 @@ const platform = @import("../platform.zig");
 const path_utils = @import("../path_utils.zig");
 const renderer = @import("renderer.zig");
 const log = @import("../log.zig");
+const builtin = @import("builtin");
 
 var clients: if (platform.is_native) std.ArrayListUnmanaged(std.Io.net.Stream) else struct {} = if (platform.is_native) .empty else .{};
 var clients_mutex: if (platform.is_native) runtime.Mutex else struct {
@@ -696,50 +697,74 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                 return stream.close(runtime.io());
             };
 
-            var file = std.Io.Dir.cwd().openFile(runtime.io(), full_path, .{}) catch |err| {
-                if (err == error.FileNotFound) {
-                    try respondStatus(&req, .not_found, "Not found", null);
-                } else {
-                    try respondStatus(&req, .internal_server_error, "Internal server error", null);
-                }
-                std.debug.print("Closing FD {} (File error: {s})\n", .{ stream.socket.handle, full_path });
-                return stream.close(runtime.io());
-            };
-            defer file.close(runtime.io());
-
-            // Opening a directory succeeds on Linux, and reading it fails with
-            // IsDir, so the request would end in a dropped connection instead of
-            // a status the client can act on. A directory is not an asset.
-            const stat = file.stat(runtime.io()) catch |err| {
-                try respondStatus(&req, .internal_server_error, "Internal server error", null);
-                std.debug.print("Closing FD {} (stat error: {s})\n", .{ stream.socket.handle, @errorName(err) });
-                return stream.close(runtime.io());
-            };
-            if (stat.kind != .file) {
-                try respondStatus(&req, .not_found, "Not found", null);
+            if (try respondAssetFromDisk(&req, asset_path, full_path, allocator) == .close_connection) {
                 return stream.close(runtime.io());
             }
-
-            const content_type = contentTypeForPath(asset_path) orelse "application/octet-stream";
-
-            const file_size = stat.size;
-            if (file_size > max_static_file_size) {
-                try respondStatus(&req, .payload_too_large, "File too large", null);
-                return stream.close(runtime.io());
-            }
-            const content = allocator.alloc(u8, @intCast(file_size)) catch {
-                try respondStatus(&req, .internal_server_error, "Out of memory", null);
-                return stream.close(runtime.io());
-            };
-            const bytes_read = file.readPositionalAll(runtime.io(), content, 0) catch |err| {
-                try respondStatus(&req, .internal_server_error, "Internal server error", null);
-                std.debug.print("Closing FD {} (read error: {s})\n", .{ stream.socket.handle, @errorName(err) });
-                return stream.close(runtime.io());
-            };
-            try respondStaticContent(&req, content[0..bytes_read], content_type);
         }
     }
     stream.close(runtime.io());
+}
+
+/// What serving one request leaves for the connection.
+const ConnectionOutcome = enum {
+    /// The reply is complete and the connection can take the next request.
+    keep_serving,
+    /// The reply was the last one on this connection.
+    close_connection,
+};
+
+/// Serves one asset read from `src/gui/` on disk. The descriptor is opened
+/// here and closed before returning on every path: the caller's connection loop
+/// serves request after request, and a `defer` in that loop body would hold one
+/// descriptor per request until the client happened to disconnect.
+fn respondAssetFromDisk(
+    req: *std.http.Server.Request,
+    asset_path: []const u8,
+    full_path: []const u8,
+    allocator: std.mem.Allocator,
+) !ConnectionOutcome {
+    var file = std.Io.Dir.cwd().openFile(runtime.io(), full_path, .{}) catch |err| {
+        if (err == error.FileNotFound) {
+            try respondStatus(req, .not_found, "Not found", null);
+        } else {
+            try respondStatus(req, .internal_server_error, "Internal server error", null);
+        }
+        std.debug.print("WebUI: cannot open {s}: {s}, ending the connection\n", .{ full_path, @errorName(err) });
+        return .close_connection;
+    };
+    defer file.close(runtime.io());
+
+    // Opening a directory succeeds on Linux, and reading it fails with
+    // IsDir, so the request would end in a dropped connection instead of
+    // a status the client can act on. A directory is not an asset.
+    const stat = file.stat(runtime.io()) catch |err| {
+        try respondStatus(req, .internal_server_error, "Internal server error", null);
+        std.debug.print("WebUI: cannot stat {s}: {s}, ending the connection\n", .{ full_path, @errorName(err) });
+        return .close_connection;
+    };
+    if (stat.kind != .file) {
+        try respondStatus(req, .not_found, "Not found", null);
+        return .close_connection;
+    }
+
+    const content_type = contentTypeForPath(asset_path) orelse "application/octet-stream";
+
+    const file_size = stat.size;
+    if (file_size > max_static_file_size) {
+        try respondStatus(req, .payload_too_large, "File too large", null);
+        return .close_connection;
+    }
+    const content = allocator.alloc(u8, @intCast(file_size)) catch {
+        try respondStatus(req, .internal_server_error, "Out of memory", null);
+        return .close_connection;
+    };
+    const bytes_read = file.readPositionalAll(runtime.io(), content, 0) catch |err| {
+        try respondStatus(req, .internal_server_error, "Internal server error", null);
+        std.debug.print("WebUI: cannot read {s}: {s}, ending the connection\n", .{ full_path, @errorName(err) });
+        return .close_connection;
+    };
+    try respondStaticContent(req, content[0..bytes_read], content_type);
+    return .keep_serving;
 }
 
 /// Dispatches one text frame to the renderer callbacks. A message the server
@@ -1485,6 +1510,51 @@ test "static assets map their extension to a content type" {
     try std.testing.expectEqualStrings("image/png", contentTypeForPath("/assets/wall.png").?);
     try std.testing.expectEqualStrings("image/vnd.microsoft.icon", contentTypeForPath("/favicon.ico").?);
     try std.testing.expect(contentTypeForPath("/drive_c/game.exe") == null);
+}
+
+/// Descriptors this process holds open, counted through `/proc/self/fd`. The
+/// directory handle used to count them is open in both readings, so the two
+/// counts are comparable.
+fn openFdCount() ?usize {
+    var dir = std.Io.Dir.openDirAbsolute(runtime.io(), "/proc/self/fd", .{ .iterate = true }) catch return null;
+    defer dir.close(runtime.io());
+    var count: usize = 0;
+    var it = dir.iterate();
+    while (it.next(runtime.io()) catch null) |_| count += 1;
+    return count;
+}
+
+test "serving an asset from disk releases its descriptor" {
+    if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    // The test runs from the repository root, where the static branch reads
+    // its assets; a run from anywhere else has nothing to serve.
+    if (std.Io.Dir.cwd().openFile(runtime.io(), "src/gui/menu.json", .{})) |probe| {
+        probe.close(runtime.io());
+    } else |_| return error.SkipZigTest;
+
+    // The connection loop serves request after request on one socket, so a
+    // descriptor that outlives a request is one per request the client makes.
+    const before = openFdCount() orelse return error.SkipZigTest;
+    // The response body comes from the connection's arena in the server, so
+    // the test does the same and frees it once the loop is done.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for (0..8) |_| {
+        var input = std.Io.Reader.fixed("GET /menu.json HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        // Scoped so the buffer is released per request rather than at the end
+        // of the test, which would hide the descriptor count it takes.
+        {
+            defer output.deinit();
+            var server = std.http.Server.init(&input, &output.writer);
+            var req = try server.receiveHead();
+            const outcome = try respondAssetFromDisk(&req, "/menu.json", "src/gui/menu.json", arena.allocator());
+            try std.testing.expectEqual(ConnectionOutcome.keep_serving, outcome);
+            try std.testing.expect(std.mem.startsWith(u8, output.written(), "HTTP/1.1 200 OK\r\n"));
+        }
+    }
+    const after = openFdCount() orelse return error.SkipZigTest;
+    try std.testing.expectEqual(before, after);
 }
 
 /// The script the build serves, which is the source with every digested asset
