@@ -104,8 +104,9 @@ pub fn stub_AppendMenuA(hMenu: usize, uFlags: u32, uIDNewItem: usize, lpNewItem:
         // Mirror CHECKED/GRAYED/DISABLED into the item-state table so
         // GetMenuState reports them (like real Win32 menu construction).
         const key = menuItemKey(hMenu, @as(u32, @intCast(uIDNewItem & 0xFFFF)));
-        const slot = findOrAllocMenuSlot(key);
-        slot.flags = (slot.flags & ~(MF_CHECKED | MF_GRAYED | MF_DISABLED)) | (uFlags & (MF_CHECKED | MF_GRAYED | MF_DISABLED));
+        if (findOrAllocMenuSlot(key)) |slot| {
+            slot.flags = (slot.flags & ~(MF_CHECKED | MF_GRAYED | MF_DISABLED)) | (uFlags & (MF_CHECKED | MF_GRAYED | MF_DISABLED));
+        }
     }
     return 1;
 }
@@ -123,8 +124,9 @@ pub fn AppendMenuW(hMenu: usize, uFlags: u32, uIDNewItem: usize, lpNewItem: usiz
         const name = text_utils.wideToUtf8(w, &buf);
         if (!addPopupItem(hMenu, @intCast(uIDNewItem & 0xFFFF), name, uFlags)) return 0;
         const key = menuItemKey(hMenu, @as(u32, @intCast(uIDNewItem & 0xFFFF)));
-        const slot = findOrAllocMenuSlot(key);
-        slot.flags = (slot.flags & ~(MF_CHECKED | MF_GRAYED | MF_DISABLED)) | (uFlags & (MF_CHECKED | MF_GRAYED | MF_DISABLED));
+        if (findOrAllocMenuSlot(key)) |slot| {
+            slot.flags = (slot.flags & ~(MF_CHECKED | MF_GRAYED | MF_DISABLED)) | (uFlags & (MF_CHECKED | MF_GRAYED | MF_DISABLED));
+        }
     }
     return 1;
 }
@@ -277,22 +279,26 @@ pub fn TrackPopupMenu(hMenu: usize, uFlags: u32, x: i32, y: i32, nReserved: i32,
     return @intCast(chosen);
 }
 
-// Menu item state tracking: key = (hMenu << 16) | uId, value = MF_* flags
+// Menu item state tracking: key = (hMenu, uId), value = MF_* flags
+const MenuItemKey = struct { hMenu: usize, uId: u32 };
 const MenuItemState = struct {
-    key: u64 = 0,
+    key: MenuItemKey = .{ .hMenu = 0, .uId = 0 },
     flags: u32 = 0,
     used: bool = false,
 };
 var menu_item_states: [64]MenuItemState = .{MenuItemState{}} ** 64;
 
-fn menuItemKey(hMenu: usize, uId: u32) u64 {
-    return (@as(u64, hMenu) << 16) | @as(u64, uId);
+fn menuItemKey(hMenu: usize, uId: u32) MenuItemKey {
+    return .{ .hMenu = hMenu, .uId = uId };
 }
 
-fn findOrAllocMenuSlot(key: u64) *MenuItemState {
+/// Null when the table is full: the item then has no recorded state, which
+/// reads back as no flags set. Reusing a live slot instead would report one
+/// item's flags as another's.
+fn findOrAllocMenuSlot(key: MenuItemKey) ?*MenuItemState {
     // Find existing
     for (&menu_item_states) |*s| {
-        if (s.used and s.key == key) return s;
+        if (s.used and s.key.hMenu == key.hMenu and s.key.uId == key.uId) return s;
     }
     // Allocate new
     for (&menu_item_states) |*s| {
@@ -303,15 +309,14 @@ fn findOrAllocMenuSlot(key: u64) *MenuItemState {
             return s;
         }
     }
-    // Full — reuse last slot
-    return &menu_item_states[63];
+    return null;
 }
 
 pub fn CheckMenuItem(hMenu: usize, uIDCheckItem: u32, uCheck: u32) callconv(w32cc.WINAPI) u32 {
     if (trace.enable_tracing) trace.print("USER32: CheckMenuItem(menu={X}, item={d}, check={x})\n", .{ hMenu, uIDCheckItem, uCheck });
     const MF_CHECKED: u32 = 0x0008;
     const key = menuItemKey(hMenu, uIDCheckItem);
-    const slot = findOrAllocMenuSlot(key);
+    const slot = findOrAllocMenuSlot(key) orelse return 0;
     const prev = slot.flags & MF_CHECKED;
     if ((uCheck & MF_CHECKED) != 0) {
         slot.flags |= MF_CHECKED;
@@ -341,7 +346,7 @@ pub fn EnableMenuItem(hMenu: usize, uIDEnableItem: u32, uEnable: u32) callconv(w
     const MF_GRAYED: u32 = 0x0001;
     const MF_DISABLED: u32 = 0x0002;
     const key = menuItemKey(hMenu, uIDEnableItem);
-    const slot = findOrAllocMenuSlot(key);
+    const slot = findOrAllocMenuSlot(key) orelse return 0;
     const prev: i32 = @bitCast(slot.flags & (MF_GRAYED | MF_DISABLED));
     // Clear old enable state, set new
     slot.flags &= ~(MF_GRAYED | MF_DISABLED);
@@ -383,7 +388,7 @@ pub fn GetMenuState(hMenu: usize, uId: u32, uFlags: u32) callconv(w32cc.WINAPI) 
     const key = menuItemKey(hMenu, uId);
     if (trace.enable_tracing) trace.print("USER32: GetMenuState(menu={X}, id={d})\n", .{ hMenu, uId });
     for (&menu_item_states) |*s| {
-        if (s.used and s.key == key) return s.flags;
+        if (s.used and s.key.hMenu == key.hMenu and s.key.uId == key.uId) return s.flags;
     }
     return 0;
 }

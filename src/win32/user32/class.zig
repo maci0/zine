@@ -43,33 +43,42 @@ pub fn RegisterClassExW(lpwcx: usize) callconv(w32cc.WINAPI) u16 {
 
 var next_registered_msg: u32 = 0xC000;
 
-/// Registered window message names → ids. Win32 guarantees identical strings
-/// map to a single id within a session (e.g. FINDMSGSTRING registered by both
-/// the app and the comdlg stub must match), so dedup by name.
+/// Registered message and clipboard format names → ids. Win32 guarantees an
+/// identical string maps to a single id for the life of the process, and both
+/// kinds share one id space, so a guest comparing two results of
+/// `RegisterWindowMessage` (or one result against a clipboard format) gets the
+/// same answer every time. The name is compared at full length: a name too long
+/// for the entry keeps its id only for the call that made it, rather than
+/// aliasing every other name with the same prefix onto one id.
 const RegMsg = struct { name: [64]u8, len: u8, id: u32 };
 var reg_msgs: [64]RegMsg = undefined;
 var reg_msg_count: usize = 0;
 
-pub fn RegisterWindowMessageA(lpString: usize) callconv(w32cc.WINAPI) u32 {
-    if (lpString != 0 and lpString > 0xFFFF) {
-        const name = trace.c_span(lpString);
-        for (reg_msgs[0..reg_msg_count]) |*e| {
-            if (e.len == name.len and std.mem.eql(u8, e.name[0..e.len], name)) {
-                if (trace.enable_tracing) trace.print("USER32: RegisterWindowMessageA('{s}') -> 0x{X} (cached)\n", .{ name, e.id });
-                return e.id;
-            }
-        }
-        if (reg_msg_count < reg_msgs.len) {
-            const e = &reg_msgs[reg_msg_count];
-            reg_msg_count += 1;
-            const n = @min(name.len, e.name.len);
-            @memcpy(e.name[0..n], name[0..n]);
-            e.len = @intCast(n);
-            e.id = next_registered_msg;
-            next_registered_msg += 1;
-            if (trace.enable_tracing) trace.print("USER32: RegisterWindowMessageA('{s}') -> 0x{X}\n", .{ name, e.id });
+/// Return the id for `name`, minting one on first use. `label` names the calling
+/// API for the trace record.
+fn registerMessageName(label: []const u8, name: []const u8) u32 {
+    for (reg_msgs[0..reg_msg_count]) |*e| {
+        if (e.len == name.len and std.mem.eql(u8, e.name[0..e.len], name)) {
+            if (trace.enable_tracing) trace.print("USER32: {s}('{s}') -> 0x{X} (cached)\n", .{ label, name, e.id });
             return e.id;
         }
+    }
+    const id = next_registered_msg;
+    next_registered_msg += 1;
+    if (name.len <= reg_msgs[0].name.len and reg_msg_count < reg_msgs.len) {
+        const e = &reg_msgs[reg_msg_count];
+        reg_msg_count += 1;
+        @memcpy(e.name[0..name.len], name);
+        e.len = @intCast(name.len);
+        e.id = id;
+    }
+    if (trace.enable_tracing) trace.print("USER32: {s}('{s}') -> 0x{X}\n", .{ label, name, id });
+    return id;
+}
+
+pub fn RegisterWindowMessageA(lpString: usize) callconv(w32cc.WINAPI) u32 {
+    if (lpString != 0 and lpString > 0xFFFF) {
+        return registerMessageName("RegisterWindowMessageA", trace.c_span(lpString));
     }
     const id = next_registered_msg;
     next_registered_msg += 1;
@@ -77,26 +86,32 @@ pub fn RegisterWindowMessageA(lpString: usize) callconv(w32cc.WINAPI) u32 {
 }
 
 pub fn RegisterWindowMessageW(lpString: usize) callconv(w32cc.WINAPI) u32 {
-    if (trace.enable_tracing) {
-        const window = @import("window.zig");
-        const name = if (lpString != 0) window.wideToUtf8(lpString) else "(null)";
-        trace.print("USER32: RegisterWindowMessageW('{s}') -> 0x{X}\n", .{ name, next_registered_msg });
+    if (lpString == 0) {
+        const id = next_registered_msg;
+        next_registered_msg += 1;
+        return id;
+    }
+    const window = @import("window.zig");
+    return registerMessageName("RegisterWindowMessageW", window.wideToUtf8(lpString));
+}
+
+pub fn RegisterClipboardFormatA(lpszFormat: usize) callconv(w32cc.WINAPI) u32 {
+    if (lpszFormat != 0 and lpszFormat > 0xFFFF) {
+        return registerMessageName("RegisterClipboardFormatA", trace.c_span(lpszFormat));
     }
     const id = next_registered_msg;
     next_registered_msg += 1;
     return id;
 }
 
-var next_clipboard_format: u32 = 0xC100;
-
-pub fn RegisterClipboardFormatA(lpszFormat: usize) callconv(w32cc.WINAPI) u32 {
-    if (trace.enable_tracing) {
-        const name = if (lpszFormat != 0) trace.c_span(lpszFormat) else "(null)";
-        trace.print("USER32: RegisterClipboardFormatA('{s}') -> 0x{X}\n", .{ name, next_clipboard_format });
+pub fn RegisterClipboardFormatW(lpszFormat: usize) callconv(w32cc.WINAPI) u32 {
+    if (lpszFormat == 0) {
+        const id = next_registered_msg;
+        next_registered_msg += 1;
+        return id;
     }
-    const id = next_clipboard_format;
-    next_clipboard_format += 1;
-    return id;
+    const window = @import("window.zig");
+    return registerMessageName("RegisterClipboardFormatW", window.wideToUtf8(lpszFormat));
 }
 
 pub fn stub_UnregisterClassA(lpClassName: usize, hInstance: usize) callconv(w32cc.WINAPI) i32 {
@@ -164,4 +179,25 @@ pub fn GetClassInfoA(hInstance: usize, lpClassName: usize, lpWndClass: usize) ca
     }
 
     return if (is_string) 1 else 0;
+}
+
+test "a registered message name keeps one id across calls" {
+    const first = RegisterWindowMessageA(@intFromPtr("ZINE_REG_MSG_TEST"));
+    const again = RegisterWindowMessageA(@intFromPtr("ZINE_REG_MSG_TEST"));
+    try std.testing.expectEqual(first, again);
+
+    const other = RegisterClipboardFormatA(@intFromPtr("ZINE_REG_MSG_TEST"));
+    try std.testing.expectEqual(first, other);
+    try std.testing.expect(RegisterWindowMessageA(@intFromPtr("ZINE_REG_MSG_OTHER")) != first);
+}
+
+test "menu item state is keyed by menu and id together" {
+    const menu = @import("menu.zig");
+    const first = menu.CreateMenu();
+    const second = menu.CreateMenu();
+    _ = menu.CheckMenuItem(first, 7, 0x0008);
+    _ = menu.CheckMenuItem(second, 8, 0x0008);
+    try std.testing.expectEqual(@as(u32, 0x0008), menu.GetMenuState(first, 7, 0));
+    try std.testing.expectEqual(@as(u32, 0), menu.GetMenuState(first, 8, 0));
+    try std.testing.expectEqual(@as(u32, 0x0008), menu.GetMenuState(second, 8, 0));
 }

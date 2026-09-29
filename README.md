@@ -50,7 +50,20 @@ promise between versions, so a breaking change takes the next minor.
   `--help` said so, and only for `--jit-max-eip`.
 
 #### Fixed
-
+- `RegisterWindowMessageW`, `RegisterClipboardFormatA` and
+  `RegisterClipboardFormatW` minted a fresh id on every call and kept no name,
+  so a guest that registers the same string twice never got the same id back
+  and every `==` on the result failed. All four entry points now share one name
+  table and one id space, as Win32 specifies, and `RegisterClipboardFormatW`
+  decodes its UTF-16 name instead of reading it as ANSI. A name longer than the
+  table entry keeps its id for that call rather than aliasing every other name
+  sharing the prefix.
+- Menu item state was keyed by the packed value `(hMenu << 16) | uId`, so a
+  menu handle above `0xFFFF` collided with a lower handle's ids. The key is now
+  the pair. A full table also rewrote the last live entry, reporting one item's
+  flags as another's; the state is now simply absent, which reads back as no
+  flags set. The same overflow aliasing is gone from listbox state, where the
+  17th listbox was handed the first one's items and cursor.
 - `FindFirstFileW` and `FindNextFileW` reported `cFileName` one UTF-16 unit per
   byte, so enumerating a directory holding `café.txt` handed the guest `cafÃ©`
   and a name it could not reopen. Both now widen the host name from UTF-8.

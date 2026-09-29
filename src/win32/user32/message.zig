@@ -710,7 +710,7 @@ fn editSetSel(start: i32, end: i32) void {
 // time by CreateWindowExA / CreateStatusWindowA.
 const ControlClass = struct { hwnd: usize, class: [32]u8, len: u8 };
 /// Width of a recorded class name, terminator included.
-const max_control_class_len = @sizeOf(@TypeOf(ControlClass.class));
+const max_control_class_len = @sizeOf(@FieldType(ControlClass, "class"));
 var control_classes: [64]ControlClass = undefined;
 var control_class_count: usize = 0;
 
@@ -895,11 +895,14 @@ var listbox_state_count: usize = 0;
 /// ListView column counter (shared, per-process).
 var col_count: u32 = 0;
 
-fn listBoxStateOf(hwnd: usize) *ListBoxState {
+/// Null when the table is full: a listbox with no entry has no items and no
+/// cursor. Handing back another listbox's entry would report its items as this
+/// one's.
+fn listBoxStateOf(hwnd: usize) ?*ListBoxState {
     for (listbox_states[0..listbox_state_count]) |*st| {
         if (st.hwnd == hwnd) return st;
     }
-    if (listbox_state_count >= listbox_states.len) return &listbox_states[0];
+    if (listbox_state_count >= listbox_states.len) return null;
     const st = &listbox_states[listbox_state_count];
     listbox_state_count += 1;
     st.* = .{ .hwnd = hwnd, .used = true };
@@ -986,7 +989,7 @@ fn handleListBoxMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isize) ?isize 
     const is_tv = std.ascii.eqlIgnoreCase(class, "SysTreeView32");
     const is_hdr = std.ascii.eqlIgnoreCase(class, "SysHeader32");
     if (!is_lb and !is_cb and !is_tab and !is_lv and !is_tv and !is_hdr) return null;
-    const st = listBoxStateOf(hWnd);
+    const st = listBoxStateOf(hWnd) orelse return null;
 
     // Normalize ComboBox (CB_*) / TabControl (TCM_*) / ListView (LVM_*) /
     // TreeView (TVM_*) / Header (HDM_*) message numbers onto the shared
@@ -1285,7 +1288,7 @@ pub fn setListboxCursor(ctrl_id: u32, index: i32) void {
         if (entry.id != @as(i32, @intCast(ctrl_id))) continue;
         const class = controlClassOf(entry.hwnd) orelse continue;
         if (!std.ascii.eqlIgnoreCase(class, "ListBox")) continue;
-        const st = listBoxStateOf(entry.hwnd);
+        const st = listBoxStateOf(entry.hwnd) orelse return;
         if (index >= 0 and @as(usize, @intCast(index)) < st.count) {
             st.cursor = index;
         }

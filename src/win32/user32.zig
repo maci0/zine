@@ -299,7 +299,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "LoadMenuW", resource.stub_LoadMenuA);
     try environment.addBuiltinExportComptime(m, "RegisterClassW", window.RegisterClassA);
     try environment.addBuiltinExportComptime(m, "LoadBitmapW", resource.LoadBitmapW);
-    try environment.addBuiltinExportComptime(m, "RegisterClipboardFormatW", class.RegisterClipboardFormatA);
+    try environment.addBuiltinExportComptime(m, "RegisterClipboardFormatW", class.RegisterClipboardFormatW);
     try environment.addBuiltinExportComptime(m, "RemoveMenu", menu.stub_DeleteMenu);
     try environment.addBuiltinExportComptime(m, "AppendMenuW", menu.AppendMenuW);
     try environment.addBuiltinExportComptime(m, "TrackPopupMenuEx", stub_ret0_6);
