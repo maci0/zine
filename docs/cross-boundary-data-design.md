@@ -741,7 +741,7 @@ baseline.
 | `kernel32/process.zig:1038` | `GetCommandLineW()` | `cmdline_w_buf` | 4096 bytes |
 | `ws2_32/winsock.zig:628` | `inet_ntoa()` | `inet_ntoa_buf` | 16 bytes |
 | `ws2_32/winsock.zig:668` | `gethostbyname()` | `hostent_buf` | 256 bytes |
-| `d3d8/d3d8.zig:1006` | `Direct3DCreate8()` | `global_d3d8` | vtable struct |
+| `d3d8.zig:1006` | `Direct3DCreate8()` | `global_d3d8` | vtable struct |
 | `mss32/miles.zig:14` | `AIL_last_error()` | `no_error_str` | 16 bytes |
 
 ### D. Files reaching for guest memory (9 sites)

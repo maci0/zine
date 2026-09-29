@@ -4,7 +4,7 @@ const trace = @import("../../trace.zig");
 const renderer = if (@import("builtin").os.tag != .windows) @import("../../gui/renderer.zig") else struct {
     pub fn setVolume(_: anytype) void {}
 };
-const dsound_stubs = @import("../dsound/dsound.zig");
+const dsound_stubs = @import("../dsound.zig");
 const platform = @import("../../platform.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");

@@ -283,7 +283,7 @@ Functions that return `@intFromPtr(&host_static)` or write host addresses to gue
 | `ws2_32/winsock.zig:628` | `inet_ntoa()` | `&inet_ntoa_buf` | 16 bytes |
 | `ws2_32/winsock.zig:668` | `gethostbyname()` | `&hostent_buf` | 256 bytes |
 | `mss32/miles.zig:14` | `AIL_last_error()` | `&no_error_str` | 16 bytes |
-| `d3d8/d3d8.zig:1006` | `Direct3DCreate8()` | `&global_d3d8` | vtable struct |
+| `d3d8.zig:1006` | `Direct3DCreate8()` | `&global_d3d8` | vtable struct |
 
 ### Data exports (registered with `is_data=true`)
 
@@ -294,12 +294,12 @@ Already handled by `relocateDataExports()`:
 
 | File | Functions | Issue |
 |------|-----------|-------|
-| `dsound/dsound.zig` | `DirectSoundCreate`, `Lock`, `initGlobalDsound` | Writes `@intFromPtr(&vtbl)` to guest |
+| `dsound.zig` | `DirectSoundCreate`, `Lock`, `initGlobalDsound` | Writes `@intFromPtr(&vtbl)` to guest |
 | `ole32/com.zig` | `CoCreateInstance`, `QueryInterface` | Same |
 | `ole32/wmi.zig` | Multiple WBEM functions | Same |
 | `d3d7/d3d7.zig` | `EnumDevices` | Passes `@intFromPtr(&desc)` to guest callback |
-| `d3d8/d3d8.zig` | `Direct3DCreate8` | Returns `@intFromPtr(&global_d3d8)` |
-| `dinput/dinput.zig` | `EnumDevices` | Passes host ptr to guest callback |
+| `d3d8.zig` | `Direct3DCreate8` | Returns `@intFromPtr(&global_d3d8)` |
+| `dinput.zig` | `EnumDevices` | Passes host ptr to guest callback |
 
 ---
 

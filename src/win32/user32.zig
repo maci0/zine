@@ -864,7 +864,7 @@ fn handleExternalResize(clientW: i32, clientH: i32, sizeType: usize) void {
 
 fn handleKeyEvent(vk_code: usize, is_down: bool) void {
     const renderer = @import("../gui/renderer.zig");
-    const dinput = @import("dinput/dinput.zig");
+    const dinput = @import("dinput.zig");
     const vk: u8 = @intCast(vk_code & 0xFF);
 
     // Store the key and read the Alt bit as one step: a GUI thread handling
@@ -916,7 +916,7 @@ fn handleWheelEvent(delta: i32, x: i32, y: i32) void {
 fn handleMouseEvent(msg_id: u32, x: i32, y: i32) void {
     // Track last known mouse position for GetCursorPos
     const rend = @import("../gui/renderer.zig");
-    const dinput = @import("dinput/dinput.zig");
+    const dinput = @import("dinput.zig");
 
     // Accumulate position, deltas and button state under the input lock so
     // two GUI threads reporting the same pointer cannot lose a delta. The

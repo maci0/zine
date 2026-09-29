@@ -501,12 +501,12 @@ zine/
 │   │   ├── ntdll.zig, ntdll/         # NT system information queries
 │   │   ├── advapi32.zig, advapi32/   # Registry, security, services
 │   │   ├── comdlg32.zig, comdlg32/  # Common dialogs (file open)
-│   │   ├── ddraw.zig, ddraw/         # DirectDraw COM vtable emulation
-│   │   ├── dsound.zig, dsound/       # DirectSound COM vtable stubs
-│   │   ├── d3d8.zig, d3d8/           # Direct3D 8 COM vtable stubs
+│   │   ├── ddraw.zig                 # DirectDraw COM vtable emulation
+│   │   ├── dsound.zig                 # DirectSound COM vtable stubs
+│   │   ├── d3d8.zig                   # Direct3D 8 COM vtable stubs
 │   │   ├── d3d7/d3d7.zig, d3d7/rasterizer.zig, d3d7/state.zig # Direct3D 3/7 interfaces (via ddraw) + software rasterizer
 │   │   ├── display_surface.zig          # Primary surface + display mode shared by ddraw and d3d7
-│   │   ├── dinput.zig, dinput/       # DirectInput COM vtable stubs
+│   │   ├── dinput.zig               # DirectInput COM vtable stubs
 │   │   ├── dinput8.zig               # DirectInput8 stubs
 │   │   ├── shell32.zig, shell32/     # Shell API stubs
 │   │   ├── comctl32.zig, comctl32/   # Common controls stubs
@@ -526,6 +526,7 @@ zine/
 │   │   └── nddeapi.zig, cards.zig, icmp.zig, vdmdbg.zig, mag_hook.zig
 │   ├── gui/
 │   │   ├── renderer.zig     # Rendering API surface & state cache
+│   │   ├── desktop_icons.zig # Desktop directory listing and PE icon extraction
 │   │   ├── web_ui.zig       # WebSocket server & HTTP file serving
 │   │   ├── fltk_ui.zig      # FLTK native GUI backend
 │   │   ├── fltk_bridge.h/.cpp # C/C++ bridge to FLTK 1.3 widgets

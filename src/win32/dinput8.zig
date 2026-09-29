@@ -1,7 +1,7 @@
 //! DINPUT8.dll registration.
 
 const env = @import("../loader/env.zig");
-const stubs = @import("dinput/dinput.zig");
+const stubs = @import("dinput.zig");
 
 /// Registers DINPUT8.dll functions with the environment.
 /// Implementation status: Partially implemented

@@ -3,7 +3,7 @@ const std = @import("std");
 const env = @import("../loader/env.zig");
 const trace = @import("../trace.zig");
 const renderer = @import("../gui/renderer.zig");
-const dsound_stubs = @import("dsound/dsound.zig");
+const dsound_stubs = @import("dsound.zig");
 const stubs = @import("winmm/multimedia.zig");
 
 /// Registers WINMM.dll functions with the environment.

@@ -1,10 +1,10 @@
 # DirectX COM Vtable Reference (from Wine headers)
 
-Status: reference for the `src/win32/ddraw/` and `src/win32/d3d7/` vtable layouts; slot counts are checked against those files on 2026-09-27.
+Status: reference for the `src/win32/ddraw.zig` and `src/win32/d3d7/` vtable layouts; slot counts are checked against those files on 2026-09-27.
 
 ## IDirectDraw7
 
-`src/win32/ddraw/ddraw.zig` declares one struct, `IDirectDrawVtbl`, that carries both the
+`src/win32/ddraw.zig` declares one struct, `IDirectDrawVtbl`, that carries both the
 `IDirectDraw` and `IDirectDraw7` layouts (30 entries).
 
 | Slot | Offset | Method |
