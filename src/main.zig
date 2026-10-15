@@ -36,6 +36,7 @@ const config = @import("config.zig");
 const log = @import("log.zig");
 const profiler = @import("profiler.zig");
 const version = @import("version.zig");
+const clispec = @import("clispec.zig");
 const build_options = @import("build_options");
 const pe = @import("pe.zig");
 const runtime = @import("runtime.zig");
@@ -63,17 +64,19 @@ fn buildCmdLineString(allocator: std.mem.Allocator, app_args_items: []const ?[*:
 /// It handles CLI argument parsing, environment setup, and starts the emulation.
 pub fn main(init: std.process.Init) !void {
     runtime.init(init.io, init.gpa, init.minimal.environ);
+    // schema and -o must work with no config and no guest. This exits on schema.
+    clispec.prepare(init);
 
     // Warm up the vDSO time path before we rewrite FS segment (TEB).
     // Without this the first clock_gettime after setupFS() faults.
     _ = platform.timestamp();
     log.initFromEnv(init.environ_map) catch {
         std.debug.print("{s}", .{log.levelErrorMessage()});
-        std.process.exit(2);
+        clispec.usageExit();
     };
     config.initFromEnv(init.environ_map) catch |err| {
         std.debug.print("{s}", .{config.initErrorMessage(err)});
-        std.process.exit(2);
+        clispec.usageExit();
     };
     if (config.clock.start_ns) |start_ns| {
         runtime.installConfiguredClock(start_ns, config.clock.step_ns);
@@ -116,6 +119,16 @@ pub fn main(init: std.process.Init) !void {
             end_of_options = true;
             continue;
         }
+        if (!end_of_options and (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output") or std.mem.startsWith(u8, arg, "--output="))) {
+            const attached = if (std.mem.startsWith(u8, arg, "--output=")) arg["--output=".len..] else null;
+            const value = attached orelse args.next() orelse {
+                std.debug.print("{s}", .{"Error: --output requires auto, text, or json.\nTry 'zine --help' for more information.\n"});
+                clispec.mode = .auto;
+                clispec.usageExit();
+            };
+            clispec.setMode(value);
+            continue;
+        }
         if (!end_of_options and (std.mem.eql(u8, arg, "--trace") or std.mem.eql(u8, arg, "-t"))) {
             trace.enable_tracing = true;
             trace.enable_instructions = true;
@@ -150,7 +163,7 @@ pub fn main(init: std.process.Init) !void {
         if (!end_of_options and std.mem.eql(u8, arg, "--fltk")) {
             if (!build_options.use_fltk) {
                 std.debug.print("{s}", .{"Error: --fltk is not available in this build.\nRebuild with: zig build -Dfltk\nTry 'zine --help' for more information.\n"});
-                std.process.exit(2);
+                clispec.usageExit();
             }
             renderer.active_backend = .fltk;
             continue;
@@ -181,7 +194,9 @@ pub fn main(init: std.process.Init) !void {
                 \\
                 \\  -h, --help          Show this help message
                 \\  -v, --version       Show version information
-                \\  --                  Stop processing options
+                \\  -o, --output FMT    auto, text, or json. auto stays text on a pipe
+                \\      schema          Print the CLI Spec document and exit
+                \\  --                  Stop processing options; zine -- schema runs a file named schema
                 \\
                 \\Environment:
                 \\  ZINE_TRACE          Set to any value to enable API tracing
@@ -205,6 +220,8 @@ pub fn main(init: std.process.Init) !void {
                 \\  zine --trace myapp.exe input.txt
                 \\  zine --argv0 editor notepad.exe file.txt
                 \\  zine -- -weird-name.exe
+                \\  zine schema
+                \\  zine -- schema
                 \\
                 \\Exit status:
                 \\  0  the guest ran and reported success
@@ -217,7 +234,11 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v"))) {
-            runtime.writeCliOut("zine " ++ version.string ++ "\n");
+            if (clispec.wantsJson()) {
+                runtime.writeCliOut("{\"version\":\"" ++ version.string ++ "\"}\n");
+            } else {
+                runtime.writeCliOut("zine " ++ version.string ++ "\n");
+            }
             std.process.exit(0);
         }
         if (!end_of_options and (std.mem.eql(u8, arg, "--argv0") or std.mem.startsWith(u8, arg, "--argv0="))) {
@@ -225,11 +246,11 @@ pub fn main(init: std.process.Init) !void {
             const attached = if (std.mem.startsWith(u8, arg, "--argv0=")) arg["--argv0=".len..] else null;
             const val = attached orelse args.next() orelse {
                 std.debug.print("{s}", .{"Error: --argv0 requires a value.\nTry 'zine --help' for more information.\n"});
-                std.process.exit(2);
+                clispec.usageExit();
             };
             if (val.len == 0) {
                 std.debug.print("{s}", .{"Error: --argv0 requires a non-empty value.\nTry 'zine --help' for more information.\n"});
-                std.process.exit(2);
+                clispec.usageExit();
             }
             argv0_opt = val;
             continue;
@@ -238,7 +259,7 @@ pub fn main(init: std.process.Init) !void {
             var err_buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&err_buf, "Error: unknown option '{s}'.\nTry 'zine --help' for more information.\n", .{arg}) catch "Error: unknown option.\n";
             std.debug.print("{s}", .{msg});
-            std.process.exit(2);
+            clispec.usageExit();
         }
 
         if (target_exe_opt == null) {
@@ -277,7 +298,7 @@ pub fn main(init: std.process.Init) !void {
 
     if (no_gui and renderer.active_backend == .fltk) {
         std.debug.print("{s}", .{"Error: --fltk and --no-gui are mutually exclusive.\nTry 'zine --help' for more information.\n"});
-        std.process.exit(2);
+        clispec.usageExit();
     }
     if (use_interpreter and use_jit) {
         log.warn("--interpret is ignored when --jit is specified", .{});
@@ -285,7 +306,7 @@ pub fn main(init: std.process.Init) !void {
 
     if (target_exe_opt == null) {
         std.debug.print("{s}", .{"Error: missing required argument <target.exe>.\nTry 'zine --help' for more information.\n"});
-        std.process.exit(2);
+        clispec.usageExit();
     }
     platform.installSegfaultHandler();
     platform.mapNullPage();

@@ -38,6 +38,13 @@ promise between versions, so a breaking change takes the next minor.
 
 ### Unreleased
 
+### 0.7.0 (2026-10-15)
+
+#### Added
+
+- `zine schema` prints a CLI Spec 0.3 document and needs no config, no credentials, and no guest. `zine schema <command>` returns that document filtered to the command. `zine -- schema` runs a file named schema.
+- `-o` / `--output` accept `auto`, `text`, or `json` before the target. `auto` stays text on a pipe, and guest stdout is unchanged. `--version` prints `{"version":"0.7.0"}` when JSON mode is explicit. A usage exit (2) then ends with an error object on stderr when JSON mode is explicit.
+
 ### 0.6.0 (2026-10-14)
 
 ### 0.5.0 (2026-09-29)

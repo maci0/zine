@@ -5,6 +5,7 @@ Run Win98/Win2K-era 32-bit Windows executables on Linux and in the browser witho
 ## Constraints
 
 - Use Zig 0.16.0. Preserve x86 and x86_64 Linux, wasm32 and wasm64 WASI builds; host pointer width does not change the guest's 32-bit address space.
+- Native `zine schema` and `-o`/`--output` run before log and config init. `auto` stays text on a pipe. Guest stdout is unchanged in every output mode, and a guest exit status is not an error envelope. `zine -- schema` runs a file named schema.
 - Keep native executables at image base `0x70000000` to leave low addresses free for guest PEs. The x86 target disables SIMD for legacy 4-byte stack alignment; do not enable it as a host optimization.
 - Use `callconv(w32cc.WINAPI)` for Win32 API stubs: stdcall on x86, Win64 on x86_64, C elsewhere. Preserve cdecl (`.c`) for APIs that require it, including MSVCRT.
 - New and migrated stubs use typed host-accessible pointer parameters and returns. Keep guest address translation, pointer-width conversion, and platform-specific mapping in the thunk/platform layer, not in stubs.

@@ -34,6 +34,7 @@ comptime {
     _ = @import("fuzz/seed.zig");
 
     // Core utility tests
+    _ = @import("clispec.zig");
     _ = @import("config.zig");
     _ = @import("runtime.zig");
     _ = @import("log.zig");
