@@ -38,6 +38,10 @@ promise between versions, so a breaking change takes the next minor.
 
 ### Unreleased
 
+### 0.8.0 (2026-10-27)
+
+#### Fixed
+
 - Fix x86 guest startup crashes caused by USER32 formatter stack cleanup, packed font and system-metric records, and heap reallocation losing its contents. Add the keyboard and BSTR APIs required by HxD and the ANSI font enumeration entry point required by hgb.
 - Bound D3D8 capability and adapter-identifier writes to their SDK structure sizes and give surfaces their own method layout, preserving the guest stack. Keep vertex, index, and texture storage separate so mesh data survives resource locks. Resolve mixed-case directory components when loading installed games. Preserve host PATH entries until module search paths have been copied, and reject unsupported PE architectures or unaligned image bases before mapping.
 
