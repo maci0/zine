@@ -2,7 +2,7 @@
 
 ## Setup
 
-Zig 0.16.0 and a POSIX shell environment. The pinned toolchain lives in
+Zig 0.17.0 and a POSIX shell environment. The pinned toolchain lives in
 `build.zig.zon` (`.minimum_zig_version`); `tests/check.sh` compares it against
 the installed `zig version` for equality and tells you what to install when
 they differ, because a patch release is free to change codegen and the shipped
@@ -25,7 +25,7 @@ tracked-file steps stop there. Everything below runs from the repository root.
 | Task | Command |
 |---|---|
 | Build (default 32-bit x86) | `zig build` |
-| Debug build | `zig build -Doptimize=Debug` |
+| debug build | `zig build -Doptimize=debug` |
 | Unit tests | `zig build test` |
 | Run the built interpreter | `zig build run -- drive_c/myapp/app.exe` |
 | One test or module | `zig build test -Dtest-filter=<substring> --summary all` |
@@ -55,9 +55,9 @@ them.
 `-Darch` does not change the target of the unit tests: they always run on the
 host. Only `test-cli` varies by architecture.
 
-`-Doptimize` defaults to ReleaseSafe so the installed artifacts are the
-optimized ones and stay free of the absolute build path that a Debug binary
-embeds. Pass `-Doptimize=Debug` when stepping through code.
+`-Doptimize` defaults to safe so the installed artifacts are the
+optimized ones and stay free of the absolute build path that a debug binary
+embeds. Pass `-Doptimize=debug` when stepping through code.
 
 `tests/check.sh` is the single pre-pull-request gate. It runs the same checks,
 in the same order, as the `static-analysis` job in `.github/workflows/ci.yml`:
@@ -157,7 +157,7 @@ flags, the environment variables, and the virtual filesystem behavior can all
 change in any release. A change that would break a consumer gets a minor bump
 and a migration line, not a patch.
 
-`AGENTS.md` holds the project rules that apply to any change: the 0.16.0
+`AGENTS.md` holds the project rules that apply to any change: the 0.17.0
 toolchain, image base `0x70000000` for native executables, `w32cc.WINAPI` for
 Win32 stubs, guest pointers translated in the thunk layer rather than in stubs,
 and the rule that stubs return the documented failure value and set last error

@@ -66,7 +66,7 @@ pub const TimerEntry = struct {
     active: bool,
 };
 
-pub var timers: [16]TimerEntry = [_]TimerEntry{.{ .hwnd = 0, .id = 0, .elapse_ms = 0, .callback = 0, .last_fire = 0, .active = false }} ** 16;
+pub var timers: [16]TimerEntry = @as([16]TimerEntry, @splat(.{ .hwnd = 0, .id = 0, .elapse_ms = 0, .callback = 0, .last_fire = 0, .active = false }));
 var timers_mutex: runtime.Mutex = .{};
 /// `ensureTimerThread` is a lazy thread spawn. Only the guest thread calls
 /// SetTimer today, but the flag gates a one-shot `std.Thread.spawn`, so a
@@ -85,7 +85,7 @@ fn safeMilliTs() i64 {
     // a raw clock_gettime, and it keeps the timer bookkeeping on the same
     // timeline as the guest-facing readings in user32/message.zig.
     if (rt.useVirtualClock()) return rt.monoMilliTimestamp();
-    if (comptime @import("builtin").os.tag == .linux) {
+    if (comptime @import("builtin").target.os.tag == .linux) {
         const linux = std.os.linux;
         var ts: linux.timespec = .{ .sec = 0, .nsec = 0 };
         _ = linux.clock_gettime(linux.CLOCK.MONOTONIC, &ts);
@@ -99,7 +99,7 @@ fn safeMilliTs() i64 {
 /// No-op on WASI, which has no threads; the message pump still expires timers
 /// there when the guest pumps messages, so WM_TIMER is delivered either way.
 fn ensureTimerThread() void {
-    if (comptime @import("builtin").os.tag == .wasi) return;
+    if (comptime @import("builtin").target.os.tag == .wasi) return;
     if (timer_thread_started.cmpxchgStrong(false, true, .acquire, .monotonic) != null) return;
     // This runs inside the SetTimer stub (compat-mode SIGSEGV dispatch), where
     // FS points at the guest TEB. pthread_create → calloc reads per-thread

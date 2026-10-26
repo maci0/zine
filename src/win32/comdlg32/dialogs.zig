@@ -2,7 +2,7 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const w32 = @import("../constants.zig");
 const w32cc = @import("../calling_convention.zig");
-const renderer = if (@import("builtin").os.tag != .windows) @import("../../gui/renderer.zig") else struct {
+const renderer = if (@import("builtin").target.os.tag != .windows) @import("../../gui/renderer.zig") else struct {
     pub fn openFileDialog(_: anytype, _: bool) void {}
     pub fn openColorDialog(_: anytype) void {}
     pub fn openFontDialog(_: []const u8, _: i32, _: bool, _: bool) void {}
@@ -380,7 +380,7 @@ fn commonChooseFont(lpcf_ptr: usize, wide: bool) i32 {
     const nsize_min = @as(*align(1) const i32, @ptrCast(cf + 52)).*;
     const nsize_max = @as(*align(1) const i32, @ptrCast(cf + 56)).*;
 
-    var face_buf: [32]u8 = [_]u8{0} ** 32;
+    var face_buf: [32]u8 = @as([32]u8, @splat(0));
     var face_len: usize = 0;
     var lf_height: i32 = 0;
     var lf_weight: i32 = 0;
@@ -712,14 +712,14 @@ fn commonFindText(lpfr_ptr: usize, is_replace: bool) usize {
     const lpstr_repl = @as(*align(1) const u32, @ptrCast(pfr + 20)).*;
 
     // Initial values from the caller's struct (guest strings).
-    var find_buf: [256]u8 = [_]u8{0} ** 256;
+    var find_buf: [256]u8 = @as([256]u8, @splat(0));
     var find_len: usize = 0;
     if (lpstr_find != 0) {
         const s = trace.c_span(@as(usize, @intCast(lpstr_find)));
         find_len = @min(s.len, 255);
         @memcpy(find_buf[0..find_len], s[0..find_len]);
     }
-    var repl_buf: [256]u8 = [_]u8{0} ** 256;
+    var repl_buf: [256]u8 = @as([256]u8, @splat(0));
     var repl_len: usize = 0;
     if (lpstr_repl != 0 and is_replace) {
         const s = trace.c_span(@as(usize, @intCast(lpstr_repl)));

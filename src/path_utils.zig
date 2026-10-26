@@ -51,7 +51,7 @@ pub fn copyCurrentDirectory(out: *[current_directory.len]u8) usize {
 }
 
 const builtin = @import("builtin");
-const is_wasi = builtin.os.tag == .wasi;
+const is_wasi = builtin.target.os.tag == .wasi;
 
 /// A preopen directory borrowed from WASI and the part of an absolute path
 /// below it. `dir` is a borrowed preopen fd, so the caller must not close it.
@@ -138,7 +138,7 @@ pub fn openHostFile(host_path: []const u8) !std.Io.File {
 /// path stays relative. The returned bytes are owned by `allocator`.
 pub fn absoluteHostPath(host_path: []const u8, allocator: std.mem.Allocator) ![:0]u8 {
     if (std.Io.Dir.cwd().realPathFileAlloc(runtime.io(), host_path, allocator)) |abs| return abs else |_| {}
-    return allocator.dupeZ(u8, host_path);
+    return allocator.dupeSentinel(u8, host_path, 0);
 }
 
 /// Check if a POSIX path is inside drive_c/ (`drive_c/` or `drive_c\`).
@@ -719,7 +719,7 @@ test "toHostPath: insufficient capacity never returns a partial path" {
 }
 
 test "toHostPath: oversized input is rejected before truncation" {
-    const input = [_]u8{'a'} ** 1024;
+    const input = @as([1024]u8, @splat('a'));
     var buf: [2048]u8 = undefined;
     try testing.expectEqual(@as(usize, 0), toHostPath(&input, &buf));
 }
@@ -780,18 +780,18 @@ test "virtualPathToDriveC: refuses inputs that escape the sandbox" {
 }
 
 test "virtualPathToDriveC: rejects input that does not fit" {
-    const input = [_]u8{'a'} ** 512;
+    const input = @as([512]u8, @splat('a'));
     var buf: [64]u8 = undefined;
     try testing.expectEqual(@as(usize, 0), virtualPathToDriveC(&input, &buf));
 }
 
 test "virtualPathToDriveC: rejects deeper paths than normalizePath can hold" {
     var deep_buf: [4096]u8 = undefined;
-    const deep = "a/" ** 200 ++ "file.txt";
+    const deep = @as([400]u8, @bitCast(@as([200][2]u8, @splat(.{ 97, 47 })))) ++ "file.txt";
     var buf: [4096]u8 = undefined;
     try testing.expectEqual(@as(usize, 0), virtualPathToDriveC(deep, &buf));
     // 128 components is still accepted and keeps its full depth.
-    const ok_deep = "a/" ** 127 ++ "file.txt";
+    const ok_deep = @as([254]u8, @bitCast(@as([127][2]u8, @splat(.{ 97, 47 })))) ++ "file.txt";
     const len = virtualPathToDriveC(ok_deep, &deep_buf);
     try testing.expect(std.mem.endsWith(u8, deep_buf[0..len], "a/file.txt"));
 }

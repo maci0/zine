@@ -252,9 +252,9 @@ pub fn main(init: std.process.Init) !void {
             var win_buf: [1024]u8 = undefined;
             const win_len = try path_utils.posixToWin32(first_arg, &win_buf);
             if (win_len > 0) {
-                try app_args.append(allocator, try allocator.dupeZ(u8, win_buf[0..win_len]));
+                try app_args.append(allocator, try allocator.dupeSentinel(u8, win_buf[0..win_len], 0));
             } else {
-                try app_args.append(allocator, try allocator.dupeZ(u8, first_arg));
+                try app_args.append(allocator, try allocator.dupeSentinel(u8, first_arg, 0));
             }
         } else {
             // Convert absolute POSIX paths to Win32 for guest PE arguments.
@@ -291,22 +291,22 @@ pub fn main(init: std.process.Init) !void {
                     var win_buf: [1024]u8 = undefined;
                     const win_len = try path_utils.posixToWin32(value, &win_buf);
                     if (win_len > 0) {
-                        const joined = try std.fmt.allocPrint(allocator, "{s}{s}", .{ arg[0 .. colon_idx + 1], win_buf[0..win_len] });
-                        try app_args.append(allocator, try allocator.dupeZ(u8, joined));
+                        const joined = try allocator.print("{s}{s}", .{ arg[0 .. colon_idx + 1], win_buf[0..win_len] });
+                        try app_args.append(allocator, try allocator.dupeSentinel(u8, joined, 0));
                         continue;
                     }
                 }
-                try app_args.append(allocator, try allocator.dupeZ(u8, arg));
+                try app_args.append(allocator, try allocator.dupeSentinel(u8, arg, 0));
             } else if (is_posix_path) {
                 var win_buf: [1024]u8 = undefined;
                 const win_len = try path_utils.posixToWin32(arg, &win_buf);
                 if (win_len > 0) {
-                    try app_args.append(allocator, try allocator.dupeZ(u8, win_buf[0..win_len]));
+                    try app_args.append(allocator, try allocator.dupeSentinel(u8, win_buf[0..win_len], 0));
                 } else {
-                    try app_args.append(allocator, try allocator.dupeZ(u8, arg));
+                    try app_args.append(allocator, try allocator.dupeSentinel(u8, arg, 0));
                 }
             } else {
-                try app_args.append(allocator, try allocator.dupeZ(u8, arg));
+                try app_args.append(allocator, try allocator.dupeSentinel(u8, arg, 0));
             }
         }
     }
@@ -885,7 +885,7 @@ fn wasmSpawnHandler(cmdname: []const u8, argv_ptr: usize) i32 {
     // ensureGuestArgs() reads these via std.mem.span() and copies them
     // into the child's guest memory for the interpreter.
     for (arg_strings.items) |s| {
-        child_argv_ptrs.append(std.heap.page_allocator, std.heap.page_allocator.dupeZ(u8, s) catch null) catch return -1;
+        child_argv_ptrs.append(std.heap.page_allocator, std.heap.page_allocator.dupeSentinel(u8, s, 0) catch null) catch return -1;
     }
     child_argv_ptrs.append(std.heap.page_allocator, null) catch return -1;
 
@@ -994,7 +994,7 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: 
     defer block_index.deinit();
     // Per-block execution counters (hot-block detection): how many times each
     // cached block ran. Mirrors the ring buffer layout.
-    var block_counts = [_]u32{0} ** jit_compiler.BLOCK_CACHE_SLOTS;
+    var block_counts = @as([jit_compiler.BLOCK_CACHE_SLOTS]u32, @splat(0));
 
     // Register SMC invalidation hook globally
     global_jit_ptr = &jit;
@@ -1128,7 +1128,7 @@ fn runWithJitHost(cpu: *x86_cpu.Cpu, allocator: std.mem.Allocator, jit_max_eip: 
 
     // Hot-block report: find the most-executed cached blocks (top 8).
     // These are the blocks worth pinning/pre-warming for future runs.
-    var hot_idx: [8]u32 = .{0} ** 8;
+    var hot_idx: [8]u32 = @splat(0);
     for (0..4096) |i| {
         const cnt = block_counts[i];
         if (cnt == 0) continue;

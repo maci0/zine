@@ -289,13 +289,13 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 const dst = getRegIdx(insn, 0);
                 const src_bits = readXmm32(cpu, insn, 1);
                 const f: f32 = @bitCast(src_bits);
-                cpu.setReg(@enumFromInt(dst), floatToI32(f32, 0b11, f));
+                cpu.setReg(@fromBackingInt(@intCast(dst)), floatToI32(f32, 0b11, f));
             },
             .pF2 => { // CVTTSD2SI
                 const dst = getRegIdx(insn, 0);
                 const src_bits = readXmm64(cpu, insn, 1);
                 const f: f64 = @bitCast(src_bits);
-                cpu.setReg(@enumFromInt(dst), floatToI32(f64, 0b11, f));
+                cpu.setReg(@fromBackingInt(@intCast(dst)), floatToI32(f64, 0b11, f));
             },
             else => {},
         },
@@ -304,12 +304,12 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             .pF3 => {
                 const dst = getRegIdx(insn, 0);
                 const f: f32 = @bitCast(readXmm32(cpu, insn, 1));
-                cpu.setReg(@enumFromInt(dst), floatToI32(f32, mxcsrRc(cpu), f));
+                cpu.setReg(@fromBackingInt(@intCast(dst)), floatToI32(f32, mxcsrRc(cpu), f));
             },
             .pF2 => {
                 const dst = getRegIdx(insn, 0);
                 const f: f64 = @bitCast(readXmm64(cpu, insn, 1));
-                cpu.setReg(@enumFromInt(dst), floatToI32(f64, mxcsrRc(cpu), f));
+                cpu.setReg(@fromBackingInt(@intCast(dst)), floatToI32(f64, mxcsrRc(cpu), f));
             },
             else => {},
         },
@@ -338,11 +338,11 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             if (pfx == .p66) { // MOVMSKPD
                 const bytes: [16]u8 = @bitCast(cpu.xmm[src]);
                 const mask: u32 = (@as(u32, bytes[7] >> 7)) | (@as(u32, bytes[15] >> 7) << 1);
-                cpu.setReg(@enumFromInt(dst), mask);
+                cpu.setReg(@fromBackingInt(@intCast(dst)), mask);
             } else { // MOVMSKPS
                 const dw: [4]u32 = @bitCast(cpu.xmm[src]);
                 const mask: u32 = (dw[0] >> 31) | ((dw[1] >> 31) << 1) | ((dw[2] >> 31) << 2) | ((dw[3] >> 31) << 3);
-                cpu.setReg(@enumFromInt(dst), mask);
+                cpu.setReg(@fromBackingInt(@intCast(dst)), mask);
             }
         },
 
@@ -473,7 +473,7 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         0x0FC3 => { // MOVNTI m32, r32 — normal store
             if (insn.op0_kind == .mem) {
                 const addr = getMemAddr(cpu, insn, 0);
-                cpu.memory.write32(addr, cpu.getReg(@enumFromInt(getRegIdx(insn, 1))));
+                cpu.memory.write32(addr, cpu.getReg(@fromBackingInt(@intCast(getRegIdx(insn, 1)))));
             }
         },
         0x0FC4 => { // PINSRW
@@ -497,10 +497,10 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             const sel: u3 = @truncate(insn.imm);
             if (pfx == .p66) {
                 const words: [8]u16 = @bitCast(cpu.xmm[src]);
-                cpu.setReg(@enumFromInt(dst), words[sel]);
+                cpu.setReg(@fromBackingInt(@intCast(dst)), words[sel]);
             } else {
                 const shift: u6 = @as(u6, sel & 3) * 16;
-                cpu.setReg(@enumFromInt(dst), @truncate(cpu.getMmx(src) >> shift));
+                cpu.setReg(@fromBackingInt(@intCast(dst)), @truncate(cpu.getMmx(src) >> shift));
             }
         },
         0x0FC6 => { // SHUFPS/SHUFPD
@@ -534,12 +534,12 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 const b: [16]u8 = @bitCast(cpu.xmm[src]);
                 var mask: u32 = 0;
                 inline for (0..16) |i| mask |= @as(u32, b[i] >> 7) << i;
-                cpu.setReg(@enumFromInt(dst), mask);
+                cpu.setReg(@fromBackingInt(@intCast(dst)), mask);
             } else {
                 const b: [8]u8 = @bitCast(cpu.getMmx(src));
                 var mask: u32 = 0;
                 inline for (0..8) |i| mask |= @as(u32, b[i] >> 7) << i;
-                cpu.setReg(@enumFromInt(dst), mask);
+                cpu.setReg(@fromBackingInt(@intCast(dst)), mask);
             }
         },
         0x0FD8 => execIntBin(cpu, insn, pfx, 1, .subus), // PSUBUSB
@@ -883,10 +883,10 @@ fn execIntBin(cpu: *Cpu, insn: *const Instruction, pfx: SsePrefix, comptime elem
 
 fn intBinOp(comptime total: comptime_int, comptime elem: comptime_int, a_bytes: [total]u8, b_bytes: [total]u8, op: IntOp) [total]u8 {
     const lanes = total / elem;
-    const UType = std.meta.Int(.unsigned, elem * 8);
-    const SType = std.meta.Int(.signed, elem * 8);
-    const WideU = std.meta.Int(.unsigned, elem * 16);
-    const WideS = std.meta.Int(.signed, elem * 16);
+    const UType = @Int(.unsigned, elem * 8);
+    const SType = @Int(.signed, elem * 8);
+    const WideU = @Int(.unsigned, elem * 16);
+    const WideS = @Int(.signed, elem * 16);
 
     var a_elems: [lanes]UType = undefined;
     var b_elems: [lanes]UType = undefined;
@@ -945,8 +945,8 @@ fn execPcmp(cpu: *Cpu, insn: *const Instruction, pfx: SsePrefix, comptime elem: 
 
 fn intCmpOp(comptime total: comptime_int, comptime elem: comptime_int, a_bytes: [total]u8, b_bytes: [total]u8, kind: CmpKind) [total]u8 {
     const lanes = total / elem;
-    const SType = std.meta.Int(.signed, elem * 8);
-    const UType = std.meta.Int(.unsigned, elem * 8);
+    const SType = @Int(.signed, elem * 8);
+    const UType = @Int(.unsigned, elem * 8);
     var result: [total]u8 = undefined;
     for (0..lanes) |i| {
         const a: SType = @bitCast(std.mem.readInt(UType, a_bytes[i * elem ..][0..elem], .little));
@@ -1099,9 +1099,9 @@ fn execGroupShift(cpu: *Cpu, insn: *const Instruction, pfx: SsePrefix, comptime 
 fn shiftImpl(comptime total: comptime_int, comptime elem: comptime_int, data: [total]u8, count: u64, kind: ShiftKind) [total]u8 {
     const lanes = total / elem;
     const bits = elem * 8;
-    const UType = std.meta.Int(.unsigned, bits);
-    const SType = std.meta.Int(.signed, bits);
-    const ShiftT = std.meta.Int(.unsigned, std.math.log2(bits));
+    const UType = @Int(.unsigned, bits);
+    const SType = @Int(.signed, bits);
+    const ShiftT = @Int(.unsigned, std.math.log2(bits));
 
     var result: [total]u8 = undefined;
     if (count >= bits) {
@@ -1213,7 +1213,7 @@ test "applyBinOp: division by zero yields zero, not IEEE exception values" {
 
 test "execUnaryFloat: reciprocal of zero yields zero, not IEEE inf" {
     var cpu = Cpu{ .memory = undefined };
-    var mem: [64]u8 = .{0} ** 64;
+    var mem: [64]u8 = @splat(0);
     cpu.memory = .{ .base = &mem };
     // The PS path reads its source through getRegIdx(insn, 1), which is
     // op1_reg whatever op1_kind says, so the source register has to be named
@@ -1242,7 +1242,7 @@ test "execUnaryFloat: reciprocal of zero yields zero, not IEEE inf" {
 
 test "execUnaryFloat: reciprocal and rsqrt of a non-zero lane compute it" {
     var cpu = Cpu{ .memory = undefined };
-    var mem: [64]u8 = .{0} ** 64;
+    var mem: [64]u8 = @splat(0);
     cpu.memory = .{ .base = &mem };
     const insn = &decoder.Instruction{
         .opcode = 0x0F53,

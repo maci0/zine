@@ -570,7 +570,7 @@ test "applyReverseRelocations: patches HIGHLOW entries" {
     const parser = FakeParser{ .nt = &nt };
 
     // Image with one reloc block at RVA 0 patching the u32 at RVA 12.
-    var buf = [_]u8{0} ** 16;
+    var buf = @as([16]u8, @splat(0));
     std.mem.writeInt(u32, buf[0..4], 0, .little); // block VirtualAddress
     std.mem.writeInt(u32, buf[4..8], 10, .little); // block SizeOfBlock (1 entry)
     const entry: u16 = (3 << 12) | 0xC; // HIGHLOW, offset 12 -> patch RVA 12
@@ -592,7 +592,7 @@ test "applyReverseRelocations: reloc directory beyond image is clamped" {
     nt.OptionalHeader.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_BASERELOC] =
         .{ .VirtualAddress = 0x1000, .Size = 0x100 }; // entirely past image_size
 
-    var buf = [_]u8{0xAB} ** 64;
+    var buf = @as([64]u8, @splat(0xAB));
     // Must not read out of bounds or panic, and must not patch anything:
     // every byte stays untouched when the directory lies past the image.
     applyReverseRelocations(&buf, &parser, buf.len, 0x0001_0000, 0x0002_0000);
@@ -604,7 +604,7 @@ test "applyReverseRelocations: out-of-bounds HIGHLOW entry is skipped" {
     const parser = FakeParser{ .nt = &nt };
 
     // Reloc block claims an entry pointing past the end of the image.
-    var buf = [_]u8{0} ** 16;
+    var buf = @as([16]u8, @splat(0));
     std.mem.writeInt(u32, buf[0..4], 0, .little); // block VirtualAddress
     std.mem.writeInt(u32, buf[4..8], 10, .little); // block SizeOfBlock (1 entry)
     const entry: u16 = (3 << 12) | 0xFC; // patch RVA 252 — far beyond 16 bytes
@@ -628,7 +628,7 @@ test "applyReverseRelocations: a block VA that wraps past 32 bits is skipped" {
     // entry is recognized as out of range and dropped rather than wrapping to
     // a small address inside the image and patching bytes the block never
     // named.
-    var buf = [_]u8{0} ** 16;
+    var buf = @as([16]u8, @splat(0));
     std.mem.writeInt(u32, buf[0..4], 0xFFFF_FF00, .little);
     std.mem.writeInt(u32, buf[4..8], 10, .little); // SizeOfBlock (1 entry)
     const entry: u16 = (3 << 12) | 0x200; // 0xFFFF_FF00 + 0x200 wraps
@@ -654,7 +654,7 @@ test "applyReverseRelocations: an IAT range that wraps past 32 bits is dropped" 
     // applied on its own terms rather than being matched against a wrapped,
     // empty interval.
     var wrapped = comptime blk: {
-        var buf = [_]u8{0} ** 0x60;
+        var buf = @as([0x60]u8, @splat(0));
         // Import descriptor at RVA 0x20: Name != 0, FirstThunk = 0xFFFFF000.
         std.mem.writeInt(u32, buf[0x20..0x24], 0, .little); // OriginalFirstThunk
         std.mem.writeInt(u32, buf[0x24..0x28], 0x1, .little); // TimeDateStamp
@@ -680,7 +680,7 @@ test "applyReverseRelocations: an IAT range that wraps past 32 bits is dropped" 
     // reverse_delta is 0x10 here, so the adjusted range starts exactly at the
     // patch target.
     var in_image = comptime blk: {
-        var buf = [_]u8{0} ** 0x60;
+        var buf = @as([0x60]u8, @splat(0));
         std.mem.writeInt(u32, buf[0x20..0x24], 0, .little);
         std.mem.writeInt(u32, buf[0x24..0x28], 0x1, .little);
         std.mem.writeInt(u32, buf[0x28..0x2C], 0, .little);

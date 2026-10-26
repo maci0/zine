@@ -52,15 +52,20 @@ comptime {
 /// nothing. A scan that finds no declarations at all reports the total as
 /// inconclusive rather than failing, so a change to the declaration syntax
 /// cannot turn this into a gate failure.
-fn testFilterMatches(root: std.Io.Dir, io: std.Io, gpa: std.mem.Allocator, filter: []const u8) struct { matched: usize, total: usize } {
+fn testFilterMatches(b: *std.Build, filter: []const u8) struct { matched: usize, total: usize } {
+    const io = b.graph.io;
+    const gpa = b.allocator;
+    b.dependOnDirectoryContents(b.path("src"));
     var matched: usize = 0;
     var total: usize = 0;
-    var src = root.openDir(io, "src", .{ .iterate = true }) catch
+    var src = b.root.openDir(io, "src", .{ .iterate = true }) catch
         return .{ .matched = 0, .total = 0 };
     defer src.close(io);
     var walker = src.walk(gpa) catch return .{ .matched = 0, .total = 0 };
     while (walker.next(io) catch return .{ .matched = 0, .total = 0 }) |entry| {
+        if (entry.kind == .directory) b.dependOnDirectoryContents(b.path(b.pathJoin(&.{ "src", entry.path })));
         if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".zig")) continue;
+        b.dependOnFileContents(b.path(b.pathJoin(&.{ "src", entry.path })));
         const source = src.readFileAlloc(io, entry.path, gpa, .limited(4 << 20)) catch continue;
         defer gpa.free(source);
 
@@ -95,10 +100,10 @@ fn queryForArch(arch: std.Target.Cpu.Arch) std.Target.Query {
             // issues with Win32 binaries expecting 4-byte aligned stacks.
             const features = std.Target.x86.Feature;
             var disabled_features = std.Target.Cpu.Feature.Set.empty;
-            disabled_features.addFeature(@intFromEnum(features.sse));
-            disabled_features.addFeature(@intFromEnum(features.sse2));
-            disabled_features.addFeature(@intFromEnum(features.avx));
-            disabled_features.addFeature(@intFromEnum(features.avx2));
+            disabled_features.addFeature(@backingInt(features.sse));
+            disabled_features.addFeature(@backingInt(features.sse2));
+            disabled_features.addFeature(@backingInt(features.avx));
+            disabled_features.addFeature(@backingInt(features.avx2));
 
             break :blk std.Target.Query{
                 .cpu_arch = .x86,
@@ -141,7 +146,7 @@ fn addNativeExe(
     b: *std.Build,
     arch: std.Target.Cpu.Arch,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     toml_mod: *std.Build.Module,
     use_fltk: bool,
     embed_stubs: bool,
@@ -163,7 +168,7 @@ fn addNativeExe(
     // DWARF records absolute source paths (DW_AT_comp_dir) and absolute
     // toolchain paths for std, so an unstripped artifact differs per
     // checkout directory and per host. Debug builds keep them.
-    exe.root_module.strip = optimize != .Debug;
+    exe.root_module.strip = optimize != .debug;
 
     // Move the host binary to a high address so that the low address
     // space (0x00400000+) is free for guest Win32 PEs.
@@ -176,6 +181,9 @@ fn addNativeExe(
     // same C++ bridge against the system FLTK libs fine — and on 64-bit-only
     // hosts (no i386 FLTK packages) that is the only way to get the FLTK UI.
     if (use_fltk) {
+        // shortcut: use the supported translation step; switch to the translate-c package before Zig 0.18.
+        const bridge = b.addTranslateC(.{ .root_source_file = b.path("src/gui/fltk_bridge.h"), .target = target, .optimize = optimize });
+        exe.root_module.addImport("fltk_bridge", bridge.createModule());
         exe.root_module.addCSourceFile(.{
             .file = b.path("src/gui/fltk_bridge.cpp"),
             .flags = &fltk_bridge_cxx_flags,
@@ -212,7 +220,7 @@ fn addWasmExe(
     b: *std.Build,
     arch: std.Target.Cpu.Arch,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     toml_mod: *std.Build.Module,
     embed_stubs: bool,
     enable_jit_host: bool,
@@ -231,7 +239,7 @@ fn addWasmExe(
     });
     // Same reason as the native exes: keep checkout and toolchain paths
     // out of the installed module.
-    wasm_lib.root_module.strip = optimize != .Debug;
+    wasm_lib.root_module.strip = optimize != .debug;
     wasm_lib.rdynamic = true;
     wasm_lib.initial_memory = 256 * 1024 * 1024;
     wasm_lib.max_memory = 2 * 1024 * 1024 * 1024;
@@ -255,7 +263,7 @@ fn hashedAssetUrl(allocator: std.mem.Allocator, name: []const u8, digest: [32]u8
     const ext = std.fs.path.extension(name);
     const stem = name[0 .. name.len - ext.len];
     const hex = std.fmt.bytesToHex(digest, .lower);
-    return std.fmt.allocPrint(allocator, "/{s}-{s}{s}", .{ stem, hex, ext });
+    return allocator.print("/{s}-{s}{s}", .{ stem, hex, ext });
 }
 
 /// A digested asset another one names by URL, and the name to write in its
@@ -270,7 +278,7 @@ const DigestReference = struct {
 /// a digested URL still names the same asset, and its content is unchanged, so
 /// a build with no edit serves the same names and the caches hold.
 fn rewriteReference(allocator: std.mem.Allocator, content: []const u8, reference: DigestReference) ![]const u8 {
-    const absolute_path = try std.fmt.allocPrint(allocator, "/{s}", .{reference.path});
+    const absolute_path = try allocator.print("/{s}", .{reference.path});
     const absolute = try replaceAll(allocator, content, absolute_path, reference.url);
     return replaceAll(allocator, absolute, reference.path, reference.url);
 }
@@ -337,7 +345,7 @@ fn embeddedWebAssets(b: *std.Build) !*std.Build.Step.Options {
 // dependency bump would invalidate (this commit and the package version) are
 // re-read from build.zig.zon at build time, so a bump cannot leave the
 // inventory describing the dependency the build no longer uses.
-const sbom_toml_commit = "a73c9423d88ed413204b39638fab7e9bccdb83fd";
+const sbom_toml_commit = "4a13e49ce7d19ac2df8b87962d9f23c0f5dd5bdd";
 const sbom_toml_version = "0.3.0";
 
 // The SHA-256 of the vendored VanJS repackaging, as hex. VanJS has no upstream
@@ -369,8 +377,7 @@ const sbom_vanjs_sha256 = "8070c4c7934b98ce80bd7aa604d98877cef2236c695a1e3203b5c
 /// any other version, so a rebuild only reproduces the artifact when the two
 /// agree, and the inventory is what tells a consumer whether it does.
 fn addSbom(b: *std.Build) void {
-    const zon = b.build_root.handle.readFileAlloc(b.graph.io, "build.zig.zon", b.allocator, .unlimited) catch
-        @panic("cannot read build.zig.zon");
+    const zon = @embedFile("build.zig.zon");
     if (std.mem.indexOf(u8, zon, sbom_toml_commit) == null) {
         std.log.err("build.zig.zon no longer pins zig-toml at {s}; update sbom_toml_commit and the SBOM in build.zig", .{sbom_toml_commit});
         @panic("SBOM dependency pin is stale");
@@ -503,18 +510,18 @@ pub fn build(b: *std.Build) void {
     const embed_stubs = !(b.option(bool, "external-stubs", "Load Win32 stubs from external DLLs instead of embedding them") orelse false);
     const enable_jit_host = b.option(bool, "jit_host", "Enable JIT host imports (requires zine-host or browser)") orelse false;
 
-    // ReleaseSafe by default: the artifacts `zig build` installs are the ones
-    // users run, and Zig's default (Debug) leaves them unoptimized and large.
-    // -Doptimize=Debug is still available for a debugging loop, and
+    // safe by default: the artifacts `zig build` installs are the ones
+    // users run, and Zig's default (debug) leaves them unoptimized and large.
+    // -Doptimize=debug is still available for a debugging loop, and
     // --release=<mode> keeps its usual meaning.
     const optimize = b.option(
-        std.builtin.OptimizeMode,
+        std.lang.Optimize,
         "optimize",
-        "Prioritize performance, safety, or binary size (default: ReleaseSafe)",
-    ) orelse switch (b.release_mode) {
-        .off, .any, .safe => std.builtin.OptimizeMode.ReleaseSafe,
-        .fast => std.builtin.OptimizeMode.ReleaseFast,
-        .small => std.builtin.OptimizeMode.ReleaseSmall,
+        "Prioritize performance, safety, or binary size (default: safe)",
+    ) orelse switch (b.graph.release_mode) {
+        .off, .any, .safe => std.lang.Optimize.safe,
+        .fast => std.lang.Optimize.fast,
+        .small => std.lang.Optimize.small,
     };
     const cli_test_step = b.step("test-cli", "Check native and wasm32 CLI output (wasm32 requires wasmtime)");
 
@@ -533,6 +540,7 @@ pub fn build(b: *std.Build) void {
         // The include and library paths below are hardcoded to the Debian
         // layout, so name the missing packages instead of failing later with a
         // C compiler error.
+        b.dependOnDirectoryMetadata(.{ .cwd_relative = fltk_include_dir });
         std.Io.Dir.accessAbsolute(b.graph.io, fltk_include_dir, .{}) catch {
             std.log.err("FLTK headers not found in {s}. Install the system FLTK 1.3 packages: " ++
                 "libfltk1.3-dev libx11-dev libxext-dev libxft-dev libfontconfig1-dev " ++
@@ -542,7 +550,9 @@ pub fn build(b: *std.Build) void {
     }
 
     for (archs_to_build) |a| {
-        const query = queryForArch(a);
+        var query = queryForArch(a);
+        // System FLTK libraries require the host glibc symbol version.
+        if (use_fltk and a == .x86_64) query.glibc_version = b.graph.host.result.os.versionRange().gnuLibCVersion();
         const target = b.resolveTargetQuery(query);
 
         const toml_dep = b.dependency("toml", .{
@@ -593,9 +603,7 @@ pub fn build(b: *std.Build) void {
                 const run_cmd = b.addRunArtifact(exe);
                 run_step.dependOn(&run_cmd.step);
                 run_cmd.step.dependOn(b.getInstallStep());
-                if (b.args) |args| {
-                    run_cmd.addArgs(args);
-                }
+                run_cmd.addPassthruArgs();
             }
         }
     }
@@ -699,7 +707,7 @@ pub fn build(b: *std.Build) void {
                 const dll_options = b.addOptions();
                 dll_options.addOption(bool, "use_fltk", false);
                 dll.root_module.addOptions("build_options", dll_options);
-                dll.root_module.strip = optimize != .Debug;
+                dll.root_module.strip = optimize != .debug;
 
                 // Install to bin/dll/ subdirectory
                 const install_dll = b.addInstallArtifact(dll, .{
@@ -727,6 +735,10 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
             }),
         });
+        // The system linker does not add Zig compiler-rt (including stack probes).
+        host_obj.bundle_compiler_rt = true;
+        const wasmer = b.addTranslateC(.{ .root_source_file = .{ .cwd_relative = "/usr/include/wasmer.h" }, .target = b.graph.host, .optimize = optimize });
+        host_obj.root_module.addImport("wasmer", wasmer.createModule());
         host_obj.root_module.link_libc = true;
         // wasmer's pkg-config has stale build-machine paths (-L/build/.wasmer/lib
         // which doesn't exist here), so do NOT linkSystemLibrary("wasmer") on the
@@ -762,7 +774,7 @@ pub fn build(b: *std.Build) void {
     // compiling anywhere (there is no other CI gate for this).
     // -----------------------------------------------------------------------
     const fmt_check = b.addFmt(.{
-        .paths = &.{ "src", "build.zig", "build.zig.zon" },
+        .paths = b.pathList(&.{ "src", "build.zig", "build.zig.zon" }),
         .check = true,
     });
     b.getInstallStep().dependOn(&fmt_check.step);
@@ -779,7 +791,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     if (test_filter) |filter| {
-        const scan = testFilterMatches(b.build_root.handle, b.graph.io, b.allocator, filter);
+        const scan = testFilterMatches(b, filter);
         if (scan.matched == 0) {
             if (scan.total == 0) {
                 std.debug.print(
@@ -865,7 +877,7 @@ pub fn build(b: *std.Build) void {
             .target = b.graph.host,
             // Debug keeps the safety checks (integer overflow, bounds) that a
             // Release fuzzer would drop.
-            .optimize = .Debug,
+            .optimize = .debug,
         }),
     });
     const fuzz_build_options = b.addOptions();

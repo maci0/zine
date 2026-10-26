@@ -72,7 +72,7 @@ pub const Buffer = struct {
 
     /// Appends a WASM opcode byte to the buffer.
     pub fn appendOpcode(self: *Buffer, op: wasm.Opcode) !void {
-        try self.append(@intFromEnum(op));
+        try self.append(@backingInt(op));
     }
 };
 
@@ -115,7 +115,7 @@ pub const WasmModule = struct {
     /// Writes a single section to the output buffer.
     fn writeSection(out: *Buffer, id: wasm.SectionId, content: *const Buffer) !void {
         if (content.bytes.items.len == 0) return;
-        try out.append(@intFromEnum(id));
+        try out.append(@backingInt(id));
         try out.appendUleb128(@as(u32, @intCast(content.bytes.items.len)));
         try out.appendSlice(content.bytes.items);
     }

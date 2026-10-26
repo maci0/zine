@@ -159,7 +159,7 @@ test "DeleteObject frees owned DIB buffers but not caller-owned ones" {
     try std.testing.expect(gdi32.findObject(h) == null);
 
     // Caller-owned (stack/static) registrations must never be freed.
-    var stack_px = [_]u32{0} ** 4;
+    var stack_px = @as([4]u32, @splat(0));
     const h2 = gdi32.nextHandle();
     _ = gdi32.registerDib(h2, @intFromPtr(&stack_px), 2, 2, 32, 0, false);
     try std.testing.expectEqual(@as(i32, 1), stub_DeleteObject(h2));

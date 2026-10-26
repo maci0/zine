@@ -132,7 +132,7 @@ fn report(
 }
 
 fn saveCrash(io: std.Io, name: []const u8, input: []const u8, index: u64) !void {
-    const path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}-{d}.bin", .{ crash_dir, name, index });
+    const path = try std.heap.page_allocator.print("{s}/{s}-{d}.bin", .{ crash_dir, name, index });
     defer std.heap.page_allocator.free(path);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = input });
 }

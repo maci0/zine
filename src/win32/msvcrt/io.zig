@@ -90,7 +90,7 @@ const FDEV: u8 = 0x40;
 /// Pre-initialized ioinfo table for fd 0-31.
 /// Layout: [osfhnd: i32, osfile: u8, pipech: u8, pad: u16] × 32
 pub var ioinfo_table0: [IOINFO_TABLE_SIZE * IOINFO_SIZE]u8 = init_ioinfo: {
-    var buf: [IOINFO_TABLE_SIZE * IOINFO_SIZE]u8 = [_]u8{0} ** (IOINFO_TABLE_SIZE * IOINFO_SIZE);
+    var buf: [IOINFO_TABLE_SIZE * IOINFO_SIZE]u8 = @as([(IOINFO_TABLE_SIZE * IOINFO_SIZE)]u8, @splat(0));
     // fd 0 (stdin):  osfhnd=0, osfile=FOPEN|FTEXT|FDEV
     buf[0] = 0;
     buf[1] = 0;
@@ -113,7 +113,7 @@ pub var ioinfo_table0: [IOINFO_TABLE_SIZE * IOINFO_SIZE]u8 = init_ioinfo: {
 };
 
 /// __pioinfo: array of 64 pointers to ioinfo tables.
-pub var pioinfo: [64]usize = [_]usize{0} ** 64;
+pub var pioinfo: [64]usize = @as([64]usize, @splat(0));
 pub var pioinfo_guest_addr: usize = 0;
 
 pub fn get_pioinfo_guest_addr() usize {
@@ -132,7 +132,7 @@ pub fn get_pioinfo_guest_addr() usize {
                     t0_ptr.* = ioinfo_table0;
 
                     const ptr = @as(*[64]usize, @ptrCast(@alignCast(addr_ptr)));
-                    ptr.* = [_]usize{0} ** 64;
+                    ptr.* = @as([64]usize, @splat(0));
                     ptr[0] = table0_addr;
                 }
             }
@@ -153,14 +153,14 @@ pub fn initPioinfo() void {
 pub var nhandle: i32 = 256;
 
 const max_files = 64;
-var file_handles: [max_files]?std.Io.File = [_]?std.Io.File{null} ** max_files;
-var file_ptrs: [max_files]usize = [_]usize{0} ** max_files;
+var file_handles: [max_files]?std.Io.File = @as([max_files]?std.Io.File, @splat(null));
+var file_ptrs: [max_files]usize = @as([max_files]usize, @splat(0));
 
 /// Recycled FILE structs. raw_alloc never frees, and a guest that
 /// fopen/fclose-cycles (logs, temp files, response files) would otherwise
 /// grow the heap by @sizeOf(MSVCRT_FILE) per cycle forever. fopen pops from
 /// here before allocating; the struct is fully reinitialized on reuse.
-var file_ptr_free_list: [max_files]usize = [_]usize{0} ** max_files;
+var file_ptr_free_list: [max_files]usize = @as([max_files]usize, @splat(0));
 var file_ptr_free_count: usize = 0;
 
 /// Guards the two tables and the free list above. Every guest thread reaches
@@ -450,7 +450,7 @@ pub fn fclose(f: ?*anyopaque) callconv(.c) i32 {
         defer file_table_mutex.unlock();
         for (0..max_files) |idx| {
             if (file_ptrs[idx] == ptr_val) {
-                if (comptime @import("builtin").os.tag == .linux) {
+                if (comptime @import("builtin").target.os.tag == .linux) {
                     // Raw close: std.Io.File.close touches TLS, which faults
                     // inside the compat-mode SIGSEGV dispatch handler.
                     _ = std.os.linux.close(file.handle);
@@ -504,7 +504,7 @@ pub fn _fcloseall() callconv(.c) i32 {
     defer file_table_mutex.unlock();
     for (0..max_files) |idx| {
         if (file_handles[idx]) |file| {
-            if (comptime @import("builtin").os.tag == .linux) {
+            if (comptime @import("builtin").target.os.tag == .linux) {
                 _ = std.os.linux.close(file.handle);
             } else {
                 file.close(runtime.io());
@@ -824,8 +824,8 @@ test "fclose recycles FILE structs across fopen cycles" {
         file_ptrs = saved_ptrs;
         file_ptr_free_count = saved_free_count;
     }
-    file_handles = [_]?std.Io.File{null} ** max_files;
-    file_ptrs = [_]usize{0} ** max_files;
+    file_handles = @as([max_files]?std.Io.File, @splat(null));
+    file_ptrs = @as([max_files]usize, @splat(0));
     file_ptr_free_count = 0;
 
     // A real file in a tmp dir rather than a host device node, so the test
@@ -837,7 +837,7 @@ test "fclose recycles FILE structs across fopen cycles" {
     try tmp_dir.dir.writeFile(runtime.io(), .{ .sub_path = file_name, .data = "x" });
     var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
     const dir_len = try tmp_dir.dir.realPath(runtime.io(), &dir_buf);
-    const name_buf = try std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ dir_buf[0..dir_len], file_name });
+    const name_buf = try std.mem.printSentinel(&path_buf, "{s}/{s}", .{ dir_buf[0..dir_len], file_name }, 0);
     var mode_buf: [4]u8 = undefined;
     @memcpy(mode_buf[0..2], "r\x00");
 

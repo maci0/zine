@@ -58,7 +58,7 @@ pub fn GetVersionExA(lpVersionInfo: usize) callconv(w32cc.WINAPI) i32 {
     info.dwMinorVersion = 1;
     info.dwBuildNumber = 2600;
     info.dwPlatformId = w32.VER_PLATFORM_WIN32_NT;
-    info.szCSDVersion = [_]u8{0} ** 128;
+    info.szCSDVersion = @as([128]u8, @splat(0));
     return 1;
 }
 
@@ -75,7 +75,7 @@ pub fn GetVersionExW(lpVersionInfo: usize) callconv(w32cc.WINAPI) i32 {
     info.dwMinorVersion = 1;
     info.dwBuildNumber = 2600;
     info.dwPlatformId = w32.VER_PLATFORM_WIN32_NT;
-    info.szCSDVersion = [_]u8{0} ** 256;
+    info.szCSDVersion = @as([256]u8, @splat(0));
     return 1;
 }
 
@@ -99,7 +99,7 @@ pub fn GetLocalTime(lpSystemTime: usize) callconv(w32cc.WINAPI) void {
     const month_day = year_day.calculateMonthDay();
     const day_secs = epoch_secs.getDaySeconds();
     st.wYear = @intCast(year_day.year);
-    st.wMonth = @intFromEnum(month_day.month);
+    st.wMonth = @backingInt(month_day.month);
     st.wDayOfWeek = @intCast((epoch_day.day + 4) % 7);
     st.wDay = month_day.day_index + 1;
     st.wHour = @intCast(day_secs.getHoursIntoDay());
@@ -200,7 +200,7 @@ pub fn SystemTimeToFileTime(lpSystemTime: usize, lpFileTime: usize) callconv(w32
 
     if (st.wYear < 1601 or st.wYear > 30827 or
         st.wMonth < 1 or st.wMonth > 12 or
-        st.wDay < 1 or st.wDay > std.time.epoch.getDaysInMonth(st.wYear, @enumFromInt(st.wMonth)) or
+        st.wDay < 1 or st.wDay > std.time.epoch.getDaysInMonth(st.wYear, @fromBackingInt(@intCast(st.wMonth))) or
         st.wHour > 23 or st.wMinute > 59 or st.wSecond > 59 or st.wMilliseconds > 999)
     {
         kernel32_error.SetLastError(ERROR_INVALID_PARAMETER);

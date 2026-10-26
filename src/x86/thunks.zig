@@ -44,7 +44,7 @@ pub const ThunkEntry = struct {
 pub const MAX_THUNKS = runtime.MAX_THUNKS;
 
 /// Global thunk table (populated during PE loading).
-var thunk_entries: [MAX_THUNKS]?ThunkEntry = .{null} ** MAX_THUNKS;
+var thunk_entries: [MAX_THUNKS]?ThunkEntry = @splat(null);
 var thunk_count: u32 = 0;
 
 /// Capacity of the _initterm callback queue. The queue holds whatever the
@@ -62,7 +62,7 @@ const max_initterm_callbacks = 4096;
 /// On WASM, _initterm collects guest x86 function addresses here.
 /// After the stub returns, x86/execute.zig reads them to build a
 /// trampoline.
-pub var pending_initterm_callbacks: [max_initterm_callbacks]u32 = [_]u32{0} ** max_initterm_callbacks;
+pub var pending_initterm_callbacks: [max_initterm_callbacks]u32 = @as([max_initterm_callbacks]u32, @splat(0));
 pub var pending_initterm_count: usize = 0;
 
 pub fn queueInittermCallback(addr: u32) void {
@@ -186,11 +186,11 @@ pub fn readParam(cpu: *const Cpu, index: u32) u32 {
 /// so entries a test registered would otherwise outlive it and answer for an
 /// address the rest of the run never registered.
 pub fn reset() void {
-    thunk_entries = .{null} ** MAX_THUNKS;
+    thunk_entries = @splat(null);
     thunk_count = 0;
     import_count = 0;
     imports_sorted = false;
-    import_filter = [_]u64{0} ** FILTER_WORDS;
+    import_filter = @as([FILTER_WORDS]u64, @splat(0));
 }
 
 // -----------------------------------------------------------------------
@@ -353,7 +353,7 @@ fn FnTypeForArity(comptime n: usize) type {
     const ret_type = if (is_64) usize else u32;
     const cc = @import("../win32/calling_convention.zig").WINAPI;
     comptime var param_types: [n]type = undefined;
-    comptime var param_attrs: [n]std.builtin.Type.Fn.Param.Attributes = undefined;
+    comptime var param_attrs: [n]std.lang.Type.Fn.ParamAttributes = undefined;
     inline for (0..n) |i| {
         param_types[i] = param_type;
         param_attrs[i] = .{};
@@ -392,7 +392,7 @@ const FILTER_WORDS = 1 << 10; // 8 KiB of filter, one bit per slot
 /// Address bits below the shift are ignored, so neighbouring stubs (a vtable
 /// of them lands in one page) share a bit instead of each taking their own.
 const FILTER_ADDR_SHIFT = 8;
-var import_filter = [_]u64{0} ** FILTER_WORDS;
+var import_filter = @as([FILTER_WORDS]u64, @splat(0));
 
 /// The filter slot an address lands in: a word index and the bit within it.
 const FilterSlot = struct { word: usize, bit: u64 };
@@ -411,7 +411,7 @@ pub fn comPtr(comptime func: anytype, comptime name: []const u8) u32 {
     if (comptime @import("../platform.zig").is_native) {
         const param_count: u32 = comptime blk: {
             const info = @typeInfo(@TypeOf(func));
-            break :blk if (info == .@"fn") @intCast(info.@"fn".params.len) else 4;
+            break :blk if (info == .@"fn") @intCast(info.@"fn".param_types.len) else 4;
         };
         if (!isNativeImport(addr)) {
             registerNativeImport(full_addr, "COM", name, param_count * 4);
@@ -649,7 +649,7 @@ test "thunks: register and dispatch" {
     });
     try testing.expectEqual(@as(u32, 0), id);
 
-    var mem: [256]u8 = .{0} ** 256;
+    var mem: [256]u8 = @splat(0);
     var cpu = Cpu{ .memory = cpu_mod.GuestMemory{ .base = &mem } };
     cpu.esp = 200;
 
@@ -681,7 +681,7 @@ test "thunks: _ftol returns EDX:EAX and preserves the caller stack" {
         .{ .value = 9223372036854775808.0, .expected = std.math.minInt(i64) },
     };
     for (cases) |case| {
-        var mem: [256]u8 = .{0} ** 256;
+        var mem: [256]u8 = @splat(0);
         var cpu = Cpu{ .memory = cpu_mod.GuestMemory{ .base = &mem } };
         cpu.esp = 200;
         cpu.push32(0x12345678);

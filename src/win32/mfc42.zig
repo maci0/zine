@@ -54,7 +54,7 @@ pub fn register(environment: *env.Environment) !void {
     };
 
     for (ordinals) |ord| {
-        const name = try std.fmt.allocPrint(environment.allocator, "ordinal_{d}", .{ord});
+        const name = try environment.allocator.print("ordinal_{d}", .{ord});
         try environment.addBuiltinExportComptime(builtin_module, name, stub_mfc_dummy);
     }
 }

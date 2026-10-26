@@ -147,23 +147,23 @@ else
     cc -m32 -O2 -std=c99 -static -o "$BENCH_LINUX32" "$BENCH_SRC" || true
 fi
 
-# Build zine (ReleaseFast for fair comparison)
+# Build zine (fast for fair comparison)
 if command -v zig &>/dev/null; then
-    echo "Building zine (ReleaseFast)..."
-    # No fallback to a default build: a benchmark labeled ReleaseFast that
-    # silently measured ReleaseSafe or Debug numbers a different binary from
+    echo "Building zine (fast)..."
+    # No fallback to a default build: a benchmark labeled fast that
+    # silently measured safe or debug numbers a different binary from
     # the one the report names, so a failed build ends the run instead.
     drop_stale "$ZINE"
-    zig build -Doptimize=ReleaseFast --summary all
+    zig build -Doptimize=fast --summary all
     # The remaining three modes are optional. Each is removed first, so a build
     # that fails reports SKIPPED below rather than running whatever bytes an
     # earlier run left behind.
-    echo "Building zine.wasm (ReleaseFast)..."
+    echo "Building zine.wasm (fast)..."
     drop_stale "$ZINE_WASM"
-    zig build -Darch=wasm32 -Doptimize=ReleaseFast --summary all || true
+    zig build -Darch=wasm32 -Doptimize=fast --summary all || true
     echo "Building zine-host..."
     drop_stale "$ZINE_HOST"
-    zig build -Dhost -Doptimize=ReleaseFast --summary all || true
+    zig build -Dhost -Doptimize=fast --summary all || true
 fi
 
 echo -e "Done.\n"

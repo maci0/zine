@@ -188,13 +188,13 @@ pub const PEB = extern struct {
     /// ImageProcessAffinityMask
     ImageProcessAffinityMask: u32 = 1,
     /// GdiHandleBuffer
-    GdiHandleBuffer: [34]u32 = .{0} ** 34,
+    GdiHandleBuffer: [34]u32 = @splat(0),
     /// PostProcessInitRoutine
     PostProcessInitRoutine: u32 = 0,
     /// TlsExpansionBitmap
     TlsExpansionBitmap: u32 = 0,
     /// TlsExpansionBitmapBits
-    TlsExpansionBitmapBits: [32]u32 = .{0} ** 32,
+    TlsExpansionBitmapBits: [32]u32 = @splat(0),
     /// SessionId
     SessionId: u32 = 0,
     /// AppCompatFlags
@@ -263,9 +263,9 @@ pub const TEB = extern struct {
     /// Win32 thread info pointer
     Win32ThreadInfo: u32 = 0,
     /// User32 reserved fields
-    User32Reserved: [26]u32 = [_]u32{0} ** 26,
+    User32Reserved: [26]u32 = @as([26]u32, @splat(0)),
     /// User reserved fields
-    UserReserved: [5]u32 = [_]u32{0} ** 5,
+    UserReserved: [5]u32 = @as([5]u32, @splat(0)),
     /// WOW32 reserved field
     WOW32Reserved: u32 = 0,
     /// Current locale ID
@@ -273,7 +273,7 @@ pub const TEB = extern struct {
     /// FPU software status register
     FpSoftwareStatusRegister: u32 = 0,
     /// Reserved padding to ensure TEB size
-    _padding: [0x1000 - 0xCC]u8 = [_]u8{0} ** (0x1000 - 0xCC),
+    _padding: [0x1000 - 0xCC]u8 = @as([(0x1000 - 0xCC)]u8, @splat(0)),
 };
 
 /// Global TEB address — needed by timer threads that must set up FS base

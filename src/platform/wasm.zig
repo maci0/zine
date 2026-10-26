@@ -178,7 +178,7 @@ pub fn dup(fd: i32) !i32 {
 /// Returns the new file position, or -1 on error.
 pub fn lseek(fd: i32, offset: i64, whence: u32) i64 {
     var new_offset: u64 = undefined;
-    const rc = std.os.wasi.fd_seek(fd, offset, @enumFromInt(whence), &new_offset);
+    const rc = std.os.wasi.fd_seek(fd, offset, @fromBackingInt(@intCast(whence)), &new_offset);
     if (rc != .SUCCESS) return -1;
     return @intCast(new_offset);
 }

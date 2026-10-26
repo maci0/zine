@@ -45,7 +45,7 @@ fn getElapsedMs() u64 {
 const PAGE_SHIFT = 12; // 4 KB pages
 const MAX_PAGES = 256 * 1024; // 1 GB coverage → 256K pages
 
-var eip_pages: [MAX_PAGES]u64 = .{0} ** MAX_PAGES;
+var eip_pages: [MAX_PAGES]u64 = @splat(0);
 var total_insns: u64 = 0;
 
 /// Tick the heat map for a given EIP.  Called once per interpreted instruction.
@@ -67,7 +67,7 @@ pub inline fn tickEip(eip: u32) void {
 // the array stays at 4096 to leave room for wider encodings.
 const MAX_OPCODES = 4096;
 
-var opcode_counts: [MAX_OPCODES]u64 = .{0} ** MAX_OPCODES;
+var opcode_counts: [MAX_OPCODES]u64 = @splat(0);
 
 /// Tick the opcode counter.  `opcode` uses the same encoding as decoder:
 /// single-byte opcodes are 0x00-0xFF, two-byte are 0x0F00-0x0FFF.
@@ -89,10 +89,10 @@ pub inline fn tickOpcode(opcode: u16) void {
 // thunks.zig hands out, so both tables must cover the same range.
 const MAX_THUNKS = runtime.MAX_THUNKS;
 
-var thunk_counts: [MAX_THUNKS]u64 = .{0} ** MAX_THUNKS;
+var thunk_counts: [MAX_THUNKS]u64 = @splat(0);
 
 /// Names registered alongside thunks — points into thunks.zig entries.
-var thunk_names: [MAX_THUNKS]?[]const u8 = .{null} ** MAX_THUNKS;
+var thunk_names: [MAX_THUNKS]?[]const u8 = @splat(null);
 
 pub inline fn tickThunk(thunk_id: u32) void {
     if (!enabled) return;

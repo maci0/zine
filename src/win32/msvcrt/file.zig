@@ -119,7 +119,7 @@ pub fn close(fd: i32) callconv(.c) i32 {
     }
     if (fd >= 3) {
         const file = @import("../host_io.zig").fileFromFd(fd);
-        if (comptime @import("builtin").os.tag == .linux) {
+        if (comptime @import("builtin").target.os.tag == .linux) {
             // Raw close: std.Io.File.close goes through Io.Threaded (TLS),
             // which faults inside the compat-mode SIGSEGV dispatch handler.
             _ = std.os.linux.close(file.handle);
@@ -153,7 +153,7 @@ pub fn tell(fd: i32) callconv(.c) i32 {
 /// Implementation status: Fully implemented
 pub fn chsize(fd: i32, size: i32) callconv(.c) i32 {
     const file = @import("../host_io.zig").fileFromFd(fd);
-    if (comptime @import("builtin").os.tag == .linux) {
+    if (comptime @import("builtin").target.os.tag == .linux) {
         // Raw ftruncate: std.Io.File.setLength touches TLS (see _close).
         const rc = std.os.linux.ftruncate(file.handle, size);
         if (@as(isize, @bitCast(rc)) < 0) return -1;
@@ -167,7 +167,7 @@ pub fn chsize(fd: i32, size: i32) callconv(.c) i32 {
 /// Implementation status: Fully implemented
 pub fn filelength(fd: i32) callconv(.c) i32 {
     const file = @import("../host_io.zig").fileFromFd(fd);
-    if (comptime @import("builtin").os.tag == .linux) {
+    if (comptime @import("builtin").target.os.tag == .linux) {
         const posix_fs = @import("posix_fs.zig");
         const st = posix_fs.fstatFdLinux(file.handle) orelse return -1;
         if (trace.enable_tracing) trace.print("MSVCRT: _filelength(fd={d}) -> {d}\n", .{ fd, st.size });
@@ -210,7 +210,7 @@ pub fn stat(path_str: [*:0]const u8, stat_out: [*]u8) callconv(.c) i32 {
 pub fn fstat(fd: i32, stat_out: [*]u8) callconv(.c) i32 {
     {
         const file = @import("../host_io.zig").fileFromFd(fd);
-        const st = if (comptime @import("builtin").os.tag == .linux)
+        const st = if (comptime @import("builtin").target.os.tag == .linux)
             @import("posix_fs.zig").fstatFdLinux(file.handle)
         else
             file.stat(runtime.io()) catch null;

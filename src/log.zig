@@ -125,10 +125,10 @@ const max_home_len = 512;
 /// leading separator so both `/home/u/f` and `Z:\home\u\f` match. Empty
 /// until `initFromEnv` runs.
 var home_forms: [max_home_forms][max_home_len]u8 = undefined;
-var home_forms_len: [max_home_forms]usize = [_]usize{0} ** max_home_forms;
+var home_forms_len: [max_home_forms]usize = @as([max_home_forms]usize, @splat(0));
 
 fn initHomeRedaction(env: *const std.process.Environ.Map) void {
-    home_forms_len = [_]usize{0} ** max_home_forms;
+    home_forms_len = @as([max_home_forms]usize, @splat(0));
     const home = env.get("HOME") orelse env.get("USERPROFILE") orelse return;
     // A bare separator or an implausibly long value would match everywhere.
     if (home.len < 2 or home.len >= max_home_len) return;
@@ -229,7 +229,7 @@ pub fn redactEnvValue(name: []const u8, value: []const u8) []const u8 {
 /// Formats and emits a log message at the specified level.
 pub fn emit(level: Level, comptime fmt: []const u8, args: anytype) void {
     // Level filtering: skip messages below min_level (lower enum value = higher severity)
-    if (@intFromEnum(level) > @intFromEnum(min_level)) return;
+    if (@backingInt(level) > @backingInt(min_level)) return;
 
     const prefix = levelPrefix(level);
     const tag = if (getUseColor()) prefix.color else prefix.plain;

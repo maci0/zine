@@ -1548,7 +1548,7 @@ fn openFdCount() ?usize {
 }
 
 test "serving an asset from disk releases its descriptor" {
-    if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    if (comptime builtin.target.os.tag != .linux) return error.SkipZigTest;
     // The test runs from the repository root, where the static branch reads
     // its assets; a run from anywhere else has nothing to serve.
     if (std.Io.Dir.cwd().openFile(runtime.io(), "src/gui/menu.json", .{})) |probe| {
@@ -1599,7 +1599,7 @@ test "a 304 describes the gzip representation it revalidated" {
     const etag_end = std.mem.indexOfPos(u8, response, etag_start, "\r\n") orelse return error.TestUnexpectedResult;
     const etag = response[etag_start..etag_end];
 
-    const conditional = try std.fmt.allocPrint(std.testing.allocator, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\nIf-None-Match: {s}\r\n\r\n", .{etag});
+    const conditional = try std.testing.allocator.print("GET /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\nIf-None-Match: {s}\r\n\r\n", .{etag});
     defer std.testing.allocator.free(conditional);
     var conditional_input = std.Io.Reader.fixed(conditional);
     var conditional_output: std.Io.Writer.Allocating = .init(std.testing.allocator);
@@ -1614,7 +1614,7 @@ test "a 304 describes the gzip representation it revalidated" {
 
     // An identity client revalidates a different ETag and must not be told
     // the resource is gzip encoded.
-    const identity = try std.fmt.allocPrint(std.testing.allocator, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: identity\r\nIf-None-Match: {s}\r\n\r\n", .{etag});
+    const identity = try std.testing.allocator.print("GET /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: identity\r\nIf-None-Match: {s}\r\n\r\n", .{etag});
     defer std.testing.allocator.free(identity);
     var identity_input = std.Io.Reader.fixed(identity);
     var identity_output: std.Io.Writer.Allocating = .init(std.testing.allocator);
@@ -1669,7 +1669,7 @@ test "static asset responses carry an etag and 304 on a matching If-None-Match" 
     const etag_start = (std.mem.indexOf(u8, response, "\r\netag: ") orelse return error.TestUnexpectedResult) + "\r\netag: ".len;
     const etag_end = std.mem.indexOfPos(u8, response, etag_start, "\r\n") orelse return error.TestUnexpectedResult;
     const etag = response[etag_start..etag_end];
-    const conditional = try std.fmt.allocPrint(std.testing.allocator, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nIf-None-Match: {s}\r\n\r\nGET /win2k.css HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", .{etag});
+    const conditional = try std.testing.allocator.print("GET /app.js HTTP/1.1\r\nHost: localhost\r\nIf-None-Match: {s}\r\n\r\nGET /win2k.css HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", .{etag});
     defer std.testing.allocator.free(conditional);
     var conditional_input = std.Io.Reader.fixed(conditional);
     var conditional_output: std.Io.Writer.Allocating = .init(std.testing.allocator);
@@ -1752,7 +1752,7 @@ test "static assets negotiate gzip without changing decoded content" {
         try decompressor.reader.readSliceAll(decoded);
         try std.testing.expectError(error.EndOfStream, decompressor.reader.takeByte());
         try std.testing.expectEqualStrings(asset[0], decoded);
-        const length_header = try std.fmt.allocPrint(std.testing.allocator, "\r\ncontent-length: {d}\r\n", .{body.len});
+        const length_header = try std.testing.allocator.print("\r\ncontent-length: {d}\r\n", .{body.len});
         defer std.testing.allocator.free(length_header);
         try std.testing.expect(std.mem.indexOf(u8, response, length_header) != null);
     }
@@ -1825,7 +1825,7 @@ test "static asset encoding negotiation preserves identity and edited files" {
         .{ .content = "", .compressed = false },
     };
     for (cases) |case| {
-        const request = try std.fmt.allocPrint(std.testing.allocator, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: {s}\r\n\r\n", .{case.encoding});
+        const request = try std.testing.allocator.print("GET /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: {s}\r\n\r\n", .{case.encoding});
         defer std.testing.allocator.free(request);
         for (bodies) |body| {
             var input = std.Io.Reader.fixed(request);
@@ -1865,7 +1865,7 @@ test "gzip asset validators distinguish representations and HEAD omits the body"
         .{ "HEAD", "gzip", "\"outdated\"", false, false },
     };
     inline for (cases) |case| {
-        const request = try std.fmt.allocPrint(std.testing.allocator, "{s} /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: {s}\r\nIf-None-Match: {s}\r\n\r\n", .{ case[0], case[1], case[2] });
+        const request = try std.testing.allocator.print("{s} /app.js HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: {s}\r\nIf-None-Match: {s}\r\n\r\n", .{ case[0], case[1], case[2] });
         defer std.testing.allocator.free(request);
         var next_input = std.Io.Reader.fixed(request);
         var next_output: std.Io.Writer.Allocating = .init(std.testing.allocator);
@@ -1888,7 +1888,7 @@ test "a digested asset URL is served immutable, and a stale one is a miss" {
     std.crypto.hash.sha2.Sha256.hash(content, &digest, .{});
     const hex = std.fmt.bytesToHex(digest, .lower);
     var stale_buf: [hex.len]u8 = undefined;
-    _ = try std.fmt.bufPrint(&stale_buf, "{s}", .{std.fmt.bytesToHex([_]u8{0} ** 32, .lower)});
+    _ = try std.fmt.bufPrint(&stale_buf, "{s}", .{std.fmt.bytesToHex(@as([32]u8, @splat(0)), .lower)});
 
     const cases = [_]struct { url: []const u8, status: []const u8, cache_control: ?[]const u8 }{
         .{ .url = "/app.js", .status = "200", .cache_control = "private, no-cache" },
@@ -1898,7 +1898,7 @@ test "a digested asset URL is served immutable, and a stale one is a miss" {
         .{ .url = "/win2k-", .status = "200", .cache_control = "private, no-cache" },
     };
     for (cases) |case| {
-        const request = try std.fmt.allocPrint(std.testing.allocator, "GET {s} HTTP/1.1\r\nHost: localhost\r\n\r\n", .{case.url});
+        const request = try std.testing.allocator.print("GET {s} HTTP/1.1\r\nHost: localhost\r\n\r\n", .{case.url});
         defer std.testing.allocator.free(request);
         var input = std.Io.Reader.fixed(request);
         var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
@@ -1907,20 +1907,20 @@ test "a digested asset URL is served immutable, and a stale one is a miss" {
         var req = try server.receiveHead();
         try respondStaticContent(&req, content, "application/javascript");
         const response = output.written();
-        const status_line = try std.fmt.allocPrint(std.testing.allocator, "HTTP/1.1 {s} ", .{case.status});
+        const status_line = try std.testing.allocator.print("HTTP/1.1 {s} ", .{case.status});
         defer std.testing.allocator.free(status_line);
         try std.testing.expect(std.mem.startsWith(u8, response, status_line));
-        const control = try std.fmt.allocPrint(std.testing.allocator, "\r\ncache-control: {s}\r\n", .{case.cache_control.?});
+        const control = try std.testing.allocator.print("\r\ncache-control: {s}\r\n", .{case.cache_control.?});
         defer std.testing.allocator.free(control);
         try std.testing.expect(std.mem.indexOf(u8, response, control) != null);
     }
 
-    const digested = try std.fmt.allocPrint(std.testing.allocator, "/app-{s}.js", .{hex});
+    const digested = try std.testing.allocator.print("/app-{s}.js", .{hex});
     defer std.testing.allocator.free(digested);
-    const stale = try std.fmt.allocPrint(std.testing.allocator, "/app-{s}.js", .{stale_buf});
+    const stale = try std.testing.allocator.print("/app-{s}.js", .{stale_buf});
     defer std.testing.allocator.free(stale);
     for ([_][]const u8{ digested, stale }) |url| {
-        const request = try std.fmt.allocPrint(std.testing.allocator, "GET {s} HTTP/1.1\r\nHost: localhost\r\n\r\n", .{url});
+        const request = try std.testing.allocator.print("GET {s} HTTP/1.1\r\nHost: localhost\r\n\r\n", .{url});
         defer std.testing.allocator.free(request);
         var input = std.Io.Reader.fixed(request);
         var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
@@ -1944,7 +1944,7 @@ test "the document and the script name the digested assets the build embedded" {
         if (!asset.digested_url) continue;
         const digest = @field(assets, asset.path ++ "_digest");
         const ext = std.fs.path.extension(asset.path);
-        const url = try std.fmt.allocPrint(std.testing.allocator, "/{s}-{s}{s}", .{
+        const url = try std.testing.allocator.print("/{s}-{s}{s}", .{
             asset.path[0 .. asset.path.len - ext.len],
             std.fmt.bytesToHex(digest, .lower),
             ext,
@@ -1970,7 +1970,7 @@ test "the document and the script name the digested assets the build embedded" {
     }
     // A digest no build produced resolves to nothing, so the request is a
     // miss rather than a 200 that would pin bytes under an immutable URL.
-    const absent: [std.crypto.hash.sha2.Sha256.digest_length]u8 = [_]u8{0} ** 32;
+    const absent: [std.crypto.hash.sha2.Sha256.digest_length]u8 = @as([32]u8, @splat(0));
     try std.testing.expect(embeddedContent(absent) == null);
     try std.testing.expect(precompressedContent(absent) == null);
     // The document itself keeps a stable URL: it is what names the assets.
@@ -1983,7 +1983,7 @@ test "the document and the script name the digested assets the build embedded" {
 test "the disk branch serves the declared assets and nothing else" {
     const list = @import("web_asset_paths.zig");
     for (list.assets) |asset| {
-        const url = try std.fmt.allocPrint(std.testing.allocator, "/{s}", .{asset.path});
+        const url = try std.testing.allocator.print("/{s}", .{asset.path});
         defer std.testing.allocator.free(url);
         try std.testing.expect(isDeclaredAsset(url));
     }
@@ -2006,13 +2006,13 @@ test "a digested asset URL answers the content it names" {
         const content = @field(assets, asset.path);
         const digest = @field(assets, asset.path ++ "_digest");
         const ext = std.fs.path.extension(asset.path);
-        const url = try std.fmt.allocPrint(std.testing.allocator, "/{s}-{s}{s}", .{
+        const url = try std.testing.allocator.print("/{s}-{s}{s}", .{
             asset.path[0 .. asset.path.len - ext.len],
             std.fmt.bytesToHex(digest, .lower),
             ext,
         });
         defer std.testing.allocator.free(url);
-        const request = try std.fmt.allocPrint(std.testing.allocator, "GET {s} HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n", .{url});
+        const request = try std.testing.allocator.print("GET {s} HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n", .{url});
         defer std.testing.allocator.free(request);
 
         var input = std.Io.Reader.fixed(request);

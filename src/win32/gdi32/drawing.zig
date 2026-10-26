@@ -993,7 +993,7 @@ fn makeDibHeader(w: i32, h: i32, bpp: u16) w32.BITMAPINFOHEADER {
 }
 
 test "fillRect: fills clamped intersection with BGRA bytes" {
-    var buf: [8 * 4 * 4]u8 = .{0} ** (8 * 4 * 4);
+    var buf: [8 * 4 * 4]u8 = @splat(0);
     const fb = FramebufferInfo{ .buf = &buf, .w = 8, .h = 4, .is_screen = false };
 
     // COLORREF 0x00102030: B=0x10 G=0x20 R=0x30 -> bytes B,G,R,A = 10 20 30 FF
@@ -1060,7 +1060,7 @@ test "blitDIBToBufferAt: 32bpp top-down copy with clipping" {
     }.f;
 
     const header = makeDibHeader(4, -2, 32); // negative height = top-down
-    var dest: [4 * 2 * 4]u8 = .{0} ** (4 * 2 * 4);
+    var dest: [4 * 2 * 4]u8 = @splat(0);
 
     // Full copy at offset 0
     blitDIBToBufferAt(@intFromPtr(&src_bytes), @intFromPtr(&header), &dest, 4, 2, 0, 0, 0, 0, 4, 2, null, 0x00CC0020);
@@ -1081,10 +1081,10 @@ test "blitDIBToBufferAt: 32bpp top-down copy with clipping" {
 test "blitDIBToBufferAt: 32bpp bottom-up row order" {
     // Positive biHeight = bottom-up: the first stored row is the BOTTOM
     // image row, so it lands in the last dest row.
-    var src_bytes: [4 * 2 * 4]u8 = .{0} ** (4 * 2 * 4);
+    var src_bytes: [4 * 2 * 4]u8 = @splat(0);
     const header_td = makeDibHeader(4, -2, 32);
     const header_bu = makeDibHeader(4, 2, 32);
-    var dest: [4 * 2 * 4]u8 = .{0} ** (4 * 2 * 4);
+    var dest: [4 * 2 * 4]u8 = @splat(0);
 
     // Mark source row 0 (physical) with a recognizable R byte = 0x77.
     @memset(src_bytes[0..16], 0x11);
@@ -1128,7 +1128,7 @@ test "StretchBlt: 2x upscale maps source by floor(dx*wSrc/wd)" {
 
     // 2x1 source scaled to 4x2: sx(dx) = xSrc + floor(dx*2/4) -> 0,0,1,1.
     var src_px = [_]u32{ 0xFF111111, 0xFF222222 };
-    var dest_px = [_]u32{0} ** (4 * 2);
+    var dest_px = @as([(4 * 2)]u32, @splat(0));
 
     // Caller-owned stack buffers: owned=false so DeleteObject never frees them.
     _ = gdi.registerDib(0xBEEF0001, @intFromPtr(&src_px), 2, 1, 32, 0, false);
@@ -1165,7 +1165,7 @@ test "StretchBlt: negative source origin is a no-op" {
     }
 
     var src_px = [_]u32{0xFF111111};
-    var dest_px = [_]u32{0} ** (2 * 2);
+    var dest_px = @as([(2 * 2)]u32, @splat(0));
 
     _ = gdi.registerDib(0xBEEF0003, @intFromPtr(&src_px), 1, 1, 32, 0, false);
     _ = gdi.registerDib(0xBEEF0004, @intFromPtr(&dest_px), 2, 2, 32, 0, false);

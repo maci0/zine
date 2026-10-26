@@ -741,7 +741,7 @@ fn controlClassOf(hwnd: usize) ?[]const u8 {
 // --- Button state (checkboxes / radio buttons) ---
 
 const ButtonState = struct { hwnd: usize, checked: u32, state: u32 };
-var button_states: [64]ButtonState = [_]ButtonState{.{ .hwnd = 0, .checked = 0, .state = 0 }} ** 64;
+var button_states: [64]ButtonState = @as([64]ButtonState, @splat(.{ .hwnd = 0, .checked = 0, .state = 0 }));
 
 fn buttonStateOf(hwnd: usize) ?*ButtonState {
     for (&button_states) |*bs| {
@@ -1299,7 +1299,7 @@ pub fn setListboxCursor(ctrl_id: u32, index: i32) void {
 }
 
 const ProgressState = struct { hwnd: usize, min: i32, max: i32, pos: i32 };
-var progress_states: [32]ProgressState = [_]ProgressState{.{ .hwnd = 0, .min = 0, .max = 100, .pos = 0 }} ** 32;
+var progress_states: [32]ProgressState = @as([32]ProgressState, @splat(.{ .hwnd = 0, .min = 0, .max = 100, .pos = 0 }));
 var progress_state_count: usize = 0;
 
 fn progressStateOf(hwnd: usize) *ProgressState {
@@ -1657,7 +1657,7 @@ pub fn releaseControlState(hwnd: usize) void {
 }
 
 const UpDownState = struct { hwnd: usize, pos: i32, min: i32, max: i32 };
-var updown_states: [32]UpDownState = [_]UpDownState{.{ .hwnd = 0, .pos = 0, .min = 0, .max = 100 }} ** 32;
+var updown_states: [32]UpDownState = @as([32]UpDownState, @splat(.{ .hwnd = 0, .pos = 0, .min = 0, .max = 100 }));
 var updown_state_count: usize = 0;
 
 /// Low 32 bits of a usize (wParam) reinterpreted as i32 — handles negative
@@ -1693,7 +1693,7 @@ const DtpState = extern struct {
     second: u16 = 0,
     milliseconds: u16 = 0,
 };
-var dtp_states: [16]DtpState = [_]DtpState{.{}} ** 16;
+var dtp_states: [16]DtpState = @as([16]DtpState, @splat(.{}));
 var dtp_state_count: usize = 0;
 
 /// Weekday (0 = Sunday) that the calendar gives a date. Exact for every date
@@ -1717,7 +1717,7 @@ fn dtpSetSystemTime(st: *DtpState, src: []const u8) bool {
     @memcpy(std.mem.asBytes(&in), src[0..@sizeOf(DtpState)]);
     if (in.year < 1601 or in.year > 30827) return false;
     if (in.month < 1 or in.month > 12) return false;
-    if (in.day < 1 or in.day > std.time.epoch.getDaysInMonth(in.year, @enumFromInt(in.month))) return false;
+    if (in.day < 1 or in.day > std.time.epoch.getDaysInMonth(in.year, @fromBackingInt(@intCast(in.month)))) return false;
     st.* = in;
     st.day_of_week = civilDayOfWeek(in.year, in.month, in.day);
     return true;
@@ -1749,7 +1749,7 @@ fn dtpStateOf(hwnd: usize) *DtpState {
     }
     return &dtp_states[0];
 }
-var dtp_hwnds: [16]usize = [_]usize{0} ** 16;
+var dtp_hwnds: [16]usize = @as([16]usize, @splat(0));
 
 // --- Tooltip text store (TTM_ADDTOOL captures the tip text per hwnd) ---
 const TooltipState = struct { hwnd: usize, text: [256]u8, len: u16 };
@@ -1913,7 +1913,7 @@ test "a stored date keeps the weekday its calendar gives, not the caller's" {
     // A zeroed wDayOfWeek (0 = Sunday) is what a Delphi caller sends with a
     // real date; 2000-02-29 was a Tuesday, and 2024-12-31 a Tuesday too.
     const zeroed: [16]u8 = blk: {
-        var b = [_]u8{0} ** 16;
+        var b = @as([16]u8, @splat(0));
         std.mem.writeInt(u16, b[0..2], 2000, .little);
         std.mem.writeInt(u16, b[2..4], 2, .little);
         std.mem.writeInt(u16, b[6..8], 29, .little);
@@ -1924,7 +1924,7 @@ test "a stored date keeps the weekday its calendar gives, not the caller's" {
     try testing.expectEqual(@as(u16, 2), st.day_of_week); // Tuesday
 
     const year_end: [16]u8 = blk: {
-        var b = [_]u8{0} ** 16;
+        var b = @as([16]u8, @splat(0));
         std.mem.writeInt(u16, b[0..2], 2024, .little);
         std.mem.writeInt(u16, b[2..4], 12, .little);
         std.mem.writeInt(u16, b[6..8], 31, .little);
@@ -1934,7 +1934,7 @@ test "a stored date keeps the weekday its calendar gives, not the caller's" {
     try testing.expectEqual(@as(u16, 2), st.day_of_week); // Tuesday
     // 2025-01-01 is a Wednesday: the weekday follows the year boundary.
     const new_year: [16]u8 = blk: {
-        var b = [_]u8{0} ** 16;
+        var b = @as([16]u8, @splat(0));
         std.mem.writeInt(u16, b[0..2], 2025, .little);
         std.mem.writeInt(u16, b[2..4], 1, .little);
         std.mem.writeInt(u16, b[6..8], 1, .little);
@@ -1954,7 +1954,7 @@ test "a date the calendar does not have is rejected and leaves the state alone" 
         .{ 2024, 1, 0 },
     };
     for (impossible) |ymd| {
-        var b = [_]u8{0} ** 16;
+        var b = @as([16]u8, @splat(0));
         std.mem.writeInt(u16, b[0..2], ymd[0], .little);
         std.mem.writeInt(u16, b[2..4], ymd[1], .little);
         std.mem.writeInt(u16, b[6..8], ymd[2], .little);

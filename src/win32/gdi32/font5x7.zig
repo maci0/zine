@@ -420,13 +420,13 @@ test "an accented letter keeps the body of its base" {
     try testing.expectEqual(glyphs['E' - 32][1], glyphForChar(0xC9)[3]);
     try testing.expect(glyphForChar(0xD8)[3] & 0x11 == 0x11); // the O body
     // The space characters stay blank.
-    const blank = [_]u8{0} ** 7;
+    const blank = @as([7]u8, @splat(0));
     try testing.expect(std.meta.eql(blank, glyphForChar(0xA0)));
 }
 
 test "unmapped code points render as '?' and undefined CP1252 bytes as blank" {
     const fallback = glyphs['?' - 32];
-    const blank = [_]u8{0} ** 7;
+    const blank = @as([7]u8, @splat(0));
     for ([_]u8{ 0x01, 0x1F, 0x7F }) |c| {
         try testing.expect(std.meta.eql(fallback, glyphForChar(c)));
     }

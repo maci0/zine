@@ -214,11 +214,11 @@ pub const Environment = struct {
         comptime var is_bare_fn = false;
         comptime var is_variadic = false;
         if (info == .pointer and @typeInfo(info.pointer.child) == .@"fn") {
-            param_len = @typeInfo(info.pointer.child).@"fn".params.len;
-            is_variadic = @typeInfo(info.pointer.child).@"fn".is_var_args;
+            param_len = @typeInfo(info.pointer.child).@"fn".param_types.len;
+            is_variadic = @typeInfo(info.pointer.child).@"fn".attrs.varargs;
         } else if (info == .@"fn") {
-            param_len = info.@"fn".params.len;
-            is_variadic = info.@"fn".is_var_args;
+            param_len = info.@"fn".param_types.len;
+            is_variadic = info.@"fn".attrs.varargs;
             is_bare_fn = true;
         } else {
             @compileError("addBuiltinExportComptime requires a function or function pointer");
@@ -282,7 +282,7 @@ pub const Environment = struct {
                     var call_args: std.meta.ArgsTuple(FnType) = undefined;
                     var pointer_slots: [param_len]usize = @splat(0);
                     inline for (0..param_len) |i| {
-                        const ParamType = fn_info.params[i].type.?;
+                        const ParamType = fn_info.param_types[i].?;
                         if (comptime @import("../x86/compat_abi.zig").isPointerSlot(ParamType)) {
                             // Pointer outputs need host-to-guest translation as well as four-byte slots.
                             pointer_slots[i] = translateGuestAddr(cpu.memory.read32(args[i]), cpu);
@@ -292,7 +292,7 @@ pub const Environment = struct {
 
                     const result = @call(.auto, fptr, call_args);
                     inline for (0..param_len) |i| {
-                        if (comptime @import("../x86/compat_abi.zig").isPointerSlot(fn_info.params[i].type.?)) {
+                        if (comptime @import("../x86/compat_abi.zig").isPointerSlot(fn_info.param_types[i].?)) {
                             const value = pointer_slots[i];
                             cpu.memory.write32(args[i], if (value == 0) 0 else toU32(@as(*anyopaque, @ptrFromInt(value)), cpu));
                         }
@@ -347,7 +347,7 @@ pub const Environment = struct {
                             }
                         },
                         .bool => val != 0,
-                        .@"enum" => @enumFromInt(val),
+                        .@"enum" => @fromBackingInt(@intCast(val)),
                         else => blk: {
                             // Only @bitCast when sizes match (both 32 bits)
                             if (@sizeOf(T) == @sizeOf(u32)) {
@@ -423,9 +423,9 @@ pub const Environment = struct {
         comptime var stub_param_len: usize = 0;
         comptime var is_bare_fn = false;
         if (info == .pointer and @typeInfo(info.pointer.child) == .@"fn") {
-            stub_param_len = @typeInfo(info.pointer.child).@"fn".params.len;
+            stub_param_len = @typeInfo(info.pointer.child).@"fn".param_types.len;
         } else if (info == .@"fn") {
-            stub_param_len = info.@"fn".params.len;
+            stub_param_len = info.@"fn".param_types.len;
             is_bare_fn = true;
         } else {
             @compileError("addBuiltinExportComptimeVA requires a function or function pointer");
@@ -445,7 +445,7 @@ pub const Environment = struct {
             const fn_type = if (is_bare_fn) @TypeOf(func) else @typeInfo(@TypeOf(func)).pointer.child;
             const fn_info = @typeInfo(fn_type).@"fn";
             inline for (0..fixed_params) |i| {
-                if (comptime fn_info.params[i].type.? == usize) {
+                if (comptime fn_info.param_types[i].? == usize) {
                     @compileError("Variadic stub fixed parameters must not be usize: declare the parameter as a pointer or a sized int");
                 }
             }
@@ -520,7 +520,7 @@ pub const Environment = struct {
                             }
                         },
                         .bool => val != 0,
-                        .@"enum" => @enumFromInt(val),
+                        .@"enum" => @fromBackingInt(@intCast(val)),
                         else => blk: {
                             if (@sizeOf(T) == @sizeOf(u32)) {
                                 break :blk @bitCast(val);
@@ -548,7 +548,7 @@ pub const Environment = struct {
 
                     // Fill fixed params (all except the last, which is va_list)
                     inline for (0..fixed_params) |i| {
-                        const ParamType = fn_info.params[i].type.?;
+                        const ParamType = fn_info.param_types[i].?;
                         call_args[i] = castArg(ParamType, args[i], cpu);
                     }
 
@@ -589,8 +589,8 @@ pub const Environment = struct {
             const info = @typeInfo(VTableType);
             if (info != .@"struct") @compileError("VTableType must be a struct");
 
-            inline for (info.@"struct".fields) |field| {
-                const func_ptr = @field(vtable, field.name);
+            inline for (info.@"struct".field_names) |field_name| {
+                const func_ptr = @field(vtable, field_name);
                 const FuncType = @TypeOf(func_ptr);
 
                 var target_ptr: usize = 0;
@@ -600,7 +600,7 @@ pub const Environment = struct {
                     .pointer => |p| {
                         if (@typeInfo(p.child) == .@"fn") {
                             target_ptr = @intFromPtr(func_ptr);
-                            param_len = @intCast(@typeInfo(p.child).@"fn".params.len);
+                            param_len = @intCast(@typeInfo(p.child).@"fn".param_types.len);
                         }
                     },
                     .optional => |opt| {
@@ -609,7 +609,7 @@ pub const Environment = struct {
                             if (@typeInfo(p.child) == .@"fn") {
                                 if (func_ptr) |ptr| {
                                     target_ptr = @intFromPtr(ptr);
-                                    param_len = @intCast(@typeInfo(p.child).@"fn".params.len);
+                                    param_len = @intCast(@typeInfo(p.child).@"fn".param_types.len);
                                 }
                             }
                         }
@@ -625,7 +625,7 @@ pub const Environment = struct {
                     x86_thunks.registerNativeImport(
                         @intCast(target_ptr),
                         "COM",
-                        field.name,
+                        field_name,
                         param_len * 4,
                     );
                 }

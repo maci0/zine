@@ -108,13 +108,13 @@ pub var resolution_set: bool = false; // True once setResolution is called with 
 pub var input_mutex: runtime.Mutex = .{};
 
 /// Current state of the keyboard (256 keys).
-pub var keyboard_state: [256]u8 = [_]u8{0} ** 256;
+pub var keyboard_state: [256]u8 = @as([256]u8, @splat(0));
 /// Last recorded X coordinate of the mouse.
 pub var last_mouse_x: i32 = 0;
 /// Last recorded Y coordinate of the mouse.
 pub var last_mouse_y: i32 = 0;
 /// State of mouse buttons (0=left, 1=right, 2=middle, 3=x1).
-pub var mouse_buttons: [4]u8 = [_]u8{0} ** 4; // 0=left, 1=right, 2=middle, 3=x1
+pub var mouse_buttons: [4]u8 = @as([4]u8, @splat(0)); // 0=left, 1=right, 2=middle, 3=x1
 /// Accumulated mouse X delta (for DirectInput).
 pub var mouse_dx: i32 = 0; // Accumulated X delta for DirectInput
 /// Accumulated mouse Y delta (for DirectInput).

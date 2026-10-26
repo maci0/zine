@@ -286,7 +286,7 @@ const MenuItemState = struct {
     flags: u32 = 0,
     used: bool = false,
 };
-var menu_item_states: [64]MenuItemState = .{MenuItemState{}} ** 64;
+var menu_item_states: [64]MenuItemState = @splat(MenuItemState{});
 
 fn menuItemKey(hMenu: usize, uId: u32) MenuItemKey {
     return .{ .hMenu = hMenu, .uId = uId };

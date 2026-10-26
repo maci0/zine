@@ -291,10 +291,10 @@ pub fn allocTexture() *IDirect3DTexture2 {
 }
 
 // Storage for viewport data — D3DVIEWPORT2 is 44 bytes
-var viewport2_data: [44]u8 = [_]u8{0} ** 44;
+var viewport2_data: [44]u8 = @as([44]u8, @splat(0));
 var viewport2_valid: bool = false;
 // D3DVIEWPORT (legacy) is 44 bytes too
-var viewport_data: [44]u8 = [_]u8{0} ** 44;
+var viewport_data: [44]u8 = @as([44]u8, @splat(0));
 var viewport_valid: bool = false;
 
 // ===== Pipeline State Storage =====
@@ -302,10 +302,10 @@ var viewport_valid: bool = false;
 /// Texture stage state: 8 stages × 32 state types.
 const MAX_TEXTURE_STAGES = 8;
 const MAX_TSS_STATES = 32;
-var texture_stage_states: [MAX_TEXTURE_STAGES][MAX_TSS_STATES]u32 = [_][MAX_TSS_STATES]u32{[_]u32{0} ** MAX_TSS_STATES} ** MAX_TEXTURE_STAGES;
+var texture_stage_states: [MAX_TEXTURE_STAGES][MAX_TSS_STATES]u32 = @as([MAX_TEXTURE_STAGES][MAX_TSS_STATES]u32, @splat(@as([MAX_TSS_STATES]u32, @splat(0))));
 
 /// Active texture handles per stage.
-var texture_handles: [MAX_TEXTURE_STAGES]usize = [_]usize{0} ** MAX_TEXTURE_STAGES;
+var texture_handles: [MAX_TEXTURE_STAGES]usize = @as([MAX_TEXTURE_STAGES]usize, @splat(0));
 
 // ===== Viewport Implementations =====
 
@@ -415,7 +415,7 @@ fn d3d7_EnumDevices(this: *IDirect3D7, lpEnumDevicesCallback: usize, lpUserArg: 
         const cb = @as(*const fn (usize, usize, usize, usize) callconv(w32cc.WINAPI) i32, @ptrFromInt(lpEnumDevicesCallback));
 
         // Create D3DDEVICEDESC7 (smaller than D3DDEVICEDESC — different struct)
-        var desc7: [544]u8 = [_]u8{0} ** 544;
+        var desc7: [544]u8 = @as([544]u8, @splat(0));
         @as(*align(1) u32, @ptrFromInt(@intFromPtr(&desc7))).* = 0x00017FF1; // dwDevCaps
         // ... fill dpcLineCaps, dpcTriCaps, etc.
 
@@ -442,8 +442,8 @@ fn d3d3_EnumDevices(this: *IDirect3D7, lpEnumDevicesCallback: usize, lpUserArg: 
         // D3DDEVICEDESC (old-style) = 252 bytes (0xFC)
         // IMPORTANT: D3DPRIMCAPS is 56 bytes (14 DWORDs), NOT 48!
         // Layout verified from Wine d3dcaps.h — see docs/DX_VTABLES.md
-        var hw_desc: [252]u8 = [_]u8{0} ** 252;
-        var hel_desc: [252]u8 = [_]u8{0} ** 252;
+        var hw_desc: [252]u8 = @as([252]u8, @splat(0));
+        var hel_desc: [252]u8 = @as([252]u8, @splat(0));
 
         // ---------- hw_desc ----------
         // 0x00: dwSize = 252

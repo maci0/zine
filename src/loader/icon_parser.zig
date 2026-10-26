@@ -96,7 +96,7 @@ pub fn parseIconData(allocator: std.mem.Allocator, data: []const u8, icon_data: 
     defer allocator.free(b64_buf);
     _ = b64_encoder.encode(b64_buf, ico_bytes);
 
-    const json_str = try std.fmt.allocPrint(allocator, "{{\"type\":\"set_icon\",\"base64\":\"{s}\"}}", .{b64_buf});
+    const json_str = try allocator.print("{{\"type\":\"set_icon\",\"base64\":\"{s}\"}}", .{b64_buf});
 
     if (trace.enable_tracing) trace.print("ICON PARSER: Successfully extracted icon and encoded to base64\n", .{});
     return json_str;

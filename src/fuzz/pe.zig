@@ -9,7 +9,7 @@ const pe = @import("../pe.zig");
 /// Build a minimal, well-formed PE32 image with `sections` section headers.
 /// Returned by value so the seed corpus is a compile-time constant.
 fn buildImage(comptime sections: u16, comptime file_len: usize) [file_len]u8 {
-    var buf = [_]u8{0} ** file_len;
+    var buf = @as([file_len]u8, @splat(0));
     const dos: *pe.IMAGE_DOS_HEADER = @ptrCast(@alignCast(&buf));
     dos.e_magic = pe.IMAGE_DOS_SIGNATURE;
     dos.e_lfanew = 64;
@@ -49,7 +49,7 @@ pub const seeds = [_][]const u8{
     &image_one_section,
     &image_three_sections,
     &image_no_sections,
-    &([_]u8{ 'M', 'Z' } ++ [_]u8{0} ** 62),
+    &([_]u8{ 'M', 'Z' } ++ @as([62]u8, @splat(0))),
 };
 
 /// Errors that mean the parser produced something impossible.

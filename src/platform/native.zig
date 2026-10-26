@@ -44,7 +44,7 @@ pub fn sleep(ns: u64) void {
         .nsec = @intCast(ns % std.time.ns_per_s),
     };
     var rem: linux.timespec = undefined;
-    while (linux.nanosleep(&req, &rem) == @intFromEnum(linux.E.INTR)) {
+    while (linux.nanosleep(&req, &rem) == @backingInt(linux.E.INTR)) {
         if (rem.sec == 0 and rem.nsec == 0) break;
         req = rem;
     }
@@ -138,7 +138,7 @@ pub fn mmap(
     if (executable) prot.EXEC = true;
 
     var flags: std.posix.MAP = if (shared) .{ .TYPE = .SHARED } else .{ .TYPE = .PRIVATE };
-    if (comptime is_x86_64 and builtin.os.tag == .linux) {
+    if (comptime is_x86_64 and builtin.target.os.tag == .linux) {
         // MAP_32BIT constrains anonymous allocations to the low 4GB.
         // Don't set it for fixed-address mappings (the address is already
         // known) — it can interfere with MAP_FIXED_NOREPLACE.
@@ -168,7 +168,7 @@ pub fn mmap(
             log.warn("MAP_FIXED_NOREPLACE failed at 0x{X}, falling back to any address", .{@intFromPtr(hint)});
             var fallback_flags = flags;
             fallback_flags.FIXED_NOREPLACE = false;
-            if (comptime is_x86_64 and builtin.os.tag == .linux) {
+            if (comptime is_x86_64 and builtin.target.os.tag == .linux) {
                 fallback_flags.@"32BIT" = true; // ensure fallback stays in low 4GB
             }
             return std.posix.mmap(null, size, prot, fallback_flags, file_fd, file_offset);
@@ -565,7 +565,7 @@ pub fn lseek(fd: i32, offset: i64, whence: u32) i64 {
         if (signed < 0) return -1;
         return signed;
     } else {
-        var result: u64 = 0;
+        var result: i64 = 0;
         const rc = std.os.linux.llseek(fd, @bitCast(offset), &result, whence);
         const signed: isize = @bitCast(rc);
         if (signed < 0) return -1;
@@ -1248,7 +1248,7 @@ pub fn installSegfaultHandler() void {
     std.posix.sigaction(std.posix.SIG.FPE, &act, null);
     std.posix.sigaction(std.posix.SIG.ILL, &act, null);
 
-    if (comptime is_x86_64 and builtin.os.tag == .linux) {
+    if (comptime is_x86_64 and builtin.target.os.tag == .linux) {
         _ = std.os.linux.prctl(38, 1, 0, 0, 0); // PR_SET_NO_NEW_PRIVS
         _ = std.os.linux.syscall2(std.os.linux.SYS.arch_prctl, 0x1012, 0); // ARCH_SET_CPUID
     }

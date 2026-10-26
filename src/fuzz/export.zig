@@ -25,7 +25,7 @@ const checked_names = [_][]const u8{ "ZineFirst", "zinethird", "Missing", "" };
 /// starts from a walk that reaches the function table. Returned by value so
 /// the seed corpus is a compile-time constant.
 fn buildImage() [image_len]u8 {
-    var buf = [_]u8{0} ** image_len;
+    var buf = @as([image_len]u8, @splat(0));
     std.mem.writeInt(u32, buf[0..4], seed_export_rva, .little);
     std.mem.writeInt(u32, buf[4..8], seed_export_size, .little);
 

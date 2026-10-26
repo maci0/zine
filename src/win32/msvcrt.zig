@@ -54,11 +54,11 @@ pub var msvcrt_daylight: i32 = 0;
 pub var msvcrt_tzname: [2]?*anyopaque = [_]?*anyopaque{ @ptrCast(@constCast("UTC\x00")), @ptrCast(@constCast("UTC\x00")) };
 
 /// MSVCRT _pctype table.
-pub var msvcrt_pctype: [257]u16 = [_]u16{0} ** 257;
+pub var msvcrt_pctype: [257]u16 = @as([257]u16, @splat(0));
 /// Pointer to the _pctype table.
 pub var msvcrt_pctype_ptr: *u16 = &msvcrt_pctype[1];
 /// MSVCRT _mbctype table.
-pub var msvcrt_mbctype: [257]u8 = [_]u8{0} ** 257;
+pub var msvcrt_mbctype: [257]u8 = @as([257]u8, @splat(0));
 /// Represents an environment variable key-value pair.
 /// `deleted` marks a tombstone: the guest removed this name, so it must
 /// shadow any inherited entry of the same (or different-case) name instead

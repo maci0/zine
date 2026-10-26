@@ -891,7 +891,7 @@ pub fn buildResImage(rc_text: []const u8, out: []u8) ?usize {
         }
         if (!found) {
             var new_block = Block{ .base = @intCast(block_idx + 1), .strs = undefined };
-            for (0..16) |k| new_block.strs[k] = StringEntry{ .len = 0, .chars = [_]u16{0} ** 128 };
+            for (0..16) |k| new_block.strs[k] = StringEntry{ .len = 0, .chars = @as([128]u16, @splat(0)) };
             blocks[block_count] = new_block;
             block_count += 1;
             bi = block_count - 1;
@@ -1489,15 +1489,15 @@ test "resource compilation preserves output when an icon cannot be loaded" {
     var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
     const dir_len = try tmp.dir.realPath(io, &dir_buf);
     const dir = dir_buf[0..dir_len];
-    const input = try std.fmt.allocPrint(allocator, "Z:{s}/input.rc", .{dir});
+    const input = try allocator.print("Z:{s}/input.rc", .{dir});
     defer allocator.free(input);
-    const output = try std.fmt.allocPrint(allocator, "{s}/output.res", .{dir});
+    const output = try allocator.print("{s}/output.res", .{dir});
     defer allocator.free(output);
     try tmp.dir.createDir(io, "directory", .default_dir);
     try tmp.dir.writeFile(io, .{ .sub_path = "short.ico", .data = "short" });
 
     for ([_][]const u8{ "missing.ico", "directory", "short.ico" }) |icon| {
-        const source = try std.fmt.allocPrint(allocator, "STRINGTABLE\nBEGIN\n1, \"hello\"\nEND\n2 ICON \"{s}/{s}\"\n", .{ dir, icon });
+        const source = try allocator.print("STRINGTABLE\nBEGIN\n1, \"hello\"\nEND\n2 ICON \"{s}/{s}\"\n", .{ dir, icon });
         defer allocator.free(source);
         try tmp.dir.writeFile(io, .{ .sub_path = "input.rc", .data = source });
         try tmp.dir.writeFile(io, .{ .sub_path = "output.res", .data = "previous output" });

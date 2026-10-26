@@ -377,7 +377,7 @@ pub const LOGFONTA = extern struct {
     lfClipPrecision: u8 = 0,
     lfQuality: u8 = 0,
     lfPitchAndFamily: u8 = 0,
-    lfFaceName: [32]u8 = [_]u8{0} ** 32,
+    lfFaceName: [32]u8 = @as([32]u8, @splat(0)),
 };
 
 /// NONCLIENTMETRICSA — 340 bytes (Win2K).
@@ -534,8 +534,8 @@ pub const TIMECAPS = extern struct {
 pub const WSADATA = extern struct {
     wVersion: u16 = 0,
     wHighVersion: u16 = 0,
-    szDescription: [257]u8 = [_]u8{0} ** 257,
-    szSystemStatus: [129]u8 = [_]u8{0} ** 129,
+    szDescription: [257]u8 = @as([257]u8, @splat(0)),
+    szSystemStatus: [129]u8 = @as([129]u8, @splat(0)),
     iMaxSockets: u16 = 0,
     iMaxUdpDg: u16 = 0,
     lpVendorInfo: u32 = 0, // 32-bit pointer
@@ -570,7 +570,7 @@ pub const OSVERSIONINFOA = extern struct {
     dwMinorVersion: u32 = 0,
     dwBuildNumber: u32 = 0,
     dwPlatformId: u32 = 0,
-    szCSDVersion: [128]u8 = [_]u8{0} ** 128,
+    szCSDVersion: [128]u8 = @as([128]u8, @splat(0)),
 };
 
 /// OSVERSIONINFOW — 276 bytes.
@@ -580,7 +580,7 @@ pub const OSVERSIONINFOW = extern struct {
     dwMinorVersion: u32 = 0,
     dwBuildNumber: u32 = 0,
     dwPlatformId: u32 = 0,
-    szCSDVersion: [256]u8 = [_]u8{0} ** 256,
+    szCSDVersion: [256]u8 = @as([256]u8, @splat(0)),
 };
 
 /// VER_PLATFORM_WIN32_NT constant.
@@ -649,19 +649,19 @@ pub const STARTUPINFOA = extern struct {
 /// DEVMODEA — 156 bytes (Win2K, no dmDriverExtra).
 /// Only the fields we actually fill are named; the rest goes in padding arrays.
 pub const DEVMODEA = extern struct {
-    dmDeviceName: [32]u8 = [_]u8{0} ** 32, // offset 0
+    dmDeviceName: [32]u8 = @as([32]u8, @splat(0)), // offset 0
     dmSpecVersion: u16 = 0, // offset 32
     dmDriverVersion: u16 = 0, // offset 34
     dmSize: u16 = 156, // offset 36
     dmDriverExtra: u16 = 0, // offset 38
     dmFields: u32 = 0, // offset 40
-    _pad1: [60]u8 = [_]u8{0} ** 60, // offsets 44–103 (position, paper, etc.)
+    _pad1: [60]u8 = @as([60]u8, @splat(0)), // offsets 44–103 (position, paper, etc.)
     dmBitsPerPel: u32 = 0, // offset 104
     dmPelsWidth: u32 = 0, // offset 108
     dmPelsHeight: u32 = 0, // offset 112
-    _pad2: [4]u8 = [_]u8{0} ** 4, // offset 116 (dmDisplayFlags/dmNup)
+    _pad2: [4]u8 = @as([4]u8, @splat(0)), // offset 116 (dmDisplayFlags/dmNup)
     dmDisplayFrequency: u32 = 0, // offset 120
-    _pad3: [32]u8 = [_]u8{0} ** 32, // offsets 124–155 (ICM, media, etc.)
+    _pad3: [32]u8 = @as([32]u8, @splat(0)), // offsets 124–155 (ICM, media, etc.)
 };
 
 /// DEVMODE field flag: dmBitsPerPel is valid.
@@ -748,8 +748,8 @@ pub const WIN32_FIND_DATAA = extern struct {
     nFileSizeLow: u32 = 0,
     dwReserved0: u32 = 0,
     dwReserved1: u32 = 0,
-    cFileName: [260]u8 = [_]u8{0} ** 260,
-    cAlternateFileName: [14]u8 = [_]u8{0} ** 14,
+    cFileName: [260]u8 = @as([260]u8, @splat(0)),
+    cAlternateFileName: [14]u8 = @as([14]u8, @splat(0)),
 };
 
 // ============================================================
@@ -769,7 +769,7 @@ pub const SYSTEM_BASIC_INFORMATION = extern struct {
     MaximumUserModeAddress: u32 = 0,
     ActiveProcessorsAffinityMask: u32 = 0,
     NumberOfProcessors: u8 = 0,
-    _pad: [3]u8 = [_]u8{0} ** 3,
+    _pad: [3]u8 = @as([3]u8, @splat(0)),
 };
 
 /// First message reserved for a window class.

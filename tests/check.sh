@@ -51,7 +51,7 @@ if [[ -z "$minimum_zig" ]]; then
 fi
 # An exact match, not a prefix: the shipped artifacts are compiled by the
 # exact toolchain CI installs, and a patch release is free to change codegen,
-# so a newer zig that passes a `0.16.0*` test can produce bytes and diagnostics
+# so a newer zig that passes a `0.17.0*` test can produce bytes and diagnostics
 # the maintainers never see. Bumping the field in build.zig.zon is what moves
 # the project forward; zig enforces the same version as its own floor.
 have_zig=$(zig version)

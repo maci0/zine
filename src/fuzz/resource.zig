@@ -31,7 +31,7 @@ const checked_names = [_][]const u8{ "MAINICON", "mainicon", "a", "" };
 /// from a walk that actually reaches the data entry. Returned by value so the
 /// seed corpus is a compile-time constant.
 fn buildImage() [image_len]u8 {
-    var buf = [_]u8{0} ** image_len;
+    var buf = @as([image_len]u8, @splat(0));
     std.mem.writeInt(u32, buf[0..4], seed_res_rva, .little);
 
     const dir = struct {

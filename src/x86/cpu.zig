@@ -70,7 +70,7 @@ pub const Cpu = struct {
     fpu: FpuState = .{},
 
     /// SSE/SSE2 XMM registers (XMM0-XMM7), 128 bits each.
-    xmm: [8]u128 = .{0} ** 8,
+    xmm: [8]u128 = @splat(0),
 
     /// MXCSR — SSE control/status register.
     /// Default: all exceptions masked (bits 7-12), round to nearest (bits 13-14 = 00).
@@ -144,12 +144,12 @@ pub const Cpu = struct {
     }
 
     pub inline fn getReg16(self: *const Cpu, idx: u3) u16 {
-        return @truncate(self.getReg(@enumFromInt(idx)));
+        return @truncate(self.getReg(@fromBackingInt(@intCast(idx))));
     }
 
     /// Preserves upper 16 bits.
     pub inline fn setReg16(self: *Cpu, idx: u3, val: u16) void {
-        const ri: RegIndex = @enumFromInt(idx);
+        const ri: RegIndex = @fromBackingInt(@intCast(idx));
         const old = self.getReg(ri);
         self.setReg(ri, (old & 0xFFFF0000) | @as(u32, val));
     }
@@ -306,7 +306,7 @@ test "cpu: segment resolution" {
 }
 
 test "cpu: push32 and pop32" {
-    var buf: [256]u8 = .{0} ** 256;
+    var buf: [256]u8 = @splat(0);
     var cpu = Cpu{};
     cpu.memory = GuestMemory{ .base = &buf };
     cpu.esp = 200;

@@ -1131,7 +1131,7 @@ fn stub_Direct3DCreate8(SDKVersion: u32) callconv(w32cc.WINAPI) usize {
 }
 
 test "D3D8 capability writes stay within the 212-byte SDK structure" {
-    var buffer = [_]u8{0xaa} ** 214;
+    var buffer = @as([214]u8, @splat(0xaa));
     fillD3D8Caps(@intFromPtr(&buffer[1]));
     try std.testing.expectEqual(@as(u8, 0xaa), buffer[0]);
     try std.testing.expectEqual(@as(u8, 0xaa), buffer[213]);
@@ -1140,7 +1140,7 @@ test "D3D8 capability writes stay within the 212-byte SDK structure" {
 }
 
 test "D3D8 adapter identifier writes stay within the SDK structure" {
-    var buffer = [_]u8{0xaa} ** 1070;
+    var buffer = @as([1070]u8, @splat(0xaa));
     try std.testing.expectEqual(@as(i32, 0), d3d8_GetAdapterIdentifier(&global_d3d8, 0, 0, @intFromPtr(&buffer[1])));
     try std.testing.expectEqual(@as(u8, 0xaa), buffer[0]);
     try std.testing.expectEqual(@as(u8, 0xaa), buffer[1069]);

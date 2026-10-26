@@ -308,7 +308,7 @@ pub fn ensureGuestArgs() void {
 
     // 1) Copy argv strings, record 32-bit addresses
     const argc_val: usize = @intCast(msvcrt.global_argc);
-    var argv_str_addrs: [MAX_GUEST_ARGV]u32 = [_]u32{0} ** MAX_GUEST_ARGV;
+    var argv_str_addrs: [MAX_GUEST_ARGV]u32 = @as([MAX_GUEST_ARGV]u32, @splat(0));
     var argv_str_count: usize = 0;
     var dropped_argv: usize = 0;
     for (0..@min(argc_val, MAX_GUEST_ARGV)) |i| {
@@ -473,21 +473,21 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     const cmdname = trace.c_span(cmdname_ptr);
     if (trace.enable_tracing) trace.print("spawnvp cmd: {s}\n", .{cmdname});
 
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         // Raw readlink: std.process.executablePathAlloc goes through std.Io
         // (TLS), which faults inside the compat-mode SIGSEGV dispatch handler.
         var exe_buf: [4096]u8 = undefined;
         const rl = std.os.linux.readlink("/proc/self/exe", &exe_buf, exe_buf.len);
         const rl_signed: isize = @bitCast(rl);
         if (rl_signed > 0) {
-            const loader_exe2 = std.fmt.allocPrint(alloc, "{s}\x00", .{exe_buf[0..@intCast(rl_signed)]}) catch return -1;
+            const loader_exe2 = alloc.print("{s}\x00", .{exe_buf[0..@intCast(rl_signed)]}) catch return -1;
             args.append(alloc, loader_exe2[0 .. loader_exe2.len - 1]) catch return -1;
         } else {
             args.append(alloc, "zine") catch return -1;
         }
     } else {
         const raw_loader_exe = std.process.executablePathAlloc(runtime.io(), alloc) catch "zine";
-        const loader_exe = std.fmt.allocPrint(alloc, "{s}\x00", .{raw_loader_exe}) catch return -1;
+        const loader_exe = alloc.print("{s}\x00", .{raw_loader_exe}) catch return -1;
         args.append(alloc, loader_exe[0 .. loader_exe.len - 1]) catch return -1;
     }
     if (trace.enable_tracing) {
@@ -528,7 +528,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     if (!has_sep and msvcrt.global_argc > 0 and msvcrt.global_argv[0] != null) {
         const exe_path = trace.c_span(@intFromPtr(msvcrt.global_argv[0].?));
         if (std.fs.path.dirname(exe_path)) |dir| {
-            const full_cmd = std.fmt.allocPrint(alloc, "{s}/{s}", .{ dir, cmdname }) catch null;
+            const full_cmd = alloc.print("{s}/{s}", .{ dir, cmdname }) catch null;
             if (full_cmd) |fc| {
                 args.append(alloc, fc) catch return -1;
                 resolved = true;
@@ -581,7 +581,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
 
         if (arg.len > 1 and arg[0] == '@') {
             const rsp_file = arg[1 .. arg.len - 1]; // remove null char? arg is [*:0] but arg.len doesn't include null
-            if (comptime builtin.os.tag == .linux) {
+            if (comptime builtin.target.os.tag == .linux) {
                 // Raw open/read/close (std.Io touches TLS in the signal context).
                 var nt: [1025]u8 = undefined;
                 if (rsp_file.len < nt.len) {
@@ -641,7 +641,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         new_env_map.put(v.key, v.val) catch {};
     }
 
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         // Raw fork/execve/waitpid: std.process.spawn goes through std.Io
         // (TLS), which faults inside the compat-mode SIGSEGV dispatch handler.
         // All allocations happen before fork; the child only calls execve.
@@ -649,7 +649,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         defer envp_items.deinit(alloc);
         var env_it = new_env_map.iterator();
         while (env_it.next()) |entry| {
-            const kv = std.fmt.allocPrint(alloc, "{s}={s}", .{ entry.key_ptr.*, entry.value_ptr.* }) catch continue;
+            const kv = alloc.print("{s}={s}", .{ entry.key_ptr.*, entry.value_ptr.* }) catch continue;
             envp_items.append(alloc, @as([*:0]const u8, @ptrCast(kv.ptr))) catch {};
         }
         envp_items.append(alloc, null) catch return -1;
@@ -665,8 +665,9 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
             _ = std.os.linux.execve(@as([*:0]const u8, @ptrCast(args.items[0].ptr)), argv_z, envp_z);
             _ = std.os.linux.exit(127);
         }
-        var status: u32 = 0;
-        _ = std.os.linux.waitpid(@intCast(pid), &status, 0);
+        var wait_status: i32 = 0;
+        _ = std.os.linux.waitpid(@intCast(pid), &wait_status, 0);
+        const status: u32 = @bitCast(wait_status);
         if (std.posix.W.IFEXITED(status)) return std.posix.W.EXITSTATUS(status);
         return -1;
     }
@@ -973,7 +974,7 @@ pub fn stub_set_app_type(app_type: i32) callconv(.c) void {
     _ = app_type;
 }
 
-var wargv_ptrs: [64]?[*:0]u16 = [_]?[*:0]u16{null} ** 64;
+var wargv_ptrs: [64]?[*:0]u16 = @as([64]?[*:0]u16, @splat(null));
 var wargv_bufs: [64][512]u16 = undefined;
 
 /// Wide version of __getmainargs for Unicode CRT apps

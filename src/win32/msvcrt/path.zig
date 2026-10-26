@@ -267,7 +267,7 @@ pub fn tempnam(dir_ptr: usize, prefix_ptr: usize) callconv(.c) usize {
     @memcpy(alloc_ptr[0..name.len], name[0..name.len]);
     if (trace.enable_tracing) trace.print("MSVCRT: _tempnam -> '{s}'\n", .{alloc_ptr[0 .. name.len - 1]});
 
-    if (comptime @import("builtin").os.tag == .linux) {
+    if (comptime @import("builtin").target.os.tag == .linux) {
         // Raw create: std.Io.Dir.createFile touches TLS (see _close).
         var nt_buf: [512]u8 = undefined;
         const name_slice = alloc_ptr[0 .. name.len - 1];

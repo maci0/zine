@@ -122,7 +122,7 @@ fn fsAccessLinux(path: []const u8) bool {
     return @as(isize, @bitCast(rc)) == 0;
 }
 
-fn fsCreateFileLinux(path: []const u8, flags: std.Io.File.CreateFlags) !std.Io.File {
+fn fsCreateFileLinux(path: []const u8, flags: std.Io.Dir.CreateFileOptions) !std.Io.File {
     const linux = std.os.linux;
     var buf: [std.posix.PATH_MAX]u8 = undefined;
     const path_nt = nullTermBuf(path, &buf) orelse return error.FileNotFound;
@@ -136,7 +136,7 @@ fn fsCreateFileLinux(path: []const u8, flags: std.Io.File.CreateFlags) !std.Io.F
     return fileFromFd(@intCast(fd));
 }
 
-fn fsOpenFileLinux(path: []const u8, mode: std.Io.File.OpenFlags) !std.Io.File {
+fn fsOpenFileLinux(path: []const u8, mode: std.Io.Dir.OpenFileOptions) !std.Io.File {
     const linux = std.os.linux;
     var buf: [std.posix.PATH_MAX]u8 = undefined;
     const path_nt = nullTermBuf(path, &buf) orelse return error.FileNotFound;
@@ -155,7 +155,7 @@ fn fsOpenFileLinux(path: []const u8, mode: std.Io.File.OpenFlags) !std.Io.File {
 fn fsStat(path: []const u8) ?std.Io.File.Stat {
     if (comptime builtin.target.os.tag == .linux) return fsStatLinux(path);
     if (std.fs.path.isAbsolute(path)) {
-        if (comptime @import("builtin").os.tag != .wasi) {
+        if (comptime @import("builtin").target.os.tag != .wasi) {
             return std.Io.Dir.cwd().statFile(runtime.io(), path, .{}) catch null;
         }
         if (path_utils.resolveWasiPath(path)) |resolved| {
@@ -172,7 +172,7 @@ fn fsAccess(path: []const u8) bool {
     if (trace.enable_tracing) trace.print("POSIX_FS ACCESS: '{s}'\n", .{path});
     if (comptime builtin.target.os.tag == .linux) return fsAccessLinux(path);
     if (std.fs.path.isAbsolute(path)) {
-        if (comptime @import("builtin").os.tag != .wasi) {
+        if (comptime @import("builtin").target.os.tag != .wasi) {
             if (std.Io.Dir.openFileAbsolute(runtime.io(), path, .{})) |file| {
                 file.close(runtime.io());
                 return true;
@@ -196,11 +196,11 @@ fn fsAccess(path: []const u8) bool {
     return false;
 }
 
-fn fsCreateFile(path: []const u8, flags: std.Io.File.CreateFlags) !std.Io.File {
+fn fsCreateFile(path: []const u8, flags: std.Io.Dir.CreateFileOptions) !std.Io.File {
     return fsFile(true, path, flags);
 }
 
-fn fsOpenFile(path: []const u8, flags: std.Io.File.OpenFlags) !std.Io.File {
+fn fsOpenFile(path: []const u8, flags: std.Io.Dir.OpenFileOptions) !std.Io.File {
     return fsFile(false, path, flags);
 }
 
@@ -209,7 +209,7 @@ fn fsOpenFile(path: []const u8, flags: std.Io.File.OpenFlags) !std.Io.File {
 fn fsFile(
     comptime create: bool,
     path: []const u8,
-    flags: if (create) std.Io.File.CreateFlags else std.Io.File.OpenFlags,
+    flags: if (create) std.Io.Dir.CreateFileOptions else std.Io.Dir.OpenFileOptions,
 ) !std.Io.File {
     const io = runtime.io();
     if (comptime builtin.target.os.tag == .linux) {
@@ -438,7 +438,7 @@ fn fsRename(old_path: []const u8, new_path: []const u8) RenameOutcome {
         const new_nt = nullTermBuf(new_path, &new_buf) orelse return .failed;
         const rc = std.os.linux.rename(old_nt, new_nt);
         if (@as(isize, @bitCast(rc)) == 0) return .ok;
-        if (rc == @intFromEnum(std.os.linux.E.XDEV)) return .cross_device;
+        if (rc == @backingInt(std.os.linux.E.XDEV)) return .cross_device;
         return .failed;
     }
     const cwd = std.Io.Dir.cwd();

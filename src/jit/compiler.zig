@@ -135,8 +135,8 @@ pub const JitCompiler = struct {
         return .{
             .allocator = allocator,
             .module = emitter.WasmModule.init(allocator),
-            .block_cache_keys = [_]u32{EMPTY_KEY} ** BLOCK_CACHE_SLOTS,
-            .block_cache_vals = [_]u32{0} ** BLOCK_CACHE_SLOTS,
+            .block_cache_keys = @as([BLOCK_CACHE_SLOTS]u32, @splat(EMPTY_KEY)),
+            .block_cache_vals = @as([BLOCK_CACHE_SLOTS]u32, @splat(0)),
             .state_addr = state_addr,
         };
     }
@@ -205,7 +205,7 @@ pub const JitCompiler = struct {
         try self.module.export_section.appendUleb128(1); // 1 export
         try self.module.export_section.appendUleb128(3); // name length
         try self.module.export_section.appendSlice("run");
-        try self.module.export_section.append(@intFromEnum(wasm.ExportType.func));
+        try self.module.export_section.append(@backingInt(wasm.ExportType.func));
         try self.module.export_section.appendUleb128(0); // function index 0
 
         // Code section: 1 function body
@@ -215,7 +215,7 @@ pub const JitCompiler = struct {
         // Locals: LOCAL_COUNT i32 variables
         try body.appendUleb128(1); // 1 local entry
         try body.appendUleb128(t.LOCAL_COUNT);
-        try body.append(@intFromEnum(wasm.ValType.i32));
+        try body.append(@backingInt(wasm.ValType.i32));
 
         // === PROLOGUE: load CPU state from shared memory ===
         try emitPrologue(&body, self.state_addr);
@@ -874,7 +874,7 @@ pub const JitCompiler = struct {
                     const cc: u4 = @truncate(insn.opcode);
                     try t.emitConditionCode(body, cc);
                     try body.appendOpcode(.if_);
-                    try body.append(@intFromEnum(wasm.BlockType.void));
+                    try body.append(@backingInt(wasm.BlockType.void));
                     try t.emitLoadOperand(body, insn, 1);
                     try body.appendOpcode(.local_set);
                     try body.appendUleb128(insn.modrm_reg);
@@ -1563,9 +1563,9 @@ fn translateStringOp(body: *Body, insn: *const decoder.Instruction) !void {
     //   end
     // end
     try body.appendOpcode(.block);
-    try body.append(@intFromEnum(wasm.BlockType.void));
+    try body.append(@backingInt(wasm.BlockType.void));
     try body.appendOpcode(.loop);
-    try body.append(@intFromEnum(wasm.BlockType.void));
+    try body.append(@backingInt(wasm.BlockType.void));
 
     // ECX == 0 → exit
     try body.appendOpcode(.local_get);
@@ -1714,7 +1714,7 @@ test "jit compiler push/pop" {
 
     try expectValidWasmModule(wasm_bin);
     // PUSH stores through the stack pointer; POP loads back.
-    try expectCodeSectionContains(wasm_bin, &.{ @intFromEnum(wasm.Opcode.i32_store), @intFromEnum(wasm.Opcode.i32_load) });
+    try expectCodeSectionContains(wasm_bin, &.{ @backingInt(wasm.Opcode.i32_store), @backingInt(wasm.Opcode.i32_load) });
 
     // The prologue and epilogue emit i32_store and i32_load themselves, so the
     // byte scan above holds even if PUSH and POP translate to nothing. Each
@@ -1740,7 +1740,7 @@ test "jit compiler group1 sub imm" {
 
     try expectValidWasmModule(wasm_bin);
     // SUB must lower to the WASM i32.sub operation.
-    try expectCodeSectionContains(wasm_bin, &.{@intFromEnum(wasm.Opcode.i32_sub)});
+    try expectCodeSectionContains(wasm_bin, &.{@backingInt(wasm.Opcode.i32_sub)});
 }
 
 test "jit compiler stops at control flow" {
@@ -1792,9 +1792,9 @@ test "jit compiler shifts" {
     try expectValidWasmModule(wasm_bin);
     // SHL / SHR / SAR must map to the corresponding WASM shift operations.
     try expectCodeSectionContains(wasm_bin, &.{
-        @intFromEnum(wasm.Opcode.i32_shl),
-        @intFromEnum(wasm.Opcode.i32_shr_u),
-        @intFromEnum(wasm.Opcode.i32_shr_s),
+        @backingInt(wasm.Opcode.i32_shl),
+        @backingInt(wasm.Opcode.i32_shr_u),
+        @backingInt(wasm.Opcode.i32_shr_s),
     });
 }
 
@@ -1813,7 +1813,7 @@ test "jit compiler movzx/movsx" {
     try expectValidWasmModule(wasm_bin);
     // MOVZX masks to 8 bits; MOVSX sign-extends via shift left + arithmetic
     // shift right.
-    try expectCodeSectionContains(wasm_bin, &.{ @intFromEnum(wasm.Opcode.i32_and), @intFromEnum(wasm.Opcode.i32_shr_s) });
+    try expectCodeSectionContains(wasm_bin, &.{ @backingInt(wasm.Opcode.i32_and), @backingInt(wasm.Opcode.i32_shr_s) });
 }
 
 test "jit compiler lea" {
@@ -1829,7 +1829,7 @@ test "jit compiler lea" {
 
     try expectValidWasmModule(wasm_bin);
     // SIB addressing scales the index (mul) and adds base + displacement.
-    try expectCodeSectionContains(wasm_bin, &.{ @intFromEnum(wasm.Opcode.i32_mul), @intFromEnum(wasm.Opcode.i32_add) });
+    try expectCodeSectionContains(wasm_bin, &.{ @backingInt(wasm.Opcode.i32_mul), @backingInt(wasm.Opcode.i32_add) });
 }
 
 test "block index: hit only for the bytes that were compiled" {
@@ -1907,7 +1907,7 @@ test "block index: blocks beyond the scan window are not indexable" {
     var index = try BlockIndex.init(std.testing.allocator);
     defer index.deinit();
 
-    const oversized = [_]u8{0x90} ** (MAX_JIT_BLOCK_BYTES + 1);
+    const oversized = @as([(MAX_JIT_BLOCK_BYTES + 1)]u8, @splat(0x90));
     index.store(0x401000, &oversized, 5);
     try std.testing.expect(index.lookup(0x401000, &oversized) == null);
 }

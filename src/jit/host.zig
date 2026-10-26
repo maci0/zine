@@ -32,7 +32,7 @@ pub const JitCpuState = extern struct {
     // memory ops (SEH chain install/read: mov fs:[0], esp).
     fs_base: u32 = 0,
     // Padding to 64 bytes (offsets 52–63)
-    _pad: [3]u32 = .{0} ** 3,
+    _pad: [3]u32 = @splat(0),
 
     // Field offsets for WASM code generation (used by compiler.zig prologue/epilogue)
     pub const OFF_EIP: u32 = 32;

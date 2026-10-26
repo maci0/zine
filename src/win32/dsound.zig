@@ -86,7 +86,7 @@ const SoundBufferState = struct {
     allocated: bool = false,
 };
 
-var buffer_pool: [MAX_SOUND_BUFFERS]SoundBufferState = [_]SoundBufferState{.{}} ** MAX_SOUND_BUFFERS;
+var buffer_pool: [MAX_SOUND_BUFFERS]SoundBufferState = @as([MAX_SOUND_BUFFERS]SoundBufferState, @splat(.{}));
 var buffer_pool_count: u32 = 0;
 
 /// Look up buffer state by `this` COM pointer.

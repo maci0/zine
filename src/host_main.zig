@@ -16,17 +16,15 @@
 const std = @import("std");
 const runtime = @import("runtime.zig");
 const version = @import("version.zig");
-const c = @cImport({
-    @cInclude("wasmer.h");
-});
+const c = @import("wasmer");
 
 // ---------------------------------------------------------------------------
 // JIT block cache
 // ---------------------------------------------------------------------------
 
 const MaxBlocks = 4096;
-var jit_modules: [MaxBlocks]?*c.wasm_module_t = .{null} ** MaxBlocks;
-var jit_instances: [MaxBlocks]?*c.wasm_instance_t = .{null} ** MaxBlocks;
+var jit_modules: [MaxBlocks]?*c.wasm_module_t = @splat(null);
+var jit_instances: [MaxBlocks]?*c.wasm_instance_t = @splat(null);
 var jit_block_count: i32 = 0;
 
 // Shared memory from the main module — JIT blocks import this.
@@ -331,7 +329,7 @@ pub fn main(init: std.process.Init) !void {
         // A "." fallback would silently rebind the preopen every relative
         // guest path resolves against, so the run would look like the guest
         // lost its files. Name the failure and stop instead.
-        const cwd_z = std.heap.page_allocator.dupeZ(u8, cwd) catch |err| {
+        const cwd_z = std.heap.page_allocator.dupeSentinel(u8, cwd, 0) catch |err| {
             writeErr("Error: cannot copy the current directory '");
             writeErr(cwd);
             writeErr("': ");
@@ -353,7 +351,7 @@ pub fn main(init: std.process.Init) !void {
     const env_iter = init.environ_map;
     var env_it = env_iter.iterator();
     while (env_it.next()) |entry| {
-        const kz = std.heap.page_allocator.dupeZ(u8, entry.key_ptr.*) catch |err| {
+        const kz = std.heap.page_allocator.dupeSentinel(u8, entry.key_ptr.*, 0) catch |err| {
             writeErr("Warning: dropping environment variable, cannot copy its name: ");
             writeErr(entry.key_ptr.*);
             writeErr(" (");
@@ -361,7 +359,7 @@ pub fn main(init: std.process.Init) !void {
             writeErr(").\n");
             continue;
         };
-        const vz = std.heap.page_allocator.dupeZ(u8, entry.value_ptr.*) catch |err| {
+        const vz = std.heap.page_allocator.dupeSentinel(u8, entry.value_ptr.*, 0) catch |err| {
             writeErr("Warning: dropping environment variable, cannot copy its value: ");
             writeErr(entry.key_ptr.*);
             writeErr(" (");

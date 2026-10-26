@@ -279,7 +279,7 @@ pub fn main(init: std.process.Init) !void {
             // Convert to proper Win32 path (drive_c/... -> C:\..., /abs -> Z:\...)
             var win_path_buf: [1024]u8 = undefined;
             const win_len = try path_utils.posixToWin32(first_arg, &win_path_buf);
-            const win_arg = try allocator.dupeZ(u8, win_path_buf[0..win_len]);
+            const win_arg = try allocator.dupeSentinel(u8, win_path_buf[0..win_len], 0);
 
             try app_args.append(allocator, win_arg);
         } else {
@@ -289,9 +289,9 @@ pub fn main(init: std.process.Init) !void {
             if (path_utils.isInsideDriveC(arg)) {
                 var win_path_buf: [1024]u8 = undefined;
                 const win_len = try path_utils.posixToWin32(arg, &win_path_buf);
-                try app_args.append(allocator, try allocator.dupeZ(u8, win_path_buf[0..win_len]));
+                try app_args.append(allocator, try allocator.dupeSentinel(u8, win_path_buf[0..win_len], 0));
             } else {
-                try app_args.append(allocator, try allocator.dupeZ(u8, arg));
+                try app_args.append(allocator, try allocator.dupeSentinel(u8, arg, 0));
             }
         }
     }
@@ -337,7 +337,7 @@ pub fn main(init: std.process.Init) !void {
             target_exe = parsed_args[0];
             app_args.clearRetainingCapacity();
             for (parsed_args) |arg| {
-                const win_arg = try allocator.dupeZ(u8, arg);
+                const win_arg = try allocator.dupeSentinel(u8, arg, 0);
                 try app_args.append(allocator, win_arg);
             }
             final_envp = try bat_env.buildEnvp();
@@ -538,8 +538,8 @@ pub fn main(init: std.process.Init) !void {
         var it = env_map.iterator();
         var i: usize = 0;
         while (it.next()) |entry| {
-            const env_str = try std.fmt.allocPrint(allocator, "{s}={s}", .{ entry.key_ptr.*, entry.value_ptr.* });
-            c_envp[i] = (try allocator.dupeZ(u8, env_str)).ptr;
+            const env_str = try allocator.print("{s}={s}", .{ entry.key_ptr.*, entry.value_ptr.* });
+            c_envp[i] = (try allocator.dupeSentinel(u8, env_str, 0)).ptr;
             allocator.free(env_str);
             i += 1;
         }

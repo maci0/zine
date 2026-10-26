@@ -62,7 +62,7 @@ pub const GuestMemory = struct {
 
     /// PE section write protection (offsets 0 = start VA, 1 = end VA).
     pe_image_end: u32 = 0,
-    writable_sections: [MAX_WRITABLE_SECTIONS][2]u32 = .{.{ 0, 0 }} ** MAX_WRITABLE_SECTIONS,
+    writable_sections: [MAX_WRITABLE_SECTIONS][2]u32 = @splat(.{ 0, 0 }),
     writable_section_count: u8 = 0,
 
     /// Guest heap bump allocator (used in WASM mode).
@@ -117,7 +117,7 @@ pub const GuestMemory = struct {
     /// True when the host is little-endian, so an unaligned multi-byte load
     /// from the guest buffer already holds the little-endian value. Guest
     /// memory is always little-endian regardless of the host.
-    const host_is_little = builtin.cpu.arch.endian() == .little;
+    const host_is_little = builtin.target.cpu.arch.endian() == .little;
 
     /// Reads a 16-bit little-endian value from guest memory at `addr`.
     pub inline fn read16(self: *const GuestMemory, addr: u32) u16 {
@@ -341,14 +341,14 @@ pub const GuestMemory = struct {
 const testing = @import("std").testing;
 
 test "guest memory: read/write 8-bit" {
-    var buf: [16]u8 = .{0} ** 16;
+    var buf: [16]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf };
     mem.write8(0, 0xAB);
     try testing.expectEqual(@as(u8, 0xAB), mem.read8(0));
 }
 
 test "guest memory: read/write 16-bit little-endian" {
-    var buf: [16]u8 = .{0} ** 16;
+    var buf: [16]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf };
     mem.write16(2, 0xBEEF);
     try testing.expectEqual(@as(u16, 0xBEEF), mem.read16(2));
@@ -357,7 +357,7 @@ test "guest memory: read/write 16-bit little-endian" {
 }
 
 test "guest memory: read/write 32-bit little-endian" {
-    var buf: [16]u8 = .{0} ** 16;
+    var buf: [16]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf };
     mem.write32(4, 0xDEADBEEF);
     try testing.expectEqual(@as(u32, 0xDEADBEEF), mem.read32(4));
@@ -368,7 +368,7 @@ test "guest memory: read/write 32-bit little-endian" {
 }
 
 test "guest memory: out of bounds returns zero/no-ops" {
-    var buf: [4]u8 = .{0xA5} ** 4;
+    var buf: [4]u8 = @splat(0xA5);
     var mem = GuestMemory{ .base = &buf };
     try testing.expectEqual(@as(u8, 0), mem.read8(100));
     try testing.expectEqual(@as(u32, 0), mem.read32(100));
@@ -380,7 +380,7 @@ test "guest memory: out of bounds returns zero/no-ops" {
 test "guest memory: unaligned multi-byte access matches little-endian layout" {
     // Guest operands are unaligned freely; the fast path loads them natively,
     // so every offset in the range must still produce the same bytes.
-    var buf: [16]u8 = .{0} ** 16;
+    var buf: [16]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf };
     // 0..8 so the widest access (8 bytes) stays inside the buffer at every
     // offset, aligned and unaligned alike.
@@ -406,7 +406,7 @@ test "guest memory: unaligned multi-byte access matches little-endian layout" {
 }
 
 test "guest memory: non-zero base_addr translation" {
-    var buf: [16]u8 = .{0} ** 16;
+    var buf: [16]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf, .base_addr = 0x00400000 };
     mem.write32(0x00400004, 0xCAFEBABE);
     try testing.expectEqual(@as(u32, 0xCAFEBABE), mem.read32(0x00400004));
@@ -416,7 +416,7 @@ test "guest memory: non-zero base_addr translation" {
 }
 
 test "guest memory: read64/write64" {
-    var buf: [16]u8 = .{0} ** 16;
+    var buf: [16]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf };
     mem.write64(0, 0xDEADBEEFCAFEBABE);
     try testing.expectEqual(@as(u64, 0xDEADBEEFCAFEBABE), mem.read64(0));
@@ -426,7 +426,7 @@ test "guest memory: read64/write64" {
 }
 
 test "guest memory: readSlice refuses a range that straddles the end" {
-    var buf: [8]u8 = .{0} ** 8;
+    var buf: [8]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf };
     // A short read would hand the caller fewer bytes than it asked for and
     // every index into it would be a host out-of-bounds access.
@@ -437,7 +437,7 @@ test "guest memory: readSlice refuses a range that straddles the end" {
 }
 
 test "guest memory: writeSlice honours PE section write protection" {
-    var buf: [128]u8 = .{0} ** 128;
+    var buf: [128]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf, .pe_image_end = 64 };
     try testing.expect(mem.addWritableSection(16, 48));
 
@@ -464,7 +464,7 @@ test "guest memory: readSlice returns correct view" {
 }
 
 test "guest memory: guestAlloc bump allocator" {
-    var buf: [256]u8 = .{0xAA} ** 256;
+    var buf: [256]u8 = @splat(0xAA);
     var mem = GuestMemory{ .base = &buf, .base_addr = 0x1000, .heap_start = 64, .heap_cursor = 64 };
     const addr1 = mem.guestAlloc(8);
     try testing.expect(addr1 != 0);
@@ -479,14 +479,14 @@ test "guest memory: guestAlloc bump allocator" {
 }
 
 test "guest memory: guestAlloc returns 0 when heap not configured" {
-    var buf: [64]u8 = .{0} ** 64;
+    var buf: [64]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf };
     // heap_start == 0 means heap is not configured
     try testing.expectEqual(@as(u32, 0), mem.guestAlloc(16));
 }
 
 test "guest memory: guestAlloc rejects sizes that overflow u32" {
-    var buf: [256]u8 = .{0} ** 256;
+    var buf: [256]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf, .base_addr = 0x1000, .heap_start = 64, .heap_cursor = 64 };
     // A guest-supplied size near u32 max must fail cleanly (return 0),
     // not overflow the alignment computation into a bogus allocation.
@@ -496,7 +496,7 @@ test "guest memory: guestAlloc rejects sizes that overflow u32" {
 }
 
 test "guest memory: write protection blocks writes to PE image" {
-    var buf: [256]u8 = .{0} ** 256;
+    var buf: [256]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf, .base_addr = 0, .pe_image_end = 128 };
     // No writable sections registered — writes inside PE image should be blocked
     mem.write8(64, 0xFF);
@@ -508,7 +508,7 @@ test "guest memory: write protection blocks writes to PE image" {
 }
 
 test "guest memory: writable section allows writes" {
-    var buf: [256]u8 = .{0} ** 256;
+    var buf: [256]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf, .base_addr = 0, .pe_image_end = 128 };
     try testing.expect(mem.addWritableSection(32, 96)); // allow writes to range [32, 96)
 
@@ -522,7 +522,7 @@ test "guest memory: writable section allows writes" {
 }
 
 test "guest memory: read/write 128-bit" {
-    var buf: [32]u8 = .{0} ** 32;
+    var buf: [32]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf };
     const val: u128 = 0xDEADBEEFCAFEBABE_1234567890ABCDEF;
     mem.write128(0, val);
@@ -543,7 +543,7 @@ test "guest memory: writeSlice returns mutable view" {
 }
 
 test "guest memory: readRangeInBounds rejects OOB and wrapping ranges" {
-    var buf: [256]u8 = .{0} ** 256;
+    var buf: [256]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf, .base_addr = 0x0001_0000 };
 
     try testing.expect(mem.readRangeInBounds(0x0001_0000, 0)); // empty range
@@ -556,7 +556,7 @@ test "guest memory: readRangeInBounds rejects OOB and wrapping ranges" {
 }
 
 test "guest memory: writeRangeAllowed without image protection" {
-    var buf: [256]u8 = .{0} ** 256;
+    var buf: [256]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf, .base_addr = 0x0001_0000 };
 
     // No PE image window configured: every in-bounds byte is writable.
@@ -567,7 +567,7 @@ test "guest memory: writeRangeAllowed without image protection" {
 }
 
 test "guest memory: writeRangeAllowed requires full writable-section cover in image" {
-    var buf: [256]u8 = .{0} ** 256;
+    var buf: [256]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf, .base_addr = 0x0001_0000, .pe_image_end = 0x0001_0080 };
     // Image window is [0x10000, 0x10080); only [0x10020, 0x10060) is writable.
     try testing.expect(mem.addWritableSection(0x0001_0020, 0x0001_0060));
@@ -582,7 +582,7 @@ test "guest memory: writeRangeAllowed requires full writable-section cover in im
 }
 
 test "guest memory: writeRangeAllowed chains adjacent writable sections" {
-    var buf: [256]u8 = .{0} ** 256;
+    var buf: [256]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf, .base_addr = 0x0001_0000, .pe_image_end = 0x0001_0080 };
     try testing.expect(mem.addWritableSection(0x0001_0020, 0x0001_0040));
     try testing.expect(mem.addWritableSection(0x0001_0040, 0x0001_0060));
@@ -592,7 +592,7 @@ test "guest memory: writeRangeAllowed chains adjacent writable sections" {
 }
 
 test "guest memory: writable section table reports overflow instead of dropping" {
-    var buf: [256]u8 = .{0} ** 256;
+    var buf: [256]u8 = @splat(0);
     var mem = GuestMemory{ .base = &buf, .base_addr = 0x0001_0000, .pe_image_end = 0x0001_0100 };
     for (0..MAX_WRITABLE_SECTIONS) |i| {
         const start: u32 = 0x0001_0000 + @as(u32, @intCast(i)) * 4;

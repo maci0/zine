@@ -16,13 +16,13 @@ pub const identity_4x4: [16]f32 = .{
 /// D3DTRANSFORMSTATE_WORLD = 1, VIEW = 2, PROJECTION = 3
 /// D3D7 adds WORLD1-3 = 4-6, TEXTURE0-7 = 16-23
 pub const max_transforms = 24;
-pub var transform_matrices: [max_transforms][16]f32 = [_][16]f32{identity_4x4} ** max_transforms;
+pub var transform_matrices: [max_transforms][16]f32 = @as([max_transforms][16]f32, @splat(identity_4x4));
 
 /// Render state table — D3DRENDERSTATETYPE values up to 255.
 /// Defaults are set at comptime matching D3D7 documentation.
 pub const max_render_states = 256;
 pub var render_states: [max_render_states]u32 = blk: {
-    var rs = [_]u32{0} ** max_render_states;
+    var rs = @as([max_render_states]u32, @splat(0));
     rs[7] = 2; // D3DRS_CULLMODE = D3DCULL_CCW
     rs[14] = 1; // D3DRS_ZWRITEENABLE = TRUE
     rs[19] = 1; // D3DRS_DITHERENABLE = TRUE

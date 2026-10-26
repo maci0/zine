@@ -207,24 +207,24 @@ pub fn CreateFileA(lpFileName_ptr: usize, dwDesiredAccess: u32, dwShareMode: u32
 }
 
 const MAX_MAPPINGS = 64;
-var mapping_fds: [MAX_MAPPINGS]i32 = [_]i32{-1} ** MAX_MAPPINGS;
+var mapping_fds: [MAX_MAPPINGS]i32 = @as([MAX_MAPPINGS]i32, @splat(-1));
 
 // Track mapped views created in guest memory (WASM) so UnmapViewOfFile can
 // write the guest's modifications back to the file. Without this, LINK.EXE
 // produced an all-zeros output: it writes the image into the mapped view and
 // relies on unmap to flush.
 const MAX_VIEWS = 64;
-var view_fds: [MAX_VIEWS]i32 = [_]i32{-1} ** MAX_VIEWS;
-var view_addrs: [MAX_VIEWS]usize = [_]usize{0} ** MAX_VIEWS;
-var view_sizes: [MAX_VIEWS]usize = [_]usize{0} ** MAX_VIEWS;
-var view_offsets: [MAX_VIEWS]u64 = [_]u64{0} ** MAX_VIEWS;
-var view_writable: [MAX_VIEWS]bool = [_]bool{false} ** MAX_VIEWS;
+var view_fds: [MAX_VIEWS]i32 = @as([MAX_VIEWS]i32, @splat(-1));
+var view_addrs: [MAX_VIEWS]usize = @as([MAX_VIEWS]usize, @splat(0));
+var view_sizes: [MAX_VIEWS]usize = @as([MAX_VIEWS]usize, @splat(0));
+var view_offsets: [MAX_VIEWS]u64 = @as([MAX_VIEWS]u64, @splat(0));
+var view_writable: [MAX_VIEWS]bool = @as([MAX_VIEWS]bool, @splat(false));
 
 // Native hosts mmap real address ranges; UnmapViewOfFile must munmap them or
 // every mapping leaks address space until process exit.
 const MAX_NATIVE_MAPS = 64;
-var native_map_addrs: [MAX_NATIVE_MAPS]usize = [_]usize{0} ** MAX_NATIVE_MAPS;
-var native_map_sizes: [MAX_NATIVE_MAPS]usize = [_]usize{0} ** MAX_NATIVE_MAPS;
+var native_map_addrs: [MAX_NATIVE_MAPS]usize = @as([MAX_NATIVE_MAPS]usize, @splat(0));
+var native_map_sizes: [MAX_NATIVE_MAPS]usize = @as([MAX_NATIVE_MAPS]usize, @splat(0));
 
 fn registerNativeMap(addr: usize, size: usize) bool {
     const page_rounded = (size + 0xFFF) & ~@as(usize, 0xFFF);
@@ -518,7 +518,7 @@ pub fn SetFilePointer(hFile: usize, lDistanceToMove: i32, lpDistanceToMoveHigh: 
 
     // MoveMethod 0/1/2 map directly to POSIX SEEK_SET/CUR/END.
     if (dwMoveMethod > 2) return 0xFFFFFFFF;
-    const final_pos = if (comptime @import("builtin").os.tag == .windows)
+    const final_pos = if (comptime @import("builtin").target.os.tag == .windows)
         @as(i64, -1)
     else
         @import("../../platform.zig").lseek(file.handle, lDistanceToMove, dwMoveMethod);
@@ -609,14 +609,14 @@ pub fn GetTempFileNameA(lpPathName: usize, lpPrefixString: usize, uUnique: u32, 
         const uniq = if (uUnique == 0) temp_counter else uUnique;
 
         var name_buf: [256]u8 = undefined;
-        const name_slice = std.fmt.bufPrintZ(&name_buf, ".\\t_{d}.tmp", .{uniq}) catch ".\\t_999.tmp\x00";
+        const name_slice = std.mem.printSentinel(&name_buf, ".\\t_{d}.tmp", .{uniq}, 0) catch ".\\t_999.tmp\x00";
 
         @memcpy(buf[0 .. name_slice.len + 1], name_slice.ptr[0 .. name_slice.len + 1]);
 
         if (uUnique == 0) {
             const posix_fs = @import("../msvcrt/posix_fs.zig");
             var fixed_buf: [256]u8 = undefined;
-            const fixed_slice = std.fmt.bufPrintZ(&fixed_buf, "./t_{d}.tmp", .{uniq}) catch "./t_999.tmp\x00";
+            const fixed_slice = std.mem.printSentinel(&fixed_buf, "./t_{d}.tmp", .{uniq}, 0) catch "./t_999.tmp\x00";
             const rc = posix_fs.open(fixed_slice.ptr, 64 | 2, 0o666);
             if (rc >= 0) {
                 const f = host_io.fileFromFd(@intCast(rc));
@@ -857,7 +857,7 @@ const FindHandleState = struct {
 
     fn close(self: *FindHandleState) void {
         if (self.raw_dir_fd >= 0) {
-            if (comptime builtin.os.tag == .linux) _ = std.os.linux.close(self.raw_dir_fd);
+            if (comptime builtin.target.os.tag == .linux) _ = std.os.linux.close(self.raw_dir_fd);
             self.raw_dir_fd = -1;
         }
         if (self.dir) |d| {
@@ -869,7 +869,7 @@ const FindHandleState = struct {
     }
 };
 
-var find_handles: [MAX_FIND_HANDLES]FindHandleState = [_]FindHandleState{.{}} ** MAX_FIND_HANDLES;
+var find_handles: [MAX_FIND_HANDLES]FindHandleState = @as([MAX_FIND_HANDLES]FindHandleState, @splat(.{}));
 
 fn allocFindHandle() ?usize {
     for (0..MAX_FIND_HANDLES) |i| {
@@ -956,7 +956,7 @@ pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: *align(1) w32.W
         var resolved_dir = dir_path;
         var ci_buf: [1024]u8 = undefined;
 
-        if (comptime builtin.os.tag == .linux) {
+        if (comptime builtin.target.os.tag == .linux) {
             // Raw open: std.Io.Dir.openDir touches TLS (see FindHandleState).
             var nt_buf: [1025]u8 = undefined;
             if (dir_path.len >= nt_buf.len) {
@@ -1053,7 +1053,7 @@ pub fn FindFirstFileA(lpFileName_ptr: usize, lpFindFileData_ptr: *align(1) w32.W
 pub fn FindNextFileA(hFindFile: usize, lpFindFileData_ptr: *align(1) w32.WIN32_FIND_DATAA) callconv(w32cc.WINAPI) i32 {
     const state = getFindHandle(hFindFile) orelse return 0;
 
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         const linux = std.os.linux;
         while (true) {
             if (state.raw_pos >= state.raw_buf_len) {
@@ -1301,7 +1301,7 @@ pub fn FlushFileBuffers(hFile: usize) callconv(w32cc.WINAPI) i32 {
     if (comptime platform.is_native) {
         const fd = @as(i32, @bitCast(@as(u32, @truncate(hFile))));
         const file = host_io.fileFromFd(fd);
-        if (comptime builtin.os.tag == .linux) {
+        if (comptime builtin.target.os.tag == .linux) {
             while (true) {
                 const err = std.os.linux.errno(std.os.linux.fsync(file.handle));
                 switch (err) {
@@ -1424,7 +1424,7 @@ pub fn CopyFileW(lpExistingFileName_ptr: usize, lpNewFileName_ptr: usize, bFailI
 
 /// Check existence of a host POSIX path.
 fn fileExistsPosix(host_path: []const u8) bool {
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         var nt: [1025]u8 = undefined;
         if (host_path.len >= nt.len) return false;
         @memcpy(nt[0..host_path.len], host_path);
@@ -1447,7 +1447,7 @@ fn copyFailed(src_buf: []const u8, dst_buf: []const u8, op: []const u8, errno: ?
 
 /// Shared copy core given resolved POSIX paths.
 fn copyFileHost(src_buf: []const u8, dst_buf: []const u8) i32 {
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         // Raw syscalls: std.Io.Dir open/create touch TLS, which faults
         // inside the compat-mode SIGSEGV dispatch handler.
         var src_nt: [1025]u8 = undefined;
@@ -1619,7 +1619,7 @@ test "FlushFileBuffers reports native sync failures" {
     try std.testing.expectEqual(@as(i32, 0), FlushFileBuffers(w32.INVALID_HANDLE_VALUE));
     try std.testing.expectEqual(@as(u32, 6), kernel32_error.GetLastError());
 
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         const fds = try platform.pipe();
         defer host_io.closeFile(host_io.fileFromFd(fds[0]));
         defer host_io.closeFile(host_io.fileFromFd(fds[1]));
@@ -1670,7 +1670,7 @@ test "GetFileTime preserves file timestamps before the Unix epoch" {
 test "CloseHandle frees file mapping slots" {
     const saved_fds = mapping_fds;
     defer mapping_fds = saved_fds;
-    mapping_fds = [_]i32{-1} ** MAX_MAPPINGS;
+    mapping_fds = @as([MAX_MAPPINGS]i32, @splat(-1));
 
     var handles: [MAX_MAPPINGS]usize = undefined;
     for (0..MAX_MAPPINGS) |i| {
@@ -1752,8 +1752,8 @@ test "native map registry unmaps registered views" {
         native_map_addrs = saved_addrs;
         native_map_sizes = saved_sizes;
     }
-    native_map_addrs = [_]usize{0} ** MAX_NATIVE_MAPS;
-    native_map_sizes = [_]usize{0} ** MAX_NATIVE_MAPS;
+    native_map_addrs = @as([MAX_NATIVE_MAPS]usize, @splat(0));
+    native_map_sizes = @as([MAX_NATIVE_MAPS]usize, @splat(0));
 
     try std.testing.expect(registerNativeMap(0x1234000, 0x2001)); // page-rounded to 0x3000
     try std.testing.expect(native_map_sizes[0] == 0x3000);
@@ -1862,7 +1862,7 @@ test "widenFindName stops at the field width and stays terminated" {
     // 200 CJK characters are 600 UTF-8 bytes, far past the 260-byte field the
     // narrow struct holds, so the name is already cut there. What must not
     // happen is a unit past the field or a missing terminator.
-    @memcpy(narrow[0..259], "你" ** 86 ++ "x");
+    @memcpy(narrow[0..259], @as([258]u8, @bitCast(@as([86][3]u8, @splat(.{ 228, 189, 160 })))) ++ "x");
 
     var wide: [260]u16 = undefined;
     widenFindName(&narrow, &wide);

@@ -122,7 +122,7 @@ pub fn CreateStatusWindowA(style: u32, lpszText: usize, hwndParent: usize, wID: 
     if (trace.enable_tracing) trace.print("COMCTL32: CreateStatusWindowA -> {x}\n", .{hwnd});
 
     // Send status bar text to renderer
-    if (@import("builtin").os.tag != .windows) {
+    if (@import("builtin").target.os.tag != .windows) {
         const text = if (lpszText != 0) trace.c_span(lpszText) else "";
         const r = @import("../../gui/renderer.zig");
         r.addControl("msctls_statusbar32", hwnd, 0, 0, 0, 20, style, text);

@@ -314,9 +314,9 @@ pub const BatEnv = struct {
         var envp_list: std.ArrayList(?[*:0]u8) = .empty;
         var it = self.env.iterator();
         while (it.next()) |entry| {
-            const str = try std.fmt.allocPrint(self.allocator, "{s}={s}", .{ entry.key_ptr.*, entry.value_ptr.* });
+            const str = try self.allocator.print("{s}={s}", .{ entry.key_ptr.*, entry.value_ptr.* });
             defer self.allocator.free(str);
-            const strZ = try self.allocator.dupeZ(u8, str);
+            const strZ = try self.allocator.dupeSentinel(u8, str, 0);
             try envp_list.append(self.allocator, strZ.ptr);
         }
 

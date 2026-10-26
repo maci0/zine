@@ -70,7 +70,7 @@ fn fixDataRva(image: []const u8, rva: u32, size: u32) u32 {
 
 /// Open a file portably — on WASI, resolves absolute paths through preopened dirs.
 fn openFilePortable(path: []const u8) !std.Io.File {
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         // Raw open: std.Io.Dir goes through Io.Threaded (TLS), which faults
         // when invoked from a stub (e.g. LoadLibraryA) running inside the
         // compat-mode SIGSEGV dispatch handler (FS points at the guest TEB).
@@ -83,7 +83,7 @@ fn openFilePortable(path: []const u8) !std.Io.File {
         if (fd < 0) return error.FileNotFound;
         return std.Io.File{ .handle = @intCast(fd), .flags = .{ .nonblocking = false } };
     }
-    if (comptime builtin.os.tag == .wasi) {
+    if (comptime builtin.target.os.tag == .wasi) {
         if (std.fs.path.isAbsolute(path)) {
             // Iterate WASI preopened fds (start at fd 3, after stdin/stdout/stderr)
             var fd: std.os.wasi.fd_t = 3;
@@ -164,13 +164,13 @@ pub const Module = struct {
             log.err("Module.load: failed to open '{s}': {}", .{ path, err });
             return err;
         };
-        defer if (comptime builtin.os.tag == .linux) {
+        defer if (comptime builtin.target.os.tag == .linux) {
             _ = std.os.linux.close(file.handle);
         } else {
             file.close(runtime.io());
         };
 
-        const file_size = if (comptime builtin.os.tag == .linux)
+        const file_size = if (comptime builtin.target.os.tag == .linux)
             try fileLengthLinux(file)
         else
             try file.length(runtime.io());
@@ -180,7 +180,7 @@ pub const Module = struct {
         // A short read leaves the tail of file_data uninitialized, and the PE
         // parser would then read garbage as if it were file content. Report
         // the shortfall with the path and both byte counts instead.
-        if (comptime builtin.os.tag == .linux) {
+        if (comptime builtin.target.os.tag == .linux) {
             var off: u64 = 0;
             while (off < file_data.len) {
                 const rc = std.os.linux.pread(file.handle, file_data.ptr + @as(usize, @intCast(off)), file_data.len - @as(usize, @intCast(off)), @as(i64, @intCast(off)));

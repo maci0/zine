@@ -84,7 +84,7 @@ pub const FontData = struct {
     /// Italic flag.
     italic: bool = false,
     /// Face name (up to 31 chars + null).
-    face_name: [32]u8 = [_]u8{0} ** 32,
+    face_name: [32]u8 = @as([32]u8, @splat(0)),
     face_len: u8 = 0,
 
     /// Derive tmHeight from the font height parameter.
@@ -125,7 +125,7 @@ pub const GdiObject = struct {
     },
 };
 
-pub var gdi_objects: [512]GdiObject = [_]GdiObject{.{ .handle = 0, .obj_type = .Bitmap, .data = .{ .none = {} } }} ** 512;
+pub var gdi_objects: [512]GdiObject = @as([512]GdiObject, @splat(.{ .handle = 0, .obj_type = .Bitmap, .data = .{ .none = {} } }));
 pub var gdi_object_count: usize = 0;
 
 /// Adds an object to the table. False when all 512 slots are live: the caller
@@ -268,7 +268,7 @@ pub const empty_dc: DeviceContext = .{
 };
 
 /// Global table of active Device Contexts.
-pub var dc_entries: [128]DeviceContext = [_]DeviceContext{empty_dc} ** 128;
+pub var dc_entries: [128]DeviceContext = @as([128]DeviceContext, @splat(empty_dc));
 /// Current number of registered DCs.
 pub var dc_count: usize = 0;
 

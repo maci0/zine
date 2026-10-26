@@ -474,7 +474,7 @@ test "heap and local reallocations preserve data and their allocation headers" {
     const grown = HeapReAlloc(null, 0x08, old, 32) orelse return error.OutOfMemory;
     try testing.expectEqualStrings("data", @as([*]const u8, @ptrCast(grown))[0..4]);
     try testing.expectEqual(@as(usize, 32), LocalSize(stub_common.hostToGuest(@intFromPtr(grown))));
-    try testing.expectEqualSlices(u8, &([_]u8{0} ** 28), @as([*]const u8, @ptrCast(grown))[4..32]);
+    try testing.expectEqualSlices(u8, &(@as([28]u8, @splat(0))), @as([*]const u8, @ptrCast(grown))[4..32]);
     @import("error.zig").SetLastError(0x1234);
     try testing.expect(HeapReAlloc(null, 0x10, grown, 64) == null);
     try testing.expectEqual(@as(u32, 0x1234), @import("error.zig").GetLastError());

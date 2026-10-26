@@ -131,7 +131,7 @@ pub fn RegOpenKeyExA(hKey: usize, lpSubKey: usize, ulOptions: u32, samDesired: u
 
 const MAX_HANDLES = 256;
 const HandleEntry = struct { handle: u32 = 0, path: [512]u8 = undefined, len: u16 = 0 };
-var handle_paths: [MAX_HANDLES]HandleEntry = [_]HandleEntry{.{}} ** MAX_HANDLES;
+var handle_paths: [MAX_HANDLES]HandleEntry = @as([MAX_HANDLES]HandleEntry, @splat(.{}));
 var handle_count: usize = 0;
 
 /// Guards `next_reg_handle` and the handle table below. Any guest thread can

@@ -48,7 +48,7 @@ test "writeJsonString leaves UTF-8 text alone" {
 test "writeJsonString output parses back to the original string" {
     const out = try escaped(testing.allocator, "quote\" back\\slash \x07 \u{10400}");
     defer testing.allocator.free(out);
-    const json = try std.fmt.allocPrint(testing.allocator, "\"{s}\"", .{out});
+    const json = try testing.allocator.print("\"{s}\"", .{out});
     defer testing.allocator.free(json);
     var parsed = try std.json.parseFromSlice([]const u8, testing.allocator, json, .{});
     defer parsed.deinit();

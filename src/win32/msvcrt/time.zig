@@ -32,7 +32,7 @@ fn fillTm(tm: *Tm, ts: u64) void {
         .tm_min = @intCast(day_secs.getMinutesIntoHour()),
         .tm_hour = @intCast(day_secs.getHoursIntoDay()),
         .tm_mday = @intCast(month_day.day_index + 1),
-        .tm_mon = @intCast(@intFromEnum(month_day.month) - 1),
+        .tm_mon = @intCast(@backingInt(month_day.month) - 1),
         .tm_year = @as(i32, @intCast(year_day.year)) - 1900,
         .tm_wday = @intCast((epoch_day.day + 4) % 7),
         .tm_yday = @intCast(year_day.day),
@@ -221,7 +221,7 @@ pub fn time64(t: ?*align(1) i64) callconv(.c) i64 {
     return ts;
 }
 
-var tm64_buf: [64]u8 = [_]u8{0} ** 64;
+var tm64_buf: [64]u8 = @as([64]u8, @splat(0));
 
 /// 64-bit version of localtime(). Returns a static buffer.
 /// struct tm is 40 bytes; the buffer is oversized so a guest that reads past

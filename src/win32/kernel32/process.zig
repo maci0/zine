@@ -788,7 +788,7 @@ pub const ChildProc = struct {
         self.exit_code.store(code orelse child_still_running, .release);
     }
 };
-var child_procs: [max_child_procs]ChildProc = [_]ChildProc{.{}} ** max_child_procs;
+var child_procs: [max_child_procs]ChildProc = @as([max_child_procs]ChildProc, @splat(.{}));
 var next_process_handle: usize = 0xCA000001;
 /// Serializes the slot scans below. `reapExitedChildren` runs on a timer
 /// alongside guest waits, so a create/evict scan and a reap pass touch the
@@ -845,17 +845,18 @@ fn adoptReservedChild(cp: *ChildProc, child: if (platform.is_native) std.process
 /// the table fills and spawns start failing.
 pub fn reapExitedChildren() void {
     if (comptime !platform.is_native) return;
-    if (comptime @import("builtin").os.tag != .linux) return;
+    if (comptime @import("builtin").target.os.tag != .linux) return;
     child_procs_mutex.lock();
     defer child_procs_mutex.unlock();
     for (&child_procs) |*cp| {
         if (cp.reserved or cp.handle == 0 or cp.exitCode() != null) continue;
         const child = &(cp.child orelse continue);
         const id = child.id orelse continue;
-        var status: u32 = 0;
-        const wrc = std.os.linux.waitpid(@intCast(id), &status, std.os.linux.W.NOHANG);
+        var wait_status: i32 = 0;
+        const wrc = std.os.linux.waitpid(@intCast(id), &wait_status, std.os.linux.W.NOHANG);
         const waited: isize = @bitCast(wrc);
         if (waited != id) continue; // still running (0) or error (<0)
+        const status: u32 = @bitCast(wait_status);
         cp.setExitCode(if (std.posix.W.IFEXITED(status)) @as(u32, std.posix.W.EXITSTATUS(status)) else 1);
     }
 }
@@ -1239,7 +1240,7 @@ const ThreadInfo = struct {
     }
 };
 
-var thread_registry: [MAX_GUEST_THREADS]ThreadInfo = [_]ThreadInfo{.{}} ** MAX_GUEST_THREADS;
+var thread_registry: [MAX_GUEST_THREADS]ThreadInfo = @as([MAX_GUEST_THREADS]ThreadInfo, @splat(.{}));
 var thread_registry_mutex: if (platform.is_native) runtime.Mutex else struct {
     pub fn lock(_: *@This()) void {}
     pub fn unlock(_: *@This()) void {}
@@ -1915,7 +1916,7 @@ fn testDummyChild() if (platform.is_native) std.process.Child else void {
 test "child proc table recycles reaped slots" {
     const saved_procs = child_procs;
     defer child_procs = saved_procs;
-    child_procs = [_]ChildProc{.{}} ** max_child_procs;
+    child_procs = @as([max_child_procs]ChildProc, @splat(.{}));
 
     const dummy = testDummyChild();
     var first_handle: usize = 0;
@@ -1934,7 +1935,7 @@ test "child proc table recycles reaped slots" {
 test "closeChildProcHandle frees reaped slots only" {
     const saved_procs = child_procs;
     defer child_procs = saved_procs;
-    child_procs = [_]ChildProc{.{}} ** max_child_procs;
+    child_procs = @as([max_child_procs]ChildProc, @splat(.{}));
 
     const dummy = testDummyChild();
     const h_live = allocChildProc(dummy) orelse return error.TestUnexpectedResult;
@@ -1990,7 +1991,7 @@ test "concurrent claims never hand the same slot to two threads" {
     const workers = 8;
     const Context = struct {
         start: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-        slots: [workers]?*ThreadInfo = [_]?*ThreadInfo{null} ** workers,
+        slots: [workers]?*ThreadInfo = @as([workers]?*ThreadInfo, @splat(null)),
 
         fn run(ctx: *@This(), worker: usize) void {
             while (!ctx.start.load(.acquire)) std.atomic.spinLoopHint();
@@ -2023,11 +2024,11 @@ test "concurrent claims never hand the same slot to two threads" {
 
 test "reapExitedChildren records exit codes of finished children" {
     if (comptime !platform.is_native) return error.SkipZigTest;
-    if (comptime @import("builtin").os.tag != .linux) return error.SkipZigTest;
+    if (comptime @import("builtin").target.os.tag != .linux) return error.SkipZigTest;
 
     const saved_procs = child_procs;
     defer child_procs = saved_procs;
-    child_procs = [_]ChildProc{.{}} ** max_child_procs;
+    child_procs = @as([max_child_procs]ChildProc, @splat(.{}));
 
     const fork_rc = std.os.linux.fork();
     const pid_signed: isize = @bitCast(fork_rc);

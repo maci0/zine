@@ -19,7 +19,7 @@ const CACHE_MASK = CACHE_SIZE - 1;
 /// A single cache entry keyed by EIP with the exact decoded bytes.
 const CacheEntry = struct {
     eip: u32 = 0,
-    code: [MAX_CODE_BYTES]u8 = .{0} ** MAX_CODE_BYTES,
+    code: [MAX_CODE_BYTES]u8 = @splat(0),
     code_len: u8 = 0,
     /// The decoded instruction.
     insn: Instruction = .{},
@@ -27,7 +27,7 @@ const CacheEntry = struct {
 
 /// Hash-indexed instruction decode cache.
 pub const DecodeCache = struct {
-    entries: [CACHE_SIZE]CacheEntry = [_]CacheEntry{.{}} ** CACHE_SIZE,
+    entries: [CACHE_SIZE]CacheEntry = @as([CACHE_SIZE]CacheEntry, @splat(.{})),
 
     /// Hit counter for diagnostics.
     hits: u64 = 0,
@@ -63,7 +63,7 @@ pub const DecodeCache = struct {
 
     /// Invalidate the entire cache (e.g. after detecting self-modifying code).
     pub fn invalidate(self: *DecodeCache) void {
-        self.entries = [_]CacheEntry{.{}} ** CACHE_SIZE;
+        self.entries = @as([CACHE_SIZE]CacheEntry, @splat(.{}));
     }
 
     /// Invalidate a single entry by EIP.
@@ -169,7 +169,7 @@ test "decode_cache: hit/miss counters" {
 
 test "decode_cache: validates every fetched byte" {
     var cache = DecodeCache{};
-    var code: [MAX_CODE_BYTES]u8 = .{0x90} ** MAX_CODE_BYTES;
+    var code: [MAX_CODE_BYTES]u8 = @splat(0x90);
     const insn = decoder.decode(&code);
     cache.store(0x401000, &code, insn);
 
@@ -206,7 +206,7 @@ test "decode_cache: maximum EIP is distinct from an empty entry" {
 
 test "decode_cache: unsupported fetch sizes are not cached" {
     var cache = DecodeCache{};
-    const code: [MAX_CODE_BYTES + 1]u8 = .{0x90} ** (MAX_CODE_BYTES + 1);
+    const code: [MAX_CODE_BYTES + 1]u8 = @splat(0x90);
     cache.store(0x401000, &code, decoder.decode(&code));
     try testing.expect(cache.lookup(0x401000, &code) == null);
     cache.store(0x401000, &.{}, decoder.decode(&.{}));

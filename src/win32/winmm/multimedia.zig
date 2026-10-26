@@ -1,7 +1,7 @@
 const std = @import("std");
 const runtime = @import("../../runtime.zig");
 const trace = @import("../../trace.zig");
-const renderer = if (@import("builtin").os.tag != .windows) @import("../../gui/renderer.zig") else struct {
+const renderer = if (@import("builtin").target.os.tag != .windows) @import("../../gui/renderer.zig") else struct {
     pub fn setVolume(_: anytype) void {}
 };
 const dsound_stubs = @import("../dsound.zig");
@@ -113,7 +113,7 @@ pub const MmTimer = struct {
     thread: if (platform.is_native) ?std.Thread else void = if (platform.is_native) null else {},
 };
 
-pub var mm_timers: [MAX_MM_TIMERS]MmTimer = [_]MmTimer{.{}} ** MAX_MM_TIMERS;
+pub var mm_timers: [MAX_MM_TIMERS]MmTimer = @as([MAX_MM_TIMERS]MmTimer, @splat(.{}));
 
 /// Serializes the slot scan, the entry store, and the thread handle in
 /// timeSetEvent/timeKillEvent against each other and against the snapshot the
@@ -647,12 +647,12 @@ test "concurrent timeSetEvent arms distinct timer slots" {
         mm_timers = saved_timers;
         timer_id_counter = saved_counter;
     }
-    mm_timers = [_]MmTimer{.{}} ** MAX_MM_TIMERS;
+    mm_timers = @as([MAX_MM_TIMERS]MmTimer, @splat(.{}));
     timer_id_counter = 1;
 
     const Context = struct {
         start: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-        ids: [4]u32 = [_]u32{0} ** 4,
+        ids: [4]u32 = @as([4]u32, @splat(0)),
 
         fn run(ctx: *@This(), worker: usize) void {
             while (!ctx.start.load(.acquire)) std.atomic.spinLoopHint();

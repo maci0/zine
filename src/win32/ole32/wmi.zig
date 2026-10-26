@@ -238,7 +238,7 @@ fn setVariantSmbios(pVal: usize) void {
     const proc_name = "Intel Compatible Processor";
 
     // SMBIOS Type 4 entry (length=0x2A = 42 bytes for 2.3 spec)
-    var smbios_data: [128]u8 = [_]u8{0} ** 128;
+    var smbios_data: [128]u8 = @as([128]u8, @splat(0));
     var pos: usize = 0;
     // Type 4 header
     smbios_data[pos] = 4;

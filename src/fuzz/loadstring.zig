@@ -23,7 +23,7 @@ pub const seed_strings = [_][]const u16{ &.{ 'H', 'e', 'l', 'l', 'o' }, &.{ 'W',
 /// Build a mapped image whose RT_STRING block 1 holds `seed_strings`.
 /// Returned by value so the seed corpus is a compile-time constant.
 fn buildImage() [image_len]u8 {
-    var buf = [_]u8{0} ** image_len;
+    var buf = @as([image_len]u8, @splat(0));
     const dos: *pe.IMAGE_DOS_HEADER = @ptrCast(@alignCast(&buf));
     dos.e_magic = pe.IMAGE_DOS_SIGNATURE;
     dos.e_lfanew = 64;
@@ -84,7 +84,7 @@ const no_resource_image = blk: {
 pub const seeds = [_][]const u8{
     &string_table_image,
     &no_resource_image,
-    &([_]u8{ 'M', 'Z' } ++ [_]u8{0} ** 62),
+    &([_]u8{ 'M', 'Z' } ++ @as([62]u8, @splat(0))),
 };
 
 /// Buffer sizes the harness copies into, small enough that a length field

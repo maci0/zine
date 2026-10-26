@@ -4,7 +4,7 @@ Run Win98/Win2K-era 32-bit Windows executables on Linux and in the browser witho
 
 ## Constraints
 
-- Use Zig 0.16.0. Preserve x86 and x86_64 Linux, wasm32 and wasm64 WASI builds; host pointer width does not change the guest's 32-bit address space.
+- Use Zig 0.17.0. Preserve x86 and x86_64 Linux, wasm32 and wasm64 WASI builds; host pointer width does not change the guest's 32-bit address space.
 - Native `zine schema` and `-o`/`--output` run before log and config init. `auto` stays text on a pipe. Guest stdout is unchanged in every output mode, and a guest exit status is not an error envelope. `zine -- schema` runs a file named schema.
 - Keep native executables at image base `0x70000000` to leave low addresses free for guest PEs. The x86 target disables SIMD for legacy 4-byte stack alignment; do not enable it as a host optimization.
 - Use `callconv(w32cc.WINAPI)` for Win32 API stubs: stdcall on x86, Win64 on x86_64, C elsewhere. Preserve cdecl (`.c`) for APIs that require it, including MSVCRT.
@@ -19,7 +19,7 @@ Run `bash tests/check.sh` from the repository root before a pull request. It fir
 - Unit tests: `zig build test` (also checks formatting). Tests run on the host; `-Darch` does not change the test target.
 - Native CLI tests: `zig build test-cli`, then `zig build test-cli -Darch=x86_64`; no guest binaries required.
 - Formatting: `zig fmt --check src build.zig build.zig.zon`.
-- Compile/typecheck each target, sequentially to limit peak memory: `zig build`, `zig build -Darch=x86_64`, `zig build -Darch=wasm32`, `zig build -Darch=wasm64`. These build ReleaseSafe, the default of the `-Doptimize` option; pass `-Doptimize=Debug` for a debugging loop and expect that to change build time.
+- Compile/typecheck each target, sequentially to limit peak memory: `zig build`, `zig build -Darch=x86_64`, `zig build -Darch=wasm32`, `zig build -Darch=wasm64`. These build safe, the default of the `-Doptimize` option; pass `-Doptimize=debug` for a debugging loop and expect that to change build time.
 - Linked-artifact hardening: `bash tests/check.sh hardening` reads the program headers of `zig-out/bin/zine.x86` and `zine.x86_64` and requires a static link and a non-executable stack. It rebuilds both targets first, so it stands alone. PIE, RELRO, BIND_NOW and Zig's stack protector are deliberately absent (fixed image base, static link, no libc); do not add one without removing its exclusion.
 - Web assets: `bash tests/check.sh check_web` parses every tracked JavaScript file with `node --check`. The Zig build only embeds those bytes, so nothing else in the gate reads them.
 - Stub DLLs: `zig build -Ddll=all` compiles `src/dll/` and `src/win32_dll_api.zig` for x86-windows. `zig build -Dexternal-stubs` covers the other half of the embed/external stub switch.

@@ -185,7 +185,7 @@ const PosixCompat = struct {
 
 /// Minimal AF_INET address used by winsock compat; replaces SockAddrInet.
 const SockAddrInet = extern struct {
-    any: linux.sockaddr = .{ .family = linux.AF.UNSPEC, .data = [_]u8{0} ** 14 },
+    any: linux.sockaddr = .{ .family = linux.AF.UNSPEC, .data = @as([14]u8, @splat(0)) },
     port: u16 = 0,
     addr: u32 = 0,
 
@@ -194,7 +194,7 @@ const SockAddrInet = extern struct {
         self.port = p;
         self.addr = std.mem.bytesToValue(u32, &octets);
         const sa_in: *linux.sockaddr.in = @ptrCast(@alignCast(&self.any));
-        sa_in.* = .{ .family = linux.AF.INET, .port = @byteSwap(p), .addr = self.addr, .zero = [_]u8{0} ** 8 };
+        sa_in.* = .{ .family = linux.AF.INET, .port = @byteSwap(p), .addr = self.addr, .zero = @as([8]u8, @splat(0)) };
         return self;
     }
 
@@ -249,7 +249,7 @@ fn addressToSockaddr(addr: SockAddrInet, name: usize, addrlen: usize) void {
         sa.sin_family = AF_INET;
         sa.sin_port = @byteSwap(addr.getPort());
         sa.sin_addr = addr.addr;
-        sa.sin_zero = [_]u8{0} ** 8;
+        sa.sin_zero = @as([8]u8, @splat(0));
     }
     if (addrlen != 0) {
         const lenp = @as(*i32, @ptrFromInt(addrlen));
@@ -1068,7 +1068,7 @@ test "a failing socket call records a code WSAGetLastError reports" {
         .sin_family = @intCast(AF_INET),
         .sin_port = std.mem.nativeToBig(u16, 80),
         .sin_addr = @bitCast([_]u8{ 127, 0, 0, 1 }),
-        .sin_zero = [_]u8{0} ** 8,
+        .sin_zero = @as([8]u8, @splat(0)),
     };
     try testing.expectEqual(SOCKET_ERROR, connect(0xFFFF, @intFromPtr(&sa), @sizeOf(WinSockAddrIn)));
     try testing.expect(stub_WSAGetLastError() != 0);

@@ -609,7 +609,7 @@ pub const WindowInfo = struct {
     exstyle: i32 = 0,
     parent: usize = 0,
 };
-pub var window_info_table: [MAX_WINDOWS]WindowInfo = [_]WindowInfo{.{}} ** MAX_WINDOWS;
+pub var window_info_table: [MAX_WINDOWS]WindowInfo = @as([MAX_WINDOWS]WindowInfo, @splat(.{}));
 pub var window_info_count: usize = 0;
 
 pub fn getWindowInfo(hwnd: usize) ?*WindowInfo {
@@ -702,7 +702,7 @@ pub fn removeHwndText(hwnd: usize) void {
     for (hwnd_texts[0..hwnd_text_count], 0..) |*e, i| {
         if (e.hwnd == hwnd) {
             hwnd_texts[i] = hwnd_texts[hwnd_text_count - 1];
-            hwnd_texts[hwnd_text_count - 1] = .{ .hwnd = 0, .text = [_]u8{0} ** 512, .len = 0 };
+            hwnd_texts[hwnd_text_count - 1] = .{ .hwnd = 0, .text = @as([512]u8, @splat(0)), .len = 0 };
             hwnd_text_count -= 1;
             return;
         }

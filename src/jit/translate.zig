@@ -614,11 +614,11 @@ const Token = struct {
 };
 
 fn token(op: wasm.Opcode) Token {
-    return .{ .op = @intFromEnum(op) };
+    return .{ .op = @backingInt(op) };
 }
 
 fn localToken(op: wasm.Opcode, index: u32) Token {
-    return .{ .op = @intFromEnum(op), .arg = @intCast(index) };
+    return .{ .op = @backingInt(op), .arg = @intCast(index) };
 }
 
 /// Split an emitted body into one token per opcode, dropping the immediates of
@@ -629,7 +629,7 @@ fn decodeTokens(bytes: []const u8, out: *std.ArrayListUnmanaged(Token)) !void {
     while (i < bytes.len) {
         const op = bytes[i];
         i += 1;
-        if (op == @intFromEnum(wasm.Opcode.i32_const)) {
+        if (op == @backingInt(wasm.Opcode.i32_const)) {
             // Skip the ILEB128 immediate: a byte whose bit 6 is set is the
             // last one, because bit 6 is the sign bit.
             while (true) {
@@ -639,19 +639,19 @@ fn decodeTokens(bytes: []const u8, out: *std.ArrayListUnmanaged(Token)) !void {
                 if (byte & 0x80 == 0 or byte & 0x40 != 0) break;
             }
             try out.append(std.testing.allocator, .{ .op = op });
-        } else if (op == @intFromEnum(wasm.Opcode.i32_load) or
-            op == @intFromEnum(wasm.Opcode.i32_store) or
-            op == @intFromEnum(wasm.Opcode.i32_load8_u) or
-            op == @intFromEnum(wasm.Opcode.i32_load16_u))
+        } else if (op == @backingInt(wasm.Opcode.i32_load) or
+            op == @backingInt(wasm.Opcode.i32_store) or
+            op == @backingInt(wasm.Opcode.i32_load8_u) or
+            op == @backingInt(wasm.Opcode.i32_load16_u))
         {
             // Skip the two ULEB128 alignment and offset immediates.
             if (i + 1 >= bytes.len) return error.TestUnexpectedResult;
             if (bytes[i] > 0x7F or bytes[i + 1] > 0x7F) return error.TestUnexpectedResult;
             i += 2;
             try out.append(std.testing.allocator, .{ .op = op });
-        } else if (op == @intFromEnum(wasm.Opcode.local_get) or
-            op == @intFromEnum(wasm.Opcode.local_set) or
-            op == @intFromEnum(wasm.Opcode.local_tee))
+        } else if (op == @backingInt(wasm.Opcode.local_get) or
+            op == @backingInt(wasm.Opcode.local_set) or
+            op == @backingInt(wasm.Opcode.local_tee))
         {
             if (i >= bytes.len or bytes[i] > 0x7F) return error.TestUnexpectedResult;
             try out.append(std.testing.allocator, .{ .op = op, .arg = bytes[i] });
@@ -755,7 +755,7 @@ fn expectConstAt(bytes: []const u8, n: usize, expected: []const u8) !void {
     var seen: usize = 0;
     var i: usize = 0;
     while (i < bytes.len) : (i += 1) {
-        if (bytes[i] != @intFromEnum(wasm.Opcode.i32_const)) continue;
+        if (bytes[i] != @backingInt(wasm.Opcode.i32_const)) continue;
         if (seen == n) {
             try std.testing.expectEqualSlices(u8, expected, bytes[i + 1 .. i + 1 + expected.len]);
             return;
@@ -767,16 +767,16 @@ fn expectConstAt(bytes: []const u8, n: usize, expected: []const u8) !void {
 
 /// The whole body is a single `i32.const <v>`.
 fn expectOnlyConst(bytes: []const u8, v: u8) !void {
-    try std.testing.expectEqualSlices(u8, &.{ @intFromEnum(wasm.Opcode.i32_const), v }, bytes);
+    try std.testing.expectEqualSlices(u8, &.{ @backingInt(wasm.Opcode.i32_const), v }, bytes);
 }
 
 test "each Jcc condition reads exactly the flags its x86 encoding defines" {
     const G = struct {
         fn op(comptime o: wasm.Opcode) Token {
-            return .{ .op = @intFromEnum(o) };
+            return .{ .op = @backingInt(o) };
         }
         fn local(index: u32) Token {
-            return .{ .op = @intFromEnum(wasm.Opcode.local_get), .arg = @intCast(index) };
+            return .{ .op = @backingInt(wasm.Opcode.local_get), .arg = @intCast(index) };
         }
     };
     const table = [_]struct { cc: u4, expected: []const Token }{
@@ -827,7 +827,7 @@ test "PUSH stores at the decremented ESP and POP loads from the old one" {
     try expectConstAt(push_body.bytes.items, 0, &.{4});
     try std.testing.expectEqualSlices(
         u8,
-        &.{ @intFromEnum(wasm.Opcode.i32_store), 2, 0 },
+        &.{ @backingInt(wasm.Opcode.i32_store), 2, 0 },
         push_body.bytes.items[push_body.bytes.items.len - 3 ..],
     );
 

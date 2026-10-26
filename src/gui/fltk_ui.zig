@@ -21,9 +21,7 @@ const text_utils = @import("../text_utils.zig");
 const build_options = @import("build_options");
 
 /// Conditionally import the C bridge — only available when -Dfltk=true
-const c = if (build_options.use_fltk) @cImport({
-    @cInclude("fltk_bridge.h");
-}) else struct {};
+const c = if (build_options.use_fltk) @import("fltk_bridge") else struct {};
 
 var g_allocator: std.mem.Allocator = undefined;
 
@@ -157,7 +155,7 @@ fn processCommand(cmd: Command) void {
         .set_title => |title| {
             // Need null-terminated string for C
             var buf: [512]u8 = undefined;
-            text_utils.copyCString(&buf, title);
+            _ = text_utils.copyCString(&buf, title);
             c.fltk_set_title(&buf);
         },
         .set_framebuf => |fb| {
@@ -180,8 +178,8 @@ fn processCommand(cmd: Command) void {
             // Need null-terminated strings
             var title_buf: [256]u8 = undefined;
             var text_buf: [2048]u8 = undefined;
-            text_utils.copyCString(&title_buf, mb.title);
-            text_utils.copyCString(&text_buf, mb.text);
+            _ = text_utils.copyCString(&title_buf, mb.title);
+            _ = text_utils.copyCString(&text_buf, mb.text);
             c.fltk_alert(&title_buf, &text_buf);
         },
         .set_resolution => |res| {
@@ -193,14 +191,14 @@ fn processCommand(cmd: Command) void {
         },
         .add_control => |ac| {
             var cls: [64]u8 = undefined;
-            text_utils.copyCString(&cls, ac.class);
+            _ = text_utils.copyCString(&cls, ac.class);
             var text: [512]u8 = undefined;
-            text_utils.copyCString(&text, ac.text);
+            _ = text_utils.copyCString(&text, ac.text);
             c.fltk_add_control(&cls, @intCast(ac.id), ac.x, ac.y, ac.w, ac.h, ac.style, &text);
         },
         .update_control_text => |ut| {
             var text: [512]u8 = undefined;
-            text_utils.copyCString(&text, ut.text);
+            _ = text_utils.copyCString(&text, ut.text);
             c.fltk_update_control_text(ut.id, &text);
         },
         .update_control_value => |uv| {
@@ -231,26 +229,26 @@ fn processCommand(cmd: Command) void {
         .close_dialog => c.fltk_close_dialog(),
         .set_clipboard => |text| {
             var buf: [4096]u8 = undefined;
-            text_utils.copyCString(&buf, text);
+            _ = text_utils.copyCString(&buf, text);
             c.fltk_set_clipboard(&buf);
         },
         .set_icon => |json| processIconJson(json),
         .open_file_dialog => |fd| {
             var buf: [512]u8 = undefined;
-            text_utils.copyCString(&buf, fd.filters);
+            _ = text_utils.copyCString(&buf, fd.filters);
             c.fltk_open_file_dialog(&buf, if (fd.is_save) 1 else 0);
         },
         .open_font_dialog => |ff| {
             var buf: [64]u8 = undefined;
-            text_utils.copyCString(&buf, ff.face);
+            _ = text_utils.copyCString(&buf, ff.face);
             c.fltk_open_font_dialog(&buf, ff.size, if (ff.bold) 1 else 0, if (ff.italic) 1 else 0);
         },
         .open_print_dialog => |pd| c.fltk_open_print_dialog(pd.from_page, pd.to_page, pd.min_page, pd.max_page, pd.copies),
         .open_find_dialog => |fd| {
             var fbuf: [512]u8 = undefined;
-            text_utils.copyCString(&fbuf, fd.find_text);
+            _ = text_utils.copyCString(&fbuf, fd.find_text);
             var rbuf: [512]u8 = undefined;
-            text_utils.copyCString(&rbuf, fd.replace_text);
+            _ = text_utils.copyCString(&rbuf, fd.replace_text);
             c.fltk_open_find_dialog(&fbuf, &rbuf, if (fd.is_replace) 1 else 0);
         },
         .open_page_setup_dialog => |ps| c.fltk_open_page_setup_dialog(ps.left, ps.top, ps.right, ps.bottom, ps.paper_w, ps.paper_h, ps.orientation),
@@ -258,13 +256,13 @@ fn processCommand(cmd: Command) void {
         .edit_resize => |er| c.fltk_edit_resize(er.x, er.y, er.w, er.h),
         .edit_set_text => |t| {
             var buf: [4096]u8 = undefined;
-            text_utils.copyCString(&buf, t);
+            _ = text_utils.copyCString(&buf, t);
             c.fltk_edit_set_text(&buf);
         },
         .edit_set_sel => |es| c.fltk_edit_set_sel(es.start, es.end),
         .edit_replace_sel => |t| {
             var buf: [4096]u8 = undefined;
-            text_utils.copyCString(&buf, t);
+            _ = text_utils.copyCString(&buf, t);
             c.fltk_edit_replace_sel(&buf);
         },
         .edit_insert_char => |ch| c.fltk_edit_insert_char(ch),
@@ -276,7 +274,7 @@ fn processCommand(cmd: Command) void {
 /// Parse a custom_dialog JSON and build the FLTK modal dialog.
 fn processDialogJson(json: []const u8) void {
     // Zeroed so an absent title still reaches the bridge as an empty C string.
-    var title_buf: [256]u8 = [_]u8{0} ** 256;
+    var title_buf: [256]u8 = @as([256]u8, @splat(0));
     var cx: i32 = 200;
     var cy: i32 = 120;
     var items: [64]struct { id: i32, x: i32, y: i32, cx: i32, cy: i32, class: [32]u8, text: [256]u8 } = undefined;
@@ -289,7 +287,7 @@ fn processDialogJson(json: []const u8) void {
 
     if (root.object.get("title")) |t| {
         if (t == .string) {
-            text_utils.copyCString(&title_buf, t.string);
+            _ = text_utils.copyCString(&title_buf, t.string);
         }
     }
     if (root.object.get("cx")) |v| {
@@ -322,12 +320,12 @@ fn processDialogJson(json: []const u8) void {
                 }
                 if (it.object.get("class")) |v| {
                     if (v == .string) {
-                        text_utils.copyCString(&itm.class, v.string);
+                        _ = text_utils.copyCString(&itm.class, v.string);
                     }
                 }
                 if (it.object.get("text")) |v| {
                     if (v == .string) {
-                        text_utils.copyCString(&itm.text, v.string);
+                        _ = text_utils.copyCString(&itm.text, v.string);
                     }
                 }
                 item_count += 1;
@@ -339,8 +337,8 @@ fn processDialogJson(json: []const u8) void {
     for (items[0..item_count]) |itm| {
         var cls_buf: [64]u8 = undefined;
         var text_buf: [512]u8 = undefined;
-        text_utils.copyCString(&cls_buf, std.mem.span(@as([*:0]const u8, @ptrCast(&itm.class))));
-        text_utils.copyCString(&text_buf, std.mem.span(@as([*:0]const u8, @ptrCast(&itm.text))));
+        _ = text_utils.copyCString(&cls_buf, std.mem.span(@as([*:0]const u8, @ptrCast(&itm.class))));
+        _ = text_utils.copyCString(&text_buf, std.mem.span(@as([*:0]const u8, @ptrCast(&itm.text))));
         c.fltk_add_dialog_item(&cls_buf, itm.id, itm.x, itm.y, itm.cx, itm.cy, &text_buf);
     }
     c.fltk_finish_dialog();

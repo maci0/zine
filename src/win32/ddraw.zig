@@ -146,17 +146,17 @@ var global_clipper: IDirectDrawClipper = undefined;
 // 256 is effectively unlimited for any real game.
 const MAX_SURFACES = 256;
 var surface_pool: [MAX_SURFACES]IDirectDrawSurface = undefined;
-var surface_widths: [MAX_SURFACES]u32 = [_]u32{0} ** MAX_SURFACES;
-var surface_heights: [MAX_SURFACES]u32 = [_]u32{0} ** MAX_SURFACES;
+var surface_widths: [MAX_SURFACES]u32 = @as([MAX_SURFACES]u32, @splat(0));
+var surface_heights: [MAX_SURFACES]u32 = @as([MAX_SURFACES]u32, @splat(0));
 
 var surface_count: u32 = 0;
 
 // Per-surface buffer map: keyed by `this` pointer address.
 // Works with dxwrapper (different `this` pointers) and native surfaces alike.
 const MAX_SURFACE_BUFS = 64;
-var sbuf_keys: [MAX_SURFACE_BUFS]usize = [_]usize{0} ** MAX_SURFACE_BUFS;
-var sbuf_ptrs: [MAX_SURFACE_BUFS]?[*]u8 = [_]?[*]u8{null} ** MAX_SURFACE_BUFS;
-var sbuf_sizes: [MAX_SURFACE_BUFS]usize = [_]usize{0} ** MAX_SURFACE_BUFS;
+var sbuf_keys: [MAX_SURFACE_BUFS]usize = @as([MAX_SURFACE_BUFS]usize, @splat(0));
+var sbuf_ptrs: [MAX_SURFACE_BUFS]?[*]u8 = @as([MAX_SURFACE_BUFS]?[*]u8, @splat(null));
+var sbuf_sizes: [MAX_SURFACE_BUFS]usize = @as([MAX_SURFACE_BUFS]usize, @splat(0));
 var sbuf_count: u32 = 0;
 
 // The backbuffer surface (largest offscreen) — set during CreateSurface

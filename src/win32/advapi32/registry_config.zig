@@ -101,7 +101,7 @@ pub fn init(allocator: std.mem.Allocator) void {
             while (val_it.next()) |val_entry| {
                 const value_name = val_entry.key_ptr.*;
                 const value = val_entry.value_ptr.*;
-                const lookup_key = std.fmt.allocPrint(allocator, "{s}\x00{s}\x00{s}", .{ bk.module, bk.key, value_name }) catch continue;
+                const lookup_key = allocator.print("{s}\x00{s}\x00{s}", .{ bk.module, bk.key, value_name }) catch continue;
                 switch (value) {
                     .string => |s| {
                         const copy = allocator.dupe(u8, s) catch {
@@ -139,7 +139,7 @@ pub fn init(allocator: std.mem.Allocator) void {
             const value_name = val_entry.key_ptr.*;
             const value = val_entry.value_ptr.*;
 
-            const lookup_key = std.fmt.allocPrint(allocator, "{s}\x00{s}", .{ upper_key, value_name }) catch continue;
+            const lookup_key = allocator.print("{s}\x00{s}", .{ upper_key, value_name }) catch continue;
 
             switch (value) {
                 .string => |s| {

@@ -804,7 +804,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             if (insn.op_size == .word) {
                 cpu.setReg16(reg, @truncate(insn.imm));
             } else {
-                cpu.setReg(@enumFromInt(reg), insn.imm);
+                cpu.setReg(@fromBackingInt(@intCast(reg)), insn.imm);
             }
         },
 
@@ -814,7 +814,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             if (insn.op_size == .word) {
                 cpu.push16(cpu.getReg16(reg));
             } else {
-                cpu.push32(cpu.getReg(@enumFromInt(reg)));
+                cpu.push32(cpu.getReg(@fromBackingInt(@intCast(reg))));
             }
         },
         // --- POP reg (58-5F) ---
@@ -823,7 +823,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             if (insn.op_size == .word) {
                 cpu.setReg16(reg, cpu.pop16());
             } else {
-                cpu.setReg(@enumFromInt(reg), cpu.pop32());
+                cpu.setReg(@fromBackingInt(@intCast(reg)), cpu.pop32());
             }
         },
 
@@ -860,7 +860,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // --- INC reg (40-47) ---
         0x40...0x47 => {
-            const reg: cpu_mod.RegIndex = @enumFromInt(@as(u3, @truncate(insn.opcode)));
+            const reg: cpu_mod.RegIndex = @fromBackingInt(@intCast(@as(u3, @truncate(insn.opcode))));
             const val = cpu.getReg(reg);
             const result = val +% 1;
             cpu.setReg(reg, result);
@@ -868,7 +868,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         },
         // --- DEC reg (48-4F) ---
         0x48...0x4F => {
-            const reg: cpu_mod.RegIndex = @enumFromInt(@as(u3, @truncate(insn.opcode)));
+            const reg: cpu_mod.RegIndex = @fromBackingInt(@intCast(@as(u3, @truncate(insn.opcode))));
             const val = cpu.getReg(reg);
             const result = val -% 1;
             cpu.setReg(reg, result);
@@ -910,7 +910,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         // MOV r/m16, Sreg (8C)
         0x8C => {
             if (insn.has_modrm) {
-                const sreg_val: u32 = switch (@as(Segment, @enumFromInt(insn.modrm_reg))) {
+                const sreg_val: u32 = switch (@as(Segment, @fromBackingInt(@intCast(insn.modrm_reg)))) {
                     .es => cpu.es,
                     .cs => cpu.cs,
                     .ss => cpu.ss,
@@ -929,7 +929,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 if (insn.op_size == .word) {
                     cpu.setReg16(insn.modrm_reg, @truncate(addr));
                 } else {
-                    cpu.setReg(@enumFromInt(insn.modrm_reg), addr);
+                    cpu.setReg(@fromBackingInt(@intCast(insn.modrm_reg)), addr);
                 }
             }
         },
@@ -938,7 +938,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         0x8E => {
             if (insn.has_modrm) {
                 const val: u16 = @truncate(readOperand(cpu, insn, 1));
-                switch (@as(Segment, @enumFromInt(insn.modrm_reg))) {
+                switch (@as(Segment, @fromBackingInt(@intCast(insn.modrm_reg)))) {
                     .es => cpu.es = val,
                     .cs => cpu.cs = val,
                     .ss => cpu.ss = val,
@@ -951,7 +951,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // XCHG EAX, reg (91-97)
         0x91...0x97 => {
-            const reg: cpu_mod.RegIndex = @enumFromInt(@as(u3, @truncate(insn.opcode)));
+            const reg: cpu_mod.RegIndex = @fromBackingInt(@intCast(@as(u3, @truncate(insn.opcode))));
             const tmp = cpu.eax;
             cpu.eax = cpu.getReg(reg);
             cpu.setReg(reg, tmp);
@@ -1213,30 +1213,30 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
         // MOVZX r32, r/m8 (0F B6)
         0x0FB6 => {
             const val: u32 = readOperand(cpu, insn, 1) & 0xFF;
-            cpu.setReg(@enumFromInt(insn.modrm_reg), val);
+            cpu.setReg(@fromBackingInt(@intCast(insn.modrm_reg)), val);
         },
         // MOVZX r32, r/m16 (0F B7)
         0x0FB7 => {
             const val: u32 = readOperand(cpu, insn, 1) & 0xFFFF;
-            cpu.setReg(@enumFromInt(insn.modrm_reg), val);
+            cpu.setReg(@fromBackingInt(@intCast(insn.modrm_reg)), val);
         },
         // MOVSX r32, r/m8 (0F BE)
         0x0FBE => {
             const val: u8 = @truncate(readOperand(cpu, insn, 1));
-            cpu.setReg(@enumFromInt(insn.modrm_reg), cpu_mod.signExtend8to32(val));
+            cpu.setReg(@fromBackingInt(@intCast(insn.modrm_reg)), cpu_mod.signExtend8to32(val));
         },
         // MOVSX r32, r/m16 (0F BF)
         0x0FBF => {
             const val: u16 = @truncate(readOperand(cpu, insn, 1));
-            cpu.setReg(@enumFromInt(insn.modrm_reg), cpu_mod.signExtend16to32(val));
+            cpu.setReg(@fromBackingInt(@intCast(insn.modrm_reg)), cpu_mod.signExtend16to32(val));
         },
 
         0x0FAF => {
-            const a: i32 = @bitCast(cpu.getReg(@enumFromInt(insn.modrm_reg)));
+            const a: i32 = @bitCast(cpu.getReg(@fromBackingInt(@intCast(insn.modrm_reg))));
             const b: i32 = @bitCast(readOperand(cpu, insn, 1));
             const result: i64 = @as(i64, a) * @as(i64, b);
             const r32: u32 = @truncate(@as(u64, @bitCast(result)));
-            cpu.setReg(@enumFromInt(insn.modrm_reg), r32);
+            cpu.setReg(@fromBackingInt(@intCast(insn.modrm_reg)), r32);
             setMulOverflow(cpu, result != @as(i64, @as(i32, @bitCast(r32))));
         },
 
@@ -1245,7 +1245,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             const cc: u4 = @truncate(insn.opcode);
             if (cpu.flags.evaluateCC(cc)) {
                 const val = readOperand(cpu, insn, 1);
-                cpu.setReg(@enumFromInt(insn.modrm_reg), val);
+                cpu.setReg(@fromBackingInt(@intCast(insn.modrm_reg)), val);
             }
         },
 
@@ -1347,7 +1347,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 cpu.flags.update(.logic, .dword, 0, 0, 0); // sets ZF
             } else {
                 const bit: u32 = @ctz(val);
-                cpu.setReg(@enumFromInt(insn.modrm_reg), bit);
+                cpu.setReg(@fromBackingInt(@intCast(insn.modrm_reg)), bit);
                 cpu.flags.update(.logic, .dword, 1, 0, 0); // clears ZF
             }
         },
@@ -1358,7 +1358,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 cpu.flags.update(.logic, .dword, 0, 0, 0);
             } else {
                 const bit: u32 = 31 - @as(u32, @clz(val));
-                cpu.setReg(@enumFromInt(insn.modrm_reg), bit);
+                cpu.setReg(@fromBackingInt(@intCast(insn.modrm_reg)), bit);
                 cpu.flags.update(.logic, .dword, 1, 0, 0);
             }
         },
@@ -1415,7 +1415,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
 
         // BSWAP (0F C8-CF)
         0x0FC8...0x0FCF => {
-            const reg: cpu_mod.RegIndex = @enumFromInt(@as(u3, @truncate(insn.opcode)));
+            const reg: cpu_mod.RegIndex = @fromBackingInt(@intCast(@as(u3, @truncate(insn.opcode))));
             const val = cpu.getReg(reg);
             cpu.setReg(reg, @byteSwap(val));
         },
@@ -1485,7 +1485,7 @@ fn executeInsn(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
             const imm: i32 = @bitCast(insn.imm);
             const result: i64 = @as(i64, src) * @as(i64, imm);
             const r32: u32 = @truncate(@as(u64, @bitCast(result)));
-            cpu.setReg(@enumFromInt(insn.modrm_reg), r32);
+            cpu.setReg(@fromBackingInt(@intCast(insn.modrm_reg)), r32);
             setMulOverflow(cpu, result != @as(i64, @as(i32, @bitCast(r32))));
         },
 
@@ -1835,7 +1835,7 @@ inline fn readOperand(cpu: *Cpu, insn: *const Instruction, idx: u1) u32 {
     const reg = if (idx == 0) insn.op0_reg else insn.op1_reg;
     return switch (kind) {
         .none => 0,
-        .reg => if (insn.op_size == .byte) @as(u32, cpu.getReg8(reg)) else cpu.getReg(@enumFromInt(reg)),
+        .reg => if (insn.op_size == .byte) @as(u32, cpu.getReg8(reg)) else cpu.getReg(@fromBackingInt(@intCast(reg))),
         .mem => blk: {
             const addr = computeEffectiveAddress(cpu, insn);
             break :blk switch (insn.op_size) {
@@ -1856,7 +1856,7 @@ inline fn writeOperand(cpu: *Cpu, insn: *const Instruction, idx: u1, val: u32) v
             if (insn.op_size == .word) {
                 cpu.setReg16(reg, @truncate(val));
             } else {
-                cpu.setReg(@enumFromInt(reg), val);
+                cpu.setReg(@fromBackingInt(@intCast(reg)), val);
             }
         },
         .mem => {
@@ -1892,7 +1892,7 @@ inline fn writeOperandSized(cpu: *Cpu, insn: *const Instruction, idx: u1, val: u
             switch (size) {
                 .byte => cpu.setReg8(reg, @truncate(val)),
                 .word => cpu.setReg16(reg, @truncate(val)),
-                .dword => cpu.setReg(@enumFromInt(reg), val),
+                .dword => cpu.setReg(@fromBackingInt(@intCast(reg)), val),
             }
         },
         .mem => {
@@ -1923,9 +1923,9 @@ fn setMulOverflow(cpu: *Cpu, overflowed: bool) void {
 
 pub inline fn computeEffectiveAddress(cpu: *const Cpu, insn: *const Instruction) u32 {
     var addr: u32 = 0;
-    if (insn.mem_base != 0xF) addr +%= cpu.getReg(@enumFromInt(@as(u3, @truncate(insn.mem_base))));
+    if (insn.mem_base != 0xF) addr +%= cpu.getReg(@fromBackingInt(@intCast(@as(u3, @truncate(insn.mem_base)))));
     if (insn.mem_index != 0xF) {
-        const idx_val = cpu.getReg(@enumFromInt(@as(u3, @truncate(insn.mem_index))));
+        const idx_val = cpu.getReg(@fromBackingInt(@intCast(@as(u3, @truncate(insn.mem_index)))));
         addr +%= idx_val << insn.mem_scale;
     }
     addr +%= @bitCast(insn.mem_disp);
@@ -2488,7 +2488,7 @@ test "execute: MOV EAX, 0x12345678 + NOP + HLT" {
     // B8 78 56 34 12 = MOV EAX, 0x12345678
     // 90             = NOP
     // F4             = HLT
-    var mem: [256]u8 = .{0} ** 256;
+    var mem: [256]u8 = @splat(0);
     mem[0] = 0xB8;
     mem[1] = 0x78;
     mem[2] = 0x56;
@@ -2506,7 +2506,7 @@ test "execute: MOV EAX, 0x12345678 + NOP + HLT" {
 }
 
 test "execute: cached instruction observes a changed immediate tail" {
-    var mem: [32]u8 = .{0x90} ** 32;
+    var mem: [32]u8 = @splat(0x90);
     @memcpy(mem[0..5], &[_]u8{ 0xB8, 0x78, 0x56, 0x34, 0x12 });
     var cpu = makeCpu(&mem);
 
@@ -2528,7 +2528,7 @@ test "execute: shifts retain the last bit shifted out in carry" {
         .{ .modrm = 0xF8, .input = 0x80000002, .result = 0xC0000001, .carry = false },
     };
     for (cases) |case| {
-        var mem: [256]u8 = .{0} ** 256;
+        var mem: [256]u8 = @splat(0);
         @memcpy(mem[0..4], &[_]u8{ 0xC1, case.modrm, 1, 0xF4 });
         var cpu = makeCpu(&mem);
         cpu.eax = case.input;
@@ -2541,7 +2541,7 @@ test "execute: shifts retain the last bit shifted out in carry" {
 test "execute: rotates use the operand width" {
     // C0 C0 01 = ROL AL, 1; C0 C8 01 = ROR AL, 1
     {
-        var mem: [256]u8 = .{0} ** 256;
+        var mem: [256]u8 = @splat(0);
         @memcpy(mem[0..4], &[_]u8{ 0xC0, 0xC0, 0x01, 0xF4 });
         var cpu = makeCpu(&mem);
         cpu.eax = 0x81;
@@ -2552,7 +2552,7 @@ test "execute: rotates use the operand width" {
         try testing.expect(cpu.flags.getCF());
     }
     {
-        var mem: [256]u8 = .{0} ** 256;
+        var mem: [256]u8 = @splat(0);
         @memcpy(mem[0..4], &[_]u8{ 0xC0, 0xC8, 0x01, 0xF4 });
         var cpu = makeCpu(&mem);
         cpu.eax = 0x03;
@@ -2564,7 +2564,7 @@ test "execute: rotates use the operand width" {
     // C1 C0 01 = ROL EAX, 1 with a full-width rotation and CF from the bit
     // rotated out.
     {
-        var mem: [256]u8 = .{0} ** 256;
+        var mem: [256]u8 = @splat(0);
         @memcpy(mem[0..4], &[_]u8{ 0xC1, 0xC0, 0x01, 0xF4 });
         var cpu = makeCpu(&mem);
         cpu.eax = 0x80000001;
@@ -2576,7 +2576,7 @@ test "execute: rotates use the operand width" {
 
 test "execute: rotates through carry" {
     // D1 D0 = RCL EAX, 1; D1 D8 = RCR EAX, 1
-    var mem: [256]u8 = .{0} ** 256;
+    var mem: [256]u8 = @splat(0);
     @memcpy(mem[0..3], &[_]u8{ 0xD1, 0xD0, 0xF4 });
     {
         var cpu = makeCpu(&mem);
@@ -2610,7 +2610,7 @@ test "execute: rotates through carry" {
 
 test "execute: SHL alias /6 and SHLD carry" {
     // C0 /6 is the SAL alias of /4: SHL AL, 1.
-    var mem: [256]u8 = .{0} ** 256;
+    var mem: [256]u8 = @splat(0);
     @memcpy(mem[0..4], &[_]u8{ 0xC0, 0xF0, 0x01, 0xF4 });
     {
         var cpu = makeCpu(&mem);
@@ -2641,7 +2641,7 @@ test "execute: SHL alias /6 and SHLD carry" {
 
 test "execute: IDIV truncates toward zero and halts on a quotient overflow" {
     // F7 F9 = IDIV ECX
-    var mem: [256]u8 = .{0} ** 256;
+    var mem: [256]u8 = @splat(0);
     @memcpy(mem[0..3], &[_]u8{ 0xF7, 0xF9, 0xF4 });
 
     // -7 / 2: the quotient truncates toward zero and the remainder keeps the
@@ -2669,7 +2669,7 @@ test "execute: IDIV truncates toward zero and halts on a quotient overflow" {
 }
 
 test "execute: PUSH/POP" {
-    var mem: [256]u8 = .{0} ** 256;
+    var mem: [256]u8 = @splat(0);
     mem[0] = 0x50;
     mem[1] = 0x5B;
     mem[2] = 0xF4;
@@ -2692,7 +2692,7 @@ test "execute: ADD and flags" {
     };
 
     for (cases) |case| {
-        var mem: [256]u8 = .{0} ** 256;
+        var mem: [256]u8 = @splat(0);
         mem[0] = 0x05;
         std.mem.writeInt(u32, mem[1..5], case.rhs, .little);
         mem[5] = 0x3D;
@@ -2721,7 +2721,7 @@ test "execute: ADD and flags" {
 }
 
 test "execute: CALL and RET" {
-    var mem: [256]u8 = .{0} ** 256;
+    var mem: [256]u8 = @splat(0);
     // 0x00: CALL +5 (E8 05 00 00 00) — target = 0x00 + 5 + 5 = 0x0A
     mem[0] = 0xE8;
     mem[1] = 0x05;
@@ -2753,7 +2753,7 @@ test "execute: conditional jump" {
         .{ .rhs = 43, .zero = false, .result = 1 },
     };
     for (cases) |case| {
-        var mem: [256]u8 = .{0} ** 256;
+        var mem: [256]u8 = @splat(0);
         @memcpy(mem[0..10], &[_]u8{ 0x39, 0xD8, 0x74, 0x05, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xF4 });
         var cpu = makeCpu(&mem);
         cpu.eax = 42;
@@ -2772,7 +2772,7 @@ test "execute: conditional jump" {
 }
 
 test "execute: LEA" {
-    var mem: [256]u8 = .{0} ** 256;
+    var mem: [256]u8 = @splat(0);
     // LEA EAX, [EBX+ECX*4+0x10]  =>  8D 44 8B 10
     mem[0] = 0x8D;
     mem[1] = 0x44;
@@ -2793,7 +2793,7 @@ test "execute: LEA" {
 test "execute: DIV stops on a quotient wider than the destination" {
     // F6 F1 = DIV CL. AX / CL with CL = 1 and AX = 0xFFFF has a quotient of
     // 0xFFFF, which does not fit in AL, so hardware raises #DE.
-    var mem: [256]u8 = .{0} ** 256;
+    var mem: [256]u8 = @splat(0);
     @memcpy(mem[0..8], &[_]u8{ 0xB9, 0x01, 0x00, 0x00, 0x00, 0xF6, 0xF1, 0xF4 });
     var cpu = makeCpu(&mem);
     cpu.eax = 0xFFFF;
@@ -2804,7 +2804,7 @@ test "execute: DIV stops on a quotient wider than the destination" {
     try testing.expectEqual(@as(u32, 0xFFFF), cpu.eax & 0xFFFF);
 
     // The in-range case still divides: AX = 0x0100, CL = 2 gives AL = 0x80.
-    var mem2: [256]u8 = .{0} ** 256;
+    var mem2: [256]u8 = @splat(0);
     @memcpy(mem2[0..8], &[_]u8{ 0xB9, 0x02, 0x00, 0x00, 0x00, 0xF6, 0xF1, 0xF4 });
     var cpu2 = makeCpu(&mem2);
     cpu2.eax = 0x0100;
@@ -2816,7 +2816,7 @@ test "execute: DIV stops on a quotient wider than the destination" {
 test "execute: CWD writes only DX" {
     // 66 99 = CWD, which sign-extends AX into DX and leaves the upper half
     // of EDX alone.
-    var mem: [256]u8 = .{0} ** 256;
+    var mem: [256]u8 = @splat(0);
     @memcpy(mem[0..3], &[_]u8{ 0x66, 0x99, 0xF4 });
     var cpu = makeCpu(&mem);
     cpu.eax = 0x00008000;
@@ -2827,7 +2827,7 @@ test "execute: CWD writes only DX" {
 
 test "execute: BT r/m16, imm8 masks the bit index to 16" {
     // 66 0F BA F0 11 = BTR AX, 17, which addresses bit 1 of a 16-bit operand.
-    var mem: [256]u8 = .{0} ** 256;
+    var mem: [256]u8 = @splat(0);
     @memcpy(mem[0..6], &[_]u8{ 0x66, 0x0F, 0xBA, 0xF0, 0x11, 0xF4 });
     var cpu = makeCpu(&mem);
     cpu.eax = 0x0000FFFF;
@@ -2837,7 +2837,7 @@ test "execute: BT r/m16, imm8 masks the bit index to 16" {
 
 test "execute: SHLD word form counts in 0 to 15" {
     // 66 0F A4 C8 14 = SHLD AX, CX, 20. A 16-bit form masks the count to 4.
-    var mem: [256]u8 = .{0} ** 256;
+    var mem: [256]u8 = @splat(0);
     @memcpy(mem[0..6], &[_]u8{ 0x66, 0x0F, 0xA4, 0xC8, 0x14, 0xF4 });
     var cpu = makeCpu(&mem);
     cpu.eax = 0x00001234;
@@ -2849,7 +2849,7 @@ test "execute: SHLD word form counts in 0 to 15" {
 
 test "execute: MOVSW moves a word, not a dword" {
     // 66 A5 = MOVSW. The 0x66 prefix halves the element size.
-    var mem: [256]u8 = .{0} ** 256;
+    var mem: [256]u8 = @splat(0);
     @memcpy(mem[0..3], &[_]u8{ 0x66, 0xA5, 0xF4 });
     mem[0x10] = 0xBB;
     mem[0x11] = 0xAA;

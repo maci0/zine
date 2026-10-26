@@ -1379,8 +1379,8 @@ test "decode: segment overrides preserve register encodings" {
     for (prefixes, 0..) |prefix, index| {
         const insn = decode(&.{ prefix, 0xA1, 0x00, 0x00, 0x00, 0x00 });
         const expected: u3 = @intCast(index);
-        try testing.expectEqual(expected, @intFromEnum(insn.seg_override.?));
-        try testing.expectEqual(expected, @intFromEnum(insn.mem_seg));
+        try testing.expectEqual(expected, @backingInt(insn.seg_override.?));
+        try testing.expectEqual(expected, @backingInt(insn.mem_seg));
         try testing.expectEqual(@as(u8, 6), insn.length);
     }
 }

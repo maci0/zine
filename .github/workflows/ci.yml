@@ -17,7 +17,7 @@ jobs:
     # Pinned OS image: a moving tag changes the compiler, libc and linker
     # under the build, so two runs of one commit are not comparable.
     runs-on: ubuntu-24.04
-    # Builds default to ReleaseSafe, which is slower to compile than Debug.
+    # Builds default to safe, which is slower to compile than debug.
     timeout-minutes: 45
     # Sorting, number formatting and the toolchain's own diagnostics follow the
     # ambient locale, and logs follow the ambient timezone. Pinning both keeps

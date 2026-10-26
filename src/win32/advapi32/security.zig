@@ -161,7 +161,7 @@ test "GetSecurityDescriptorOwner sets NULL owner" {
     try std.testing.expectEqual(@as(i32, 0), defaulted);
 }
 
-var sid_storage: [48]u8 align(4) = [_]u8{0} ** 48;
+var sid_storage: [48]u8 align(4) = @as([48]u8, @splat(0));
 
 /// SID structure: revision(1) + subAuthorityCount(1) + identifierAuthority(6) + subAuthority[8](32)
 /// Implementation status: Stub

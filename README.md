@@ -38,6 +38,16 @@ promise between versions, so a breaking change takes the next minor.
 
 ### Unreleased
 
+### 0.9.0 (2026-10-27)
+
+#### Breaking changes
+
+- Building now requires Zig 0.17.0. Use `-Doptimize=debug|safe|fast|small` with the renamed optimization modes; the default remains `safe`.
+
+#### Fixed
+
+- Generate FLTK and Wasmer C bindings through build translation steps. Match the host glibc when linking FLTK system libraries and include Zig compiler-rt when linking the Wasmer host with the system linker. Existing runtime limitations are documented in [the migration audit](docs/zig-0.17-migration.md).
+
 ### 0.8.0 (2026-10-27)
 
 #### Fixed
@@ -768,10 +778,10 @@ command table, and pull-request expectations.
 
 ## Build
 
-Requires [Zig 0.16.0](https://ziglang.org/download/); the gate requires that
-exact version. Builds are ReleaseSafe by
-default; add `-Doptimize=Debug` for a debugging loop. Every build except
-`-Doptimize=Debug` strips debug info: unstripped DWARF records the checkout
+Requires [Zig 0.17.0](https://ziglang.org/download/); the gate requires that
+exact version. Builds are safe by
+default; add `-Doptimize=debug` for a debugging loop. Every build except
+`-Doptimize=debug` strips debug info: unstripped DWARF records the checkout
 directory and the toolchain's lib path, so the same source would produce a
 different binary on every machine. The remaining output is path-independent:
 the `reproducible` gate step builds both native executables twice from copies
@@ -930,7 +940,7 @@ native binary too, and only the WASI build reads the accepted one.
 |---|---|
 | `-Darch=x86\|x86_64\|wasm32\|wasm64` | Target architecture (default: x86) |
 | `-Dall` | Build all four architectures |
-| `-Doptimize=Debug\|ReleaseSafe\|ReleaseFast\|ReleaseSmall` | Optimization mode (default: ReleaseSafe) |
+| `-Doptimize=debug\|safe\|fast\|small` | Optimization mode (default: safe) |
 | `-Dfltk` | Enable native FLTK GUI backend (x86_64 only) |
 | `-Djit_host` | Enable JIT host imports for WASM builds |
 | `-Dexternal-stubs` | Load Win32 stubs from DLLs instead of embedding |
@@ -1008,7 +1018,7 @@ checking log-level validation.
 ### Before opening a pull request
 
 Run from the repository root on x86_64 Linux with 32-bit executable support.
-Besides Zig 0.16.0, the CI checks require Bash, Git, ShellCheck, `node` (for
+Besides Zig 0.17.0, the CI checks require Bash, Git, ShellCheck, `node` (for
 `check_web`), `sed`, `awk`, `cmp`, `readelf`, `grep`, `diff`, and GNU coreutils
 (including `timeout`, `find` and `sort`). Zig fetches the pinned TOML
 dependency on the first build; no

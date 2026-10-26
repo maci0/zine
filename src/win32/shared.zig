@@ -93,7 +93,7 @@ var internal_heap_hint: usize = 0x03000000;
 /// a real Windows process, where the platform backend has no POSIX mmap and
 /// the pointer only has to stay valid, so it takes the page allocator.
 fn allocHeapChunk(size: usize) ?[]align(4096) u8 {
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime builtin.target.os.tag == .windows) {
         return @alignCast(std.heap.page_allocator.alloc(u8, size) catch null);
     }
     const plt = @import("../platform.zig");

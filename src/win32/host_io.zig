@@ -245,7 +245,7 @@ test "getCwd excludes the terminator and resolves relative paths" {
 
     const full_len = getFullPath("child.txt", &actual);
     const separator: []const u8 = if (expected[expected_len - 1] == '\\') "" else "\\";
-    const full = try std.fmt.allocPrint(std.testing.allocator, "{s}{s}child.txt", .{ expected[0..expected_len], separator });
+    const full = try std.testing.allocator.print("{s}{s}child.txt", .{ expected[0..expected_len], separator });
     defer std.testing.allocator.free(full);
     try std.testing.expectEqualStrings(full, actual[0..full_len]);
 }
@@ -302,8 +302,8 @@ test "getFullPath builds long relative paths in the caller buffer" {
     const cwd_len = getCwd(&cwd);
     try std.testing.expect(cwd_len > 0);
     const separator: []const u8 = if (cwd[cwd_len - 1] == '\\') "" else "\\";
-    const relative = "folder/" ** 160 ++ "file.txt";
-    const expected = try std.fmt.allocPrint(std.testing.allocator, "{s}{s}{s}", .{ cwd[0..cwd_len], separator, relative });
+    const relative = @as([1120]u8, @bitCast(@as([160][7]u8, @splat(.{ 102, 111, 108, 100, 101, 114, 47 })))) ++ "file.txt";
+    const expected = try std.testing.allocator.print("{s}{s}{s}", .{ cwd[0..cwd_len], separator, relative });
     defer std.testing.allocator.free(expected);
     std.mem.replaceScalar(u8, expected, '/', '\\');
 
@@ -330,7 +330,7 @@ test "getFullPath builds long relative paths in the caller buffer" {
 /// On POSIX, fd is used directly. On Windows, fd is cast to HANDLE.
 /// This abstracts the platform difference so stubs can use integer fds everywhere.
 pub fn fileFromFd(fd: i32) std.Io.File {
-    const builtin_os = @import("builtin").os.tag;
+    const builtin_os = @import("builtin").target.os.tag;
     if (comptime builtin_os == .windows) {
         // For DLL builds: defer handle lookup to kernel32 stubs at runtime.
         // std.os.windows.GetStdHandle was removed in Zig 0.16.

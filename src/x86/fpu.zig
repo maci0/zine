@@ -10,7 +10,7 @@ const std = @import("std");
 
 pub const FpuState = struct {
     /// 8-entry register stack (ST(0)..ST(7)) stored as f64.
-    stack: [8]f64 = .{0} ** 8,
+    stack: [8]f64 = @splat(0),
 
     /// Top of stack pointer (0-7).  ST(0) = stack[top].
     top: u3 = 0,
@@ -30,7 +30,7 @@ pub const FpuState = struct {
         self.status_word = 0;
         self.control_word = 0x037F;
         self.tag_word = 0xFFFF;
-        self.stack = .{0} ** 8;
+        self.stack = @splat(0);
     }
 
     /// Push a value onto the FPU stack.

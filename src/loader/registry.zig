@@ -12,11 +12,11 @@ const log = @import("../log.zig");
 const trace = @import("../trace.zig");
 const path_utils = @import("../path_utils.zig");
 const text_utils = @import("../text_utils.zig");
-const is_wasi = builtin.os.tag == .wasi;
+const is_wasi = builtin.target.os.tag == .wasi;
 
 /// Check if a file exists by trying to open it. Works on WASI (unlike Dir.access).
 fn fileExists(path: []const u8) bool {
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         // Raw faccessat: std.Io.Dir.openFile touches TLS, which faults when
         // called from a stub inside the compat-mode SIGSEGV dispatch handler.
         var buf: [std.posix.PATH_MAX]u8 = undefined;
@@ -88,7 +88,7 @@ fn fileIdLinux(path: []const u8) ?FileId {
 /// different case), so on Linux the comparison is by device and inode; hosts
 /// that cannot report those fall back to the normalized path text.
 fn sameFile(a: []const u8, b: []const u8) bool {
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         if (fileIdLinux(a)) |ida| {
             if (fileIdLinux(b)) |idb| return std.meta.eql(ida, idb);
         }
@@ -180,7 +180,7 @@ fn findModuleEntryCiLinux(dir_path: []const u8, base: []const u8, out: []u8) ?[]
 
 /// Open a directory portably — resolves through WASI preopened dirs for absolute paths.
 fn openDirPortable(path: []const u8, args: std.Io.Dir.OpenOptions) !std.Io.Dir {
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         var buf: [std.posix.PATH_MAX]u8 = undefined;
         if (path.len >= buf.len) return error.NameTooLong;
         @memcpy(buf[0..path.len], path);
@@ -284,7 +284,7 @@ pub const Registry = struct {
             } else {
                 if (std.fs.path.dirname(fixed_path)) |dir| {
                     const base = std.fs.path.basename(fixed_path);
-                    if (comptime builtin.os.tag == .linux) {
+                    if (comptime builtin.target.os.tag == .linux) {
                         var ci_buf: [std.fs.max_path_bytes]u8 = undefined;
                         if (findDirEntryCiLinux(dir, base, &ci_buf)) |ci_path| {
                             file_path = try self.allocator.dupe(u8, ci_path);
@@ -295,7 +295,7 @@ pub const Registry = struct {
                         var it = d.iterate();
                         while (it.next(runtime.io()) catch null) |entry| {
                             if (text_utils.eqlIgnoreCaseName(entry.name, base)) {
-                                file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ dir, entry.name });
+                                file_path = try self.allocator.print("{s}/{s}", .{ dir, entry.name });
                                 break;
                             }
                         }
@@ -308,7 +308,7 @@ pub const Registry = struct {
             for (self.search_paths.items) |path| {
                 trace.print("Searching for {s} in {s}", .{ name, path });
                 // Check exact match first
-                const full_path_exact = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, name });
+                const full_path_exact = try self.allocator.print("{s}/{s}", .{ path, name });
                 defer self.allocator.free(full_path_exact);
 
                 if (fileExists(full_path_exact)) {
@@ -317,7 +317,7 @@ pub const Registry = struct {
                 }
 
                 // Open the directory and search case-insensitively
-                if (comptime builtin.os.tag == .linux) {
+                if (comptime builtin.target.os.tag == .linux) {
                     // Raw getdents64 scans: std.Io.Dir iteration goes through
                     // Io.Threaded (TLS), which faults inside the compat-mode
                     // SIGSEGV dispatch handler (FS points at the guest TEB).
@@ -358,26 +358,26 @@ pub const Registry = struct {
 
                         if (found_real_base) |real_base| {
                             defer self.allocator.free(real_base);
-                            const real_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ parent, real_base });
+                            const real_path = try self.allocator.print("{s}/{s}", .{ parent, real_base });
                             defer self.allocator.free(real_path);
                             var real_dir = openDirPortable(real_path, .{ .iterate = true }) catch continue;
 
                             var it = real_dir.iterate();
-                            const real_name_exe = try std.fmt.allocPrint(self.allocator, "{s}.exe", .{name});
+                            const real_name_exe = try self.allocator.print("{s}.exe", .{name});
                             defer self.allocator.free(real_name_exe);
-                            const real_name_dll = try std.fmt.allocPrint(self.allocator, "{s}.dll", .{name});
+                            const real_name_dll = try self.allocator.print("{s}.dll", .{name});
                             defer self.allocator.free(real_name_dll);
                             while (it.next(runtime.io()) catch null) |entry| {
                                 if (text_utils.eqlIgnoreCaseName(entry.name, name)) {
-                                    file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
+                                    file_path = try self.allocator.print("{s}/{s}", .{ real_path, entry.name });
                                     break;
                                 }
                                 if (text_utils.eqlIgnoreCaseName(entry.name, real_name_exe)) {
-                                    file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
+                                    file_path = try self.allocator.print("{s}/{s}", .{ real_path, entry.name });
                                     break;
                                 }
                                 if (text_utils.eqlIgnoreCaseName(entry.name, real_name_dll)) {
-                                    file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ real_path, entry.name });
+                                    file_path = try self.allocator.print("{s}/{s}", .{ real_path, entry.name });
                                     break;
                                 }
                             }
@@ -392,23 +392,23 @@ pub const Registry = struct {
                     // Built once per directory, not once per entry: the
                     // extension variants are compared against every name the
                     // directory holds.
-                    const name_exe = try std.fmt.allocPrint(self.allocator, "{s}.exe", .{name});
+                    const name_exe = try self.allocator.print("{s}.exe", .{name});
                     defer self.allocator.free(name_exe);
-                    const name_dll = try std.fmt.allocPrint(self.allocator, "{s}.dll", .{name});
+                    const name_dll = try self.allocator.print("{s}.dll", .{name});
                     defer self.allocator.free(name_dll);
                     while (it.next(runtime.io()) catch null) |entry| {
                         if (text_utils.eqlIgnoreCaseName(entry.name, name)) {
-                            file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
+                            file_path = try self.allocator.print("{s}/{s}", .{ path, entry.name });
                             break;
                         }
 
                         if (text_utils.eqlIgnoreCaseName(entry.name, name_exe)) {
-                            file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
+                            file_path = try self.allocator.print("{s}/{s}", .{ path, entry.name });
                             break;
                         }
 
                         if (text_utils.eqlIgnoreCaseName(entry.name, name_dll)) {
-                            file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ path, entry.name });
+                            file_path = try self.allocator.print("{s}/{s}", .{ path, entry.name });
                             log.info("Found match for {s} -> {s}", .{ name, file_path.? });
                             break;
                         }
@@ -630,7 +630,7 @@ test "registry: sameFile separates two real files sharing a basename" {
 
     // The inode path must be the one under test; a null id means the test
     // would pass on the fallback alone.
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         const ida = fileIdLinux(a) orelse return error.TestUnexpectedResult;
         const idb = fileIdLinux(b) orelse return error.TestUnexpectedResult;
         try testing.expect(ida.ino != idb.ino);

@@ -438,7 +438,7 @@ test "parse: accepts well-formed minimal PE" {
 }
 
 test "parse: rejects a buffer without the MZ signature" {
-    const data = [_]u8{ 'X', 'Y' } ++ ([_]u8{0} ** 62);
+    const data = [_]u8{ 'X', 'Y' } ++ (@as([62]u8, @splat(0)));
     try testing.expectError(error.InvalidDOSSignature, PEParser.parse(testing.allocator, @constCast(&data)));
 }
 
@@ -470,7 +470,7 @@ test "parse: rejects a wrong NT signature" {
 }
 
 test "parse: rejects PE32+ and unaligned image bases before mapping" {
-    var buf = [_]u8{0} ** 512;
+    var buf = @as([512]u8, @splat(0));
     const dos: *align(1) IMAGE_DOS_HEADER = @ptrCast(&buf);
     dos.e_magic = IMAGE_DOS_SIGNATURE;
     dos.e_lfanew = 64;

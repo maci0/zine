@@ -428,7 +428,7 @@ test "DeleteDC removes DC entries so create/delete cycles stay bounded" {
         gdi32.dc_count = saved_count;
     }
 
-    gdi32.dc_entries = [_]gdi32.DeviceContext{gdi32.empty_dc} ** gdi32.dc_entries.len;
+    gdi32.dc_entries = @as([gdi32.dc_entries.len]gdi32.DeviceContext, @splat(gdi32.empty_dc));
     gdi32.dc_count = 0;
 
     var first_hdc: usize = 0;

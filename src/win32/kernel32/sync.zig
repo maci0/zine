@@ -123,7 +123,7 @@ const EventData = struct {
     signaled: bool = false,
     mutex: runtime.Mutex = .{},
     cond: runtime.Condition = .{},
-    name: [128]u8 = [_]u8{0} ** 128,
+    name: [128]u8 = @as([128]u8, @splat(0)),
     name_len: u8 = 0,
 };
 
@@ -134,7 +134,7 @@ const MutexData = struct {
     /// borrowing the lock the recursive path does not hold.
     owner: std.atomic.Value(std.Thread.Id) = std.atomic.Value(std.Thread.Id).init(0),
     recursion: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-    name: [128]u8 = [_]u8{0} ** 128,
+    name: [128]u8 = @as([128]u8, @splat(0)),
     name_len: u8 = 0,
 };
 
@@ -143,7 +143,7 @@ const SemaphoreData = struct {
     cond: runtime.Condition = .{},
     count: i32 = 0,
     max_count: i32 = 1,
-    name: [128]u8 = [_]u8{0} ** 128,
+    name: [128]u8 = @as([128]u8, @splat(0)),
     name_len: u8 = 0,
 };
 
@@ -155,7 +155,7 @@ const KernelObject = struct {
     semaphore: SemaphoreData = .{},
 };
 
-var kernel_objects: [MAX_KERNEL_OBJECTS]KernelObject = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
+var kernel_objects: [MAX_KERNEL_OBJECTS]KernelObject = @as([MAX_KERNEL_OBJECTS]KernelObject, @splat(.{}));
 var next_kernel_handle: usize = 0xE0000001;
 
 /// Serializes every scan and mutation of `kernel_objects`. A guest thread
@@ -572,7 +572,7 @@ var tls_threads: [MAX_TLS_THREADS]TlsThreadEntry = init: {
     var entries: [MAX_TLS_THREADS]TlsThreadEntry = undefined;
     for (&entries) |*e| {
         e.thread_id = 0;
-        e.slots = [_]usize{0} ** MAX_TLS_SLOTS;
+        e.slots = @as([MAX_TLS_SLOTS]usize, @splat(0));
     }
     break :init entries;
 };
@@ -583,7 +583,7 @@ var tls_threads: [MAX_TLS_THREADS]TlsThreadEntry = init: {
 /// the values of another.
 var tls_overflow_entry: TlsThreadEntry = .{
     .thread_id = 0,
-    .slots = [_]usize{0} ** MAX_TLS_SLOTS,
+    .slots = @as([MAX_TLS_SLOTS]usize, @splat(0)),
 };
 
 fn getOrCreateTlsEntry() *TlsThreadEntry {
@@ -613,7 +613,7 @@ pub fn releaseTlsEntryForCurrentThread() void {
     defer tls_mutex.unlock();
     for (&tls_threads) |*entry| {
         if (entry.thread_id == tid) {
-            entry.* = .{ .thread_id = 0, .slots = [_]usize{0} ** MAX_TLS_SLOTS };
+            entry.* = .{ .thread_id = 0, .slots = @as([MAX_TLS_SLOTS]usize, @splat(0)) };
             return;
         }
     }
@@ -907,8 +907,8 @@ pub fn DecodePointer(ptr: usize) callconv(w32cc.WINAPI) usize {
 
 var fls_next: u32 = 0;
 const MAX_FLS_SLOTS = 128;
-var fls_values: [MAX_FLS_SLOTS]usize = [_]usize{0} ** MAX_FLS_SLOTS;
-var fls_callbacks: [MAX_FLS_SLOTS]usize = [_]usize{0} ** MAX_FLS_SLOTS;
+var fls_values: [MAX_FLS_SLOTS]usize = @as([MAX_FLS_SLOTS]usize, @splat(0));
+var fls_callbacks: [MAX_FLS_SLOTS]usize = @as([MAX_FLS_SLOTS]usize, @splat(0));
 /// The tables above are shared by every guest thread, so allocation (a
 /// check-then-claim over `fls_next`) and value access take the same lock the
 /// TLS stubs use. Without it two threads calling FlsAlloc race for one index
@@ -963,7 +963,7 @@ pub fn FlsFree(dwFlsIndex: u32) callconv(w32cc.WINAPI) i32 {
 test "critical sections serialize recursive access during concurrent registration" {
     const saved_sections = cs_table;
     defer cs_table = saved_sections;
-    cs_table = [_]CriticalSection{.{}} ** MAX_CRITICAL_SECTIONS;
+    cs_table = @as([MAX_CRITICAL_SECTIONS]CriticalSection, @splat(.{}));
 
     const Context = struct {
         start: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -1016,12 +1016,12 @@ test "TLS allocation and values remain isolated across concurrent threads" {
         tls_threads = saved_threads;
     }
     tls_next = 0;
-    for (&tls_threads) |*entry| entry.* = .{ .thread_id = 0, .slots = [_]usize{0} ** MAX_TLS_SLOTS };
+    for (&tls_threads) |*entry| entry.* = .{ .thread_id = 0, .slots = @as([MAX_TLS_SLOTS]usize, @splat(0)) };
 
     const Context = struct {
         start: std.atomic.Value(bool) = .init(false),
         indices: [8][8]u32 = undefined,
-        valid: [8]bool = [_]bool{true} ** 8,
+        valid: [8]bool = @as([8]bool, @splat(true)),
 
         fn run(ctx: *@This(), worker: usize) void {
             while (!ctx.start.load(.acquire)) std.atomic.spinLoopHint();
@@ -1046,7 +1046,7 @@ test "TLS allocation and values remain isolated across concurrent threads" {
             spawned += 1;
         }
     }
-    var seen: [MAX_TLS_SLOTS]bool = [_]bool{false} ** MAX_TLS_SLOTS;
+    var seen: [MAX_TLS_SLOTS]bool = @as([MAX_TLS_SLOTS]bool, @splat(false));
     for (ctx.indices, ctx.valid) |indices, valid| {
         try std.testing.expect(valid);
         for (indices) |index| {
@@ -1062,7 +1062,7 @@ test "TLS allocation and values remain isolated across concurrent threads" {
 test "CloseHandle frees kernel object slots" {
     const saved_objects = kernel_objects;
     defer kernel_objects = saved_objects;
-    kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
+    kernel_objects = @as([MAX_KERNEL_OBJECTS]KernelObject, @splat(.{}));
 
     const h = CreateEventA(0, 0, 0, 0);
     try std.testing.expect(h != 0);
@@ -1078,14 +1078,14 @@ test "CloseHandle frees kernel object slots" {
 test "closeKernelObject ignores unknown handles" {
     const saved_objects = kernel_objects;
     defer kernel_objects = saved_objects;
-    kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
+    kernel_objects = @as([MAX_KERNEL_OBJECTS]KernelObject, @splat(.{}));
     try std.testing.expect(!closeKernelObject(0xE0000001));
 }
 
 test "WaitForSingleObject times out on unsignaled event" {
     const saved_objects = kernel_objects;
     defer kernel_objects = saved_objects;
-    kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
+    kernel_objects = @as([MAX_KERNEL_OBJECTS]KernelObject, @splat(.{}));
 
     // Auto-reset event created nonsignaled: a finite wait must return
     // WAIT_TIMEOUT instead of blocking forever.
@@ -1101,7 +1101,7 @@ test "WaitForSingleObject times out on unsignaled event" {
 test "event signaled during timed wait returns WAIT_OBJECT_0" {
     const saved_objects = kernel_objects;
     defer kernel_objects = saved_objects;
-    kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
+    kernel_objects = @as([MAX_KERNEL_OBJECTS]KernelObject, @splat(.{}));
 
     const h = CreateEventA(0, 0, 0, 0);
     try std.testing.expect(h != 0);
@@ -1118,7 +1118,7 @@ test "event signaled during timed wait returns WAIT_OBJECT_0" {
 test "semaphore timed wait returns WAIT_TIMEOUT when empty" {
     const saved_objects = kernel_objects;
     defer kernel_objects = saved_objects;
-    kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
+    kernel_objects = @as([MAX_KERNEL_OBJECTS]KernelObject, @splat(.{}));
 
     const ko = allocKernelObject(.semaphore) orelse return error.NoSlots;
     ko.semaphore.max_count = 4;
@@ -1128,7 +1128,7 @@ test "semaphore timed wait returns WAIT_TIMEOUT when empty" {
 test "WaitForSingleObject times out on a mutex held by another thread" {
     const saved_objects = kernel_objects;
     defer kernel_objects = saved_objects;
-    kernel_objects = [_]KernelObject{.{}} ** MAX_KERNEL_OBJECTS;
+    kernel_objects = @as([MAX_KERNEL_OBJECTS]KernelObject, @splat(.{}));
 
     const ko = allocKernelObject(.mutex) orelse return error.NoSlots;
     // Held without recording an owner, so the waiter takes the contended path
@@ -1149,7 +1149,7 @@ test "WaitForSingleObject times out on a mutex held by another thread" {
 }
 
 test "TLS values belong to the thread that set them and end with the thread" {
-    if (comptime builtin.os.tag == .wasi) return error.SkipZigTest;
+    if (comptime builtin.target.os.tag == .wasi) return error.SkipZigTest;
 
     // TlsAlloc advances the module-global slot counter and each spawned thread
     // takes an entry from the shared thread table; both outlive the test unless
@@ -1162,7 +1162,7 @@ test "TLS values belong to the thread that set them and end with the thread" {
         tls_threads = saved_threads;
     }
     tls_next = 0;
-    for (&tls_threads) |*entry| entry.* = .{ .thread_id = 0, .slots = [_]usize{0} ** MAX_TLS_SLOTS };
+    for (&tls_threads) |*entry| entry.* = .{ .thread_id = 0, .slots = @as([MAX_TLS_SLOTS]usize, @splat(0)) };
 
     const idx = TlsAlloc();
     try std.testing.expect(idx < MAX_TLS_SLOTS);
