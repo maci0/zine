@@ -887,7 +887,7 @@ test "tryCaseInsensitiveResolve matches non-ASCII filename casing" {
 
 /// Case-insensitive path resolution: find the file under a different case,
 /// scanning each parent directory upward. Linux has a dedicated path
-/// (tryCaseInsensitiveResolveLinux) that reads only the immediate directory
+/// (tryCaseInsensitiveResolveLinux) that resolves each directory component
 /// and rejects a filename longer than NAME_MAX; other targets take the
 /// portable walk below.
 pub fn tryCaseInsensitiveResolve(path: []const u8, buf: []u8) ?[]const u8 {
@@ -997,6 +997,46 @@ pub fn tryCaseInsensitiveResolve(path: []const u8, buf: []u8) ?[]const u8 {
 /// the compat-mode SIGSEGV dispatch handler (FS points at the guest TEB).
 fn tryCaseInsensitiveResolveLinux(path: []const u8, buf: []u8) ?[]const u8 {
     const linux = std.os.linux;
+    var candidate: [std.posix.PATH_MAX]u8 = undefined;
+    if (path.len == 0 or path.len >= candidate.len or path.len > buf.len or path[path.len - 1] == '/') return null;
+    @memcpy(candidate[0..path.len], path);
+    candidate[path.len] = 0;
+    if (linux.faccessat(linux.AT.FDCWD, @ptrCast(&candidate), 0, 0) == 0) {
+        @memcpy(buf[0..path.len], path);
+        return buf[0..path.len];
+    }
+
+    // Walk iteratively: long guest paths must not consume one stack frame per component.
+    var len: usize = 0;
+    if (path[0] == '/') {
+        buf[0] = '/';
+        len = 1;
+    }
+    var components = std.mem.tokenizeScalar(u8, path, '/');
+    while (components.next()) |component| {
+        @memcpy(candidate[0..len], buf[0..len]);
+        if (len > 0 and candidate[len - 1] != '/') {
+            if (len >= candidate.len) return null;
+            candidate[len] = '/';
+            len += 1;
+        }
+        const end = len + component.len;
+        if (end >= candidate.len or end > buf.len) return null;
+        @memcpy(candidate[len..end], component);
+        candidate[end] = 0;
+        if (linux.faccessat(linux.AT.FDCWD, @ptrCast(&candidate), 0, 0) == 0) {
+            @memcpy(buf[0..end], candidate[0..end]);
+            len = end;
+        } else {
+            const resolved = resolveCaseInsensitiveComponentLinux(candidate[0..end], buf) orelse return null;
+            len = resolved.len;
+        }
+    }
+    return buf[0..len];
+}
+
+fn resolveCaseInsensitiveComponentLinux(path: []const u8, buf: []u8) ?[]const u8 {
+    const linux = std.os.linux;
 
     var last_slash: usize = 0;
     var found_slash = false;
@@ -1068,4 +1108,21 @@ fn tryCaseInsensitiveResolveLinux(path: []const u8, buf: []u8) ?[]const u8 {
     if (filename.len > buf.len) return null;
     @memcpy(buf[0..filename.len], matched_name[0..filename.len]);
     return buf[0..filename.len];
+}
+
+test "case-insensitive resolution includes parent directories" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = runtime.io();
+    try tmp.dir.createDirPath(io, "Data/Nested");
+    try tmp.dir.writeFile(io, .{ .sub_path = "Data/Nested/A_Geb.dat", .data = "asset" });
+    var absolute: [1024]u8 = undefined;
+    const length = try tmp.dir.realPath(io, &absolute);
+    var query: [1024]u8 = undefined;
+    const path = try std.fmt.bufPrint(&query, "{s}/data/nested/a_GEB.DAT", .{absolute[0..length]});
+    var output: [1024]u8 = undefined;
+    const resolved = tryCaseInsensitiveResolve(path, &output) orelse return error.TestUnexpectedResult;
+    try testing.expect(std.mem.endsWith(u8, resolved, "/Data/Nested/A_Geb.dat"));
+    var short: [4]u8 = undefined;
+    try testing.expect(tryCaseInsensitiveResolve(path, &short) == null);
 }

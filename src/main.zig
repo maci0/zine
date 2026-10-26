@@ -384,7 +384,8 @@ pub fn main(init: std.process.Init) !void {
     } else {
         var host_dirs = try runner.getHostPathDirs(allocator);
         defer runner.freeHostPathDirs(allocator, &host_dirs);
-        for (host_dirs.items) |d| try extra_paths.append(allocator, d);
+        try extra_paths.ensureUnusedCapacity(allocator, host_dirs.items.len);
+        for (host_dirs.items) |d| extra_paths.appendAssumeCapacity(try allocator.dupe(u8, d));
     }
     try runner.setupSearchPaths(&environment, allocator, target_exe, extra_paths.items);
 

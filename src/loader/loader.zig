@@ -284,8 +284,7 @@ pub fn allocThunkForExport(exp: BuiltinExport, dll_name: []const u8, func_name: 
         if (comptime platform.is_x86_64) {
             // On x86_64 compat mode, allocate an INT 0xFE stub in the low 4GB pool
             const compat_thunks = @import("../x86/compat_thunks.zig");
-            const is_cdecl_rt = std.ascii.eqlIgnoreCase(dll_name, "MSVCRT.dll") or
-                std.ascii.startsWithIgnoreCase(dll_name, "MSVCP");
+            const is_cdecl_rt = @import("../win32/calling_convention.zig").isCdeclExport(dll_name, func_name);
             const thunk_id = x86_thunks.registerNativeThunkVA(func_name, exp.addr, exp.param_bytes, is_cdecl_rt, exp.va_fixed);
             if (compat_thunks.allocThunk(thunk_id)) |addr32| {
                 return @as(usize, addr32);
@@ -385,8 +384,7 @@ fn patchImport(
         } else if (exp.is_native) {
             // Function export: register as a native thunk for signal dispatch.
             // Detect cdecl vs stdcall from the DLL name (MSVCRT/MSVCP use cdecl).
-            const is_cdecl = std.ascii.eqlIgnoreCase(dll_name, "MSVCRT.dll") or
-                std.ascii.startsWithIgnoreCase(dll_name, "MSVCP");
+            const is_cdecl = @import("../win32/calling_convention.zig").isCdeclExport(dll_name, func_name);
             const thunk_id = x86_thunks.registerNativeThunkVA(func_name, exp.addr, exp.param_bytes, is_cdecl, exp.va_fixed);
             if (compat_thunks.allocThunk(thunk_id)) |addr32| {
                 first_thunk.* = addr32;

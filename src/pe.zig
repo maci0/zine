@@ -306,6 +306,8 @@ pub const PEParser = struct {
         InvalidDOSSignature,
         /// The PE signature "PE\0\0" was not found.
         InvalidPESignature,
+        UnsupportedArchitecture,
+        InvalidImageBase,
         /// Memory allocation failed.
         OutOfMemory,
     };
@@ -328,6 +330,9 @@ pub const PEParser = struct {
 
         const nt_headers_ptr: *align(1) const IMAGE_NT_HEADERS32 = @ptrCast(data.ptr + @as(usize, @intCast(dos_header_ptr.e_lfanew)));
         if (nt_headers_ptr.Signature != IMAGE_NT_SIGNATURE) return error.InvalidPESignature;
+        // PE32+ stores ImageBase at a different offset; never interpret it as PE32.
+        if (nt_headers_ptr.FileHeader.Machine != 0x14c or nt_headers_ptr.OptionalHeader.Magic != 0x10b) return error.UnsupportedArchitecture;
+        if (nt_headers_ptr.OptionalHeader.ImageBase & 0xfff != 0) return error.InvalidImageBase;
 
         const num_sections = nt_headers_ptr.FileHeader.NumberOfSections;
         // Bound the headers before allocating: NumberOfSections is a raw u16
@@ -404,6 +409,8 @@ test "parse: rejects truncated section header table" {
 
     const nt: *IMAGE_NT_HEADERS32 = @ptrCast(@alignCast(buf[64..].ptr));
     nt.Signature = IMAGE_NT_SIGNATURE;
+    nt.FileHeader.Machine = 0x14c;
+    nt.OptionalHeader.Magic = 0x10b;
     nt.FileHeader.NumberOfSections = 2; // only room for one header
     nt.FileHeader.SizeOfOptionalHeader = @sizeOf(IMAGE_OPTIONAL_HEADER32);
 
@@ -420,6 +427,8 @@ test "parse: accepts well-formed minimal PE" {
 
     const nt: *IMAGE_NT_HEADERS32 = @ptrCast(@alignCast(buf[64..].ptr));
     nt.Signature = IMAGE_NT_SIGNATURE;
+    nt.FileHeader.Machine = 0x14c;
+    nt.OptionalHeader.Magic = 0x10b;
     nt.FileHeader.NumberOfSections = 1;
     nt.FileHeader.SizeOfOptionalHeader = @sizeOf(IMAGE_OPTIONAL_HEADER32);
 
@@ -458,4 +467,20 @@ test "parse: rejects a wrong NT signature" {
     nt.Signature = 0x454C4946; // "FILE" — plausible garbage, not "PE\0\0"
 
     try testing.expectError(error.InvalidPESignature, PEParser.parse(testing.allocator, &buf));
+}
+
+test "parse: rejects PE32+ and unaligned image bases before mapping" {
+    var buf = [_]u8{0} ** 512;
+    const dos: *align(1) IMAGE_DOS_HEADER = @ptrCast(&buf);
+    dos.e_magic = IMAGE_DOS_SIGNATURE;
+    dos.e_lfanew = 64;
+    const nt: *align(1) IMAGE_NT_HEADERS32 = @ptrCast(buf[64..].ptr);
+    nt.Signature = IMAGE_NT_SIGNATURE;
+    nt.FileHeader.Machine = 0x8664;
+    nt.OptionalHeader.Magic = 0x20b;
+    try testing.expectError(error.UnsupportedArchitecture, PEParser.parse(testing.allocator, &buf));
+    nt.FileHeader.Machine = 0x14c;
+    nt.OptionalHeader.Magic = 0x10b;
+    nt.OptionalHeader.ImageBase = 1;
+    try testing.expectError(error.InvalidImageBase, PEParser.parse(testing.allocator, &buf));
 }

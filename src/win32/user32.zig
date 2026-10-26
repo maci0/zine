@@ -39,7 +39,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "OemToCharA", char.OemToCharA);
 
     // Text formatting (format.zig)
-    try environment.addBuiltinExportComptime(m, "wsprintfA", format.wsprintfA);
+    try environment.addBuiltinExportComptimeVA(m, "wsprintfA", format.wsprintfA, 2);
 
     // Display/visual (display.zig)
     try environment.addBuiltinExportComptime(m, "ChangeDisplaySettingsA", display.stub_ChangeDisplaySettingsA);
@@ -157,6 +157,8 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "CharUpperW", char.CharUpperW);
     try environment.addBuiltinExportComptime(m, "CharLowerW", char.CharLowerW);
     try environment.addBuiltinExportComptime(m, "GetKeyboardLayout", input.stub_GetKeyboardLayout);
+    try environment.addBuiltinExportComptime(m, "GetKeyboardType", input.GetKeyboardType);
+    try environment.addBuiltinExportComptime(m, "GetKeyboardLayoutList", input.GetKeyboardLayoutList);
     try environment.addBuiltinExportComptime(m, "GetDoubleClickTime", input.stub_GetDoubleClickTime);
     try environment.addBuiltinExportComptime(m, "GetCaretBlinkTime", input.stub_GetCaretBlinkTime);
     try environment.addBuiltinExportComptime(m, "EqualRect", window.EqualRect);
@@ -274,7 +276,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "ChildWindowFromPoint", stub_ret0_3);
     try environment.addBuiltinExportComptime(m, "CharNextW", char.CharNextW);
     try environment.addBuiltinExportComptime(m, "DrawTextExW", stub_ret0_6);
-    try environment.addBuiltinExportComptime(m, "wsprintfW", format.stub_wsprintfW);
+    try environment.addBuiltinExportComptimeVA(m, "wsprintfW", format.wsprintfW, 2);
     try environment.addBuiltinExportComptime(m, "RegisterWindowMessageW", class.RegisterWindowMessageW);
 
     // Rect utilities (win2k apps: 5-6x each)
@@ -366,7 +368,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "GetCaretPos", stub_ret0_1);
     try environment.addBuiltinExportComptime(m, "SetClassLongW", class.stub_SetClassLongA);
     try environment.addBuiltinExportComptime(m, "EnableScrollBar", stub_ret0_3);
-    try environment.addBuiltinExportComptime(m, "wvsprintfW", stub_ret0_3);
+    try environment.addBuiltinExportComptime(m, "wvsprintfW", format.wvsprintfW);
     try environment.addBuiltinExportComptime(m, "RegisterDeviceNotificationW", stub_ret0_3);
     try environment.addBuiltinExportComptime(m, "SetPropW", stub_ret0_3);
     try environment.addBuiltinExportComptime(m, "RemovePropW", stub_ret0_2);
@@ -447,7 +449,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "CreateIcon", stub_ret0_7);
 
     // --- Additional USER32 stubs ---
-    try environment.addBuiltinExportComptime(m, "wvsprintfA", format.wsprintfA);
+    try environment.addBuiltinExportComptime(m, "wvsprintfA", format.wvsprintfA);
     try environment.addBuiltinExportComptime(m, "mouse_event", stub_ret0_5);
     try environment.addBuiltinExportComptime(m, "keybd_event", stub_ret0_4);
     try environment.addBuiltinExportComptime(m, "ToUnicode", stub_ret0_7);

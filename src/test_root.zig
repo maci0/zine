@@ -3,6 +3,15 @@
 //! when running zig test on individual files under subdirectories.
 
 comptime {
+    _ = @import("win32/ole32/com.zig");
+    _ = @import("win32/d3d8.zig");
+    _ = @import("win32/user32/message.zig");
+    _ = @import("win32/user32/window.zig");
+    _ = @import("win32/kernel32/mem.zig");
+    _ = @import("win32/calling_convention.zig");
+    _ = @import("win32/user32/format.zig");
+    _ = @import("win32/user32/input.zig");
+    _ = @import("x86/compat_abi.zig");
     // x86 interpreter tests
     _ = @import("x86/flags.zig");
     _ = @import("x86/memory.zig");

@@ -2,141 +2,42 @@ const std = @import("std");
 const trace = @import("../../trace.zig");
 const w32cc = @import("../calling_convention.zig");
 
-pub fn wsprintfA(lpOut: [*]u8, lpFmt: [*:0]const u8, a1: usize, a2: usize, a3: usize, a4: usize) callconv(w32cc.WINAPI) i32 {
-    // Simple sprintf implementation supporting %d, %s, %x, %X, %u, %%
-    const args = [_]usize{ a1, a2, a3, a4 };
-    var ai: usize = 0;
-    var oi: usize = 0;
-    var fi: usize = 0;
-    const MAX_OUT: usize = 1024;
+const platform = @import("../../platform.zig");
+const crt_fmt = @import("../msvcrt/fmt.zig");
 
-    while (lpFmt[fi] != 0 and oi < MAX_OUT - 1) {
-        if (lpFmt[fi] == '%') {
-            fi += 1;
-            if (lpFmt[fi] == 0) break;
+/// Implementation status: Partially implemented (CRT formatter, 1024-character limit).
+/// wsprintf is cdecl even though it is exported by USER32.
+pub const wsprintfA = if (platform.is_x86) wsprintfANative else wsprintfAThunk;
+pub const wsprintfW = if (platform.is_x86) wsprintfWNative else wsprintfWThunk;
 
-            // Skip width/flags (simplified)
-            while (lpFmt[fi] == '-' or lpFmt[fi] == '+' or lpFmt[fi] == ' ' or lpFmt[fi] == '0') fi += 1;
-            while (lpFmt[fi] >= '0' and lpFmt[fi] <= '9') fi += 1;
-
-            switch (lpFmt[fi]) {
-                '%' => {
-                    lpOut[oi] = '%';
-                    oi += 1;
-                    fi += 1;
-                },
-                'd', 'i' => {
-                    if (ai < args.len) {
-                        const val = @as(i32, @bitCast(@as(u32, @truncate(args[ai]))));
-                        ai += 1;
-                        var buf: [16]u8 = undefined;
-                        const str = std.fmt.bufPrint(&buf, "{d}", .{val}) catch "?";
-                        for (str) |c| {
-                            if (oi < MAX_OUT - 1) {
-                                lpOut[oi] = c;
-                                oi += 1;
-                            }
-                        }
-                    }
-                    fi += 1;
-                },
-                'u' => {
-                    if (ai < args.len) {
-                        const val = @as(u32, @truncate(args[ai]));
-                        ai += 1;
-                        var buf: [16]u8 = undefined;
-                        const str = std.fmt.bufPrint(&buf, "{d}", .{val}) catch "?";
-                        for (str) |c| {
-                            if (oi < MAX_OUT - 1) {
-                                lpOut[oi] = c;
-                                oi += 1;
-                            }
-                        }
-                    }
-                    fi += 1;
-                },
-                'x' => {
-                    if (ai < args.len) {
-                        const val = @as(u32, @truncate(args[ai]));
-                        ai += 1;
-                        var buf: [16]u8 = undefined;
-                        const str = std.fmt.bufPrint(&buf, "{x}", .{val}) catch "?";
-                        for (str) |c| {
-                            if (oi < MAX_OUT - 1) {
-                                lpOut[oi] = c;
-                                oi += 1;
-                            }
-                        }
-                    }
-                    fi += 1;
-                },
-                'X' => {
-                    if (ai < args.len) {
-                        const val = @as(u32, @truncate(args[ai]));
-                        ai += 1;
-                        var buf: [16]u8 = undefined;
-                        const str = std.fmt.bufPrint(&buf, "{X}", .{val}) catch "?";
-                        for (str) |c| {
-                            if (oi < MAX_OUT - 1) {
-                                lpOut[oi] = c;
-                                oi += 1;
-                            }
-                        }
-                    }
-                    fi += 1;
-                },
-                's' => {
-                    if (ai < args.len and args[ai] != 0) {
-                        const s = trace.c_span(args[ai]);
-                        ai += 1;
-                        for (s) |c| {
-                            if (oi < MAX_OUT - 1) {
-                                lpOut[oi] = c;
-                                oi += 1;
-                            }
-                        }
-                    } else {
-                        ai += 1;
-                    }
-                    fi += 1;
-                },
-                'c' => {
-                    if (ai < args.len) {
-                        lpOut[oi] = @truncate(args[ai]);
-                        oi += 1;
-                        ai += 1;
-                    }
-                    fi += 1;
-                },
-                else => {
-                    // Unknown specifier — output literal
-                    lpOut[oi] = '%';
-                    oi += 1;
-                    if (oi < MAX_OUT - 1) {
-                        lpOut[oi] = lpFmt[fi];
-                        oi += 1;
-                    }
-                    fi += 1;
-                },
-            }
-        } else {
-            lpOut[oi] = lpFmt[fi];
-            oi += 1;
-            fi += 1;
-        }
-    }
-    lpOut[oi] = 0;
-    return @intCast(oi);
+fn wsprintfANative(out: [*]u8, format: [*:0]const u8, ...) callconv(.c) i32 {
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
+    return wsprintfAThunk(out, format, crt_fmt.va_list_to_usize(ap));
 }
 
-pub fn stub_wsprintfW(lpOut: [*]u16, lpFmt: [*]const u16, a1: usize, a2: usize, a3: usize, a4: usize) callconv(w32cc.WINAPI) i32 {
-    _ = lpFmt;
-    _ = a1;
-    _ = a2;
-    _ = a3;
-    _ = a4;
-    lpOut[0] = 0;
-    return 0;
+fn wsprintfWNative(out: [*]u16, format: [*:0]const u16, ...) callconv(.c) i32 {
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
+    return wsprintfWThunk(out, format, crt_fmt.va_list_to_usize(ap));
+}
+
+fn wsprintfAThunk(out: [*]u8, format: [*:0]const u8, ap: usize) callconv(.c) i32 {
+    return crt_fmt.vsnprintf(out, 1024, format, @ptrFromInt(ap));
+}
+
+fn wsprintfWThunk(out: [*]u16, format: [*:0]const u16, ap: usize) callconv(.c) i32 {
+    return crt_fmt.vsnwprintf(out, 1024, format, @ptrFromInt(ap));
+}
+
+/// Implementation status: Partially implemented (same formatter as wsprintf).
+pub fn wvsprintfA(out: [*]u8, format: [*:0]const u8, ap: [*]const u32) callconv(w32cc.WINAPI) i32 {
+    return crt_fmt.vsnprintf(out, 1024, format, ap);
+}
+
+/// Implementation status: Partially implemented (same formatter as wsprintf).
+pub fn wvsprintfW(out: [*]u16, format: [*:0]const u16, ap: [*]const u32) callconv(w32cc.WINAPI) i32 {
+    return crt_fmt.vsnwprintf(out, 1024, format, ap);
 }
 
 const dc = @import("../gdi32/dc.zig");
@@ -197,4 +98,20 @@ pub fn DrawTextA(hdc: usize, lpchText: usize, cchText: i32, lprc: usize, fmt: u3
 /// DrawTextW: Unicode variant, delegates to DrawTextA.
 pub fn DrawTextW(hdc: usize, lpchText: usize, cchText: i32, lprc: usize, fmt: u32) callconv(w32cc.WINAPI) i32 {
     return DrawTextA(hdc, lpchText, cchText, lprc, fmt);
+}
+
+test "USER32 formatters use cdecl variadics and stdcall argument lists" {
+    const testing = std.testing;
+    var narrow: [1024]u8 = undefined;
+    var wide: [1024]u16 = undefined;
+    const args = [_]u32{42};
+    try testing.expectEqual(@as(i32, 2), wvsprintfA(&narrow, "%u", &args));
+    try testing.expectEqualStrings("42", std.mem.sliceTo(&narrow, 0));
+    const wide_fmt = [_:0]u16{ '%', 'u' };
+    try testing.expectEqual(@as(i32, 2), wvsprintfW(&wide, &wide_fmt, &args));
+    try testing.expectEqualSlices(u16, &.{ '4', '2', 0 }, wide[0..3]);
+    if (comptime platform.is_native and platform.is_x86) {
+        try testing.expectEqual(@as(i32, 2), wsprintfA(&narrow, "%u", @as(u32, 42)));
+        try testing.expectEqual(@as(i32, 2), wsprintfW(&wide, &wide_fmt, @as(u32, 42)));
+    }
 }

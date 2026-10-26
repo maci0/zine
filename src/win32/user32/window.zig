@@ -37,14 +37,14 @@ pub fn SystemParametersInfoA(uiAction: u32, uiParam: u32, pvParam: ?*anyopaque, 
     _ = fWinIni;
     if (trace.enable_tracing) trace.print("USER32: SystemParametersInfoA(action={x})\n", .{uiAction});
     if (uiAction == w32.SPI_GETWORKAREA) {
-        const rect = @as(*user32.RECT, @ptrCast(@alignCast(pvParam orelse return 0)));
+        const rect = @as(*align(1) user32.RECT, @ptrCast(pvParam orelse return 0));
         rect.left = 0;
         rect.top = 0;
         rect.right = 1024; // matches SM_CXSCREEN
         rect.bottom = 738; // screen height minus taskbar (768 - 30)
     }
     if (uiAction == w32.SPI_GETNONCLIENTMETRICS) {
-        const ncm = @as(*w32.NONCLIENTMETRICSA, @ptrCast(@alignCast(pvParam orelse return 0)));
+        const ncm = @as(*align(1) w32.NONCLIENTMETRICSA, @ptrCast(pvParam orelse return 0));
         ncm.* = .{}; // zero all fields, cbSize defaults to 340
         ncm.iBorderWidth = 1;
         ncm.iScrollWidth = 16;
@@ -1342,7 +1342,7 @@ pub fn stub_SystemParametersInfoW(uiAction: u32, uiParam: u32, pvParam: ?*anyopa
     if (trace.enable_tracing) trace.print("USER32: SystemParametersInfoW(action=0x{x})\n", .{uiAction});
     // SPI_GETWORKAREA
     if (uiAction == w32.SPI_GETWORKAREA) {
-        const rect = @as(*user32.RECT, @ptrCast(@alignCast(pvParam orelse return 0)));
+        const rect = @as(*align(1) user32.RECT, @ptrCast(pvParam orelse return 0));
         rect.left = 0;
         rect.top = 0;
         rect.right = @intCast(user32.current_client_width);
@@ -1352,7 +1352,7 @@ pub fn stub_SystemParametersInfoW(uiAction: u32, uiParam: u32, pvParam: ?*anyopa
     // SPI_GETNONCLIENTMETRICS
     if (uiAction == w32.SPI_GETNONCLIENTMETRICS) {
         const p = pvParam orelse return 0;
-        const size_ptr = @as(*u32, @ptrCast(@alignCast(p)));
+        const size_ptr = @as(*align(1) u32, @ptrCast(p));
         const total = size_ptr.*;
         const bytes = @as([*]u8, @ptrCast(p));
         @memset(bytes[0..total], 0);
@@ -1568,4 +1568,15 @@ pub fn WindowFromPoint(x: i32, y: i32) callconv(w32cc.WINAPI) usize {
 pub fn IsWindowUnicode(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     if (trace.enable_tracing) trace.print("USER32: IsWindowUnicode(0x{X}) -> 0\n", .{hWnd});
     return 0;
+}
+
+test "SystemParametersInfo accepts packed nonclient metrics without overwriting neighbours" {
+    var bytes: [2 + @sizeOf(w32.NONCLIENTMETRICSA)]u8 align(4) = @splat(0xaa);
+    const data = bytes[1..][0..@sizeOf(w32.NONCLIENTMETRICSA)];
+    try std.testing.expectEqual(@as(i32, 1), SystemParametersInfoA(w32.SPI_GETNONCLIENTMETRICS, @intCast(data.len), @ptrCast(data.ptr), 0));
+    const metrics: *align(1) const w32.NONCLIENTMETRICSA = @ptrCast(data.ptr);
+    try std.testing.expectEqual(@as(i32, 1), metrics.iBorderWidth);
+    try std.testing.expectEqual(@as(i32, -11), metrics.lfCaptionFont.lfHeight);
+    try std.testing.expectEqual(@as(u8, 0xaa), bytes[0]);
+    try std.testing.expectEqual(@as(u8, 0xaa), bytes[bytes.len - 1]);
 }

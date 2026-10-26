@@ -292,3 +292,46 @@ test "SetTimer reports failure once every slot is taken" {
     // An id already in use is re-armed in place even when the table is full.
     try testing.expectEqual(@as(usize, 3), armTimer(0x1002, 3, 50));
 }
+
+/// Implementation status: Fully implemented (emulates an enhanced US keyboard).
+pub fn GetKeyboardType(kind: i32) callconv(w32cc.WINAPI) i32 {
+    trace.print("USER32: GetKeyboardType({d})\n", .{kind});
+    return switch (kind) {
+        0 => 4, // Enhanced 101/102-key keyboard.
+        1 => 0, // OEM-independent subtype.
+        2 => 12,
+        else => blk: {
+            @import("../kernel32/error.zig").SetLastError(87); // ERROR_INVALID_PARAMETER
+            break :blk 0;
+        },
+    };
+}
+
+test "GetKeyboardType reports the emulated keyboard and rejects invalid queries" {
+    try testing.expectEqual(@as(i32, 4), GetKeyboardType(0));
+    try testing.expectEqual(@as(i32, 0), GetKeyboardType(1));
+    try testing.expectEqual(@as(i32, 12), GetKeyboardType(2));
+    try testing.expectEqual(@as(i32, 0), GetKeyboardType(-1));
+    try testing.expectEqual(@as(u32, 87), @import("../kernel32/error.zig").GetLastError());
+}
+
+/// Implementation status: Fully implemented (one emulated US keyboard layout).
+pub fn GetKeyboardLayoutList(capacity: i32, layouts: ?[*]u32) callconv(w32cc.WINAPI) i32 {
+    trace.print("USER32: GetKeyboardLayoutList({d})\n", .{capacity});
+    if (capacity == 0) return 1;
+    if (capacity < 0 or layouts == null) {
+        @import("../kernel32/error.zig").SetLastError(87);
+        return 0;
+    }
+    layouts.?[0] = @intCast(stub_GetKeyboardLayout(0));
+    return 1;
+}
+
+test "GetKeyboardLayoutList reports one layout and respects the output capacity" {
+    var layouts = [_]u32{ 0, 0xdeadbeef };
+    try testing.expectEqual(@as(i32, 1), GetKeyboardLayoutList(0, null));
+    try testing.expectEqual(@as(i32, 1), GetKeyboardLayoutList(2, &layouts));
+    try testing.expectEqual(@as(u32, 0x04090409), layouts[0]);
+    try testing.expectEqual(@as(u32, 0xdeadbeef), layouts[1]);
+    try testing.expectEqual(@as(i32, 0), GetKeyboardLayoutList(-1, &layouts));
+}

@@ -17,3 +17,18 @@ pub const WINAPI: std.builtin.CallingConvention = if (arch == .x86 or arch == .x
     .winapi
 else
     .c;
+
+/// Fully implemented: USER32's variadic formatters use cdecl like the CRT.
+pub fn isCdeclExport(dll: []const u8, name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(dll, "MSVCRT.dll") or std.ascii.startsWithIgnoreCase(dll, "MSVCP") or
+        (std.ascii.eqlIgnoreCase(dll, "USER32.dll") and
+            (std.mem.eql(u8, name, "wsprintfA") or std.mem.eql(u8, name, "wsprintfW")));
+}
+
+test "only USER32 variadic formatters use caller stack cleanup" {
+    try std.testing.expect(isCdeclExport("user32.dll", "wsprintfW"));
+    try std.testing.expect(isCdeclExport("USER32.dll", "wsprintfA"));
+    try std.testing.expect(!isCdeclExport("user32.dll", "wvsprintfW"));
+    try std.testing.expect(!isCdeclExport("other.dll", "wsprintfA"));
+    try std.testing.expect(isCdeclExport("msvcrt.dll", "sprintf"));
+}

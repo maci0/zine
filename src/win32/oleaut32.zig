@@ -11,6 +11,7 @@ pub fn register(environment: *env.Environment) !void {
     const stub = @import("shared.zig");
     try environment.addBuiltinExportComptime(m, "SysFreeString", stubs.SysFreeString);
     try environment.addBuiltinExportComptime(m, "SysAllocStringLen", stubs.SysAllocStringLen);
+    try environment.addBuiltinExportComptime(m, "SysReAllocStringLen", stubs.SysReAllocStringLen);
     try environment.addBuiltinExportComptime(m, "SysAllocString", stubs.SysAllocString);
     try environment.addBuiltinExportComptime(m, "SysStringLen", stubs.SysStringLen);
     try environment.addBuiltinExportComptime(m, "SysStringByteLen", stubs.SysStringByteLen);

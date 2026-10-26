@@ -59,6 +59,8 @@ pub const Failure = error{
     NtHeadersOutOfBounds,
     /// Reported by the allocator, not by a parser contract violation.
     OutOfMemory,
+    InvalidArchitecture,
+    InvalidImageBase,
 };
 
 /// Runs one image through the parser and checks the invariants every
@@ -71,6 +73,8 @@ pub fn harness(allocator: std.mem.Allocator, data: []u8) Failure!void {
     defer parser.deinit(allocator);
 
     const nt = parser.getNtHeaders();
+    if (nt.FileHeader.Machine != 0x14c or nt.OptionalHeader.Magic != 0x10b) return error.InvalidArchitecture;
+    if (nt.OptionalHeader.ImageBase & 0xfff != 0) return error.InvalidImageBase;
     if (parser.sections.len != nt.FileHeader.NumberOfSections) return error.SectionCountMismatch;
 
     // The parsed headers are handed back as pointers into the caller's

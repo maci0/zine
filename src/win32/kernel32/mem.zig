@@ -232,8 +232,8 @@ var win32_heap_mutex: runtime.Mutex = .{};
 fn win32HeapAlloc(size: usize, zero: bool) ?*anyopaque {
     _ = zero; // mmap'd chunks are already zeroed
     const actual = if (size == 0) @as(usize, 16) else size;
-    const aligned = (actual + 15) & ~@as(usize, 15); // 16-byte align
-    const total = aligned + 16; // 16 bytes header (size + padding)
+    const aligned = (std.math.add(usize, actual, 15) catch return null) & ~@as(usize, 15);
+    const total = std.math.add(usize, aligned, 16) catch return null;
 
     if (guest_memory()) |_| {
         // On WASM, default to the shared guest heap (avoids out of bounds VM escapes).
@@ -269,11 +269,23 @@ fn win32HeapAlloc(size: usize, zero: bool) ?*anyopaque {
 }
 
 /// Reallocates a block of memory from a heap.
-/// Implementation status: Partially implemented (Uses shared raw_realloc)
+/// Implementation status: Partially implemented (copies from the Win32 heap header; bump allocations are retained)
 pub fn HeapReAlloc(hHeap: ?*anyopaque, dwFlags: u32, lpMem: ?*anyopaque, dwBytes: usize) callconv(w32cc.WINAPI) ?*anyopaque {
     _ = hHeap;
-    _ = dwFlags;
-    return raw_realloc(lpMem, dwBytes);
+    const old = lpMem orelse return null;
+    // HeapAlloc has a 16-byte header; raw_realloc's 8-byte header belongs to malloc.
+    const header: *usize = @ptrFromInt(@intFromPtr(old) - 16);
+    const old_size = header.*;
+    if (dwBytes <= old_size) {
+        header.* = dwBytes;
+        return old;
+    }
+    if (dwFlags & 0x10 != 0) return null; // HEAP_REALLOC_IN_PLACE_ONLY
+    const result = win32HeapAlloc(dwBytes, dwFlags & 0x08 != 0) orelse return null;
+    const src: [*]const u8 = @ptrCast(old);
+    const dst: [*]u8 = @ptrCast(result);
+    @memcpy(dst[0..old_size], src[0..old_size]);
+    return result;
 }
 
 /// Frees a memory block allocated from a heap.
@@ -325,17 +337,17 @@ pub fn LocalSize(hMem: usize) callconv(w32cc.WINAPI) usize {
 }
 
 /// Changes the size or the attributes of a specified local memory object.
-/// Implementation status: Partially implemented (Uses shared raw_realloc)
+/// Implementation status: Partially implemented (uses the same header as LocalAlloc)
 pub fn LocalReAlloc(hMem: usize, uBytes: usize, uFlags: u32) callconv(w32cc.WINAPI) usize {
-    _ = uFlags;
-    if (hMem == 0) {
-        const ptr = raw_alloc(uBytes) orelse return 0;
-        // usize return — hand back a guest VA, not the raw host pointer.
-        return stub_common.hostToGuest(@intFromPtr(ptr));
-    }
-    // hMem is a guest VA; raw_realloc expects a host pointer.
-    const ptr = raw_realloc(@ptrFromInt(trace.addr(hMem)), uBytes) orelse return 0;
-    return stub_common.hostToGuest(@intFromPtr(ptr));
+    const ptr = if (hMem == 0)
+        LocalAlloc(uFlags, uBytes)
+    else
+        HeapReAlloc(null, if (uFlags & 0x40 != 0) 0x08 else 0, @ptrFromInt(trace.addr(hMem)), uBytes);
+    const result = ptr orelse {
+        @import("error.zig").SetLastError(8); // ERROR_NOT_ENOUGH_MEMORY
+        return 0;
+    };
+    return stub_common.hostToGuest(@intFromPtr(result));
 }
 
 /// Retrieves information about the system's current usage of both physical and virtual memory.
@@ -453,4 +465,24 @@ pub fn FlushInstructionCache(hProcess: usize, lpBaseAddress: usize, dwSize: usiz
 pub fn GlobalHandle(pMem: usize) callconv(w32cc.WINAPI) usize {
     // For GMEM_FIXED allocations (which we always use), the handle IS the pointer
     return pMem;
+}
+
+test "heap and local reallocations preserve data and their allocation headers" {
+    const testing = std.testing;
+    const old = HeapAlloc(null, 0, 4) orelse return error.OutOfMemory;
+    @memcpy(@as([*]u8, @ptrCast(old))[0..4], "data");
+    const grown = HeapReAlloc(null, 0x08, old, 32) orelse return error.OutOfMemory;
+    try testing.expectEqualStrings("data", @as([*]const u8, @ptrCast(grown))[0..4]);
+    try testing.expectEqual(@as(usize, 32), LocalSize(stub_common.hostToGuest(@intFromPtr(grown))));
+    try testing.expectEqualSlices(u8, &([_]u8{0} ** 28), @as([*]const u8, @ptrCast(grown))[4..32]);
+    @import("error.zig").SetLastError(0x1234);
+    try testing.expect(HeapReAlloc(null, 0x10, grown, 64) == null);
+    try testing.expectEqual(@as(u32, 0x1234), @import("error.zig").GetLastError());
+    try testing.expectEqualStrings("data", @as([*]const u8, @ptrCast(grown))[0..4]);
+    const local = LocalAlloc(0, 4) orelse return error.OutOfMemory;
+    @memcpy(@as([*]u8, @ptrCast(local))[0..4], "test");
+    const resized = LocalReAlloc(stub_common.hostToGuest(@intFromPtr(local)), 16, 0x40);
+    try testing.expect(resized != 0);
+    try testing.expectEqual(@as(usize, 16), LocalSize(resized));
+    try testing.expectEqualStrings("test", @as([*]const u8, @ptrFromInt(trace.addr(resized)))[0..4]);
 }

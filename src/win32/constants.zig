@@ -193,6 +193,8 @@ pub const D3DLOCKED_RECT = extern struct {
 pub const WM_DESTROY: u32 = 0x0002;
 /// Window size changed.
 pub const WM_SIZE: u32 = 0x0005;
+/// No operation.
+pub const WM_NULL: u32 = 0;
 /// Window activated.
 pub const WM_ACTIVATE: u32 = 0x0006;
 /// Application activated.
@@ -769,3 +771,6 @@ pub const SYSTEM_BASIC_INFORMATION = extern struct {
     NumberOfProcessors: u8 = 0,
     _pad: [3]u8 = [_]u8{0} ** 3,
 };
+
+/// First message reserved for a window class.
+pub const WM_USER: u32 = 0x0400;

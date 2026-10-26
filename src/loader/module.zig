@@ -676,6 +676,7 @@ const TestImage = struct {
         std.mem.writeInt(u32, file_data[60..64], 64, .little);
         // NT signature + COFF header (no sections, optional header = 224)
         @memcpy(file_data[64..68], "PE\x00\x00");
+        std.mem.writeInt(u16, file_data[68..70], 0x14c, .little);
         std.mem.writeInt(u16, file_data[68 + 16 ..][0..2], 224, .little);
         // Optional header: magic 0x10b, 16 data directories
         std.mem.writeInt(u16, file_data[88..][0..2], 0x10b, .little);

@@ -88,24 +88,29 @@ pub fn SysFreeString(bstrString: usize) callconv(w32cc.WINAPI) void {
 /// Layout: [u32 byte_length][wide chars...][u16 null]
 /// Implementation status: Partially implemented
 pub fn SysAllocStringLen(strIn: usize, ui: u32) callconv(w32cc.WINAPI) usize {
-    const byte_len: usize = @as(usize, ui) * 2;
-    const alloc_size = 4 + byte_len + 2;
-    const ptr = shared.raw_alloc(alloc_size) orelse return 0;
-    const base = @intFromPtr(ptr);
-    @as(*align(1) u32, @ptrFromInt(base)).* = @intCast(byte_len);
-    const data_ptr = base + 4;
-    if (strIn != 0 and byte_len > 0) {
-        // strIn is a guest VA (usize param — not auto-translated).
-        const src = @as([*]const u8, @ptrFromInt(trace.addr(strIn)));
-        @memcpy(@as([*]u8, @ptrFromInt(data_ptr))[0..byte_len], src[0..byte_len]);
-    } else if (byte_len > 0) {
-        @memset(@as([*]u8, @ptrFromInt(data_ptr))[0..byte_len], 0);
-    }
-    @as(*align(1) u16, @ptrFromInt(data_ptr + byte_len)).* = 0;
-    // usize return — hand back a guest VA, not the raw host pointer.
-    const guest_va = shared.hostToGuest(data_ptr);
-    if (trace.enable_tracing) trace.print("OLEAUT32: SysAllocStringLen(len={d}) -> 0x{X}\n", .{ ui, guest_va });
-    return guest_va;
+    const result = allocateBstr(if (strIn == 0) null else @ptrFromInt(trace.addr(strIn)), ui) orelse return 0;
+    return shared.hostToGuest(@intFromPtr(result));
+}
+
+fn allocateBstr(source: ?[*]const u16, len: u32) ?[*]u16 {
+    const byte_len = std.math.mul(u32, len, 2) catch return null;
+    const allocation = std.math.add(u32, byte_len, 6) catch return null;
+    _ = std.math.add(u32, allocation, 8) catch return null; // Shared allocator header.
+    const memory = shared.raw_alloc(allocation) orelse return null;
+    const bytes: [*]u8 = @ptrCast(memory);
+    std.mem.writeInt(u32, bytes[0..4], byte_len, .little);
+    const result: [*]u16 = @ptrCast(@alignCast(bytes + 4));
+    if (source) |src| @memcpy(result[0..len], src[0..len]) else @memset(result[0..len], 0);
+    result[len] = 0;
+    return result;
+}
+
+/// Implementation status: Partially implemented (replaces the string; bump storage is reclaimed at exit).
+pub fn SysReAllocStringLen(destination: *?[*]u16, source: ?[*]const u16, len: u32) callconv(w32cc.WINAPI) i32 {
+    trace.print("OLEAUT32: SysReAllocStringLen(len={d})\n", .{len});
+    const replacement = allocateBstr(source, len) orelse return 0;
+    destination.* = replacement;
+    return 1;
 }
 
 /// VariantClear — release any resources in a VARIANT and zero it
@@ -158,4 +163,19 @@ pub fn SysAllocString(strIn: usize) callconv(w32cc.WINAPI) usize {
     const src = @as([*]const u16, @ptrFromInt(strIn));
     while (src[len] != 0) : (len += 1) {}
     return SysAllocStringLen(strIn, len);
+}
+
+test "BSTR reallocation supports aliases and embedded NULs and preserves the old string on failure" {
+    const input = [_]u16{ 'a', 0, 'b' };
+    var string: ?[*]u16 = null;
+    try std.testing.expectEqual(@as(i32, 1), SysReAllocStringLen(&string, &input, input.len));
+    try std.testing.expectEqualSlices(u16, &.{ 'a', 0, 'b', 0 }, string.?[0..4]);
+    try std.testing.expectEqual(@as(u32, 6), @as(*align(1) const u32, @ptrFromInt(@intFromPtr(string.?) - 4)).*);
+    try std.testing.expectEqual(@as(i32, 1), SysReAllocStringLen(&string, string.? + 2, 1));
+    try std.testing.expectEqualSlices(u16, &.{ 'b', 0 }, string.?[0..2]);
+    const previous = string;
+    try std.testing.expectEqual(@as(i32, 0), SysReAllocStringLen(&string, null, std.math.maxInt(u32)));
+    try std.testing.expectEqual(previous, string);
+    try std.testing.expectEqual(@as(i32, 1), SysReAllocStringLen(&string, null, 0));
+    try std.testing.expectEqual(@as(u16, 0), string.?[0]);
 }

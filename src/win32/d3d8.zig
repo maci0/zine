@@ -145,21 +145,37 @@ const IDirect3DDevice8Vtbl = extern struct {
 
 // --- Generic D3D8 Resource (fake texture/surface/VB/IB) ---
 // A minimal COM object with a large vtable full of typed noops.
-// Used for CreateTexture, CreateVertexBuffer, etc. — app just needs a non-NULL handle.
+// Resource identity and storage survive lock/unlock calls.
 
 const D3D8Resource = extern struct {
     lpVtbl: *const [64]usize, // large enough for any D3D8 sub-object vtable
+    width: u32 = 0,
+    height: u32 = 0,
+    format: u32 = w32.D3DFMT_X8R8G8B8,
+    usage: u32 = 0,
+    pool: u32 = 0,
+    parent: ?*D3D8Resource = null,
+    data: ?[*]u8 = null,
+    data_len: usize = 0,
 };
 
 var resource_vtbl: [64]usize = undefined;
-var global_resources: [32]D3D8Resource = undefined;
+var texture_vtbl: [64]usize = undefined;
+var surface_vtbl: [64]usize = undefined;
 var next_resource: usize = 0;
 
-fn allocResource() *D3D8Resource {
-    const idx = next_resource % global_resources.len;
+fn allocResource() ?*D3D8Resource {
+    const memory = @import("shared.zig").raw_alloc(@sizeOf(D3D8Resource)) orelse return null;
+    const resource: *D3D8Resource = @ptrCast(@alignCast(memory));
+    resource.* = .{ .lpVtbl = &resource_vtbl, .width = renderer.global_width, .height = renderer.global_height };
     next_resource += 1;
-    global_resources[idx].lpVtbl = &resource_vtbl;
-    return &global_resources[idx];
+    return resource;
+}
+
+fn allocSurface() ?*D3D8Resource {
+    const surface = allocResource() orelse return null;
+    surface.lpVtbl = &surface_vtbl;
+    return surface;
 }
 
 // --- Instances ---
@@ -202,7 +218,7 @@ fn d3d8_GetAdapterIdentifier(this: *IDirect3D8, Adapter: u32, Flags: u32, pIdent
     if (pIdentifier != 0) {
         // D3DADAPTER_IDENTIFIER8: Driver[512], Description[512], ...
         const buf = @as([*]u8, @ptrFromInt(pIdentifier));
-        @memset(buf[0 .. 1024 + 48], 0);
+        @memset(buf[0 .. 1024 + 44], 0); // D3DADAPTER_IDENTIFIER8 is 1068 bytes.
         const driver = "Zine Virtual GPU";
         @memcpy(buf[0..driver.len], driver);
         const desc = "Zine D3D8 Emulation";
@@ -314,10 +330,11 @@ fn d3d8_GetDeviceCaps(this: *IDirect3D8, Adapter: u32, DeviceType: u32, pCaps: u
     return w32.D3D_OK;
 }
 
-/// Fill D3DCAPS8 (304 bytes) with plausible hardware-accelerated device caps
+/// Implementation status: Partially implemented (emulated device capabilities).
+/// D3DCAPS8 has 53 four-byte fields; D3DCAPS9's larger size corrupts the caller's stack.
 fn fillD3D8Caps(pCaps: usize) void {
     const caps = @as([*]u8, @ptrFromInt(pCaps));
-    @memset(caps[0..304], 0);
+    @memset(caps[0..212], 0);
 
     // D3DCAPS8 layout (offsets in bytes):
     //   0: DeviceType (4)
@@ -589,11 +606,15 @@ fn device_GetDirect3D(this: *IDirect3DDevice8, ppD3D8: *?*IDirect3D8) callconv(w
 fn device_CreateTexture(this: *IDirect3DDevice8, Width: u32, Height: u32, Levels: u32, Usage: u32, Format: u32, Pool: u32, ppTexture: *?*D3D8Resource) callconv(w32cc.WINAPI) i32 {
     _ = this;
     _ = Levels;
-    _ = Usage;
-    _ = Format;
-    _ = Pool;
-    if (trace.enable_tracing) trace.print("D3D8: CreateTexture({d}x{d})\n", .{ Width, Height });
-    ppTexture.* = allocResource();
+    if (trace.enable_tracing) trace.print("D3D8: CreateTexture({d}x{d}, format={d})\n", .{ Width, Height, Format });
+    ppTexture.* = allocResource() orelse return @bitCast(w32.D3DERR_OUTOFVIDEOMEMORY);
+    const texture = ppTexture.*.?;
+    texture.lpVtbl = &texture_vtbl;
+    texture.width = Width;
+    texture.height = Height;
+    texture.format = Format;
+    texture.usage = Usage;
+    texture.pool = Pool;
     return 0;
 }
 
@@ -603,7 +624,8 @@ fn device_CreateVertexBuffer(this: *IDirect3DDevice8, Length: u32, Usage: u32, F
     _ = FVF;
     _ = Pool;
     if (trace.enable_tracing) trace.print("D3D8: CreateVertexBuffer(len={d})\n", .{Length});
-    ppVB.* = allocResource();
+    ppVB.* = allocResource() orelse return @bitCast(w32.D3DERR_OUTOFVIDEOMEMORY);
+    ppVB.*.?.data_len = Length;
     return 0;
 }
 
@@ -613,35 +635,46 @@ fn device_CreateIndexBuffer(this: *IDirect3DDevice8, Length: u32, Usage: u32, Fo
     _ = Format;
     _ = Pool;
     if (trace.enable_tracing) trace.print("D3D8: CreateIndexBuffer(len={d})\n", .{Length});
-    ppIB.* = allocResource();
+    ppIB.* = allocResource() orelse return @bitCast(w32.D3DERR_OUTOFVIDEOMEMORY);
+    ppIB.*.?.data_len = Length;
     return 0;
 }
 
 fn device_CreateRenderTarget(this: *IDirect3DDevice8, Width: u32, Height: u32, Format: u32, MultiSample: u32, Lockable: u32, ppSurface: *?*D3D8Resource) callconv(w32cc.WINAPI) i32 {
     _ = this;
-    _ = Format;
     _ = MultiSample;
     _ = Lockable;
     if (trace.enable_tracing) trace.print("D3D8: CreateRenderTarget({d}x{d})\n", .{ Width, Height });
-    ppSurface.* = allocResource();
+    ppSurface.* = allocSurface() orelse return @bitCast(w32.D3DERR_OUTOFVIDEOMEMORY);
+    ppSurface.*.?.width = Width;
+    ppSurface.*.?.height = Height;
+    ppSurface.*.?.format = Format;
+    ppSurface.*.?.usage = 1;
+    ppSurface.*.?.pool = 0;
     return 0;
 }
 
 fn device_CreateDepthStencilSurface(this: *IDirect3DDevice8, Width: u32, Height: u32, Format: u32, MultiSample: u32, ppSurface: *?*D3D8Resource) callconv(w32cc.WINAPI) i32 {
     _ = this;
-    _ = Format;
     _ = MultiSample;
     if (trace.enable_tracing) trace.print("D3D8: CreateDepthStencilSurface({d}x{d})\n", .{ Width, Height });
-    ppSurface.* = allocResource();
+    ppSurface.* = allocSurface() orelse return @bitCast(w32.D3DERR_OUTOFVIDEOMEMORY);
+    ppSurface.*.?.width = Width;
+    ppSurface.*.?.height = Height;
+    ppSurface.*.?.format = Format;
+    ppSurface.*.?.usage = 2;
+    ppSurface.*.?.pool = 0;
     return 0;
 }
 
 fn device_CreateImageSurface(this: *IDirect3DDevice8, Width: u32, Height: u32, Format: u32, ppSurface: *?*D3D8Resource) callconv(w32cc.WINAPI) i32 {
     _ = this;
-    _ = Width;
-    _ = Height;
-    _ = Format;
-    ppSurface.* = allocResource();
+    ppSurface.* = allocSurface() orelse return @bitCast(w32.D3DERR_OUTOFVIDEOMEMORY);
+    ppSurface.*.?.width = Width;
+    ppSurface.*.?.height = Height;
+    ppSurface.*.?.format = Format;
+    ppSurface.*.?.usage = 0;
+    ppSurface.*.?.pool = 2;
     return 0;
 }
 
@@ -649,7 +682,7 @@ fn device_GetBackBuffer(this: *IDirect3DDevice8, BackBuffer: u32, Type: u32, ppB
     _ = this;
     _ = BackBuffer;
     _ = Type;
-    ppBackBuffer.* = allocResource();
+    ppBackBuffer.* = allocSurface() orelse return @bitCast(w32.D3DERR_OUTOFVIDEOMEMORY);
     return 0;
 }
 
@@ -662,13 +695,13 @@ fn device_SetRenderTarget(this: *IDirect3DDevice8, pRenderTarget: usize, pNewZSt
 
 fn device_GetRenderTarget(this: *IDirect3DDevice8, ppRenderTarget: *?*D3D8Resource) callconv(w32cc.WINAPI) i32 {
     _ = this;
-    ppRenderTarget.* = allocResource();
+    ppRenderTarget.* = allocSurface() orelse return @bitCast(w32.D3DERR_OUTOFVIDEOMEMORY);
     return 0;
 }
 
 fn device_GetDepthStencilSurface(this: *IDirect3DDevice8, ppZStencilSurface: *?*D3D8Resource) callconv(w32cc.WINAPI) i32 {
     _ = this;
-    ppZStencilSurface.* = allocResource();
+    ppZStencilSurface.* = allocSurface() orelse return @bitCast(w32.D3DERR_OUTOFVIDEOMEMORY);
     return 0;
 }
 
@@ -764,43 +797,123 @@ fn noop9(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h
 
 // --- Resource method implementations ---
 
-fn resource_GetSurfaceLevel(this: usize, Level: u32, ppSurfaceLevel: *?*D3D8Resource) callconv(w32cc.WINAPI) i32 {
+/// Implementation status: Partially implemented (all resources belong to the shared device).
+fn resource_GetDevice(this: *D3D8Resource, output: *?*IDirect3DDevice8) callconv(w32cc.WINAPI) i32 {
     _ = this;
-    _ = Level;
-    ppSurfaceLevel.* = allocResource();
-    return 0;
+    output.* = &global_d3d8_device;
+    return w32.D3D_OK;
 }
 
-fn resource_LockRect(this: usize, Level: u32, pLockedRect: usize, pRect: usize, Flags: u32) callconv(w32cc.WINAPI) i32 {
+/// Implementation status: Partially implemented (one mip level).
+fn texture_GetLevelCount(this: *D3D8Resource) callconv(w32cc.WINAPI) u32 {
     _ = this;
-    _ = Level;
-    _ = pRect;
-    _ = Flags;
-    // D3DLOCKED_RECT: { INT Pitch; void* pBits; }
-    if (pLockedRect != 0) {
-        const lr = @as(*w32.D3DLOCKED_RECT, @ptrFromInt(pLockedRect));
-        lr.Pitch = 2048 * 4; // generous pitch
-        if (surface_buffer.len > 0) {
-            lr.pBits = @truncate(@intFromPtr(surface_buffer.ptr));
-        } else {
-            lr.pBits = 0;
-        }
-    }
-    return 0;
+    return 1;
 }
 
-fn resource_VBLock(this: usize, OffsetToLock: u32, SizeToLock: u32, ppbData: *?*anyopaque, Flags: u32) callconv(w32cc.WINAPI) i32 {
-    _ = this;
-    _ = OffsetToLock;
-    _ = Flags;
-    _ = SizeToLock;
-    // Return our surface buffer as scratch space
-    if (surface_buffer.len > 0) {
-        ppbData.* = @ptrFromInt(@intFromPtr(surface_buffer.ptr));
-    } else {
-        ppbData.* = null;
+const iid_texture8 = [_]u8{ 0x75, 0xd5, 0xcd, 0xe4, 0x66, 0x28, 0x01, 0x4f, 0xb1, 0x2e, 0x7e, 0xec, 0xe1, 0xec, 0x93, 0x58 };
+const iid_unknown = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46 };
+
+/// Implementation status: Partially implemented (texture and IUnknown containers).
+fn surface_GetContainer(this: *D3D8Resource, riid: ?*const [16]u8, output: *?*anyopaque) callconv(w32cc.WINAPI) i32 {
+    output.* = null;
+    const parent = this.parent orelse return @bitCast(@as(u32, 0x80004002));
+    const iid = riid orelse return @bitCast(@as(u32, 0x80004002));
+    if (!std.mem.eql(u8, iid, &iid_texture8) and !std.mem.eql(u8, iid, &iid_unknown)) return @bitCast(@as(u32, 0x80004002));
+    output.* = parent;
+    return w32.D3D_OK;
+}
+
+/// Implementation status: Partially implemented (unmultisampled RGB and DXT surfaces).
+fn surface_GetDesc(this: *D3D8Resource, output: *align(1) [8]u32) callconv(w32cc.WINAPI) i32 {
+    const cells: u64 = switch (this.format) {
+        0x31545844...0x35545844 => @max(1, (@as(u64, this.width) + 3) / 4) * @max(1, (@as(u64, this.height) + 3) / 4),
+        else => @as(u64, this.width) * this.height,
+    };
+    const bytes: u64 = switch (this.format) {
+        20 => 3, // R8G8B8
+        21, 22 => 4, // A8R8G8B8, X8R8G8B8
+        23...26 => 2, // R5G6B5 through A4R4G4B4
+        28 => 1, // A8
+        0x31545844 => 8, // DXT1 block
+        0x32545844, 0x33545844, 0x34545844, 0x35545844 => 16, // DXT2-5 block
+        else => return @bitCast(w32.D3DERR_INVALIDCALL),
+    };
+    const size = std.math.mul(u64, cells, bytes) catch return @bitCast(w32.D3DERR_INVALIDCALL);
+    if (size > std.math.maxInt(u32)) return @bitCast(w32.D3DERR_INVALIDCALL);
+    output.* = .{ this.format, 1, this.usage, this.pool, @intCast(size), 0, this.width, this.height };
+    return w32.D3D_OK;
+}
+
+/// Implementation status: Partially implemented (one mip level).
+fn texture_GetLevelDesc(this: *D3D8Resource, level: u32, output: *align(1) [8]u32) callconv(w32cc.WINAPI) i32 {
+    if (level != 0) return @bitCast(w32.D3DERR_INVALIDCALL);
+    return surface_GetDesc(this, output);
+}
+
+/// Implementation status: Partially implemented (level zero).
+fn surface_LockRect(this: *D3D8Resource, locked: *align(1) w32.D3DLOCKED_RECT, rect: ?*align(1) const w32.RECT, flags: u32) callconv(w32cc.WINAPI) i32 {
+    return resource_LockRect(this, 0, locked, rect, flags);
+}
+
+/// Implementation status: Partially implemented (one surface level with stable parent identity).
+fn resource_GetSurfaceLevel(this: *D3D8Resource, Level: u32, ppSurfaceLevel: *?*D3D8Resource) callconv(w32cc.WINAPI) i32 {
+    ppSurfaceLevel.* = null;
+    if (Level != 0) return @bitCast(w32.D3DERR_INVALIDCALL);
+    const surface = allocSurface() orelse return @bitCast(w32.D3DERR_OUTOFVIDEOMEMORY);
+    surface.* = this.*;
+    surface.lpVtbl = &surface_vtbl;
+    surface.parent = this;
+    ppSurfaceLevel.* = surface;
+    return w32.D3D_OK;
+}
+
+fn resourceData(resource: *D3D8Resource) ?[*]u8 {
+    if (resource.data == null) {
+        if (resource.data_len == 0) return null;
+        const memory = @import("shared.zig").raw_alloc(resource.data_len) orelse return null;
+        resource.data = @ptrCast(memory);
     }
-    return 0;
+    return resource.data;
+}
+
+/// Implementation status: Partially implemented (level zero, rectangular locks).
+fn resource_LockRect(this: *D3D8Resource, Level: u32, locked: *align(1) w32.D3DLOCKED_RECT, rect: ?*align(1) const w32.RECT, Flags: u32) callconv(w32cc.WINAPI) i32 {
+    _ = Flags;
+    locked.* = .{ .Pitch = 0, .pBits = 0 };
+    if (Level != 0) return @bitCast(w32.D3DERR_INVALIDCALL);
+    const owner = this.parent orelse this;
+    var desc: [8]u32 = undefined;
+    const result = surface_GetDesc(owner, &desc);
+    if (result < 0) return result;
+    const compressed = owner.format >= 0x31545844 and owner.format <= 0x35545844;
+    const rows = if (compressed) @max(1, (@as(u64, owner.height) + 3) / 4) else owner.height;
+    if (rows == 0 or owner.width == 0) return @bitCast(w32.D3DERR_INVALIDCALL);
+    const pitch = desc[4] / rows;
+    if (pitch > std.math.maxInt(i32)) return @bitCast(w32.D3DERR_INVALIDCALL);
+    var offset: usize = 0;
+    if (rect) |r| {
+        if (r.left < 0 or r.top < 0 or r.right <= r.left or r.bottom <= r.top or r.right > owner.width or r.bottom > owner.height)
+            return @bitCast(w32.D3DERR_INVALIDCALL);
+        const x: u32 = @intCast(r.left);
+        const y: u32 = @intCast(r.top);
+        if (compressed and (x % 4 != 0 or y % 4 != 0)) return @bitCast(w32.D3DERR_INVALIDCALL);
+        offset = if (compressed) @as(usize, y / 4) * @as(usize, @intCast(pitch)) + @as(usize, x / 4) * (if (owner.format == 0x31545844) @as(usize, 8) else 16) else @as(usize, y) * @as(usize, @intCast(pitch)) + @as(usize, x) * (@as(usize, @intCast(pitch)) / owner.width);
+    }
+    owner.data_len = desc[4];
+    const data = resourceData(owner) orelse return @bitCast(w32.D3DERR_OUTOFVIDEOMEMORY);
+    locked.Pitch = @intCast(pitch);
+    locked.pBits = @intCast(@import("../x86/memory.zig").hostToGuest(@intFromPtr(data + offset)));
+    return w32.D3D_OK;
+}
+
+/// Implementation status: Partially implemented (persistent storage; lock flags are ignored).
+fn resource_VBLock(this: *D3D8Resource, OffsetToLock: u32, SizeToLock: u32, ppbData: *?*anyopaque, Flags: u32) callconv(w32cc.WINAPI) i32 {
+    _ = Flags;
+    ppbData.* = null;
+    if (OffsetToLock >= this.data_len or SizeToLock > this.data_len - OffsetToLock) return @bitCast(w32.D3DERR_INVALIDCALL);
+    const data = resourceData(this) orelse return @bitCast(w32.D3DERR_OUTOFVIDEOMEMORY);
+    ppbData.* = @ptrCast(data + OffsetToLock);
+    return w32.D3D_OK;
 }
 
 /// --- Registration ---
@@ -947,26 +1060,40 @@ pub fn register(environment: *env.Environment) !void {
     resource_vtbl[1] = n1; // AddRef
     resource_vtbl[2] = n1; // Release
     // IDirect3DResource8 methods (3-10) — set correct arg-count noops
-    resource_vtbl[3] = n2; // GetDevice(this, ppDevice)
+    resource_vtbl[3] = comPtr(resource_GetDevice, "IDirect3DResource8::GetDevice");
     resource_vtbl[4] = n5; // SetPrivateData(this, refguid, pData, SizeOfData, Flags)
     resource_vtbl[5] = n4; // GetPrivateData(this, refguid, pData, pSizeOfData)
     resource_vtbl[6] = n2; // FreePrivateData(this, refguid)
     resource_vtbl[7] = n2; // SetPriority(this, PriorityNew)
     resource_vtbl[8] = n1; // GetPriority(this)
-    resource_vtbl[9] = n1; // PreLoad(this) — also surface LockRect(4 args), conflict accepted
+    resource_vtbl[9] = n1; // PreLoad(this)
     resource_vtbl[10] = n1; // GetType(this)
 
     // IDirect3DVertexBuffer8: Lock at index 11, Unlock at 12, GetDesc at 13
     resource_vtbl[11] = comPtr(resource_VBLock, "D3D8Resource::Lock"); // Lock(this, Offset, Size, ppbData, Flags)
     resource_vtbl[12] = n1; // Unlock(this)
-    resource_vtbl[13] = n2; // GetDesc(this, pDesc) / GetLevelCount(this) — 1-2 args, safe as noop2
+    resource_vtbl[13] = n2; // Vertex/index buffer GetDesc(this, pDesc)
 
     // IDirect3DTexture8 methods (14-18) — CORRECT indices per D3D8 SDK
-    resource_vtbl[14] = n3; // GetLevelDesc(this, Level, pDesc)
+    resource_vtbl[14] = comPtr(texture_GetLevelDesc, "IDirect3DTexture8::GetLevelDesc");
     resource_vtbl[15] = comPtr(resource_GetSurfaceLevel, "D3D8Resource::GetSurfaceLevel"); // GetSurfaceLevel(this, Level, ppSurf)
     resource_vtbl[16] = comPtr(resource_LockRect, "D3D8Resource::LockRect"); // LockRect(this, Level, pLockedRect, pRect, Flags)
     resource_vtbl[17] = n2; // UnlockRect(this, Level)
     resource_vtbl[18] = n2; // AddDirtyRect(this, pDirtyRect)
+
+    // Texture LOD methods overlap the buffer Lock/Unlock/GetDesc slots.
+    texture_vtbl = resource_vtbl;
+    texture_vtbl[11] = n2; // SetLOD(this, level)
+    texture_vtbl[12] = n1; // GetLOD(this)
+    texture_vtbl[13] = comPtr(texture_GetLevelCount, "IDirect3DTexture8::GetLevelCount");
+
+    // IDirect3DSurface8 does not inherit IDirect3DResource8: slots 7-10
+    // take different arguments, and using the texture slots corrupts ESP.
+    surface_vtbl = resource_vtbl;
+    surface_vtbl[7] = comPtr(surface_GetContainer, "IDirect3DSurface8::GetContainer");
+    surface_vtbl[8] = comPtr(surface_GetDesc, "IDirect3DSurface8::GetDesc");
+    surface_vtbl[9] = comPtr(surface_LockRect, "IDirect3DSurface8::LockRect");
+    surface_vtbl[10] = n1; // UnlockRect(this)
 
     global_d3d8.lpVtbl = &d3d8_vtbl;
     global_d3d8_device.lpVtbl = &device_vtbl;
@@ -1001,4 +1128,92 @@ fn stub_Direct3DCreate8(SDKVersion: u32) callconv(w32cc.WINAPI) usize {
         trace.print("D3D8: vtbl[10] CheckDeviceFormat at {x}\n", .{@intFromPtr(global_d3d8.lpVtbl.CheckDeviceFormat)});
     }
     return @intFromPtr(&global_d3d8);
+}
+
+test "D3D8 capability writes stay within the 212-byte SDK structure" {
+    var buffer = [_]u8{0xaa} ** 214;
+    fillD3D8Caps(@intFromPtr(&buffer[1]));
+    try std.testing.expectEqual(@as(u8, 0xaa), buffer[0]);
+    try std.testing.expectEqual(@as(u8, 0xaa), buffer[213]);
+    try std.testing.expectEqual(@as(u32, w32.D3DDEVTYPE_HAL), std.mem.readInt(u32, buffer[1..5], .little));
+    try std.testing.expectEqual(@as(u32, @bitCast(@as(f32, 1.0))), std.mem.readInt(u32, buffer[209..213], .little));
+}
+
+test "D3D8 adapter identifier writes stay within the SDK structure" {
+    var buffer = [_]u8{0xaa} ** 1070;
+    try std.testing.expectEqual(@as(i32, 0), d3d8_GetAdapterIdentifier(&global_d3d8, 0, 0, @intFromPtr(&buffer[1])));
+    try std.testing.expectEqual(@as(u8, 0xaa), buffer[0]);
+    try std.testing.expectEqual(@as(u8, 0xaa), buffer[1069]);
+}
+
+test "an unsupported D3D8 surface container query clears its output and fails" {
+    var resource = D3D8Resource{ .lpVtbl = undefined };
+    var output: ?*anyopaque = @ptrFromInt(0x1234);
+    try std.testing.expectEqual(@as(i32, @bitCast(@as(u32, 0x80004002))), surface_GetContainer(&resource, null, &output));
+    try std.testing.expect(output == null);
+}
+
+test "D3D8 resources return a device instead of succeeding with an unset output" {
+    var resource = D3D8Resource{ .lpVtbl = undefined };
+    var device: ?*IDirect3DDevice8 = null;
+    try std.testing.expectEqual(@as(i32, 0), resource_GetDevice(&resource, &device));
+    try std.testing.expectEqual(&global_d3d8_device, device.?);
+    try std.testing.expectEqual(@as(u32, 1), texture_GetLevelCount(&resource));
+}
+
+test "D3D8 resource identities are not recycled while the guest still holds them" {
+    const first = allocResource() orelse return error.OutOfMemory;
+    first.lpVtbl = &texture_vtbl;
+    for (0..64) |_| {
+        const next = allocSurface() orelse return error.OutOfMemory;
+        try std.testing.expect(next != first);
+    }
+    try std.testing.expect(first.lpVtbl == &texture_vtbl);
+}
+
+test "D3D8 surface levels retain texture metadata and parent identity" {
+    var texture = D3D8Resource{ .lpVtbl = &texture_vtbl, .width = 64, .height = 16, .format = 21, .pool = 1 };
+    var surface: ?*D3D8Resource = null;
+    try std.testing.expectEqual(@as(i32, 0), resource_GetSurfaceLevel(&texture, 0, &surface));
+    var desc: [8]u32 = undefined;
+    try std.testing.expectEqual(@as(i32, 0), surface_GetDesc(surface.?, &desc));
+    try std.testing.expectEqualSlices(u32, &.{ 21, 1, 0, 1, 4096, 0, 64, 16 }, &desc);
+    var parent: ?*anyopaque = null;
+    try std.testing.expectEqual(@as(i32, 0), surface_GetContainer(surface.?, &iid_texture8, &parent));
+    try std.testing.expectEqual(@intFromPtr(&texture), @intFromPtr(parent));
+    try std.testing.expect(texture_GetLevelDesc(&texture, 1, &desc) < 0);
+    texture.width = std.math.maxInt(u32);
+    texture.height = std.math.maxInt(u32);
+    try std.testing.expect(surface_GetDesc(&texture, &desc) < 0);
+}
+
+test "D3D8 buffer locks preserve independent storage and offsets" {
+    var vertex = D3D8Resource{ .lpVtbl = undefined, .data_len = 32 };
+    var index = D3D8Resource{ .lpVtbl = undefined, .data_len = 16 };
+    var v: ?*anyopaque = null;
+    var i: ?*anyopaque = null;
+    try std.testing.expectEqual(@as(i32, 0), resource_VBLock(&vertex, 0, 0, &v, 0));
+    try std.testing.expectEqual(@as(i32, 0), resource_VBLock(&index, 0, 16, &i, 0));
+    @memset(@as([*]u8, @ptrCast(v.?))[0..32], 0x56);
+    @memset(@as([*]u8, @ptrCast(i.?))[0..16], 0x12);
+    try std.testing.expectEqual(@as(i32, 0), resource_VBLock(&vertex, 7, 4, &v, 0));
+    try std.testing.expectEqual(@as(u8, 0x56), @as(*u8, @ptrCast(v.?)).*);
+    try std.testing.expectEqual(@intFromPtr(vertex.data.?) + 7, @intFromPtr(v.?));
+    try std.testing.expectEqual(@as(u8, 0x12), index.data.?[0]);
+    try std.testing.expect(resource_VBLock(&index, 15, 2, &i, 0) < 0);
+    try std.testing.expect(i == null);
+}
+
+test "D3D8 surface locks share texture storage without overwriting buffers" {
+    var texture = D3D8Resource{ .lpVtbl = &texture_vtbl, .width = 8, .height = 4, .format = 21 };
+    var surface: ?*D3D8Resource = null;
+    try std.testing.expectEqual(@as(i32, 0), resource_GetSurfaceLevel(&texture, 0, &surface));
+    var locked: w32.D3DLOCKED_RECT = undefined;
+    try std.testing.expectEqual(@as(i32, 0), resource_LockRect(&texture, 0, &locked, null, 0));
+    try std.testing.expectEqual(@as(u32, 32), locked.Pitch);
+    texture.data.?[36] = 0xAB;
+    const rect = w32.RECT{ .left = 1, .top = 1, .right = 3, .bottom = 2 };
+    try std.testing.expectEqual(@as(i32, 0), surface_LockRect(surface.?, &locked, &rect, 0));
+    try std.testing.expectEqual(@as(u32, @intCast(@import("../x86/memory.zig").hostToGuest(@intFromPtr(texture.data.? + 36)))), locked.pBits);
+    try std.testing.expectEqual(@as(u8, 0xAB), texture.data.?[36]);
 }

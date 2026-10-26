@@ -437,7 +437,7 @@ pub fn registerNativeImport(addr: usize, dll_name: []const u8, func_name: []cons
         log.fatal("x86 thunks: native import registry full ({d} entries)", .{MAX_IMPORTS});
         std.process.exit(1);
     }
-    const is_msvcrt = std.ascii.eqlIgnoreCase(dll_name, "MSVCRT.dll") or std.ascii.eqlIgnoreCase(dll_name, "MSVCP60.dll");
+    const is_cdecl = @import("../win32/calling_convention.zig").isCdeclExport(dll_name, func_name);
 
     // Check for @N suffix (decorated stdcall names)
     var resolved_bytes = param_bytes;
@@ -451,7 +451,7 @@ pub fn registerNativeImport(addr: usize, dll_name: []const u8, func_name: []cons
     import_registry[import_count] = .{
         .addr = addr,
         .param_bytes = resolved_bytes,
-        .is_cdecl = is_msvcrt,
+        .is_cdecl = is_cdecl,
     };
     import_count += 1;
     imports_sorted = false; // invalidate sort

@@ -224,7 +224,7 @@ pub const Environment = struct {
             @compileError("addBuiltinExportComptime requires a function or function pointer");
         }
         const param_bytes = param_len * 4;
-        const addr = if (is_bare_fn) @intFromPtr(&func) else @intFromPtr(func);
+        const addr = @import("../x86/compat_abi.zig").nativeAddress(func);
 
         // On WASM, generate a comptime thunk handler that reads args from the
         // guest stack and calls the function with the exact correct signature.
@@ -280,12 +280,23 @@ pub const Environment = struct {
 
                     // Build a tuple of correctly-typed arguments
                     var call_args: std.meta.ArgsTuple(FnType) = undefined;
+                    var pointer_slots: [param_len]usize = @splat(0);
                     inline for (0..param_len) |i| {
                         const ParamType = fn_info.params[i].type.?;
-                        call_args[i] = castArg(ParamType, args[i], cpu);
+                        if (comptime @import("../x86/compat_abi.zig").isPointerSlot(ParamType)) {
+                            // Pointer outputs need host-to-guest translation as well as four-byte slots.
+                            pointer_slots[i] = translateGuestAddr(cpu.memory.read32(args[i]), cpu);
+                            call_args[i] = @ptrCast(&pointer_slots[i]);
+                        } else call_args[i] = castArg(ParamType, args[i], cpu);
                     }
 
                     const result = @call(.auto, fptr, call_args);
+                    inline for (0..param_len) |i| {
+                        if (comptime @import("../x86/compat_abi.zig").isPointerSlot(fn_info.params[i].type.?)) {
+                            const value = pointer_slots[i];
+                            cpu.memory.write32(args[i], if (value == 0) 0 else toU32(@as(*anyopaque, @ptrFromInt(value)), cpu));
+                        }
+                    }
                     return toU32(result, cpu);
                 }
 

@@ -1332,7 +1332,7 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
             },
             0x040B => { // SB_SETTEXTW: lParam = LPCWSTR text
                 if (lParam != 0) {
-                    const w = trace.c_span_w(@intCast(lParam));
+                    const w = trace.c_span_w(@as(usize, @bitCast(lParam)));
                     var buf: [512]u8 = undefined;
                     renderer.updateControlText(@intCast(hWnd), text_utils.wideToUtf8(w, &buf));
                 }
@@ -1863,7 +1863,7 @@ test "every dispatched MSG carries the tick count GetMessageTime reports" {
     // A zero time field makes the guest's age arithmetic read as "posted at
     // boot". The stamps come from one helper, so a message delivered now and
     // GetMessageTime() now differ by a sampling gap, not by the whole uptime.
-    var msg: user32.MSG = .{};
+    var msg: user32.MSG = std.mem.zeroes(user32.MSG);
     msg.hwnd = 1;
     msg.message = w32.WM_NULL;
     msg.time = user32.msgTime();

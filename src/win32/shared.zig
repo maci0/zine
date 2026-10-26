@@ -133,6 +133,7 @@ fn heapAlloc(size: usize) ?[*]u8 {
 /// Implementation status: Partially implemented
 pub fn raw_alloc(size: usize) ?*anyopaque {
     const actual_size = if (size == 0) @as(usize, 64) else size;
+    if (actual_size > 0xFFFFFFFF - 16) return null;
 
     // On WASM: use guest heap allocator to keep addresses in range.
     // Return a guest virtual address (not a host pointer) so the x86
@@ -170,16 +171,7 @@ pub fn raw_alloc(size: usize) ?*anyopaque {
 /// Use it for stubs whose return type is `usize`: the thunk layer only
 /// reverse-translates TYPED pointer returns, so a `usize`-returning stub must
 /// hand back a guest VA itself or the guest dereferences a host address.
-pub fn hostToGuest(host_addr: usize) usize {
-    if (x86_memory.guest_memory) |gmem| {
-        const base_ptr = @intFromPtr(gmem.base.ptr);
-        const base_end = base_ptr + gmem.base.len;
-        if (host_addr >= base_ptr and host_addr < base_end) {
-            return gmem.base_addr +% @as(u32, @intCast(host_addr - base_ptr));
-        }
-    }
-    return host_addr;
-}
+pub const hostToGuest = x86_memory.hostToGuest;
 
 /// Reallocates memory from the shared guest heap.
 ///

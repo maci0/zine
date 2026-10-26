@@ -34,6 +34,18 @@ pub fn guestToHost(guest_addr: usize) usize {
     return guest_addr;
 }
 
+/// Convert a host address back to the guest address space.
+pub fn hostToGuest(host_addr: usize) usize {
+    if (guest_memory) |gmem| {
+        const base_ptr = @intFromPtr(gmem.base.ptr);
+        const base_end = base_ptr + gmem.base.len;
+        if (host_addr >= base_ptr and host_addr < base_end) {
+            return gmem.base_addr +% @as(u32, @intCast(host_addr - base_ptr));
+        }
+    }
+    return host_addr;
+}
+
 /// Bounds-checked guest memory accessor.
 pub const GuestMemory = struct {
     /// The backing memory buffer.  On WASM this is a slice of the linear

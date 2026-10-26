@@ -128,11 +128,14 @@ test "MulDiv avoids intermediate overflow for huge inputs" {
 
 /// Retrieves the size of a memory block allocated from a heap.
 /// Implementation status: Partially implemented
-pub fn HeapSize(hHeap: usize, dwFlags: u32, lpMem: usize) callconv(w32cc.WINAPI) usize {
+pub fn HeapSize(hHeap: usize, dwFlags: u32, lpMem: ?*const anyopaque) callconv(w32cc.WINAPI) usize {
     _ = hHeap;
     _ = dwFlags;
-    if (lpMem == 0) return 0;
-    const header = @as(*const usize, @ptrFromInt(lpMem - 8));
+    const memory = lpMem orelse {
+        @import("error.zig").SetLastError(87); // ERROR_INVALID_PARAMETER
+        return std.math.maxInt(usize);
+    };
+    const header: *const usize = @ptrFromInt(@intFromPtr(memory) - 16);
     return header.*;
 }
 
@@ -191,4 +194,13 @@ pub fn SleepEx(dwMilliseconds: u32, bAlertable: i32) callconv(w32cc.WINAPI) u32 
         @import("../../runtime.zig").pauseOrAdvance(sleep_ns);
     }
     return 0;
+}
+
+test "HeapSize reads the Win32 allocation header before and after reallocation" {
+    const mem = @import("mem.zig");
+    const old = mem.HeapAlloc(null, 0, 13) orelse return error.OutOfMemory;
+    try std.testing.expectEqual(@as(usize, 13), HeapSize(0, 0, old));
+    const grown = mem.HeapReAlloc(null, 0, old, 37) orelse return error.OutOfMemory;
+    try std.testing.expectEqual(@as(usize, 37), HeapSize(0, 0, grown));
+    try std.testing.expectEqual(std.math.maxInt(usize), HeapSize(0, 0, null));
 }

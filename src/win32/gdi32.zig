@@ -454,6 +454,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "SetRectRgn", stub.stub_args(5));
     try environment.addBuiltinExportComptime(m, "FillRgn", stub.stub_args(3));
     try environment.addBuiltinExportComptime(m, "Escape", stub.stub_args(5));
+    try environment.addBuiltinExportComptime(m, "EnumFontFamiliesExA", stub.stub_args(5));
     try environment.addBuiltinExportComptime(m, "EnumFontFamiliesExW", stub.stub_args(5));
     try environment.addBuiltinExportComptime(m, "EnumFontFamiliesW", stub.stub_args(4));
     try environment.addBuiltinExportComptime(m, "SetWindowOrgEx", stub.stub_args(4));

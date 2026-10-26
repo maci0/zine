@@ -177,19 +177,16 @@ pub fn CreatePen(iStyle: i32, cWidth: i32, crColor: u32) callconv(w32cc.WINAPI) 
 
 /// Create a logical font from a LOGFONT structure.
 /// Implementation status: Partially implemented (stores height, weight, face name for metrics)
-pub fn CreateFontIndirectA(lplf: usize) callconv(w32cc.WINAPI) usize {
+pub fn CreateFontIndirectA(lplf: ?*align(1) const w32.LOGFONTA) callconv(w32cc.WINAPI) usize {
     var fd = gdi32.FontData{};
-    if (lplf != 0) {
-        // LOGFONT layout: lfHeight(0), lfWidth(4), lfEscapement(8), lfOrientation(12),
-        // lfWeight(16), lfItalic(20), lfUnderline(21), lfStrikeOut(22), lfCharSet(23),
-        // ... lfFaceName(28, 32 bytes)
-        fd.height = @as(*const i32, @ptrFromInt(lplf)).*;
-        fd.width = @as(*const i32, @ptrFromInt(lplf + 4)).*;
-        fd.weight = @as(*const i32, @ptrFromInt(lplf + 16)).*;
-        fd.italic = @as(*const u8, @ptrFromInt(lplf + 20)).* != 0;
-        fd.charset = @as(*const u8, @ptrFromInt(lplf + 23)).*;
-        // Copy face name
-        const face = @as([*]const u8, @ptrFromInt(lplf + 28));
+    if (lplf) |font| {
+        // Delphi can place LOGFONT in a packed record, so field reads must allow byte alignment.
+        fd.height = font.lfHeight;
+        fd.width = font.lfWidth;
+        fd.weight = font.lfWeight;
+        fd.italic = font.lfItalic != 0;
+        fd.charset = font.lfCharSet;
+        const face = &font.lfFaceName;
         const len = std.mem.indexOfScalar(u8, face[0..32], 0) orelse 32;
         const copy_len = @min(len, 31);
         @memcpy(fd.face_name[0..copy_len], face[0..copy_len]);
@@ -522,4 +519,18 @@ pub fn EnumFontsA(hdc: usize, lpLogfont: usize, lpProc: usize, lParam: usize) ca
     _ = lParam;
     if (trace.enable_tracing) trace.print("GDI32: EnumFontsA -> 1 (no fonts enumerated)\n", .{});
     return 1;
+}
+
+test "CreateFontIndirectA accepts byte-aligned Delphi records" {
+    var bytes: [1 + @sizeOf(w32.LOGFONTA)]u8 align(4) = undefined;
+    var font = w32.LOGFONTA{ .lfHeight = -16, .lfWidth = 7, .lfWeight = 700, .lfItalic = 1 };
+    @memcpy(font.lfFaceName[0..5], "Arial");
+    @memcpy(bytes[1..], std.mem.asBytes(&font));
+    const handle = CreateFontIndirectA(@ptrCast(bytes[1..].ptr));
+    defer _ = stub_DeleteObject(handle);
+    const obj = gdi32.findObject(handle) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(i32, -16), obj.data.font.height);
+    try std.testing.expectEqual(@as(i32, 700), obj.data.font.weight);
+    try std.testing.expect(obj.data.font.italic);
+    try std.testing.expectEqualStrings("Arial", obj.data.font.face_name[0..obj.data.font.face_len]);
 }
