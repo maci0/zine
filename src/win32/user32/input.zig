@@ -118,22 +118,30 @@ fn ensureTimerThread() void {
 fn timerThread() void {
     while (true) {
         const now = safeMilliTs();
+        // Collect under the lock, post after releasing it. Unlocking per timer
+        // and resuming the same walk let SetTimer reuse a slot the scan had
+        // already passed (that timer then waits a full extra period) and post
+        // a slot twice when KillTimer freed it for a new id mid-pass.
+        var due_hwnd: [timers.len]usize = undefined;
+        var due_id: [timers.len]usize = undefined;
+        var due_count: usize = 0;
         timers_mutex.lock();
         for (&timers) |*t| {
             if (!t.active) continue;
             const elapsed = now - t.last_fire;
             if (elapsed >= t.elapse_ms) {
                 t.last_fire = now;
-                const hwnd = t.hwnd;
-                const id = t.id;
-                // Post outside the lock to avoid deadlock if the queue is full.
-                timers_mutex.unlock();
-                const msg_mod = @import("message.zig");
-                msg_mod.postMessageTo(hwnd, 0x0113, id, 0); // WM_TIMER
-                timers_mutex.lock();
+                due_hwnd[due_count] = t.hwnd;
+                due_id[due_count] = t.id;
+                due_count += 1;
             }
         }
         timers_mutex.unlock();
+        // Post outside the lock to avoid deadlock if the queue is full.
+        const msg_mod = @import("message.zig");
+        for (due_hwnd[0..due_count], due_id[0..due_count]) |hwnd, id| {
+            msg_mod.postMessageTo(hwnd, 0x0113, id, 0); // WM_TIMER
+        }
         // Under a virtual clock each pass advances simulated time instead of
         // sleeping, so WM_TIMER fires after a count of passes that does not
         // depend on how fast the host is.

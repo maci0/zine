@@ -35,6 +35,16 @@ const CriticalSection = struct {
     owner: std.atomic.Value(std.Thread.Id) = std.atomic.Value(std.Thread.Id).init(0),
     recursion: u32 = 0,
     addr: usize = 0,
+    /// Threads between lookup and finishing with the slot. `getOrCreateCS`
+    /// returns the pointer and drops `cs_table_mutex`, so DeleteCriticalSection
+    /// must not `cs.* = .{}` while one of them still uses it: that zeroes the
+    /// slot mutex under a holder, whose unlock then releases a different
+    /// mutex than it acquired and the next enter walks in beside it.
+    /// Touched only under `cs_table_mutex`.
+    users: u32 = 0,
+    /// Set when a delete arrived while `users` was nonzero. The last user out
+    /// resets the slot, so the address is not reusable until then.
+    deleted: bool = false,
 };
 
 var cs_table: [MAX_CRITICAL_SECTIONS]CriticalSection = init_cs: {
@@ -49,27 +59,43 @@ fn getOrCreateCS(addr: usize) ?*CriticalSection {
     cs_table_mutex.lock();
     defer cs_table_mutex.unlock();
     for (&cs_table) |*cs| {
-        if (cs.addr == addr) return cs;
+        if (cs.addr == addr and !cs.deleted) {
+            cs.users += 1;
+            return cs;
+        }
     }
     for (&cs_table) |*cs| {
         if (cs.addr == 0) {
-            cs.* = .{ .addr = addr };
+            cs.* = .{ .addr = addr, .users = 1 };
             return cs;
         }
     }
     return null;
 }
 
+/// Drops one reference taken by `getOrCreateCS`. The last user of a slot that
+/// was deleted while in use frees it, which is the reset `DeleteCriticalSection`
+/// deferred.
+fn releaseCS(cs: *CriticalSection) void {
+    cs_table_mutex.lock();
+    defer cs_table_mutex.unlock();
+    cs.users -= 1;
+    if (cs.deleted and cs.users == 0) cs.* = .{};
+}
+
 /// Implementation status: Partially implemented
 pub fn InitializeCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
     if (trace.enable_tracing) trace.print("KERNEL32: InitializeCriticalSection({x})\n", .{lpCriticalSection});
-    if (lpCriticalSection != 0) _ = getOrCreateCS(lpCriticalSection);
+    if (lpCriticalSection != 0) {
+        if (getOrCreateCS(lpCriticalSection)) |cs| releaseCS(cs);
+    }
 }
 
 /// Implementation status: Partially implemented
 pub fn EnterCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
     if (lpCriticalSection == 0) return;
     const cs = getOrCreateCS(lpCriticalSection) orelse return;
+    defer releaseCS(cs);
     const tid = std.Thread.getCurrentId();
     if (cs.owner.load(.monotonic) == tid) {
         // Recursive entry — same thread, just bump count
@@ -85,6 +111,7 @@ pub fn EnterCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) voi
 pub fn LeaveCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) void {
     if (lpCriticalSection == 0) return;
     const cs = getOrCreateCS(lpCriticalSection) orelse return;
+    defer releaseCS(cs);
     if (cs.recursion > 1) {
         cs.recursion -= 1;
         return;
@@ -101,8 +128,15 @@ pub fn DeleteCriticalSection(lpCriticalSection: usize) callconv(w32cc.WINAPI) vo
     cs_table_mutex.lock();
     defer cs_table_mutex.unlock();
     for (&cs_table) |*cs| {
-        if (cs.addr == lpCriticalSection) {
-            cs.* = .{};
+        if (cs.addr == lpCriticalSection and !cs.deleted) {
+            // A thread looked this slot up and has not finished with it. Zeroing
+            // it now would reset the mutex it is about to lock or unlock, so
+            // mark it and let the last releaseCS reset it.
+            if (cs.users > 0) {
+                cs.deleted = true;
+            } else {
+                cs.* = .{};
+            }
             return;
         }
     }
@@ -1004,6 +1038,7 @@ test "critical sections serialize recursive access during concurrent registratio
     try std.testing.expectEqual(@as(u32, 0), cs.recursion);
     try std.testing.expect(cs.mutex.tryLock());
     cs.mutex.unlock();
+    releaseCS(cs);
     DeleteCriticalSection(1);
     for (&cs_table) |*entry| try std.testing.expectEqual(@as(usize, 0), entry.addr);
 }
