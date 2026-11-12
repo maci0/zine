@@ -40,6 +40,7 @@ promise between versions, so a breaking change takes the next minor.
 
 #### Fixed
 
+- The browser UI looks up a guest control by its id instead of scanning the document on every update, and paints only the newest frame per display refresh instead of blitting every frame the host pushes.
 - `GlobalAddAtomA` and `GlobalAddAtomW` return the same atom for the same string, so a guest that adds an atom twice compares the two results equal.
 - The browser UI marks the row or tab a click chooses, and radio buttons inside one group box now clear each other instead of staying checked together.
 - A progress bar, up-down, trackbar, or date control created after its table is full no longer shares state with the first control of that kind, and destroying a focused window returns keyboard focus to the main window.

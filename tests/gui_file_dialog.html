@@ -79,7 +79,8 @@
             block12();
             block13();
             block14();
-            document.getElementById('result').textContent = 'PASS: dialogs, filter, print range, font style, start menu, name error, enter key, escape, window clamp, error text, keyboard, list selection, tabs, radio groups, row mark';
+            block15();
+            document.getElementById('result').textContent = 'PASS: dialogs, filter, print range, font style, start menu, name error, enter key, escape, window clamp, error text, keyboard, list selection, tabs, radio groups, row mark, control updates, frame coalesce';
         } catch (error) {
             document.getElementById('result').textContent = 'FAIL: ' + error.message + ' @ ' + (error.stack || '').split('\n')[1];
         }
@@ -405,6 +406,51 @@
             assert(radio(62).checked && !radio(61).checked, 'Checking one radio must clear the other in its group');
             assert(!radio(71).checked && !radio(72).checked, 'Checking a radio must not touch the other group');
             hideDialog();
+        }
+
+        // Control updates address the element by id, including a checkbox
+        // whose id sits on the input inside its label, and a dialog update
+        // must not lose the controls that stay on screen behind it.
+        function block15() {
+            receive({type: 'show_controls', cx: 120, cy: 60, items: [
+                {id: 80, class: 'Static', x: 0, y: 0, cx: 80, cy: 14, style: 0, text: 'Before'},
+                {id: 81, class: 'Button', x: 0, y: 20, cx: 80, cy: 14, style: 3, text: 'Check'}]});
+            const label = document.querySelector('#controls-container [data-id="80"]');
+            const box = document.querySelector('#controls-container input[data-id="81"]');
+            assert(label && box, 'The in-window controls must be created');
+            receive({type: 'update_control_text', id: 80, text: '&After'});
+            assert(label.textContent === 'After', 'An update must reach the control by id, got ' + label.textContent);
+            receive({type: 'set_control_checked', id: 81, checked: true});
+            assert(box.checked, 'A check update must reach the input nested inside its label');
+
+            receive({type: 'custom_dialog', title: 'Over', cx: 80, cy: 40, items: [
+                {id: 90, class: 'Static', x: 0, y: 0, cx: 60, cy: 14, style: 0, text: 'Dialog'}]});
+            receive({type: 'update_control_text', id: 90, text: 'Changed'});
+            const dialogLabel = document.querySelector('#dialog-overlay [data-id="90"]');
+            assert(dialogLabel && dialogLabel.textContent === 'Changed', 'A dialog control must update by id');
+            receive({type: 'update_control_text', id: 80, text: 'Still here'});
+            assert(label.isConnected && label.textContent === 'Still here',
+                'Updating a dialog must not drop the controls behind it');
+            hideDialog();
+            document.getElementById('controls-container').remove();
+
+            // Two frames arrive before the display paints, so only the latest
+            // is blitted, and a resolution change discards the one waiting.
+            const queued = [];
+            const realFrame = window.requestAnimationFrame;
+            window.requestAnimationFrame = (fn) => { queued.push(fn); return queued.length; };
+            const frameBytes = currentRenderWidth * currentRenderHeight * 4;
+            const pixels = (n) => new Uint8Array(frameBytes).fill(n).buffer;
+            socket.onmessage({data: pixels(1)});
+            socket.onmessage({data: pixels(2)});
+            assert(queued.length === 1, 'Two frames must schedule one paint, got ' + queued.length);
+            assert(framePending && framePending[0] === 2, 'The paint must carry the newer frame');
+            receive({type: 'set_resolution', width: currentRenderWidth + 1, height: currentRenderHeight});
+            assert(framePending === null, 'A resolution change must drop the frame sized for the old one');
+            queued[0]();
+            assert(frameImage === null || frameImage.width !== currentRenderWidth,
+                'The dropped frame must not be painted at the new size');
+            window.requestAnimationFrame = realFrame;
         }
     </script>
 </body>

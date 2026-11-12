@@ -41,11 +41,53 @@ let currentRenderHeight = 1;
 // One frame buffer, reused across messages and rebuilt when the guest
 // changes the resolution.
 let frameImage = null;
+// The host pushes a frame per emulated frame, faster than the display paints,
+// so only the newest is blitted, once per animation frame. The view aliases
+// the socket buffer, which the next message reuses, so that frame is copied
+// out of it and one already waiting is overwritten in place.
+let framePending = null;
+let framePaintQueued = false;
+
+function queueFrame(bytes) {
+    if (framePending) framePending.set(bytes);
+    else framePending = bytes.slice();
+    if (framePaintQueued) return;
+    framePaintQueued = true;
+    requestAnimationFrame(() => {
+        framePaintQueued = false;
+        const pending = framePending;
+        framePending = null;
+        if (!pending || pending.length !== currentRenderWidth * currentRenderHeight * 4) return;
+        if (!frameImage || frameImage.width !== currentRenderWidth || frameImage.height !== currentRenderHeight) {
+            frameImage = new ImageData(currentRenderWidth, currentRenderHeight);
+        }
+        frameImage.data.set(pending);
+        ctx.putImageData(frameImage, 0, 0);
+    });
+}
+
 const appIconUrl = van.state("");
 const hasEditControl = van.state(false);
 // Progress-bar state per control id: {value, min, max} -> fill width.
 const controlRanges = {};
+// Controls the guest addresses by id, so a message finds its element instead
+// of scanning every data-id in the document. A checkbox keeps its id on the
+// input inside its label, so the element and its contents are both recorded.
+const controlsById = new Map();
 let currentMenuData = null;
+
+function rememberControl(el) {
+    if (!el || !el.querySelectorAll) return;
+    if (el.dataset && el.dataset.id !== undefined) controlsById.set(String(el.dataset.id), el);
+    el.querySelectorAll('[data-id]').forEach(node => controlsById.set(String(node.dataset.id), node));
+}
+
+function controlById(id) {
+    const el = controlsById.get(String(id));
+    if (el && el.isConnected) return el;
+    if (el) controlsById.delete(String(id));
+    return null;
+}
 
 // --- Audio ---
 let audioCtx = null;
@@ -295,6 +337,7 @@ function showDialog(title, content) {
         dialogContent.innerHTML = '';
         dialogContent.appendChild(content);
     }
+    indexControls(dialogContent);
 
     dialogOverlay.style.display = 'flex';
     dialogOverlay.style.transform = 'translate(-50%, -50%)';
@@ -1103,6 +1146,16 @@ function onMuteToggle(checked) {
     }
 }
 
+// Record the controls a container holds, dropping the ones it replaced. A
+// dialog and the in-window controls can both be on screen, so only this
+// container's own entries go.
+function indexControls(root) {
+    for (const [key, el] of controlsById) {
+        if (!el.isConnected || root && root.contains(el)) controlsById.delete(key);
+    }
+    if (root) rememberControl(root);
+}
+
 // --- Helper: ensure controls container exists ---
 function getOrCreateControlsContainer() {
     canvas.style.display = 'none';
@@ -1197,17 +1250,9 @@ function connect() {
             if (view.length >= 4 && view[0] === 0x41 && view[1] === 0x55 && view[2] === 0x44 && view[3] === 0x00) {
                 handleAudioData(view.subarray(4));
             } else {
-                // A frame is w*h*4 bytes and the host pushes one per emulated
-                // frame, so allocating an ImageData per message churns as much
-                // garbage as the frames themselves. One buffer per resolution is
-                // refilled in place instead; a resolution change drops it.
                 const frameLen = currentRenderWidth * currentRenderHeight * 4;
                 if (view.length !== frameLen) return;
-                if (!frameImage || frameImage.width !== currentRenderWidth || frameImage.height !== currentRenderHeight) {
-                    frameImage = new ImageData(currentRenderWidth, currentRenderHeight);
-                }
-                frameImage.data.set(view);
-                ctx.putImageData(frameImage, 0, 0);
+                queueFrame(view);
             }
         } else {
             try {
@@ -1225,6 +1270,8 @@ function connect() {
                 } else if (msg.type === "set_resolution") {
                     currentRenderWidth = msg.width;
                     currentRenderHeight = msg.height;
+                    // The queued frame belongs to the old resolution.
+                    framePending = null;
                     frameImage = null;
                     canvas.width = currentRenderWidth;
                     canvas.height = currentRenderHeight;
@@ -1300,6 +1347,7 @@ function connect() {
                     (msg.items || []).forEach(item => {
                         van.add(ctrlContainer, DialogControl(item, scaleX, scaleY, msg.items));
                     });
+                    indexControls(ctrlContainer);
 
                     const inset = canvas.parentElement;
                     inset.style.width = dlgW + 'px';
@@ -1313,14 +1361,15 @@ function connect() {
 
                 } else if (msg.type === "add_control") {
                     const ctrlContainer = getOrCreateControlsContainer();
-                    van.add(ctrlContainer, DialogControl({
+                    const added = DialogControl({
                         id: msg.id, x: msg.x, y: msg.y, cx: msg.cx, cy: msg.cy,
                         style: msg.style, class: msg.class, text: msg.text || ''
-                    }, 1, 1));
+                    }, 1, 1);
+                    van.add(ctrlContainer, added);
+                    rememberControl(added);
 
                 } else if (msg.type === "update_control_text") {
-                    // Update text of an existing control by its data-id attribute
-                    const el = Array.from(document.querySelectorAll('[data-id]')).find(e => e.dataset.id == msg.id);
+                    const el = controlById(msg.id);
                     if (el) {
                         // Strip Win32 '&' accelerator prefix for display
                         const displayText = (msg.text || '').replace(/&([^&])/g, '$1').replace(/&&/g, '&');
@@ -1365,7 +1414,7 @@ function connect() {
 
                 } else if (msg.type === "set_control_color") {
                     // Background color from the parent's WM_CTLCOLOR handler.
-                    const el = Array.from(document.querySelectorAll('[data-id]')).find(e => e.dataset.id == msg.id);
+                    const el = controlById(msg.id);
                     if (el) {
                         const c = msg.color >>> 0;
                         const r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
@@ -1374,7 +1423,7 @@ function connect() {
 
                 } else if (msg.type === "set_listbox_items") {
                     // Fill a listbox control with items (newline-joined string).
-                    const el = Array.from(document.querySelectorAll('[data-id]')).find(e => e.dataset.id == msg.id);
+                    const el = controlById(msg.id);
                     if (el && el.classList.contains('win2k-listbox')) {
                         const items = (msg.items || '').split('\n');
                         el.innerHTML = '';
@@ -1445,7 +1494,7 @@ function connect() {
 
                 } else if (msg.type === "set_control_checked") {
                     // Checkbox/radio checked state pushed from the backend.
-                    const el = Array.from(document.querySelectorAll('[data-id]')).find(e => e.dataset.id == msg.id);
+                    const el = controlById(msg.id);
                     if (el && (el.type === 'checkbox' || el.type === 'radio')) {
                         el.checked = !!msg.checked;
                     }
@@ -1456,7 +1505,7 @@ function connect() {
                     const st = (controlRanges[msg.id] = controlRanges[msg.id] || {value: 0, min: 0, max: 100});
                     if (msg.type === "update_control_value") st.value = msg.value;
                     if (msg.type === "update_control_range") { st.min = msg.min; st.max = msg.max; }
-                    const el = Array.from(document.querySelectorAll('[data-id]')).find(e => e.dataset.id == msg.id);
+                    const el = controlById(msg.id);
                     if (el) {
                         const fill = el.querySelector('.win2k-progress-fill');
                         if (fill) {
