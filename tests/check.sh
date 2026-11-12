@@ -164,16 +164,17 @@ check_shell() {
 check_c() {
     local objdir=".scratch/c-check"
     mkdir -p "$objdir"
-    # -Wall stops short of the width, signedness, shadowing, format-argument
-    # and declaration rules below. Every tracked source compiles clean under
-    # them, so they are part of the gate from here on: a warning they name is a
-    # defect class -Wall would have merged without comment.
+    # -Weverything is the whole clang set rather than the handful -Wall names,
+    # and every tracked source compiles clean under it except the three
+    # suppressions below. -Wdeclaration-after-statement rejects the mixed
+    # declarations tests/cpubench_win32.c uses, which C99 allows and this gate
+    # compiles as C99; -Wunsafe-buffer-usage flags the pointer arithmetic the
+    # benchmark loops are written as; -Wpadded is struct-layout noise. Drop a
+    # suppression when its findings are fixed, not before.
     local flags=(
         -std=c99
-        -Wall -Wextra -Wpedantic -Werror
-        -Wconversion -Wsign-conversion -Wshadow -Wcast-qual -Wundef
-        -Wformat=2 -Wwrite-strings -Wvla -Wdouble-promotion
-        -Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition
+        -Werror -Weverything
+        -Wno-declaration-after-statement -Wno-unsafe-buffer-usage -Wno-padded
     )
     # The gate runs each step inside `if ! ...`, which suspends errexit for the
     # whole body, so a compile that fails does not stop the loop. The status is

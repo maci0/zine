@@ -5,3 +5,4 @@ enable=check-unassigned-uppercase
 enable=check-script-has-shebang
 enable=deprecate-which
 enable=quote-safe-variables
+enable=useless-use-of-cat

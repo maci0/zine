@@ -12,19 +12,34 @@ const fltk_lib_dir = "/usr/lib/fltk1.3";
 // the other means a warning can merge while the gate stays green. The FLTK
 // headers reach the compiler as a system include, so their own warnings do
 // not fail either compile.
-// -Wimplicit-fallthrough joins the set because a switch case falling through
-// without a break is a defect class the C gate already runs (check_c in
-// tests/check.sh) and the C++ side did not. -Wconversion,
-// -Wsign-conversion and -Wdouble-promotion are deliberately absent: the
-// bridge does not compile clean under them yet (19 findings in the font
-// table lookup and the input replace, src/gui/fltk_bridge.cpp lines 999 and
-// 1145). Enable them with the fix.
+//
+// -Weverything is the whole clang set rather than the handful -Wall names,
+// and the suppressions below are exactly the warnings the bridge does not yet
+// compile clean under. -Wconversion, -Wsign-conversion, -Wdouble-promotion
+// and the two float-conversion warnings they imply are the findings in the
+// font table lookup and the input replace (lines 999 and 1145); -Wold-style-cast
+// is every C cast in the file; -Wunsafe-buffer-usage flags the pointer
+// arithmetic the pixel blits are written as. -Wpadded is struct layout noise
+// and the rest reject the C++11 this file is pinned to. Drop a suppression
+// when its findings are fixed, not before.
 const fltk_bridge_cxx_flags = [_][]const u8{
-    "-std=c++11",             "-fno-exceptions",    "-Werror",
-    "-Wall",                  "-Wextra",            "-Wpedantic",
-    "-Wshadow",               "-Wnon-virtual-dtor", "-Woverloaded-virtual",
-    "-Wcast-qual",            "-Wundef",            "-Wformat=2",
-    "-Wswitch-enum",          "-Wnull-dereference", "-Wimplicit-fallthrough",
+    "-std=c++11",
+    "-fno-exceptions",
+    "-Werror",
+    "-Weverything",
+    "-Wno-c++98-compat",
+    "-Wno-padded",
+    "-Wno-old-style-cast",
+    "-Wno-unsafe-buffer-usage",
+    "-Wno-pre-c++17-compat",
+    "-Wno-pre-c++14-compat",
+    "-Wno-missing-prototypes",
+    "-Wno-conversion",
+    "-Wno-sign-conversion",
+    "-Wno-double-promotion",
+    "-Wno-float-conversion",
+    "-Wno-implicit-int-float-conversion",
+    "-Wno-implicit-float-conversion",
     "-I" ++ fltk_include_dir,
 };
 

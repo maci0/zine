@@ -77,6 +77,12 @@ public:
     ZineWindow(int w, int h, const char* t = nullptr)
         : Fl_Double_Window(w, h, t) {}
 
+    /* Defined out of line so the vtable is emitted once, in this
+     * translation unit, rather than copied into every one that includes
+     * the class. The base class already deletes through a virtual
+     * destructor, so this adds no behaviour. */
+    ~ZineWindow() override;
+
     int handle(int event) override {
         switch (event) {
             case FL_KEYBOARD: {
@@ -149,6 +155,8 @@ public:
         }
     }
 };
+
+ZineWindow::~ZineWindow() = default;
 
 /* ───────────────────────────────────────── menu callback */
 

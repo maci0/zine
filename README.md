@@ -46,6 +46,7 @@ promise between versions, so a breaking change takes the next minor.
 - Bound x86 prefix decoding at the 15-byte encoding limit, so a section of repeated prefix bytes no longer overflows the instruction length the block scan and the JIT add to their offset.
 - The browser UI is operable from the keyboard and named for assistive technology. Menus, the Start menu, dialogs, the file list and the volume popup take focus, expose their state, and return focus when they close, and the Win2000 palette meets the WCAG 2.2 AA contrast floor, including under a forced-colors theme.
 - A program launched with `_spawnvp` can no longer pass its own arguments as emulator options, and a `ZINE_*` variable it sets no longer reconfigures the child emulator. The child keeps the operator's settings.
+- The C and C++ compile checks now run clang's full warning set, so a warning outside the handful `-Wall` names fails the gate. Warnings the sources do not yet compile clean under stay suppressed, each named.
 
 ### 0.9.0 (2026-10-27)
 
