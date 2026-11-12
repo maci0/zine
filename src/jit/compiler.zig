@@ -125,8 +125,10 @@ pub const BlockIndex = struct {
 pub const JitCompiler = struct {
     allocator: std.mem.Allocator,
     module: emitter.WasmModule,
+    /// EIPs a compile was attempted for. A set key suppresses another attempt
+    /// at that address; nothing reads a compiled function index back out, so
+    /// no parallel value array is kept.
     block_cache_keys: [BLOCK_CACHE_SLOTS]u32,
-    block_cache_vals: [BLOCK_CACHE_SLOTS]u32,
     /// WASM linear memory address of the JitCpuState struct.
     state_addr: u32,
 
@@ -136,7 +138,6 @@ pub const JitCompiler = struct {
             .allocator = allocator,
             .module = emitter.WasmModule.init(allocator),
             .block_cache_keys = @as([BLOCK_CACHE_SLOTS]u32, @splat(EMPTY_KEY)),
-            .block_cache_vals = @as([BLOCK_CACHE_SLOTS]u32, @splat(0)),
             .state_addr = state_addr,
         };
     }
@@ -152,10 +153,8 @@ pub const JitCompiler = struct {
         return self.block_cache_keys[idx] == eip;
     }
 
-    pub fn markCached(self: *JitCompiler, eip: u32, func_idx: u32) void {
-        const idx = eip & BLOCK_CACHE_MASK;
-        self.block_cache_keys[idx] = eip;
-        self.block_cache_vals[idx] = func_idx;
+    pub fn markCached(self: *JitCompiler, eip: u32) void {
+        self.block_cache_keys[eip & BLOCK_CACHE_MASK] = eip;
     }
 
     /// Drop the "already compiled" mark for `eip` so the next visit
@@ -175,7 +174,7 @@ pub const JitCompiler = struct {
     ///   - On exit: stores CPU state back, sets EIP + status
     pub fn compile(self: *JitCompiler, guest_eip: u32, x86_code: []const u8) ![]u8 {
         var offset: usize = 0;
-        self.markCached(guest_eip, @intCast(self.module.func_section.bytes.items.len));
+        self.markCached(guest_eip);
         // isCached() is what gates a compile attempt, so a mark left behind by
         // a failed compile would silence this EIP for the rest of the run. The
         // mark belongs to a block that exists only once the module is finished.
@@ -1920,8 +1919,8 @@ test "compiler: invalidateEip clears the compile mark for that EIP only" {
     const eip_b: u32 = 0x401004;
     try std.testing.expect(eip_a & BLOCK_CACHE_MASK != eip_b & BLOCK_CACHE_MASK);
 
-    compiler.markCached(eip_a, 0);
-    compiler.markCached(eip_b, 0);
+    compiler.markCached(eip_a);
+    compiler.markCached(eip_b);
     try std.testing.expect(compiler.isCached(eip_a));
     compiler.invalidateEip(eip_a);
     try std.testing.expect(!compiler.isCached(eip_a));

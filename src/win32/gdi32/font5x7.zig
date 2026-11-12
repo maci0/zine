@@ -137,7 +137,6 @@ const mark_acute = [2]u8{ 0x02, 0x04 };
 const mark_circumflex = [2]u8{ 0x0A, 0x04 };
 const mark_tilde = [2]u8{ 0x0A, 0x15 };
 const mark_diaeresis = [2]u8{ 0x0A, 0x00 };
-const mark_ring = [2]u8{ 0x0A, 0x0A };
 
 /// The five rows an accented capital is drawn from.
 fn capBody(letter: u8) [5]u8 {

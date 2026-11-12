@@ -409,16 +409,12 @@ pub fn wcsicmp(s1_ptr: usize, s2_ptr: usize) callconv(w32cc.WINAPI) i32 {
     const s2 = @as([*]const u16, @ptrFromInt(s2_ptr));
     var i: usize = 0;
     while (true) {
-        const c1 = toLowerW(s1[i]);
-        const c2 = toLowerW(s2[i]);
+        const c1 = unicase.toLower(s1[i]);
+        const c2 = unicase.toLower(s2[i]);
         if (c1 != c2) return @as(i32, @intCast(c1)) - @as(i32, @intCast(c2));
         if (c1 == 0) return 0;
         i += 1;
     }
-}
-
-fn toLowerW(c: u16) u16 {
-    return unicase.toLower(c);
 }
 
 /// Implementation status: Partially implemented
