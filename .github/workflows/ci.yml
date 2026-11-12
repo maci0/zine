@@ -55,6 +55,13 @@ jobs:
           key: zig-${{ runner.os }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
             zig-${{ runner.os }}-
+      # The FLTK headers are the one system package the gate needs, and the
+      # key names the exact archive the install step below saves, so bumping
+      # that version misses this cache instead of reinstalling a stale .deb.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .apt-debs
+          key: fltk-${{ runner.os }}-libfltk1.3-dev_1.3.8-6.1build2
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: ${{ steps.zig-version.outputs.version }}
@@ -86,10 +93,23 @@ jobs:
       # build only compiles it under -Dfltk, so without this step nothing in
       # the workflow analyzes it. check-cxx compiles it alone, which needs the
       # FLTK development headers and none of the X11 runtime they come with.
+      #
+      # The package is pinned to the version ubuntu-24.04 shipped and
+      # installed from the archive saved below, so a mirror outage or a
+      # later archive rebuild cannot change the headers under one commit.
+      # A cache hit skips the download; a miss records the .deb that was
+      # actually installed so the next run repeats it.
       - name: Install the FLTK development headers
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libfltk1.3-dev
+          set -euo pipefail
+          deb=libfltk1.3-dev_1.3.8-6.1build2_amd64.deb
+          mkdir -p .apt-debs
+          if [[ ! -f .apt-debs/$deb ]]; then
+            sudo apt-get update
+            apt-get download "$deb"
+            mv "$deb" .apt-debs/
+          fi
+          sudo apt-get install -y --no-install-recommends "./.apt-debs/$deb"
       - name: C++ sources compile warning-free
         run: bash tests/check.sh check_cxx
       # src/gui/app.js is embedded into the wasm artifact and served to a

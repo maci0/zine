@@ -102,6 +102,9 @@ tests/smygb.asm
 # Downloaded Zig package cache
 /zig-pkg/
 
+# The exact libfltk1.3-dev archive CI saves and reinstalls
+/.apt-debs/
+
 # Review artifacts (generated, not source)
 cli-review.md
 code-review.md

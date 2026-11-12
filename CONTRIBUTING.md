@@ -91,7 +91,14 @@ The job takes its Zig version from `build.zig.zon` and restores `.zig-cache/`
 and `zig-pkg/` from a cache keyed on `build.zig.zon`, which pins the toolchain
 and the dependency set. Both paths are content addressed, so a restored entry
 that no longer matches is recompiled rather than reused; a run that misses the
-cache pays the full build.
+cache pays the full build. A second cache, keyed on the package version
+rather than the toolchain, holds `.apt-debs/`: the exact `libfltk1.3-dev`
+archive the job installed. The step names
+`libfltk1.3-dev_1.3.8-6.1build2_amd64.deb` (the version ubuntu-24.04 shipped)
+and reinstalls the saved archive on a hit, so a mirror outage or a later
+archive rebuild cannot change the headers under one commit, and bumping the
+version misses that cache instead of reinstalling a stale archive. A miss
+still downloads that one version and records it for the next run.
 
 Tests that need more than Zig are opt-in and say so in the README: the MSVC
 integration suite (`tests/test_msvc_cli.sh`, needs MSVC 6.0 fixtures under
