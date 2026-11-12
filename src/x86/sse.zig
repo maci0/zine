@@ -277,14 +277,26 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 fs[0] = @floatFromInt(src);
                 cpu.setXmmF64(dst, fs);
             },
-            else => {}, // CVTPI2PS — rare, skip for now
+            // CVTPI2PS: two packed MMX i32s become the low two f32 lanes.
+            // The decoder records an MM source as `.reg`, and `readXmm64`
+            // would read an XMM there, so a register source comes from the
+            // MMX alias the other MMX arms use.
+            else => {
+                const dst = getRegIdx(insn, 0);
+                const src: u64 = if (isMem(insn, 1)) readXmm64(cpu, insn, 1) else cpu.getMmx(getRegIdx(insn, 1));
+                const ints: [2]i32 = @bitCast(src);
+                var fs = cpu.getXmmF32(dst);
+                fs[0] = @floatFromInt(ints[0]);
+                fs[1] = @floatFromInt(ints[1]);
+                cpu.setXmmF32(dst, fs);
+            },
         },
 
         0x0F2B => { // MOVNTPS/MOVNTPD — non-temporal store = normal store
             writeXmm128(cpu, insn, 0, cpu.xmm[getRegIdx(insn, 1)]);
         },
 
-        0x0F2C => switch (pfx) { // CVTTSS2SI/CVTTSD2SI (truncate)
+        0x0F2C => switch (pfx) { // CVTTPS2PI/CVTTSS2SI/CVTTSD2SI (truncate)
             .pF3 => { // CVTTSS2SI
                 const dst = getRegIdx(insn, 0);
                 const src_bits = readXmm32(cpu, insn, 1);
@@ -297,10 +309,21 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 const f: f64 = @bitCast(src_bits);
                 cpu.setReg(@fromBackingInt(@intCast(dst)), floatToI32(f64, 0b11, f));
             },
-            else => {},
+            // CVTTPS2PI: truncate the two low f32 lanes into a packed MMX
+            // pair. The source is an m64, read at the width the CVTTSD2SI
+            // arm above uses, and the MM destination is setMmx like the
+            // other MMX arms.
+            else => {
+                const dst = getRegIdx(insn, 0);
+                const src: [2]f32 = @bitCast(readXmm64(cpu, insn, 1));
+                cpu.setMmx(dst, @bitCast([2]u32{
+                    floatToI32(f32, 0b11, src[0]),
+                    floatToI32(f32, 0b11, src[1]),
+                }));
+            },
         },
 
-        0x0F2D => switch (pfx) { // CVTSS2SI/CVTSD2SI (round per MXCSR)
+        0x0F2D => switch (pfx) { // CVTPS2PI/CVTSS2SI/CVTSD2SI (round per MXCSR)
             .pF3 => {
                 const dst = getRegIdx(insn, 0);
                 const f: f32 = @bitCast(readXmm32(cpu, insn, 1));
@@ -311,7 +334,17 @@ pub fn execute(cpu: *Cpu, insn: *const Instruction, eip: u32) void {
                 const f: f64 = @bitCast(readXmm64(cpu, insn, 1));
                 cpu.setReg(@fromBackingInt(@intCast(dst)), floatToI32(f64, mxcsrRc(cpu), f));
             },
-            else => {},
+            // CVTPS2PI: same two lanes as CVTTPS2PI, rounded with the MXCSR
+            // mode the CVTSS2SI arm above passes to floatToI32.
+            else => {
+                const dst = getRegIdx(insn, 0);
+                const src: [2]f32 = @bitCast(readXmm64(cpu, insn, 1));
+                const rc = mxcsrRc(cpu);
+                cpu.setMmx(dst, @bitCast([2]u32{
+                    floatToI32(f32, rc, src[0]),
+                    floatToI32(f32, rc, src[1]),
+                }));
+            },
         },
 
         0x0F2E, 0x0F2F => { // UCOMISS/UCOMISD, COMISS/COMISD
@@ -1271,4 +1304,63 @@ test "execUnaryFloat: reciprocal and rsqrt of a non-zero lane compute it" {
     try testing.expect(std.math.isNan(q[1])); // 1/sqrt of a negative is NaN
     try testing.expectEqual(@as(f32, 2.0), q[2]);
     try testing.expectEqual(@as(f32, 0.25), q[3]);
+}
+
+test "CVTPI2PS converts both packed MMX i32 lanes and leaves the high lanes" {
+    var cpu = Cpu{ .memory = undefined };
+    var mem: [64]u8 = @splat(0);
+    cpu.memory = .{ .base = &mem };
+    const insn = &decoder.Instruction{
+        .opcode = 0x0F2A,
+        .length = 3,
+        .has_modrm = true,
+        .op0_kind = .reg,
+        .op0_reg = 0,
+        .op1_kind = .reg,
+        .op1_reg = 1,
+    };
+    cpu.setMmx(1, @bitCast([2]i32{ -2, 7 }));
+    cpu.xmm[0] = @bitCast([4]f32{ 9.0, 9.0, 3.5, -1.25 });
+    execute(&cpu, insn, 0);
+    const r: [4]f32 = @bitCast(cpu.xmm[0]);
+    try testing.expectEqual(@as(f32, -2.0), r[0]);
+    try testing.expectEqual(@as(f32, 7.0), r[1]);
+    try testing.expectEqual(@as(f32, 3.5), r[2]);
+    try testing.expectEqual(@as(f32, -1.25), r[3]);
+}
+
+test "CVTPS2PI rounds and CVTTPS2PI truncates the two low lanes into MMX" {
+    var cpu = Cpu{ .memory = undefined };
+    var mem: [64]u8 = @splat(0);
+    cpu.memory = .{ .base = &mem };
+    const round = &decoder.Instruction{
+        .opcode = 0x0F2D,
+        .length = 3,
+        .has_modrm = true,
+        .op0_kind = .reg,
+        .op0_reg = 2,
+        .op1_kind = .reg,
+        .op1_reg = 1,
+    };
+    cpu.xmm[1] = @bitCast([4]f32{ 1.9, -1.9, 100.0, 100.0 });
+    cpu.setMmx(2, 0);
+    execute(&cpu, round, 0);
+    const rounded: [2]i32 = @bitCast(cpu.getMmx(2));
+    try testing.expectEqual(@as(i32, 2), rounded[0]);
+    try testing.expectEqual(@as(i32, -2), rounded[1]);
+
+    const trunc = &decoder.Instruction{
+        .opcode = 0x0F2C,
+        .length = 3,
+        .has_modrm = true,
+        .op0_kind = .reg,
+        .op0_reg = 2,
+        .op1_kind = .reg,
+        .op1_reg = 1,
+    };
+    cpu.setMmx(2, 0);
+    execute(&cpu, trunc, 0);
+    const truncated: [2]i32 = @bitCast(cpu.getMmx(2));
+    try testing.expectEqual(@as(i32, 1), truncated[0]);
+    try testing.expectEqual(@as(i32, -1), truncated[1]);
 }
