@@ -114,7 +114,8 @@ canvas                      { cursor: none; }
 
     /* Text */
     --sys-text:         #000000;  /* ButtonText / ControlText                 RGB 0,0,0       */
-    --sys-gray-text:    #808080;  /* GrayText (disabled)                      RGB 128,128,128 */
+    --sys-gray-text:    #595959;  /* GrayText (disabled). 4.6:1 on --sys-face,
+                                     above the 3:1 floor for disabled text.   */
 
     /* Window */
     --sys-window:       #FFFFFF;  /* Window (client background)               RGB 255,255,255 */
@@ -127,14 +128,17 @@ canvas                      { cursor: none; }
     --sys-title-text:   #FFFFFF;  /* TitleText / CaptionText                  RGB 255,255,255 */
     --sys-ititle:       #808080;  /* InactiveTitle / InactiveCaption           RGB 128,128,128 */
     --sys-ititle-grad:  #C0C0C0;  /* GradientInactiveTitle                    RGB 192,192,192 */
-    --sys-ititle-text:  #D4D0C8;  /* InactiveTitleText                        RGB 212,208,200 */
+    --sys-ititle-text:  #FFFFFF;  /* InactiveTitleText. White clears 4.5:1 on
+                                     the inactive caption; the classic face
+                                     color did not.                           */
 
     /* Selection */
     --sys-sel:          #0A246A;  /* Hilight / Highlight                      RGB 10,36,106   */
     --sys-sel-text:     #FFFFFF;  /* HilightText / HighlightText              RGB 255,255,255 */
     --sys-hot:          #000080;  /* HotTrackingColor                         RGB 0,0,128     */
 
-    --sys-error:        #A40000;  /* Inline validation text                    */
+    --sys-error:        #9E0000;  /* Inline validation text. 7:1 on the dialog
+                                     face, so the message is not color alone. */
 
     /* Menu */
     --sys-menu:         #D4D0C8;  /* Menu                                     RGB 212,208,200 */
@@ -369,7 +373,10 @@ body {
 .menu-item:focus-visible {
     background-color: var(--sys-sel);
     color: var(--sys-sel-text);
-    outline: none;
+    /* The highlight is the focus cue; the outline stays so a high-contrast
+       theme, which drops the background, still shows where focus is. */
+    outline: 1px dotted var(--sys-sel-text);
+    outline-offset: -2px;
 }
 
 /* Popup / dropdown menu */
@@ -421,7 +428,8 @@ body {
 .popup-item:focus-visible {
     background-color: var(--sys-sel);
     color: var(--sys-sel-text);
-    outline: none;
+    outline: 1px dotted var(--sys-sel-text);
+    outline-offset: -2px;
 }
 
 .popup-separator {
@@ -490,7 +498,6 @@ body {
 .win2k-dialog {
     z-index: 2000;
     display: none;
-    outline: none;  /* dialogs don't have the outer black frame */
     min-width: fit-content;
 }
 
@@ -568,6 +575,8 @@ canvas {
     font-family: var(--font-mono);
     font-size: 13px;
     border: none;
+    /* The caret is the focus cue inside the editor; the ring shows it when the
+       window is not the thing under the pointer. */
     outline: none;
     resize: none;
     padding: 2px 3px;
@@ -576,6 +585,11 @@ canvas {
     white-space: pre;
     tab-size: 8;
     -webkit-user-drag: none;
+}
+
+#edit-control:focus-visible {
+    outline: 1px dotted var(--sys-text);
+    outline-offset: -2px;
 }
 
 /* Host status line: the connection and API errors it reports have no
@@ -595,7 +609,10 @@ canvas {
 }
 
 #status.error {
-    color: var(--sys-error);
+    /* The tooltip surface is near white, so the dialog-face error red would
+       drop under 4.5:1 here. */
+    color: #9E0000;
+    font-weight: bold;
 }
 
 /* ===================================================================
@@ -658,7 +675,12 @@ button.taskbar-start {
 
 /* Task window buttons */
 
+button.taskbar-window-btn,
 .taskbar-window-btn {
+    font-family: inherit;
+    color: var(--sys-text);
+    cursor: default;
+    text-align: left;
     background-color: var(--sys-face);
     border: 1px solid;
     border-color: var(--sys-hilight) var(--sys-dk-shadow) var(--sys-dk-shadow) var(--sys-hilight);
@@ -673,6 +695,11 @@ button.taskbar-start {
     display: flex;
     align-items: center;
     gap: 3px;
+}
+
+.taskbar-window-btn:focus-visible {
+    outline: 1px dotted var(--sys-dk-shadow);
+    outline-offset: -3px;
 }
 
 .taskbar-window-btn.active {
@@ -1379,6 +1406,9 @@ select.win2k-edit:disabled {
     height: 22px;
     background-color: var(--sys-face);
     border: 1px solid var(--sys-face);
+    font-family: inherit;
+    color: var(--sys-text);
+    cursor: default;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1434,6 +1464,8 @@ select.win2k-edit:disabled {
     padding: 4px 2px 3px;
     width: 72px;
     color: var(--sys-hilight);
+    background: transparent;
+    font-family: inherit;
     font-size: 8px;
     text-align: center;
     border: 1px solid transparent;
@@ -1623,6 +1655,8 @@ select.win2k-edit:disabled {
 
 .win2k-desktop-icon-label {
     font-size: 11px;
+    /* White on the desktop blue is about 5:1; the shadow keeps it readable
+       where an icon sits over a lighter part of the wallpaper. */
     color: var(--sys-hilight);
     text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
     text-align: center;
@@ -1633,7 +1667,9 @@ select.win2k-edit:disabled {
     -webkit-line-clamp: 2;
     line-clamp: 2;
     -webkit-box-orient: vertical;
-    line-height: 1.2;
+    /* 1.5, not 1.2: WCAG 1.4.12 lets a reader raise line height to 1.5, and a
+       label clamped to two lines has to survive that without clipping. */
+    line-height: 1.5;
 }
 
 .win2k-desktop-icon.selected .win2k-desktop-icon-label {
@@ -1701,5 +1737,30 @@ select.win2k-edit:disabled {
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
+    }
+}
+
+/* A forced-colors theme drops the authored palette, so a cue that was only a
+   background or a text color has to be a system color to survive it. */
+@media (forced-colors: active) {
+    .menu-item:focus-visible,
+    .popup-item:focus-visible,
+    .win2k-button:focus,
+    .win2k-desktop-icon:focus-visible .win2k-desktop-icon-label,
+    #edit-control:focus-visible {
+        outline: 2px solid Highlight;
+    }
+
+    .win2k-titlebar,
+    .win2k-titlebar.inactive {
+        background: Highlight;
+        color: HighlightText;
+    }
+
+    .dlg-error,
+    #status.error {
+        color: CanvasText;
+        font-weight: bold;
+        outline: 1px solid CanvasText;
     }
 }

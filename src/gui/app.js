@@ -273,6 +273,9 @@ let dialogPreferredWidth = 0;
 // A modeless dialog the guest owns (Find and Replace) has to be told it is
 // closed; a modal one only has to be cancelled. The dialog in view says which.
 let dialogCancel = null;
+// The element that held focus when the dialog opened, so closing it puts the
+// keyboard back there instead of dropping it on the document.
+let dialogReturnFocus = null;
 
 function setDialogWidth(px) {
     dialogPreferredWidth = px;
@@ -281,6 +284,7 @@ function setDialogWidth(px) {
 }
 
 function showDialog(title, content) {
+    dialogReturnFocus = document.activeElement;
     const dialogContent = document.getElementById('dialog-content');
     setGuestText(document.getElementById('dialog-title'), title);
 
@@ -317,7 +321,7 @@ function showDialog(title, content) {
             }
         }
         if (e.key === 'Tab') {
-            const els = dialogOverlay.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+            const els = dialogFocusables();
             if (els.length === 0) {
                 e.preventDefault();
                 return;
@@ -336,9 +340,19 @@ function showDialog(title, content) {
 
     // Move focus into the dialog for accessibility
     requestAnimationFrame(() => {
-        const focusables = dialogOverlay.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+        const focusables = dialogFocusables();
         if (focusables.length > 0) focusables[0].focus();
     });
+}
+
+// What Tab cycles through while a dialog is up. A disabled control and a
+// control the author took out of the tab order are not among them, and the
+// titlebar close button is, so the trap has a way out.
+function dialogFocusables() {
+    return [...dialogOverlay.querySelectorAll(
+        'button, input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+        .filter(el => !el.disabled && el.getAttribute('aria-disabled') !== 'true' &&
+            el.tabIndex >= 0);
 }
 
 function hideDialog() {
@@ -347,6 +361,10 @@ function hideDialog() {
     document.getElementById('main-titlebar').classList.remove('inactive');
     window._fileDialogUpdate = null; // Clean up file dialog navigation handler
     dialogCancel = null;
+    // Focus left the dialog when it closed; put it back where it was taken from.
+    const restore = dialogReturnFocus;
+    dialogReturnFocus = null;
+    if (restore && document.body.contains(restore)) restore.focus();
 }
 
 function closeDialog(suppressBackend = false) {
@@ -377,7 +395,9 @@ function minimizeWindow() {
     if (!isMinimized) {
         isMinimized = true;
         mainWindow.style.display = 'none';
-        document.getElementById('taskbar-app-btn').classList.remove('active');
+        const appBtn = document.getElementById('taskbar-app-btn');
+        appBtn.classList.remove('active');
+        appBtn.setAttribute('aria-pressed', 'false');
     }
 }
 
@@ -445,7 +465,9 @@ document.getElementById('taskbar-app-btn').addEventListener('click', () => {
     if (isMinimized) {
         isMinimized = false;
         mainWindow.style.display = 'flex';
-        document.getElementById('taskbar-app-btn').classList.add('active');
+        const appBtn = document.getElementById('taskbar-app-btn');
+        appBtn.classList.add('active');
+        appBtn.setAttribute('aria-pressed', 'true');
     }
 });
 
@@ -469,8 +491,11 @@ function launchDesktopItem(name) {
 }
 
 function closeStartMenu() {
+    const wasOpen = startMenu.style.display === 'block';
     startMenu.style.display = 'none';
     startButton.setAttribute('aria-expanded', 'false');
+    // A keyboard opened it, so the keyboard needs somewhere to land when it closes.
+    if (wasOpen) startButton.focus();
 }
 
 function renderStartMenu() {
@@ -480,22 +505,22 @@ function renderStartMenu() {
     const listingPending = !desktopItemsLoaded &&
         Date.now() - desktopItemsWaitStart < DESKTOP_LISTING_GRACE_MS;
 
-    van.add(startMenu, div({class: 'popup-header'}, 'Programs'));
+    van.add(startMenu, div({class: 'popup-header', role: 'presentation'}, 'Programs'));
     if (listingPending) {
-        van.add(startMenu, div({class: 'popup-item disabled'}, 'Loading...'));
+        van.add(startMenu, div({class: 'popup-item disabled', role: 'menuitem', 'aria-disabled': 'true'}, 'Loading...'));
     } else if (programs.length === 0) {
-        van.add(startMenu, div({class: 'popup-item disabled'},
+        van.add(startMenu, div({class: 'popup-item disabled', role: 'menuitem', 'aria-disabled': 'true'},
             'No programs on the Desktop'));
     } else {
         programs.forEach(p => {
-            van.add(startMenu, div({class: 'popup-item', dir: 'auto', onclick: () => {
+            van.add(startMenu, div({class: 'popup-item', role: 'menuitem', tabindex: '-1', dir: 'auto', onclick: () => {
                 closeStartMenu();
                 launchDesktopItem(p.name);
             }}, p.name));
         });
     }
-    van.add(startMenu, div({class: 'popup-separator'}));
-    van.add(startMenu, div({class: 'popup-item', onclick: closeStartMenu}, 'Cancel'));
+    van.add(startMenu, div({class: 'popup-separator', role: 'separator'}));
+    van.add(startMenu, div({class: 'popup-item', role: 'menuitem', tabindex: '-1', onclick: closeStartMenu}, 'Cancel'));
 }
 
 startButton.addEventListener('click', (e) => {
@@ -507,6 +532,7 @@ startButton.addEventListener('click', (e) => {
     renderStartMenu();
     startMenu.style.display = 'block';
     startButton.setAttribute('aria-expanded', 'true');
+    focusMenuItem(startMenu, 0);
 });
 
 // --- Menu Helpers ---
@@ -554,7 +580,7 @@ function PopupItem(sub, onAfterClick) {
     }
     const isChecked = (sub.flags & 0x0008) !== 0; // MF_CHECKED
     const isDisabled = (sub.flags & 0x0003) !== 0; // MF_GRAYED | MF_DISABLED
-    return div({class: 'popup-item' + (isChecked ? ' checked' : '') + (isDisabled ? ' disabled' : ''), role: 'menuitem', dir: 'auto', 'aria-disabled': isDisabled ? 'true' : 'false', 'data-cmd-id': sub.id, onclick: (e) => {
+    return div({class: 'popup-item' + (isChecked ? ' checked' : '') + (isDisabled ? ' disabled' : ''), role: 'menuitemcheckbox', dir: 'auto', tabindex: '-1', 'aria-checked': isChecked ? 'true' : 'false', 'aria-disabled': isDisabled ? 'true' : 'false', 'data-cmd-id': sub.id, onclick: (e) => {
         e.stopPropagation();
         if (isDisabled) return;
         sendCommand(sub.id);
@@ -570,6 +596,8 @@ function closeOtherMenus(except) {
         if (el === except) return;
         el.classList.remove('open');
         el.setAttribute('aria-expanded', 'false');
+        // A keyboard opened it, so the keyboard needs to land back on the menu.
+        if (el.contains(document.activeElement)) el.focus();
         closed++;
     });
     return closed;
@@ -577,6 +605,81 @@ function closeOtherMenus(except) {
 
 function closeAllMenus() {
     return closeOtherMenus(null);
+}
+
+// The rows of a menu a keyboard can land on. Disabled rows stay listed so arrow
+// keys move past them, and they are skipped when choosing where focus starts.
+function menuRows(menu) {
+    return [...menu.querySelectorAll(':scope > [role^="menuitem"]')];
+}
+
+function focusMenuItem(menu, index) {
+    const rows = menuRows(menu);
+    if (rows.length === 0) return;
+    const enabled = rows.filter(r => r.getAttribute('aria-disabled') !== 'true');
+    const pool = enabled.length > 0 ? enabled : rows;
+    pool[((index % pool.length) + pool.length) % pool.length].focus();
+}
+
+function moveMenuFocus(menu, delta) {
+    const enabled = menuRows(menu).filter(r => r.getAttribute('aria-disabled') !== 'true');
+    if (enabled.length === 0) return;
+    const at = enabled.indexOf(document.activeElement);
+    focusMenuItem(menu, (at < 0 ? 0 : at) + delta);
+}
+
+// Arrow keys walk a menu, Enter and Space activate the row under focus, and
+// Left and Right move between the menus of the menu bar. A menu that only
+// opens on hover has no keyboard equivalent otherwise.
+function onMenuKey(e) {
+    const inBar = menuBar.contains(e.target);
+    const inStart = startMenu.style.display === 'block' &&
+        (startMenu.contains(e.target) || e.target === startButton);
+    if (!inBar && !inStart) return;
+
+    if (inStart) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); moveMenuFocus(startMenu, e.target === startButton ? 0 : 1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); moveMenuFocus(startMenu, -1); }
+        else if ((e.key === 'Enter' || e.key === ' ') && startMenu.contains(e.target)) {
+            e.preventDefault();
+            e.target.click();
+        }
+        return;
+    }
+
+    const top = e.target.closest('.menu-item');
+    const tops = [...menuBar.querySelectorAll(':scope > .menu-item')];
+    const popup = top ? top.querySelector(':scope > .popup-menu') : null;
+    const open = top && top.classList.contains('open');
+
+    if ((e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') && top && e.target === top) {
+        e.preventDefault();
+        if (popup) {
+            closeOtherMenus(top);
+            top.classList.add('open');
+            top.setAttribute('aria-expanded', 'true');
+            focusMenuItem(popup, 0);
+        } else if (e.key !== 'ArrowDown') {
+            top.click();
+        }
+    } else if (e.key === 'ArrowDown' && open) {
+        e.preventDefault();
+        moveMenuFocus(popup, 1);
+    } else if (e.key === 'ArrowUp' && open) {
+        e.preventDefault();
+        moveMenuFocus(popup, -1);
+    } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (tops.length === 0 || !top) return;
+        const at = Math.max(0, tops.indexOf(top));
+        const next = tops[(at + (e.key === 'ArrowRight' ? 1 : -1) + tops.length) % tops.length];
+        closeAllMenus();
+        next.focus();
+        if (open && next.querySelector(':scope > .popup-menu')) next.click();
+    } else if ((e.key === 'Enter' || e.key === ' ') && popup && popup.contains(e.target)) {
+        e.preventDefault();
+        e.target.click();
+    }
 }
 
 // --- Menu Rendering ---
@@ -594,7 +697,7 @@ function renderMenu(menuData) {
                 }))
             );
             menuItem = div({class: 'menu-item', role: 'menuitem', tabindex: '0', dir: 'auto',
-                'aria-haspopup': 'true', 'aria-expanded': 'false', onclick: (e) => {
+                'aria-haspopup': 'menu', 'aria-expanded': 'false', onclick: (e) => {
                 e.stopPropagation();
                 const showing = window.getComputedStyle(popup).display !== 'none';
                 closeOtherMenus(showing ? null : menuItem);
@@ -671,7 +774,7 @@ document.addEventListener('contextmenu', (e) => {
 
 // Escape dismisses the topmost transient surface, in stacking order.
 document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
+    if (e.key !== 'Escape') { onMenuKey(e); return; }
 
     if (startMenu.style.display === 'block') {
         closeStartMenu();
@@ -681,6 +784,9 @@ document.addEventListener('keydown', (e) => {
     const volumePopup = document.getElementById('volume-popup');
     if (volumePopup && volumePopup.style.display === 'flex') {
         volumePopup.style.display = 'none';
+        const tray = document.getElementById('tray-volume');
+        tray.setAttribute('aria-expanded', 'false');
+        tray.focus();
         return;
     }
 
@@ -788,7 +894,7 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
 
     // ListBox
     if (cls === 'ListBox') {
-        return div({class: 'win2k-listbox', style: absPos, "data-id": item.id});
+        return div({class: 'win2k-listbox', role: 'listbox', 'aria-label': 'List', style: absPos, "data-id": item.id});
     }
 
     // ComboBox
@@ -804,12 +910,12 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
     // SysTabControl32
     if (cls === 'SysTabControl32') {
         return div({"data-id": item.id, class: 'win2k-tab-control', style: absPos},
-            div({class: 'tab-header-row'}), div({class: 'tab-content'}));
+            div({class: 'tab-header-row', role: 'tablist'}), div({class: 'tab-content'}));
     }
 
     // SysListView32
     if (cls === 'SysListView32' || cls === 'SysListView') {
-        return div({"data-id": item.id, class: 'win2k-listview', style: absPos});
+        return div({"data-id": item.id, class: 'win2k-listview', role: 'listbox', 'aria-label': 'List', style: absPos});
     }
 
     // msctls_statusbar32
@@ -822,32 +928,36 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
 
     // msctls_progress32
     if (cls === 'msctls_progress32') {
-        return div({"data-id": item.id, class: 'win2k-progress', style: absPos},
+        return div({"data-id": item.id, class: 'win2k-progress', role: 'progressbar',
+            'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': '0', 'aria-label': 'Progress', style: absPos},
             div({class: 'win2k-progress-fill'}));
     }
 
     // msctls_trackbar32
     if (cls === 'msctls_trackbar32') {
         return div({"data-id": item.id, style: absPos + ' display:flex; align-items:center; gap:4px;'},
-            input({type: 'range', min: 0, max: 100, value: 0, style: 'flex:1; height:20px;', oninput: (e) => sendCommand(item.id)}),
+            input({type: 'range', min: 0, max: 100, value: 0, 'aria-label': 'Slider', 'aria-valuetext': '0', style: 'flex:1; height:20px;', oninput: (e) => {
+                e.target.setAttribute('aria-valuetext', e.target.value);
+                sendCommand(item.id);
+            }}),
             span({class: 'win2k-trackbar-val', style: 'font-size:11px; min-width:24px; text-align:right;'}, '0'));
     }
 
     // msctls_updown32
     if (cls === 'msctls_updown32') {
         return div({"data-id": item.id, class: 'win2k-updown', style: absPos + ' display:flex; align-items:center; justify-content:center; border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); background:var(--sys-window);'},
-            span({class: 'win2k-updown-val', style: 'font-size:11px;'}, '0'));
+            span({class: 'win2k-updown-val', role: 'spinbutton', 'aria-valuenow': '0', 'aria-label': 'Value', style: 'font-size:11px;'}, '0'));
     }
 
     // SysDateTimePick32
     if (cls === 'SysDateTimePick32') {
         return div({"data-id": item.id, class: 'win2k-dtp', style: absPos + ' display:flex; align-items:center; justify-content:center; border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); background:var(--sys-window);'},
-            span({style: 'font-size:11px;', dir: 'auto'}, item.text || '2000-01-01'));
+            span({role: 'textbox', 'aria-readonly': 'true', 'aria-label': 'Date', style: 'font-size:11px;', dir: 'auto'}, item.text || '2000-01-01'));
     }
 
     // SysTreeView32
     if (cls === 'SysTreeView32') {
-        return div({"data-id": item.id, class: 'win2k-treeview', style: absPos});
+        return div({"data-id": item.id, class: 'win2k-treeview', role: 'tree', 'aria-label': 'Tree', style: absPos});
     }
 
     // Fallback
@@ -870,7 +980,10 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
 function toggleVolumePopup(e) {
     e.stopPropagation();
     var popup = document.getElementById('volume-popup');
-    popup.style.display = popup.style.display === 'flex' ? 'none' : 'flex';
+    var open = popup.style.display !== 'flex';
+    popup.style.display = open ? 'flex' : 'none';
+    document.getElementById('tray-volume').setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) document.getElementById('volume-slider').focus();
 }
 
 document.addEventListener('click', function(e) {
@@ -878,6 +991,7 @@ document.addEventListener('click', function(e) {
     if (popup.style.display === 'flex' && !popup.contains(e.target) &&
         !document.getElementById('tray-volume').contains(e.target)) {
         popup.style.display = 'none';
+        document.getElementById('tray-volume').setAttribute('aria-expanded', 'false');
     }
 });
 
@@ -1146,7 +1260,7 @@ function connect() {
                     const toHex = (v) => v.toString(16).padStart(2, '0');
                     const initial = '#' + toHex((init >> 16) & 0xFF) + toHex((init >> 8) & 0xFF) + toHex(init & 0xFF);
 
-                    const colorInput = input({type: 'color', value: initial,
+                    const colorInput = input({type: 'color', value: initial, 'aria-label': 'Color',
                         style: 'width:100%; height:34px; padding:0; background:transparent; border:none;'});
                     const sendColor = () => {
                         const v = colorInput.value;
@@ -1187,7 +1301,7 @@ function connect() {
                         const items = (msg.items || '').split('\n');
                         el.innerHTML = '';
                         items.forEach((it, idx) => {
-                            const d = div({class: 'win2k-listbox-item', style: 'padding:1px 4px; font-size:11px; cursor:default; white-space:nowrap; overflow:hidden;', onclick: (e) => {
+                            const d = div({class: 'win2k-listbox-item', role: 'option', tabindex: '-1', 'aria-selected': 'false', style: 'padding:1px 4px; font-size:11px; cursor:default; white-space:nowrap; overflow:hidden;', onclick: (e) => {
                                 e.stopPropagation();
                                 sendCommand(msg.id);
                                 if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
@@ -1205,7 +1319,7 @@ function connect() {
                         const items = (msg.items || '').split('\n');
                         el.innerHTML = '';
                         items.forEach((it, idx) => {
-                            const d = div({class: 'win2k-treeview-row', onclick: (e) => {
+                            const d = div({class: 'win2k-treeview-row', role: 'treeitem', tabindex: '-1', onclick: (e) => {
                                 e.stopPropagation();
                                 sendCommand(msg.id);
                                 if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
@@ -1217,7 +1331,7 @@ function connect() {
                         const items = (msg.items || '').split('\n');
                         el.innerHTML = '';
                         items.forEach((it, idx) => {
-                            const d = div({class: 'win2k-listview-row', onclick: (e) => {
+                            const d = div({class: 'win2k-listview-row', role: 'option', tabindex: '-1', 'aria-selected': 'false', onclick: (e) => {
                                 e.stopPropagation();
                                 sendCommand(msg.id);
                                 if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
@@ -1231,7 +1345,7 @@ function connect() {
                         if (header) {
                             header.innerHTML = '';
                             items.forEach((it, idx) => {
-                                const t = div({class: 'win2k-tab', style: 'display:inline-block; padding:2px 10px; border:1px solid; border-color:var(--sys-hilight) var(--sys-shadow) var(--sys-shadow) var(--sys-hilight); font-size:11px; margin-right:2px; cursor:default; background:var(--sys-face);', onclick: (e) => {
+                                const t = div({class: 'win2k-tab', role: 'tab', tabindex: '0', 'aria-selected': 'false', style: 'display:inline-block; padding:2px 10px; border:1px solid; border-color:var(--sys-hilight) var(--sys-shadow) var(--sys-shadow) var(--sys-hilight); font-size:11px; margin-right:2px; cursor:default; background:var(--sys-face);', onclick: (e) => {
                                     e.stopPropagation();
                                     sendCommand(msg.id);
                                     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
@@ -1275,15 +1389,22 @@ function connect() {
                             const span = (st.max - st.min) > 0 ? (st.max - st.min) : 1;
                             const pct = Math.max(0, Math.min(100, (st.value - st.min) * 100 / span));
                             fill.style.width = pct + '%';
+                            el.setAttribute('aria-valuemin', String(st.min));
+                            el.setAttribute('aria-valuemax', String(st.max));
+                            el.setAttribute('aria-valuenow', String(Math.round(pct)));
                         }
                         const rangeEl = el.querySelector('input[type=range]');
                         if (rangeEl) {
                             rangeEl.value = st.value;
+                            rangeEl.setAttribute('aria-valuetext', String(st.value));
                             const valEl = el.querySelector('.win2k-trackbar-val');
                             if (valEl) valEl.textContent = String(st.value);
                         }
                         const spinEl = el.querySelector('.win2k-updown-val');
-                        if (spinEl) spinEl.textContent = String(st.value);
+                        if (spinEl) {
+                            spinEl.textContent = String(st.value);
+                            spinEl.setAttribute('aria-valuenow', String(st.value));
+                        }
                     }
 
                 } else if (msg.type === "open_file_dialog") {
@@ -1296,17 +1417,21 @@ function connect() {
                     let pathHistory = [];
 
                     // --- File selection logic ---
-                    const filenameInput = input({type: 'text', id: 'dialog_filename', class: 'win2k-edit', dir: 'auto'});
-                    const nameErrorEl = div({class: 'dlg-error', style: 'display:none;'});
+                    const filenameInput = input({type: 'text', id: 'dialog_filename', class: 'win2k-edit', dir: 'auto',
+                        'aria-describedby': 'dialog-name-error', 'aria-invalid': 'false'});
+                    const nameErrorEl = div({class: 'dlg-error', id: 'dialog-name-error', role: 'alert', style: 'display:none;'});
                     filenameInput.addEventListener('input', hideNameError);
                     function showNameError(text) {
                         nameErrorEl.textContent = text;
                         nameErrorEl.style.display = 'block';
+                        filenameInput.setAttribute('aria-invalid', 'true');
+                        filenameInput.focus();
                     }
                     function hideNameError() {
                         nameErrorEl.style.display = 'none';
+                        filenameInput.setAttribute('aria-invalid', 'false');
                     }
-                    const fileListEl = div({class: 'win2k-edit comdlg-file-list'});
+                    const fileListEl = div({class: 'win2k-edit comdlg-file-list', role: 'listbox', 'aria-label': 'Files'});
                     const lookInLabel = div({class: 'win2k-edit comdlg-lookin', dir: 'auto'});
 
                     // The guest sends filter descriptions ("Text files (*.txt)"),
@@ -1323,10 +1448,10 @@ function connect() {
                     let listingPending = false;
 
                     // --- Toolbar buttons (created early so we can reference them) ---
-                    const backBtn = div({class: 'comdlg-toolbar-btn', title: 'Go To Last Folder Visited',
-                        onclick: () => navigateBack()}, img({src: 'assets/back.svg'}));
-                    const upBtn = div({class: 'comdlg-toolbar-btn', title: 'Up One Level',
-                        onclick: () => navigateUp()}, img({src: 'assets/up.svg'}));
+                    const backBtn = button({type: 'button', class: 'comdlg-toolbar-btn', title: 'Go To Last Folder Visited',
+                        'aria-label': 'Go To Last Folder Visited', onclick: () => navigateBack()}, img({src: 'assets/back.svg', alt: ''}));
+                    const upBtn = button({type: 'button', class: 'comdlg-toolbar-btn', title: 'Up One Level',
+                        'aria-label': 'Up One Level', onclick: () => navigateUp()}, img({src: 'assets/up.svg', alt: ''}));
 
                     function updateLookIn() {
                         // Show just the last folder name, like Windows does
@@ -1352,9 +1477,15 @@ function connect() {
 
                     function markSelected(el) {
                         if (selectedItemEl === el) return;
-                        if (selectedItemEl) selectedItemEl.classList.remove('selected');
+                        if (selectedItemEl) {
+                            selectedItemEl.classList.remove('selected');
+                            selectedItemEl.setAttribute('aria-selected', 'false');
+                        }
                         selectedItemEl = el;
-                        if (el) el.classList.add('selected');
+                        if (el) {
+                            el.classList.add('selected');
+                            el.setAttribute('aria-selected', 'true');
+                        }
                     }
 
                     function selectFile(f) {
@@ -1460,24 +1591,30 @@ function connect() {
                         listFolders.forEach(f => {
                             const item = div({
                                 class: 'file-item',
+                                role: 'option',
+                                tabindex: '-1',
+                                'aria-selected': 'false',
                                 dir: 'auto',
                                 'data-name': f,
                                 'data-type': 'folder',
                                 onclick: () => selectFile(f),
                                 ondblclick: () => navigateTo(currentPath + '/' + f)
-                            }, img({src: 'assets/folder.svg', width: 16, height: 16}), span({class: 'file-item-name'}, f));
+                            }, img({src: 'assets/folder.svg', alt: '', width: 16, height: 16}), span({class: 'file-item-name'}, f));
                             van.add(fileListEl, item);
                             itemEls.set(f, item);
                         });
                         files.forEach(f => {
                             const item = div({
                                 class: 'file-item',
+                                role: 'option',
+                                tabindex: '-1',
+                                'aria-selected': 'false',
                                 dir: 'auto',
                                 'data-name': f,
                                 'data-type': 'file',
                                 onclick: () => selectFile(f),
                                 ondblclick: () => { selectFile(f); openSelectedFile(); }
-                            }, img({src: 'assets/file.svg', width: 16, height: 16}), span({class: 'file-item-name'}, f));
+                            }, img({src: 'assets/file.svg', alt: '', width: 16, height: 16}), span({class: 'file-item-name'}, f));
                             van.add(fileListEl, item);
                             itemEls.set(f, item);
                         });
@@ -1506,16 +1643,21 @@ function connect() {
                     // a backing path. The other Win2K places are not listed.
                     const placeItems = [];
                     function makePlace(title, iconSrc, targetPath) {
-                        const el = div({
+                        const el = button({type: 'button',
                             class: 'comdlg-place-item', title: title, dir: 'auto',
+                            'aria-pressed': 'false',
                             onclick: () => { if (currentPath !== targetPath) navigateTo(targetPath); }
-                        }, img({src: iconSrc}), span(title));
+                        }, img({src: iconSrc, alt: ''}), span(title));
                         placeItems.push({el: el, path: targetPath});
                         return el;
                     }
 
                     function updatePlaceState() {
-                        placeItems.forEach(p => p.el.classList.toggle('active', currentPath === p.path));
+                        placeItems.forEach(p => {
+                            const here = currentPath === p.path;
+                            p.el.classList.toggle('active', here);
+                            p.el.setAttribute('aria-pressed', here ? 'true' : 'false');
+                        });
                     }
 
                     // --- Build dialog DOM ---
@@ -1586,9 +1728,9 @@ function connect() {
                         return 0;
                     }
 
-                    const fontInput = input({type: 'text', class: 'win2k-edit', value: selFont, style: 'width:160px; height:21px;'});
-                    const styleInput = input({type: 'text', class: 'win2k-edit', value: styles[getStyleIdx()], style: 'width:100px; height:21px;'});
-                    const sizeInput = input({type: 'text', class: 'win2k-edit', value: String(selSize), style: 'width:50px; height:21px;'});
+                    const fontInput = input({type: 'text', class: 'win2k-edit', value: selFont, 'aria-label': 'Font', style: 'width:160px; height:21px;'});
+                    const styleInput = input({type: 'text', class: 'win2k-edit', value: styles[getStyleIdx()], 'aria-label': 'Font style', style: 'width:100px; height:21px;'});
+                    const sizeInput = input({type: 'text', class: 'win2k-edit', value: String(selSize), 'aria-label': 'Size', style: 'width:50px; height:21px;'});
 
                     const previewEl = div({class: 'fontdlg-preview', style: 'min-height:60px;'}, 'AaBbYyZz');
 
@@ -1601,17 +1743,19 @@ function connect() {
 
                     function selectListItem(listEl, value) {
                         listEl.querySelectorAll('.fontdlg-list-item').forEach(el => {
-                            el.classList.toggle('selected', el.textContent === String(value));
-                            if (el.textContent === String(value)) {
+                            const on = el.textContent === String(value);
+                            el.classList.toggle('selected', on);
+                            el.setAttribute('aria-selected', on ? 'true' : 'false');
+                            if (on) {
                                 el.scrollIntoView({block: 'nearest'});
                             }
                         });
                     }
 
                     // Font list
-                    const fontListEl = div({class: 'fontdlg-list', style: 'width:160px;'});
+                    const fontListEl = div({class: 'fontdlg-list', role: 'listbox', 'aria-label': 'Font', style: 'width:160px;'});
                     fonts.forEach(f => {
-                        van.add(fontListEl, div({class: 'fontdlg-list-item' + (f === selFont ? ' selected' : ''), onclick: () => {
+                        van.add(fontListEl, div({class: 'fontdlg-list-item' + (f === selFont ? ' selected' : ''), role: 'option', tabindex: '-1', 'aria-selected': f === selFont ? 'true' : 'false', onclick: () => {
                             selFont = f;
                             fontInput.value = f;
                             selectListItem(fontListEl, f);
@@ -1620,9 +1764,9 @@ function connect() {
                     });
 
                     // Style list
-                    const styleListEl = div({class: 'fontdlg-list', style: 'width:100px;'});
+                    const styleListEl = div({class: 'fontdlg-list', role: 'listbox', 'aria-label': 'Font style', style: 'width:100px;'});
                     styles.forEach((s, i) => {
-                        van.add(styleListEl, div({class: 'fontdlg-list-item' + (i === getStyleIdx() ? ' selected' : ''), onclick: () => {
+                        van.add(styleListEl, div({class: 'fontdlg-list-item' + (i === getStyleIdx() ? ' selected' : ''), role: 'option', tabindex: '-1', 'aria-selected': i === getStyleIdx() ? 'true' : 'false', onclick: () => {
                             selBold = (i === 2 || i === 3);
                             selItalic = (i === 1 || i === 3);
                             styleInput.value = s;
@@ -1632,9 +1776,9 @@ function connect() {
                     });
 
                     // Size list
-                    const sizeListEl = div({class: 'fontdlg-list', style: 'width:50px;'});
+                    const sizeListEl = div({class: 'fontdlg-list', role: 'listbox', 'aria-label': 'Size', style: 'width:50px;'});
                     sizes.forEach(sz => {
-                        van.add(sizeListEl, div({class: 'fontdlg-list-item' + (sz === selSize ? ' selected' : ''), onclick: () => {
+                        van.add(sizeListEl, div({class: 'fontdlg-list-item' + (sz === selSize ? ' selected' : ''), role: 'option', tabindex: '-1', 'aria-selected': sz === selSize ? 'true' : 'false', onclick: () => {
                             selSize = sz;
                             sizeInput.value = String(sz);
                             selectListItem(sizeListEl, String(sz));
@@ -1706,19 +1850,22 @@ function connect() {
                     const minPage = msg.min || 1;
                     const maxPage = msg.max || 100;
 
-                    const fromInput = input({type: 'text', class: 'win2k-edit', value: String(fromPage), style: 'width:50px; height:21px;'});
-                    const toInput = input({type: 'text', class: 'win2k-edit', value: String(toPage), style: 'width:50px; height:21px;'});
-                    const copiesInput = input({type: 'text', class: 'win2k-edit', value: String(copies), style: 'width:50px; height:21px;'});
+                    const fromInput = input({type: 'text', class: 'win2k-edit', value: String(fromPage), 'aria-label': 'From page', 'aria-describedby': 'print-range-error', 'aria-invalid': 'false', style: 'width:50px; height:21px;'});
+                    const toInput = input({type: 'text', class: 'win2k-edit', value: String(toPage), 'aria-label': 'To page', 'aria-describedby': 'print-range-error', 'aria-invalid': 'false', style: 'width:50px; height:21px;'});
+                    const copiesInput = input({type: 'text', class: 'win2k-edit', value: String(copies), 'aria-label': 'Copies', style: 'width:50px; height:21px;'});
 
                     function clampInt(v, lo, hi) {
                         const n = parseInt(v);
                         if (isNaN(n)) return lo;
                         return Math.max(lo, Math.min(n, hi));
                     }
-                    const rangeError = div({class: 'dlg-error', style: 'display:none;'}, 'The "To" page cannot be before the "From" page.');
+                    const rangeError = div({class: 'dlg-error', id: 'print-range-error', role: 'alert', style: 'display:none;'}, 'The "To" page cannot be before the "From" page.');
                     function refreshRangeError() {
                         const bad = fromPage > toPage;
                         rangeError.style.display = bad ? 'block' : 'none';
+                        fromInput.setAttribute('aria-invalid', bad ? 'true' : 'false');
+                        toInput.setAttribute('aria-invalid', bad ? 'true' : 'false');
+                        if (bad) fromInput.focus();
                         return bad;
                     }
                     fromInput.addEventListener('change', () => { fromPage = clampInt(fromInput.value, minPage, maxPage); fromInput.value = String(fromPage); refreshRangeError(); });
@@ -1754,16 +1901,16 @@ function connect() {
                     let orientation = msg.orientation || 0;
                     const units = msg.units || '0.001 in';
 
-                    const leftEl = input({type: 'text', class: 'win2k-edit', value: String(left), style: 'width:70px; height:21px;'});
+                    const leftEl = input({type: 'text', class: 'win2k-edit', value: String(left), 'aria-label': 'Left margin', style: 'width:70px; height:21px;'});
                     leftEl.addEventListener('change', () => { const n = parseInt(leftEl.value); if (!isNaN(n) && n >= 0) { left = n; } leftEl.value = String(left); });
-                    const topEl = input({type: 'text', class: 'win2k-edit', value: String(top), style: 'width:70px; height:21px;'});
+                    const topEl = input({type: 'text', class: 'win2k-edit', value: String(top), 'aria-label': 'Top margin', style: 'width:70px; height:21px;'});
                     topEl.addEventListener('change', () => { const n = parseInt(topEl.value); if (!isNaN(n) && n >= 0) { top = n; } topEl.value = String(top); });
-                    const rightEl = input({type: 'text', class: 'win2k-edit', value: String(right), style: 'width:70px; height:21px;'});
+                    const rightEl = input({type: 'text', class: 'win2k-edit', value: String(right), 'aria-label': 'Right margin', style: 'width:70px; height:21px;'});
                     rightEl.addEventListener('change', () => { const n = parseInt(rightEl.value); if (!isNaN(n) && n >= 0) { right = n; } rightEl.value = String(right); });
-                    const bottomEl = input({type: 'text', class: 'win2k-edit', value: String(bottom), style: 'width:70px; height:21px;'});
+                    const bottomEl = input({type: 'text', class: 'win2k-edit', value: String(bottom), 'aria-label': 'Bottom margin', style: 'width:70px; height:21px;'});
                     bottomEl.addEventListener('change', () => { const n = parseInt(bottomEl.value); if (!isNaN(n) && n >= 0) { bottom = n; } bottomEl.value = String(bottom); });
 
-                    const landscapeChk = input({type: 'checkbox', id: 'ps-landscape', style: 'margin-right:4px;',
+                    const landscapeChk = input({type: 'checkbox', id: 'ps-landscape', 'aria-label': 'Landscape', style: 'margin-right:4px;',
                         onchange: (e) => { orientation = e.target.checked ? 1 : 0; }});
 
                     showDialog('Page Setup',
@@ -1799,10 +1946,10 @@ function connect() {
                     let searchDown = true;
 
                     const findInput = input({type: 'text', value: findText, style: 'width:100%;', id: 'find-input',
-                        oninput: (e) => { findText = e.target.value; }});
+                        'aria-label': 'Find what', oninput: (e) => { findText = e.target.value; }});
                     const replaceInput = input({type: 'text', value: replaceText, style: 'width:100%;', id: 'replace-input',
-                        oninput: (e) => { replaceText = e.target.value; }});
-                    const matchCaseCheck = input({type: 'checkbox', id: 'find-match-case',
+                        'aria-label': 'Replace with', oninput: (e) => { replaceText = e.target.value; }});
+                    const matchCaseCheck = input({type: 'checkbox', id: 'find-match-case', 'aria-label': 'Match case',
                         onchange: (e) => { matchCase = e.target.checked; }});
 
                     function sendFindAction(action) {
@@ -1837,7 +1984,7 @@ function connect() {
                                     label({style: 'min-width:80px;'}, 'Find what:'), findInput),
                                 replaceRow ? replaceRow : '',
                                 div({style: 'display:flex; align-items:center; gap:16px; margin-top:4px;'},
-                                    div({style: 'display:flex; align-items:center; gap:4px;'}, matchCaseCheck, label('Match case')),
+                                    div({style: 'display:flex; align-items:center; gap:4px;'}, matchCaseCheck, label({for: 'find-match-case'}, 'Match case')),
                                     !isReplace ? fieldset({style: 'border:1px solid; border-color:var(--sys-shadow) var(--sys-hilight) var(--sys-hilight) var(--sys-shadow); margin:0; padding:4px 8px;'},
                                         legend({style: 'font-size:11px; padding:0 4px;'}, 'Direction'),
                                         div({style: 'display:flex; gap:12px;'},
@@ -2135,6 +2282,8 @@ function connect() {
                         iconEl.className = 'win2k-desktop-icon';
                         // Enter launches, so double-click is not the only route.
                         iconEl.tabIndex = 0;
+                        iconEl.setAttribute('role', 'button');
+                        iconEl.setAttribute('aria-label', item.name);
 
                         const imgContainer = document.createElement('div');
                         const img = document.createElement('img');

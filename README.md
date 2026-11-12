@@ -42,6 +42,7 @@ promise between versions, so a breaking change takes the next minor.
 
 - A progress bar, up-down, trackbar, or date control created after its table is full no longer shares state with the first control of that kind, and destroying a focused window returns keyboard focus to the main window.
 - Bound x86 prefix decoding at the 15-byte encoding limit, so a section of repeated prefix bytes no longer overflows the instruction length the block scan and the JIT add to their offset.
+- The browser UI is operable from the keyboard and named for assistive technology. Menus, the Start menu, dialogs, the file list and the volume popup take focus, expose their state, and return focus when they close, and the Win2000 palette meets the WCAG 2.2 AA contrast floor, including under a forced-colors theme.
 
 ### 0.9.0 (2026-10-27)
 

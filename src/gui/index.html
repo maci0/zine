@@ -11,7 +11,7 @@
     <!-- Desktop Background with File Icons -->
     <div id="desktop-area"></div>
 
-    <div id="status">Connecting...</div>
+    <div id="status" role="status" aria-live="polite">Connecting...</div>
 
     <!-- Main Application Window -->
     <div id="main-window" class="win2k-window" role="application" style="top: 50%; left: 50%; transform: translate(-50%, -50%);">
@@ -44,7 +44,7 @@
     </div>
 
     <!-- Dialog Overlay -->
-    <div id="dialog-overlay" class="win2k-window win2k-dialog" role="dialog" aria-labelledby="dialog-title">
+    <div id="dialog-overlay" class="win2k-window win2k-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
         <div class="win2k-titlebar" id="dialog-titlebar">
             <div class="win2k-titlebar-text">
                 <span id="dialog-title" dir="auto">Dialog</span>
@@ -58,24 +58,24 @@
 
     <!-- Taskbar -->
     <div id="taskbar">
-        <button type="button" class="taskbar-start" id="start-button" aria-haspopup="true" aria-expanded="false">
+        <button type="button" class="taskbar-start" id="start-button" aria-haspopup="menu" aria-controls="start-menu" aria-expanded="false">
             <img src="assets/start.svg" class="win-flag" width="16" height="16" alt="">
             <span>Start</span>
         </button>
-        <div class="taskbar-window-btn active" id="taskbar-app-btn">
+        <button type="button" class="taskbar-window-btn" id="taskbar-app-btn" aria-pressed="true">
             <img id="taskbar-icon" alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" style="width: 16px; height: 16px; display: none;">
             <span id="taskbar-title" dir="auto"></span>
-        </div>
+        </button>
         <div class="taskbar-tray">
-            <button type="button" class="tray-volume" id="tray-volume" aria-label="Volume" onclick="toggleVolumePopup(event)">
+            <button type="button" class="tray-volume" id="tray-volume" aria-label="Volume" aria-haspopup="dialog" aria-expanded="false" aria-controls="volume-popup" onclick="toggleVolumePopup(event)">
                 <svg viewBox="0 0 16 16" width="16" height="16" class="volume-icon">
                     <polygon points="2,6 2,10 5,10 9,13 9,3 5,6" fill="currentColor"/>
                     <path id="vol-wave1" d="M10,5.5 Q12,8 10,10.5" fill="none" stroke="currentColor" stroke-width="1.2"/>
                     <path id="vol-wave2" d="M11,3.5 Q14,8 11,12.5" fill="none" stroke="currentColor" stroke-width="1.2"/>
-                    <line id="vol-mute-line" x1="2" y1="3" x2="14" y2="13" stroke="red" stroke-width="2" style="display:none"/>
+                    <line id="vol-mute-line" x1="2" y1="3" x2="14" y2="13" stroke="currentColor" stroke-width="2" style="display:none"/>
                 </svg>
             </button>
-            <div class="volume-popup" id="volume-popup">
+            <div class="volume-popup" id="volume-popup" role="dialog" aria-label="Volume">
                 <div class="volume-popup-title">Volume</div>
                 <div class="volume-slider-container">
                     <div class="volume-label-hi">High</div>
@@ -90,14 +90,14 @@
                 </label>
             </div>
         </div>
-        <div class="taskbar-clock" id="taskbar-clock"></div>
+        <div class="taskbar-clock" id="taskbar-clock" role="timer" aria-label="Clock"></div>
     </div>
 
     <!-- Start Menu -->
-    <div id="start-menu" class="taskbar-context-menu"></div>
+    <div id="start-menu" class="taskbar-context-menu" role="menu" aria-label="Start"></div>
 
     <!-- Taskbar Right-Click Context Menu -->
-    <div id="taskbar-context-menu" class="taskbar-context-menu"></div>
+    <div id="taskbar-context-menu" class="taskbar-context-menu" role="menu" aria-label="Window"></div>
 
     <script>
         // Both scripts are deferred, so a load failure is indistinguishable

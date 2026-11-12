@@ -18,10 +18,11 @@
     <div id="taskbar-clock"></div>
     <div id="taskbar-app-btn"></div>
     <div id="taskbar-context-menu"></div>
-    <div id="start-button"></div>
+    <button id="start-button"></button>
     <div id="start-menu"></div>
     <div id="volume-popup"></div>
-    <div id="tray-volume"></div>
+    <button id="tray-volume"></button>
+    <input id="volume-slider">
     <script>
         const sent = [];
         let socket;
@@ -74,9 +75,10 @@
             block8();
             block9();
             block10();
-            document.getElementById('result').textContent = 'PASS: dialogs, filter, print range, font style, start menu, name error, enter key, escape, window clamp, error text';
+            block11();
+            document.getElementById('result').textContent = 'PASS: dialogs, filter, print range, font style, start menu, name error, enter key, escape, window clamp, error text, keyboard';
         } catch (error) {
-            document.getElementById('result').textContent = 'FAIL: ' + error.message;
+            document.getElementById('result').textContent = 'FAIL: ' + error.message + ' @ ' + (error.stack || '').split('\n')[1];
         }
 
         // "Files of type" narrows the listing and the list says so when it is empty
@@ -267,6 +269,65 @@
                 'The status line must show the host message, got "' + status.textContent + '"');
             assert(status.classList.contains('error'), 'A host error must be marked as one');
             receive({type: 'set_resolution', width: 320, height: 200});
+        }
+
+        // A menu, a file list and a dialog error are reachable from the keyboard
+        // and named for assistive technology, not only painted.
+        function block11() {
+            receive({type: 'menu', menu: [
+                {name: '&File', popup: [{name: '&Open', id: 101}, {name: 'E&xit', id: 102}]},
+                {name: '&Edit', popup: [{name: '&Copy', id: 201}]}
+            ]});
+            const bar = document.getElementById('menu-bar');
+            const fileMenu = bar.querySelector('.menu-item');
+            assert(fileMenu.getAttribute('role') === 'menuitem', 'A menu title must be a menuitem');
+            assert(fileMenu.getAttribute('aria-haspopup') === 'menu', 'A menu title must say it opens a menu');
+            fileMenu.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true}));
+            const openItem = fileMenu.querySelector('.popup-item');
+            assert(fileMenu.classList.contains('open'), 'ArrowDown must open the menu');
+            assert(document.activeElement === openItem, 'ArrowDown must move focus into the menu');
+            openItem.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight', bubbles: true}));
+            const editMenu = bar.querySelectorAll('.menu-item')[1];
+            assert(document.activeElement === editMenu, 'ArrowRight must move to the next menu');
+            assert(!fileMenu.classList.contains('open'), 'Leaving a menu must close it');
+
+            const startMenu = document.getElementById('start-menu');
+            startMenu.setAttribute('role', 'menu');
+            document.getElementById('start-button').click();
+            assert(startMenu.getAttribute('role') === 'menu', 'The Start menu must be a menu');
+            assert(document.activeElement === startMenu.querySelector('[role="menuitem"]:not([aria-disabled="true"])'),
+                'Opening Start must move focus onto its first item');
+            document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+            assert(startMenu.style.display !== 'block', 'Escape must close the Start menu');
+            assert(document.activeElement === document.getElementById('start-button'),
+                'Closing Start must return focus to the Start button');
+
+            receive({type: 'open_file_dialog', mode: 'open', path: 'Desktop', folders: ['Documents'], files: ['old.txt']});
+            const list = document.querySelector('.comdlg-file-list');
+            assert(list.getAttribute('role') === 'listbox', 'The file list must be a listbox');
+            const option = list.querySelector('[data-type="file"]');
+            assert(option.getAttribute('role') === 'option', 'A file must be an option');
+            option.click();
+            assert(option.getAttribute('aria-selected') === 'true', 'The chosen file must be selected');
+            const back = document.querySelector('.comdlg-toolbar-btn');
+            assert(back.tagName === 'BUTTON' && back.getAttribute('aria-label'),
+                'The toolbar buttons must be named buttons');
+            document.getElementById('dialog_filename').value = '';
+            document.querySelector('#dialog-content [data-dialog-default]').click();
+            const nameError = document.getElementById('dialog-name-error');
+            assert(nameError.getAttribute('role') === 'alert' && nameError.style.display === 'block',
+                'A rejected filename must be announced');
+            assert(document.getElementById('dialog_filename').getAttribute('aria-invalid') === 'true',
+                'The rejected field must be marked invalid');
+            closeDialog();
+
+            receive({type: 'show_print_dialog', from: 4, to: 2, copies: 1, printerName: 'Default'});
+            document.querySelector('#dialog-content [data-dialog-default]').click();
+            assert(document.getElementById('print-range-error').style.display === 'block',
+                'A backwards page range must be announced');
+            assert(document.activeElement.getAttribute('aria-label') === 'From page',
+                'The first invalid field must take focus');
+            closeDialog();
         }
     </script>
 </body>
