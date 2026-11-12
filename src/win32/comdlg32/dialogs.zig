@@ -369,8 +369,20 @@ fn handleFontChosen(face: []const u8, size: i32, bold: bool, italic: bool) void 
 ///   +52 nSizeMin, +56 nSizeMax.
 /// LOGFONT layout: +0 lfHeight, +4 lfWidth, +16 lfWeight, +20 lfItalic,
 ///   +28 lfFaceName (A: char[32], W: WCHAR[32]).
-/// When `wide` is set the face name is read/written as UTF-16LE (LOGFONTW /
-/// CHOOSEFONTW); the numeric fields are layout-identical.
+/// Point size shown by ChooseFont, in points. A positive iPointSize (tenths of
+/// a point) wins; otherwise the size is derived from lfHeight at 96 dpi, where
+/// a negative height is a character height and a positive one a cell height.
+/// lfHeight is a guest i32, so the 72/96 conversion runs in i64: the i32
+/// product wraps past about 29.8 million and reports a negative size, which the
+/// clamp below then forces to 1 pt.
+pub fn chooseFontPointSize(ipt_size: i32, lf_height: i32) i32 {
+    if (ipt_size > 0) return @intCast(@divTrunc(@as(i64, ipt_size), 10));
+    const px: i64 = if (lf_height < 0) -@as(i64, lf_height) else lf_height;
+    return @intCast(std.math.clamp(@divTrunc(px * 72, 96), 1, std.math.maxInt(i32)));
+}
+
+/// `wide` selects UTF-16LE face names (LOGFONTW / CHOOSEFONTW); the numeric
+/// fields are layout-identical.
 fn commonChooseFont(lpcf_ptr: usize, wide: bool) i32 {
     if (lpcf_ptr == 0) return 0;
     const cf = @as([*]u8, @ptrFromInt(trace.addr(lpcf_ptr)));
@@ -408,7 +420,7 @@ fn commonChooseFont(lpcf_ptr: usize, wide: bool) i32 {
     if (trace.enable_tracing) trace.print("COMDLG32: ChooseFont(face='{s}')\n", .{face_buf[0..face_len]});
 
     // Point size: prefer iPointSize (1/10 pt), else derive from lfHeight at 96 dpi.
-    var pt: i32 = if (ipt_size > 0) @divTrunc(ipt_size, 10) else @divTrunc(-lf_height * 72, 96);
+    var pt: i32 = chooseFontPointSize(ipt_size, lf_height);
     if (pt < 1) pt = 1;
     if (pt > 72) pt = 72;
     if ((flags & CF_LIMITSIZE) != 0 and nsize_max >= nsize_min and nsize_max > 0) {
@@ -877,4 +889,19 @@ pub fn stub_ret0_3(a: usize, b: usize, c: usize) callconv(w32cc.WINAPI) i32 {
     _ = b;
     _ = c;
     return 0;
+}
+
+test "chooseFontPointSize converts a huge lfHeight without wrapping" {
+    // -13px at 96 dpi is 9.75pt, truncated to 9; a positive height is a cell
+    // height and converts the same way.
+    try std.testing.expectEqual(@as(i32, 9), chooseFontPointSize(0, -13));
+    try std.testing.expectEqual(@as(i32, 9), chooseFontPointSize(0, 13));
+    // iPointSize is tenths of a point and wins over lfHeight.
+    try std.testing.expectEqual(@as(i32, 12), chooseFontPointSize(120, -13));
+    // Past ~29.8 million the i32 product -lfHeight*72 wraps negative, and the
+    // clamp then reports 1pt. The wide conversion stays positive.
+    try std.testing.expectEqual(@as(i32, 22369621), chooseFontPointSize(0, -29826162));
+    try std.testing.expectEqual(@as(i32, 1610612736), chooseFontPointSize(0, std.math.minInt(i32)));
+    // A zero lfHeight with no iPointSize is the 1pt floor.
+    try std.testing.expectEqual(@as(i32, 1), chooseFontPointSize(0, 0));
 }

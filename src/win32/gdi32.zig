@@ -187,6 +187,16 @@ pub fn registerDib(handle: usize, buffer: usize, width: u32, height: u32, bpp: u
 /// asking for more than this has no allocation that could be served anyway.
 pub const max_dib_bytes: u64 = 256 * 1024 * 1024;
 
+/// Bytes in one scan line of a DIB, padded up to a 4-byte boundary:
+/// `(((width * bit_count) + 31) / 32) * 4`. Dividing the bit count by 8 first
+/// drops the remainder, so a 1bpp or 4bpp row came out as 0 bytes and
+/// CreateDIBSection handed the guest an empty buffer. A bit count of 0 is the
+/// 32bpp default the callers already assumed.
+pub fn dibRowStride(width: u32, bit_count: u16) u64 {
+    const bits: u64 = if (bit_count == 0) @as(u64, width) * 32 else @as(u64, width) * bit_count;
+    return ((bits + 31) / 32) * 4;
+}
+
 /// Pixel slice for a registered DIB.
 ///
 /// The length comes from the recorded allocation, not from
@@ -623,4 +633,22 @@ test "FontData tmHeight and aveCharWidth survive an extreme lfHeight" {
     try std.testing.expectEqual(@as(i32, 5), normal.aveCharWidth());
     const default_font: FontData = .{};
     try std.testing.expectEqual(@as(i32, 13), default_font.tmHeight());
+}
+
+test "dibRowStride keeps the fractional byte of a sub-byte DIB" {
+    // (((width * bit_count) + 31) / 32) * 4. A byte-rounded stride is 0 for
+    // every 1bpp and 4bpp width, so CreateDIBSection allocated nothing.
+    try std.testing.expectEqual(@as(u64, 4), dibRowStride(1, 1));
+    try std.testing.expectEqual(@as(u64, 4), dibRowStride(32, 1));
+    try std.testing.expectEqual(@as(u64, 8), dibRowStride(33, 1));
+    try std.testing.expectEqual(@as(u64, 4), dibRowStride(1, 4));
+    try std.testing.expectEqual(@as(u64, 8), dibRowStride(9, 4));
+    try std.testing.expectEqual(@as(u64, 52), dibRowStride(100, 4));
+    // 8bpp and above already agreed with the byte-rounded formula.
+    try std.testing.expectEqual(@as(u64, 4), dibRowStride(1, 8));
+    try std.testing.expectEqual(@as(u64, 4), dibRowStride(1, 24));
+    try std.testing.expectEqual(@as(u64, 96), dibRowStride(32, 24));
+    try std.testing.expectEqual(@as(u64, 128), dibRowStride(32, 32));
+    // A bit count of 0 is the 32bpp default the callers assumed.
+    try std.testing.expectEqual(dibRowStride(32, 32), dibRowStride(32, 0));
 }

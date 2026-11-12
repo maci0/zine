@@ -898,6 +898,9 @@ fn resource_LockRect(this: *D3D8Resource, Level: u32, locked: *align(1) w32.D3DL
         const y: u32 = @intCast(r.top);
         if (compressed and (x % 4 != 0 or y % 4 != 0)) return @bitCast(w32.D3DERR_INVALIDCALL);
         offset = if (compressed) @as(usize, y / 4) * @as(usize, @intCast(pitch)) + @as(usize, x / 4) * (if (owner.format == 0x31545844) @as(usize, 8) else 16) else @as(usize, y) * @as(usize, @intCast(pitch)) + @as(usize, x) * (@as(usize, @intCast(pitch)) / owner.width);
+        // A rect that ends on the surface edge lands one row past the buffer:
+        // 8x4 at 4 bytes per pixel is 128 bytes, and (0,4) is offset 128.
+        if (offset >= desc[4]) return @bitCast(w32.D3DERR_INVALIDCALL);
     }
     owner.data_len = desc[4];
     const data = resourceData(owner) orelse return @bitCast(w32.D3DERR_OUTOFVIDEOMEMORY);
@@ -1216,4 +1219,8 @@ test "D3D8 surface locks share texture storage without overwriting buffers" {
     try std.testing.expectEqual(@as(i32, 0), surface_LockRect(surface.?, &locked, &rect, 0));
     try std.testing.expectEqual(@as(u32, @intCast(@import("../x86/memory.zig").hostToGuest(@intFromPtr(texture.data.? + 36)))), locked.pBits);
     try std.testing.expectEqual(@as(u8, 0xAB), texture.data.?[36]);
+    // top == height passes the rectangle check but the row offset equals the
+    // buffer length, so the pointer would start past the allocation.
+    const past = w32.RECT{ .left = 0, .top = 4, .right = 1, .bottom = 4 };
+    try std.testing.expect(surface_LockRect(surface.?, &locked, &past, 0) < 0);
 }

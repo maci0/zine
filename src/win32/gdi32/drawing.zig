@@ -294,21 +294,16 @@ pub fn blitDIBToBufferAt(lpBits: usize, lpbmi: usize, dest_buf: []u8, dest_w: u3
     // Palette follows immediately after BITMAPINFOHEADER (each entry is 4 bytes: B,G,R,reserved)
     const palette_ptr = @as([*]const u8, @ptrFromInt(lpbmi + hdr.biSize));
 
-    // Calculate row stride (rows padded to 4-byte boundaries). The width is
-    // guest-supplied, so the products run in u64: a wrapped stride would point
-    // the row walk at unrelated memory instead of the caller's bits.
-    const row_stride_wide: u64 = switch (bi_bitcount) {
-        4 => ((@as(u64, w) + 7) / 8 * 4 + 3) / 4 * 4, // 4bpp: (w/2) rounded up, padded to 4
-        8 => ((@as(u64, w) + 3) / 4) * 4,
-        24 => ((@as(u64, w) * 3 + 3) / 4) * 4,
-        32 => @as(u64, w) * 4,
+    // Rows are padded to a 4-byte boundary. The width is guest-supplied, so the
+    // stride is computed in u64: a wrapped stride would point the row walk at
+    // unrelated memory instead of the caller's bits.
+    const actual_stride_wide: u64 = switch (bi_bitcount) {
+        4, 8, 24, 32 => gdi32.dibRowStride(w, bi_bitcount),
         else => {
             if (trace.enable_tracing) trace.print("GDI32: blitDIB unsupported bpp={d}\n", .{bi_bitcount});
             return;
         },
     };
-    // For 4bpp, row stride is actually: ((w * 4 + 31) / 32) * 4 = ((w+7)/2) & ~3
-    const actual_stride_wide: u64 = if (bi_bitcount == 4) ((@as(u64, w) * 4 + 31) / 32) * 4 else row_stride_wide;
     if (actual_stride_wide > std.math.maxInt(usize) or actual_stride_wide > std.math.maxInt(u32)) return;
     const actual_row_stride: u32 = @intCast(actual_stride_wide);
 
@@ -1097,6 +1092,28 @@ test "blitDIBToBufferAt: 32bpp bottom-up row order" {
     @memset(&dest, 0);
     blitDIBToBufferAt(@intFromPtr(&src_bytes), @intFromPtr(&header_bu), &dest, 4, 2, 0, 0, 0, 0, 4, 2, null, 0x00CC0020);
     try testing.expectEqual(@as(u32, 0xFF111177), std.mem.readInt(u32, dest[4 * 4 ..][0..4], .little)); // bottom-up: row 0 lands last
+}
+
+test "blitDIBToBufferAt: 4bpp row stride is padded, not the raw nibble count" {
+    // 9 pixels of 4bpp is 5 bytes of nibbles, padded to 8 per row. The old
+    // formula gave 4, so the second row was read from the middle of the first.
+    // Palette entry 1 is red (B,G,R), entry 0 is black.
+    var header_bytes: [40 + 16]u8 = @splat(0);
+    const hdr: *w32.BITMAPINFOHEADER = @ptrCast(@alignCast(&header_bytes));
+    hdr.* = makeDibHeader(9, 2, 4);
+    header_bytes[40 + 4 + 2] = 0xFF; // palette[1].R
+
+    var src: [16]u8 = @splat(0);
+    src[0] = 0x10; // pixel 0 = index 1
+    src[8] = 0x10; // row 1, pixel 0 = index 1
+    var dest: [9 * 2 * 4]u8 = @splat(0);
+
+    blitDIBToBufferAt(@intFromPtr(&src), @intFromPtr(&header_bytes), &dest, 9, 2, 0, 0, 0, 0, 9, 2, null, 0x00CC0020);
+    // Dest byte order is r,g,b,255. Row 0 col 0 is red; row 1 col 0 is red too,
+    // which a 4-byte stride would have read as black.
+    try testing.expectEqual(@as(u32, 0xFF0000FF), std.mem.readInt(u32, dest[0..4], .little));
+    try testing.expectEqual(@as(u32, 0xFF0000FF), std.mem.readInt(u32, dest[9 * 4 ..][0..4], .little));
+    try testing.expectEqual(@as(u32, 0xFF000000), std.mem.readInt(u32, dest[4..8], .little));
 }
 
 test "blitDIBToBufferAt: SRCPAINT ORs into destination" {

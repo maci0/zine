@@ -264,8 +264,7 @@ pub fn CreateDIBSection(hdc: usize, pbmi: usize, usage: u32, ppvBits: usize, hSe
         // u32 stride and the product overflows u64.
         const raw_height: u64 = if (bi_height_raw > 0) @intCast(bi_height_raw) else @intCast(-@as(i64, bi_height_raw));
         const height: u64 = @max(raw_height, 1);
-        const bpp: u64 = if (bitcount > 0) @as(u64, bitcount) / 8 else 4;
-        const row_stride: u64 = ((@as(u64, w) * bpp + 3) / 4) * 4;
+        const row_stride: u64 = gdi32.dibRowStride(w, bitcount);
         const total: u128 = @as(u128, row_stride) * height;
         if (total > gdi32.max_dib_bytes) {
             if (trace.enable_tracing) trace.print("GDI32: CreateDIBSection too large ({d} bytes)\n", .{total});
@@ -316,7 +315,7 @@ pub fn GetObjectA(h: usize, c: i32, pv: usize) callconv(w32cc.WINAPI) i32 {
             @as(*i32, @ptrFromInt(pv + 0)).* = 0; // bmType
             @as(*i32, @ptrFromInt(pv + 4)).* = @intCast(dib.width); // bmWidth
             @as(*i32, @ptrFromInt(pv + 8)).* = @intCast(dib.height); // bmHeight
-            @as(*i32, @ptrFromInt(pv + 12)).* = @intCast(dib.width * (@as(u32, dib.bpp) / 8)); // bmWidthBytes
+            @as(*i32, @ptrFromInt(pv + 12)).* = @intCast(gdi32.dibRowStride(dib.width, dib.bpp)); // bmWidthBytes
             @as(*u16, @ptrFromInt(pv + 16)).* = 1; // bmPlanes
             @as(*u16, @ptrFromInt(pv + 18)).* = dib.bpp; // bmBitsPixel
             @as(*u32, @ptrFromInt(pv + 20)).* = @truncate(dib.buffer); // bmBits
