@@ -1856,26 +1856,64 @@ pub fn GetModuleFileNameA_Full(hModule: usize, lpFilename: usize, nSize: u32) ca
 /// Highest atom `GlobalAddAtomA` hands out before it saturates.
 const max_global_atom: u16 = 0xFFFE;
 
-/// Adds a character string to the global atom table and returns a unique value (an atom).
-pub fn GlobalAddAtomA(lpString: usize) callconv(w32cc.WINAPI) u16 {
-    const state = struct {
-        /// An atom is the guest's unique key for a string, so allocation has
-        /// to be one atomic RMW: a read-then-increment hands the same value
-        /// to two concurrent guest threads.
-        var next_atom: std.atomic.Value(u16) = std.atomic.Value(u16).init(0xC000);
-    };
-    var atom = state.next_atom.fetchAdd(1, .monotonic);
+/// The global atom table. Win32 returns one atom for a string for the life of
+/// the process: a second `GlobalAddAtom` of the same string (a guest retry, a
+/// re-entered init) must not mint another, or two callers of the same name no
+/// longer compare equal. Case is significant. A name longer than an entry, or
+/// one that arrives after the table is full, keeps the atom only for the call
+/// that made it rather than aliasing every other long name onto one id.
+const GlobalAtom = struct { name: [255]u8, len: u8, atom: u16 };
+const max_global_atoms = 256;
+var global_atoms: [max_global_atoms]GlobalAtom = undefined;
+var global_atom_count: usize = 0;
+var next_global_atom: u16 = 0xC000;
+
+fn addGlobalAtom(label: []const u8, name: []const u8) u16 {
+    for (global_atoms[0..global_atom_count]) |*e| {
+        if (e.len == name.len and std.mem.eql(u8, e.name[0..e.len], name)) {
+            if (trace.enable_tracing) trace.print("KERNEL32: {s}('{s}') -> 0x{X} (cached)\n", .{ label, name, e.atom });
+            return e.atom;
+        }
+    }
+    var atom = next_global_atom;
     if (atom >= max_global_atom) {
         // Saturate rather than wrap back into the range the guest uses for
         // its own predefined atoms.
-        state.next_atom.store(max_global_atom, .monotonic);
         atom = max_global_atom;
+    } else {
+        next_global_atom += 1;
     }
-    if (trace.enable_tracing) {
-        const name = if (lpString != 0) trace.c_span(lpString) else "(null)";
-        trace.print("KERNEL32: GlobalAddAtomA('{s}') -> 0x{X}\n", .{ name, atom });
+    if (name.len <= global_atoms[0].name.len and global_atom_count < global_atoms.len) {
+        const e = &global_atoms[global_atom_count];
+        global_atom_count += 1;
+        @memcpy(e.name[0..name.len], name);
+        e.len = @intCast(name.len);
+        e.atom = atom;
     }
+    if (trace.enable_tracing) trace.print("KERNEL32: {s}('{s}') -> 0x{X}\n", .{ label, name, atom });
     return atom;
+}
+
+/// Adds a character string to the global atom table and returns its atom.
+/// Implementation status: Partially implemented (string atoms are remembered;
+/// integer atoms and `GlobalDeleteAtom` are not)
+pub fn GlobalAddAtomA(lpString: usize) callconv(w32cc.WINAPI) u16 {
+    if (lpString == 0) return 0;
+    // An integer atom (the MAKEINTATOM form, a value below 0xC000) is already
+    // its own id. Only a pointer names a string.
+    if (lpString < 0xC000) return @truncate(lpString);
+    return addGlobalAtom("GlobalAddAtomA", trace.c_span(lpString));
+}
+
+/// Wide twin of `GlobalAddAtomA`. Narrowed to the same CP1252 bytes, so a
+/// string added through either entry is the same atom.
+/// Implementation status: Partially implemented
+pub fn GlobalAddAtomW(lpString: usize) callconv(w32cc.WINAPI) u16 {
+    if (lpString == 0) return 0;
+    if (lpString < 0xC000) return @truncate(lpString);
+    var narrow_buf: [256]u8 = undefined;
+    const name = narrowWide(trace.c_span_w(lpString), &narrow_buf);
+    return addGlobalAtom("GlobalAddAtomW", name);
 }
 
 /// ExpandEnvironmentStringsA — expands %VARIABLE% references in a string.
@@ -1911,6 +1949,40 @@ fn testDummyChild() if (platform.is_native) std.process.Child else void {
     } else {
         return {};
     }
+}
+
+test "GlobalAddAtom returns one atom per string" {
+    const saved_atoms = global_atoms;
+    const saved_count = global_atom_count;
+    const saved_next = next_global_atom;
+    defer {
+        global_atoms = saved_atoms;
+        global_atom_count = saved_count;
+        next_global_atom = saved_next;
+    }
+    global_atom_count = 0;
+    next_global_atom = 0xC000;
+
+    const name: [*:0]const u8 = "ZINE_ATOM";
+    const first = GlobalAddAtomA(@intFromPtr(name));
+    const again = GlobalAddAtomA(@intFromPtr(name));
+    try std.testing.expectEqual(first, again);
+    try std.testing.expectEqual(@as(usize, 1), global_atom_count);
+
+    const other: [*:0]const u8 = "ZINE_ATOM_OTHER";
+    try std.testing.expect(GlobalAddAtomA(@intFromPtr(other)) != first);
+
+    // Case is significant: a different case is a different atom.
+    const upper: [*:0]const u8 = "ZINE_atom";
+    try std.testing.expect(GlobalAddAtomA(@intFromPtr(upper)) != first);
+
+    // The wide entry shares the table, so the same text is the same atom.
+    const wide = [_]u16{ 'Z', 'I', 'N', 'E', '_', 'A', 'T', 'O', 'M', 0 };
+    try std.testing.expectEqual(first, GlobalAddAtomW(@intFromPtr(&wide)));
+
+    // MAKEINTATOM: a value below 0xC000 is the atom itself, stored nowhere.
+    try std.testing.expectEqual(@as(u16, 7), GlobalAddAtomA(7));
+    try std.testing.expectEqual(@as(usize, 3), global_atom_count);
 }
 
 test "child proc table recycles reaped slots" {

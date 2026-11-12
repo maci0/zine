@@ -401,7 +401,7 @@ pub fn register(environment: *env.Environment) !void {
     try environment.addBuiltinExportComptime(m, "VerifyVersionInfoW", stub_args4);
     // GetPrivateProfileStringW already registered above with kernel32_profile.GetPrivateProfileStringW
     try environment.addBuiltinExportComptime(m, "DeleteAtom", stub_args1);
-    try environment.addBuiltinExportComptime(m, "GlobalAddAtomW", stub_args1);
+    try environment.addBuiltinExportComptime(m, "GlobalAddAtomW", kernel32_process.GlobalAddAtomW);
     try environment.addBuiltinExportComptime(m, "GlobalGetAtomNameW", stub_args3);
     try environment.addBuiltinExportComptime(m, "EnumDateFormatsW", stub_args3);
     try environment.addBuiltinExportComptime(m, "EnumTimeFormatsW", stub_args3);
