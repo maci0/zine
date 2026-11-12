@@ -76,7 +76,10 @@
             block9();
             block10();
             block11();
-            document.getElementById('result').textContent = 'PASS: dialogs, filter, print range, font style, start menu, name error, enter key, escape, window clamp, error text, keyboard';
+            block12();
+            block13();
+            block14();
+            document.getElementById('result').textContent = 'PASS: dialogs, filter, print range, font style, start menu, name error, enter key, escape, window clamp, error text, keyboard, list selection, tabs, radio groups, row mark';
         } catch (error) {
             document.getElementById('result').textContent = 'FAIL: ' + error.message + ' @ ' + (error.stack || '').split('\n')[1];
         }
@@ -328,6 +331,62 @@
             assert(document.activeElement.getAttribute('aria-label') === 'From page',
                 'The first invalid field must take focus');
             closeDialog();
+        }
+
+        // A click in a list, tree, or list view marks the chosen row and
+        // clears the previous one, so the list shows which entry is current.
+        function block14() {
+            for (const [cls, row] of [['ListBox', 'win2k-listbox-item'],
+                                      ['SysListView32', 'win2k-listview-row'],
+                                      ['SysTreeView32', 'win2k-treeview-row']]) {
+                receive({type: 'show_controls', cx: 120, cy: 80, items: [
+                    {id: 40, class: cls, x: 0, y: 0, cx: 100, cy: 60, style: 0, text: ''}]});
+                receive({type: 'set_listbox_items', id: 40, items: 'One\nTwo\nThree'});
+                const el = document.querySelector('[data-id="40"]');
+                const rows = el.querySelectorAll('.' + row);
+                assert(rows.length === 3, cls + ' must list every item, got ' + rows.length);
+                rows[1].click();
+                assert(rows[1].classList.contains('selected'), 'The clicked ' + cls + ' row must be marked selected');
+                assert(!rows[0].classList.contains('selected'), 'The other ' + cls + ' rows must not stay selected');
+                rows[2].click();
+                assert(rows[2].classList.contains('selected') && !rows[1].classList.contains('selected'),
+                    'Choosing another ' + cls + ' row must move the mark');
+            }
+            document.getElementById('controls-container').remove();
+        }
+
+        // A tab strip starts on its first tab and moves the mark when clicked.
+        function block12() {
+            receive({type: 'show_controls', cx: 160, cy: 80, items: [
+                {id: 50, class: 'SysTabControl32', x: 0, y: 0, cx: 140, cy: 60, style: 0, text: ''}]});
+            receive({type: 'set_listbox_items', id: 50, items: 'General\nAdvanced'});
+            const tabs = document.querySelectorAll('[data-id="50"] .win2k-tab');
+            assert(tabs.length === 2, 'The tab strip must list both tabs, got ' + tabs.length);
+            assert(tabs[0].classList.contains('active'), 'The first tab must start active');
+            tabs[1].click();
+            assert(tabs[1].classList.contains('active') && !tabs[0].classList.contains('active'),
+                'Clicking a tab must move the active mark onto it');
+            document.getElementById('controls-container').remove();
+        }
+
+        // Radio buttons inside one group box share a name, so checking one
+        // clears the others. Buttons in a second box stay independent.
+        function block13() {
+            receive({type: 'custom_dialog', title: 'Options', cx: 200, cy: 120, items: [
+                {id: 60, class: 'Button', style: 7, x: 4, y: 4, cx: 90, cy: 70, text: 'Paper'},
+                {id: 61, class: 'Button', style: 9, x: 10, y: 20, cx: 70, cy: 14, text: 'Letter'},
+                {id: 62, class: 'Button', style: 9, x: 10, y: 40, cx: 70, cy: 14, text: 'A4'},
+                {id: 70, class: 'Button', style: 7, x: 104, y: 4, cx: 90, cy: 70, text: 'Color'},
+                {id: 71, class: 'Button', style: 4, x: 110, y: 20, cx: 70, cy: 14, text: 'Mono'},
+                {id: 72, class: 'Button', style: 4, x: 110, y: 40, cx: 70, cy: 14, text: 'Color'}]});
+            const radio = id => document.querySelector('#dialog-overlay input[data-id="' + id + '"]');
+            assert(radio(61).name === radio(62).name, 'Radios in one group box must share a name');
+            assert(radio(61).name !== radio(71).name, 'Radios in different group boxes must not share a name');
+            radio(61).checked = true;
+            radio(62).click();
+            assert(radio(62).checked && !radio(61).checked, 'Checking one radio must clear the other in its group');
+            assert(!radio(71).checked && !radio(72).checked, 'Checking a radio must not touch the other group');
+            hideDialog();
         }
     </script>
 </body>

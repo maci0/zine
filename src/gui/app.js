@@ -566,6 +566,15 @@ function setGuestText(el, text) {
     el.setAttribute('dir', 'auto');
 }
 
+/** Mark the row or tab the user just chose and clear the previous one,
+ * so a list shows which entry is current instead of only reporting it. */
+function markChosenRow(row) {
+    const parent = row.parentElement;
+    if (!parent) return;
+    parent.querySelectorAll('.selected, .active').forEach(el => el.classList.remove('selected', 'active'));
+    row.classList.add(row.classList.contains('win2k-tab') ? 'active' : 'selected');
+}
+
 /** Send a WM_COMMAND to the backend */
 function sendCommand(id) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -827,6 +836,23 @@ document.addEventListener('keydown', (e) => {
 });
 
 // --- Dialog Control Rendering (VanJS) ---
+
+// The name shared by the radio buttons of one group box. A button inside a
+// group box joins that box; one inside none joins the dialog-wide group.
+function radioGroupName(item, allItems) {
+    const cx = item.cx || 0, cy = item.cy || 0;
+    const midX = item.x + cx / 2, midY = item.y + cy / 2;
+    let group = null;
+    for (const other of allItems) {
+        if ((other.class || '') !== 'Button' || ((other.style || 0) & 0xF) !== 7) continue;
+        const gw = other.cx || 0, gh = other.cy || 0;
+        if (midX < other.x || midY < other.y || midX > other.x + gw || midY > other.y + gh) continue;
+        const area = gw * gh;
+        if (!group || area < group.area) group = {id: other.id, area};
+    }
+    return group ? 'radio-group-' + group.id : 'radio-group';
+}
+
 function DialogControl(item, scaleX, scaleY, allItems = []) {
     const px = Math.round(item.x * scaleX);
     const py = Math.round(item.y * scaleY);
@@ -853,9 +879,13 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
             );
         }
         if (bsType === 4 || bsType === 9) {
-            // BS_RADIOBUTTON / BS_AUTORADIOBUTTON
+            // BS_RADIOBUTTON / BS_AUTORADIOBUTTON. Win32 radios are mutually
+            // exclusive inside the group box that contains them, so every
+            // button in one box shares a name. A name of the control's own id
+            // left each button in a group of one, and clicking one could never
+            // clear another.
             return label({style: absPos + ' display:flex; align-items:center; gap:4px; font-size:11px; overflow:hidden; white-space:nowrap;'},
-                input({type:'radio', class:'win2k-check', "data-id": item.id, name:'radio-'+item.id, style:'width:13px;height:13px;margin:0;flex:none;', onclick: (e) => { e.stopPropagation(); sendCommand(item.id); }}),
+                input({type:'radio', class:'win2k-check', "data-id": item.id, name: radioGroupName(item, allItems), style:'width:13px;height:13px;margin:0;flex:none;', onclick: (e) => { e.stopPropagation(); sendCommand(item.id); }}),
                 span({style:'overflow:hidden;text-overflow:ellipsis;', dir: 'auto'}, (item.text||'').replace(/&([^&])/g,'$1').replace(/&&/g,'&'))
             );
         }
@@ -1303,6 +1333,7 @@ function connect() {
                         items.forEach((it, idx) => {
                             const d = div({class: 'win2k-listbox-item', role: 'option', tabindex: '-1', 'aria-selected': 'false', style: 'padding:1px 4px; font-size:11px; cursor:default; white-space:nowrap; overflow:hidden;', onclick: (e) => {
                                 e.stopPropagation();
+                                markChosenRow(d);
                                 sendCommand(msg.id);
                                 if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
                             }}, it);
@@ -1321,6 +1352,7 @@ function connect() {
                         items.forEach((it, idx) => {
                             const d = div({class: 'win2k-treeview-row', role: 'treeitem', tabindex: '-1', onclick: (e) => {
                                 e.stopPropagation();
+                                markChosenRow(d);
                                 sendCommand(msg.id);
                                 if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
                             }}, it);
@@ -1333,6 +1365,7 @@ function connect() {
                         items.forEach((it, idx) => {
                             const d = div({class: 'win2k-listview-row', role: 'option', tabindex: '-1', 'aria-selected': 'false', onclick: (e) => {
                                 e.stopPropagation();
+                                markChosenRow(d);
                                 sendCommand(msg.id);
                                 if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
                             }}, it);
@@ -1345,8 +1378,9 @@ function connect() {
                         if (header) {
                             header.innerHTML = '';
                             items.forEach((it, idx) => {
-                                const t = div({class: 'win2k-tab', role: 'tab', tabindex: '0', 'aria-selected': 'false', style: 'display:inline-block; padding:2px 10px; border:1px solid; border-color:var(--sys-hilight) var(--sys-shadow) var(--sys-shadow) var(--sys-hilight); font-size:11px; margin-right:2px; cursor:default; background:var(--sys-face);', onclick: (e) => {
+                                const t = div({class: 'win2k-tab' + (idx === 0 ? ' active' : ''), role: 'tab', tabindex: '0', 'aria-selected': idx === 0 ? 'true' : 'false', style: 'display:inline-block; padding:2px 10px; border:1px solid; border-color:var(--sys-hilight) var(--sys-shadow) var(--sys-shadow) var(--sys-hilight); font-size:11px; margin-right:2px; cursor:default; background:var(--sys-face);', onclick: (e) => {
                                     e.stopPropagation();
+                                    markChosenRow(t);
                                     sendCommand(msg.id);
                                     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
                                 }}, it);
@@ -1365,7 +1399,7 @@ function connect() {
                         });
                         el.onchange = (e) => {
                             sendCommand(msg.id);
-                            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: parseInt(el.value, 10) || 0}));
+                            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: parseInt(e.target.value, 10) || 0}));
                         };
                     }
 

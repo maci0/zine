@@ -1158,7 +1158,9 @@ select.win2k-edit:disabled {
 }
 
 .win2k-listview-row:hover,
-.win2k-treeview-row:hover {
+.win2k-treeview-row:hover,
+.win2k-listview-row.selected,
+.win2k-treeview-row.selected {
     background-color: var(--sys-sel);
     color: var(--sys-sel-text);
 }

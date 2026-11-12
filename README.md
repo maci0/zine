@@ -41,6 +41,7 @@ promise between versions, so a breaking change takes the next minor.
 #### Fixed
 
 - `GlobalAddAtomA` and `GlobalAddAtomW` return the same atom for the same string, so a guest that adds an atom twice compares the two results equal.
+- The browser UI marks the row or tab a click chooses, and radio buttons inside one group box now clear each other instead of staying checked together.
 - A progress bar, up-down, trackbar, or date control created after its table is full no longer shares state with the first control of that kind, and destroying a focused window returns keyboard focus to the main window.
 - Bound x86 prefix decoding at the 15-byte encoding limit, so a section of repeated prefix bytes no longer overflows the instruction length the block scan and the JIT add to their offset.
 - The browser UI is operable from the keyboard and named for assistive technology. Menus, the Start menu, dialogs, the file list and the volume popup take focus, expose their state, and return focus when they close, and the Win2000 palette meets the WCAG 2.2 AA contrast floor, including under a forced-colors theme.
