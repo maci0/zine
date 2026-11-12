@@ -50,6 +50,7 @@ promise between versions, so a breaking change takes the next minor.
 - ChooseFont derives a point size from an `lfHeight` past about 29.8 million without the `i32` product wrapping negative and clamping the size to 1pt.
 - CreateDIBSection and GetObject allocate and report the padded scan-line stride for 1bpp and 4bpp bitmaps, which previously came out as zero bytes.
 - A D3D8 surface lock whose rectangle ends on the surface edge is rejected instead of returning a pointer one row past the buffer.
+- A list, tree or tab strip in the browser UI is reachable and operable from the keyboard, and choosing a row moves its selected state for assistive technology. A combo box takes its accessible name from the caption beside it.
 
 ### 0.9.0 (2026-10-27)
 

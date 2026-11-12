@@ -351,7 +351,21 @@
                 rows[2].click();
                 assert(rows[2].classList.contains('selected') && !rows[1].classList.contains('selected'),
                     'Choosing another ' + cls + ' row must move the mark');
+                assert(rows[2].getAttribute('aria-selected') === 'true' && rows[1].getAttribute('aria-selected') === 'false',
+                    'Choosing a ' + cls + ' row must move aria-selected with the mark');
+                el.focus();
+                el.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true}));
+                assert(document.activeElement === rows[0], 'ArrowDown must move into the first ' + cls + ' row');
+                rows[0].dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+                assert(rows[0].getAttribute('aria-selected') === 'true',
+                    'Enter must choose the focused ' + cls + ' row');
             }
+            receive({type: 'custom_dialog', title: 'Form', cx: 200, cy: 80, items: [
+                {id: 80, class: 'Static', x: 4, y: 8, cx: 40, cy: 14, text: 'City:'},
+                {id: 81, class: 'ComboBox', x: 48, y: 6, cx: 100, cy: 18, text: ''}]});
+            assert(document.querySelector('#dialog-overlay select[data-id="81"]').getAttribute('aria-label') === 'City:',
+                'A combo box must take its name from the caption beside it');
+            hideDialog();
             document.getElementById('controls-container').remove();
         }
 
@@ -366,6 +380,10 @@
             tabs[1].click();
             assert(tabs[1].classList.contains('active') && !tabs[0].classList.contains('active'),
                 'Clicking a tab must move the active mark onto it');
+            assert(tabs[1].getAttribute('aria-selected') === 'true' && tabs[0].getAttribute('aria-selected') === 'false',
+                'Clicking a tab must move aria-selected with the mark');
+            assert(tabs[1].tabIndex === 0 && tabs[0].tabIndex === -1,
+                'Only the active tab stays in the tab order');
             document.getElementById('controls-container').remove();
         }
 

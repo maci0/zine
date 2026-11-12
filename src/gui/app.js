@@ -566,13 +566,64 @@ function setGuestText(el, text) {
     el.setAttribute('dir', 'auto');
 }
 
+/** The caption of the Static that sits immediately left of a control, which is
+ * the only name a guest dialog gives an edit box or a combo box. */
+function siblingCaption(item, allItems) {
+    const sibling = allItems.find(other =>
+        other.class === 'Static' && other.text &&
+        Math.abs(other.y - item.y) < 10 && other.x < item.x);
+    return sibling ? sibling.text.replace(/&/g, '') : '';
+}
+
 /** Mark the row or tab the user just chose and clear the previous one,
- * so a list shows which entry is current instead of only reporting it. */
+ * so a list shows which entry is current instead of only reporting it.
+ * The class is the painted mark; aria-selected is what a screen reader reads. */
 function markChosenRow(row) {
     const parent = row.parentElement;
     if (!parent) return;
-    parent.querySelectorAll('.selected, .active').forEach(el => el.classList.remove('selected', 'active'));
-    row.classList.add(row.classList.contains('win2k-tab') ? 'active' : 'selected');
+    parent.querySelectorAll('.selected, .active').forEach(el => {
+        el.classList.remove('selected', 'active');
+        if (el.hasAttribute('aria-selected')) el.setAttribute('aria-selected', 'false');
+        if (el.getAttribute('role') === 'tab') el.tabIndex = -1;
+    });
+    const isTab = row.classList.contains('win2k-tab');
+    row.classList.add(isTab ? 'active' : 'selected');
+    if (row.hasAttribute('aria-selected')) row.setAttribute('aria-selected', 'true');
+    if (isTab) row.tabIndex = 0;
+}
+
+/** Choose a list, tree or tab row and tell the guest which one. A pointer and
+ * the keyboard share this path, so both move the painted mark and the
+ * aria-selected state together. */
+function chooseListRow(row, id, index) {
+    markChosenRow(row);
+    row.focus();
+    sendCommand(id);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({type: 'listbox_select', id, index}));
+    }
+}
+
+/** Arrow keys walk the rows of a list, tree or tab strip, and Enter or Space
+ * chooses the row under focus. The rows sit at tabindex -1, so without this a
+ * keyboard can reach the list and no further. */
+function onListKey(e) {
+    const list = e.target.closest('[role="listbox"], [role="tree"], [role="tablist"]');
+    // A text field drawn inside the list owns its own keys.
+    if (!list || e.target !== list && !e.target.matches('[role="option"], [role="treeitem"], [role="tab"]')) return;
+    const rows = [...list.querySelectorAll('[role="option"], [role="treeitem"], [role="tab"]')];
+    if (rows.length === 0) return;
+    const at = rows.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        const down = e.key === 'ArrowDown' || e.key === 'ArrowRight';
+        const next = at < 0 ? rows[0] : rows[Math.max(0, Math.min(rows.length - 1, at + (down ? 1 : -1)))];
+        if (list.getAttribute('role') === 'tablist') next.click();
+        else next.focus();
+    } else if ((e.key === 'Enter' || e.key === ' ') && rows.includes(e.target)) {
+        e.preventDefault();
+        e.target.click();
+    }
 }
 
 /** Send a WM_COMMAND to the backend */
@@ -783,7 +834,7 @@ document.addEventListener('contextmenu', (e) => {
 
 // Escape dismisses the topmost transient surface, in stacking order.
 document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') { onMenuKey(e); return; }
+    if (e.key !== 'Escape') { onMenuKey(e); onListKey(e); return; }
 
     if (startMenu.style.display === 'block') {
         closeStartMenu();
@@ -910,26 +961,21 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
 
     // Edit
     if (cls === 'Edit') {
-        let ariaLabel = "Text input";
-        const siblingLabel = allItems.find(sibling => 
-            sibling.class === 'Static' && 
-            Math.abs(sibling.y - item.y) < 10 && 
-            sibling.x < item.x
-        );
-        if (siblingLabel && siblingLabel.text) {
-            ariaLabel = siblingLabel.text.replace(/&/g, "");
-        }
-        return input({type: 'text', class: 'win2k-edit', style: absPos, dir: 'auto', value: item.text, "aria-label": ariaLabel, "data-id": item.id});
+        return input({type: 'text', class: 'win2k-edit', style: absPos, dir: 'auto', value: item.text,
+            "aria-label": siblingCaption(item, allItems) || 'Text input', "data-id": item.id});
     }
 
     // ListBox
     if (cls === 'ListBox') {
-        return div({class: 'win2k-listbox', role: 'listbox', 'aria-label': 'List', style: absPos, "data-id": item.id});
+        return div({class: 'win2k-listbox', role: 'listbox', tabindex: '0',
+            'aria-label': siblingCaption(item, allItems) || 'List', style: absPos, "data-id": item.id});
     }
 
-    // ComboBox
+    // ComboBox. A bare select has no accessible name, so it borrows the caption
+    // of the Static drawn beside it, the same way an edit box does.
     if (cls === 'ComboBox') {
-        return select({class: 'win2k-combo', style: absPos, "data-id": item.id});
+        return select({class: 'win2k-combo', style: absPos, "data-id": item.id,
+            'aria-label': siblingCaption(item, allItems) || 'List'});
     }
 
     // SysHeader32
@@ -940,12 +986,13 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
     // SysTabControl32
     if (cls === 'SysTabControl32') {
         return div({"data-id": item.id, class: 'win2k-tab-control', style: absPos},
-            div({class: 'tab-header-row', role: 'tablist'}), div({class: 'tab-content'}));
+            div({class: 'tab-header-row', role: 'tablist', 'aria-label': 'Tabs'}), div({class: 'tab-content'}));
     }
 
     // SysListView32
     if (cls === 'SysListView32' || cls === 'SysListView') {
-        return div({"data-id": item.id, class: 'win2k-listview', role: 'listbox', 'aria-label': 'List', style: absPos});
+        return div({"data-id": item.id, class: 'win2k-listview', role: 'listbox', tabindex: '0',
+            'aria-label': siblingCaption(item, allItems) || 'List', style: absPos});
     }
 
     // msctls_statusbar32
@@ -987,7 +1034,8 @@ function DialogControl(item, scaleX, scaleY, allItems = []) {
 
     // SysTreeView32
     if (cls === 'SysTreeView32') {
-        return div({"data-id": item.id, class: 'win2k-treeview', role: 'tree', 'aria-label': 'Tree', style: absPos});
+        return div({"data-id": item.id, class: 'win2k-treeview', role: 'tree', tabindex: '0',
+            'aria-label': siblingCaption(item, allItems) || 'Tree', style: absPos});
     }
 
     // Fallback
@@ -1333,9 +1381,7 @@ function connect() {
                         items.forEach((it, idx) => {
                             const d = div({class: 'win2k-listbox-item', role: 'option', tabindex: '-1', 'aria-selected': 'false', style: 'padding:1px 4px; font-size:11px; cursor:default; white-space:nowrap; overflow:hidden;', onclick: (e) => {
                                 e.stopPropagation();
-                                markChosenRow(d);
-                                sendCommand(msg.id);
-                                if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
+                                chooseListRow(d, msg.id, idx);
                             }}, it);
                             el.appendChild(d);
                         });
@@ -1350,11 +1396,9 @@ function connect() {
                         const items = (msg.items || '').split('\n');
                         el.innerHTML = '';
                         items.forEach((it, idx) => {
-                            const d = div({class: 'win2k-treeview-row', role: 'treeitem', tabindex: '-1', onclick: (e) => {
+                            const d = div({class: 'win2k-treeview-row', role: 'treeitem', tabindex: '-1', 'aria-selected': 'false', onclick: (e) => {
                                 e.stopPropagation();
-                                markChosenRow(d);
-                                sendCommand(msg.id);
-                                if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
+                                chooseListRow(d, msg.id, idx);
                             }}, it);
                             el.appendChild(d);
                         });
@@ -1365,9 +1409,7 @@ function connect() {
                         items.forEach((it, idx) => {
                             const d = div({class: 'win2k-listview-row', role: 'option', tabindex: '-1', 'aria-selected': 'false', onclick: (e) => {
                                 e.stopPropagation();
-                                markChosenRow(d);
-                                sendCommand(msg.id);
-                                if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
+                                chooseListRow(d, msg.id, idx);
                             }}, it);
                             el.appendChild(d);
                         });
@@ -1378,11 +1420,9 @@ function connect() {
                         if (header) {
                             header.innerHTML = '';
                             items.forEach((it, idx) => {
-                                const t = div({class: 'win2k-tab' + (idx === 0 ? ' active' : ''), role: 'tab', tabindex: '0', 'aria-selected': idx === 0 ? 'true' : 'false', style: 'display:inline-block; padding:2px 10px; border:1px solid; border-color:var(--sys-hilight) var(--sys-shadow) var(--sys-shadow) var(--sys-hilight); font-size:11px; margin-right:2px; cursor:default; background:var(--sys-face);', onclick: (e) => {
+                                const t = div({class: 'win2k-tab' + (idx === 0 ? ' active' : ''), role: 'tab', tabindex: idx === 0 ? '0' : '-1', 'aria-selected': idx === 0 ? 'true' : 'false', style: 'display:inline-block; padding:2px 10px; border:1px solid; border-color:var(--sys-hilight) var(--sys-shadow) var(--sys-shadow) var(--sys-hilight); font-size:11px; margin-right:2px; cursor:default; background:var(--sys-face);', onclick: (e) => {
                                     e.stopPropagation();
-                                    markChosenRow(t);
-                                    sendCommand(msg.id);
-                                    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'listbox_select', id: msg.id, index: idx}));
+                                    chooseListRow(t, msg.id, idx);
                                 }}, it);
                                 header.appendChild(t);
                             });
@@ -1465,7 +1505,7 @@ function connect() {
                         nameErrorEl.style.display = 'none';
                         filenameInput.setAttribute('aria-invalid', 'false');
                     }
-                    const fileListEl = div({class: 'win2k-edit comdlg-file-list', role: 'listbox', 'aria-label': 'Files'});
+                    const fileListEl = div({class: 'win2k-edit comdlg-file-list', role: 'listbox', tabindex: '0', 'aria-label': 'Files'});
                     const lookInLabel = div({class: 'win2k-edit comdlg-lookin', dir: 'auto'});
 
                     // The guest sends filter descriptions ("Text files (*.txt)"),
@@ -1787,7 +1827,7 @@ function connect() {
                     }
 
                     // Font list
-                    const fontListEl = div({class: 'fontdlg-list', role: 'listbox', 'aria-label': 'Font', style: 'width:160px;'});
+                    const fontListEl = div({class: 'fontdlg-list', role: 'listbox', tabindex: '0', 'aria-label': 'Font', style: 'width:160px;'});
                     fonts.forEach(f => {
                         van.add(fontListEl, div({class: 'fontdlg-list-item' + (f === selFont ? ' selected' : ''), role: 'option', tabindex: '-1', 'aria-selected': f === selFont ? 'true' : 'false', onclick: () => {
                             selFont = f;
@@ -1798,7 +1838,7 @@ function connect() {
                     });
 
                     // Style list
-                    const styleListEl = div({class: 'fontdlg-list', role: 'listbox', 'aria-label': 'Font style', style: 'width:100px;'});
+                    const styleListEl = div({class: 'fontdlg-list', role: 'listbox', tabindex: '0', 'aria-label': 'Font style', style: 'width:100px;'});
                     styles.forEach((s, i) => {
                         van.add(styleListEl, div({class: 'fontdlg-list-item' + (i === getStyleIdx() ? ' selected' : ''), role: 'option', tabindex: '-1', 'aria-selected': i === getStyleIdx() ? 'true' : 'false', onclick: () => {
                             selBold = (i === 2 || i === 3);
@@ -1810,7 +1850,7 @@ function connect() {
                     });
 
                     // Size list
-                    const sizeListEl = div({class: 'fontdlg-list', role: 'listbox', 'aria-label': 'Size', style: 'width:50px;'});
+                    const sizeListEl = div({class: 'fontdlg-list', role: 'listbox', tabindex: '0', 'aria-label': 'Size', style: 'width:50px;'});
                     sizes.forEach(sz => {
                         van.add(sizeListEl, div({class: 'fontdlg-list-item' + (sz === selSize ? ' selected' : ''), role: 'option', tabindex: '-1', 'aria-selected': sz === selSize ? 'true' : 'false', onclick: () => {
                             selSize = sz;
