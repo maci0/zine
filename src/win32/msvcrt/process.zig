@@ -702,12 +702,73 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     }
 }
 
+/// One cached getenv result. raw_alloc never frees, so a guest that looks a
+/// name up per file (the compiler's include search does) would otherwise grow
+/// the heap by the value's length on every call. The pointer is stable until
+/// putenv changes the name, which is the CRT contract: the guest may keep it
+/// until the next putenv of that name.
+const EnvCacheEntry = struct {
+    name: []const u8,
+    value: [*:0]u8,
+};
+
+/// Names a guest looks up repeatedly (PATH, INCLUDE, LIB, TMP, TEMP) plus
+/// room for a few more. Past the cap the oldest entry is replaced, so the
+/// table itself cannot grow.
+const env_cache_cap = 16;
+var env_cache: [env_cache_cap]EnvCacheEntry = undefined;
+var env_cache_len: usize = 0;
+var env_cache_next: usize = 0;
+
+/// Drops the cached copy of `name`, if any. putenv and SetEnvironmentVariableA
+/// must call this: the cached pointer would otherwise keep answering with the
+/// value it replaced.
+pub fn invalidateEnvCache(name: []const u8) void {
+    var i: usize = 0;
+    while (i < env_cache_len) : (i += 1) {
+        if (!std.ascii.eqlIgnoreCase(env_cache[i].name, name)) continue;
+        env_cache_len -= 1;
+        if (i != env_cache_len) env_cache[i] = env_cache[env_cache_len];
+        return;
+    }
+}
+
+fn cachedEnv(name: []const u8) ?[*:0]u8 {
+    for (env_cache[0..env_cache_len]) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.name, name)) return entry.value;
+    }
+    return null;
+}
+
+/// Copies `value` once and remembers it under `name`. A later lookup of the
+/// same name returns the same pointer.
+fn cacheEnv(name: []const u8, value: []const u8) ?[*:0]u8 {
+    const stub_common = @import("../shared.zig");
+    const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(value.len + 1) orelse return null));
+    @memcpy(ptr[0..value.len], value);
+    ptr[value.len] = 0;
+
+    const slot = if (env_cache_len < env_cache_cap) blk: {
+        const i = env_cache_len;
+        env_cache_len += 1;
+        break :blk i;
+    } else blk: {
+        const i = env_cache_next;
+        env_cache_next = (env_cache_next + 1) % env_cache_cap;
+        break :blk i;
+    };
+    env_cache[slot] = .{ .name = name, .value = @ptrCast(ptr) };
+    return @ptrCast(ptr);
+}
+
 /// Implementation status: Partially implemented
 pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
     if (name_ptr == 0) return null;
     const name = trace.c_span(name_ptr);
 
     if (trace.enable_tracing) trace.print("MSVCRT: getenv('{s}')\n", .{name});
+
+    if (cachedEnv(name)) |cached| return @ptrCast(cached);
 
     var deleted_shadow = false;
     for (msvcrt.msvcrt_env_vars.items) |v| {
@@ -719,11 +780,10 @@ pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
             break;
         }
         if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> '{s}'\n", .{ name, log.redactEnvValue(name, v.val) });
-        const stub_common = @import("../shared.zig");
-        const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(v.val.len + 1) orelse return null));
-        @memcpy(ptr[0..v.val.len], v.val);
-        ptr[v.val.len] = 0;
-        return @ptrCast(ptr);
+        // The cache key must outlive the call. The override table owns its
+        // key for as long as the entry exists, which is what invalidateEnvCache
+        // drops the copy against.
+        return @ptrCast(cacheEnv(v.key, v.val));
     }
 
     if (deleted_shadow) {
@@ -739,11 +799,9 @@ pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
             if (std.ascii.startsWithIgnoreCase(env_str, name) and env_str.len > name.len and env_str[name.len] == '=') {
                 const val = env_str[name.len + 1 ..];
                 if (trace.enable_tracing) trace.print("MSVCRT: getenv '{s}' -> '{s}' (inherited)\n", .{ name, log.redactEnvValue(name, val) });
-                const stub_common = @import("../shared.zig");
-                const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(val.len + 1) orelse return null));
-                @memcpy(ptr[0..val.len], val);
-                ptr[val.len] = 0;
-                return @ptrCast(ptr);
+                // The inherited block is process-lifetime, so the name slice
+                // inside it is a stable cache key.
+                return @ptrCast(cacheEnv(env_str[0..name.len], val));
             }
         }
     }
@@ -753,12 +811,7 @@ pub fn getenv(name_ptr: usize) callconv(.c) ?*anyopaque {
     // Windows usually expects TMP or TEMP to exist, but if it's missing in the native
     // environment, we'll provide a generic fallback since CLI tools frequently require it.
     if (std.ascii.eqlIgnoreCase(name, "TMP") or std.ascii.eqlIgnoreCase(name, "TEMP")) {
-        const tmp_str = ".\x00";
-        const stub_common = @import("../shared.zig");
-        const ptr = @as([*]u8, @ptrCast(stub_common.raw_alloc(4096) orelse return null));
-        @memset(ptr[0..4096], 0);
-        @memcpy(ptr[0..tmp_str.len], tmp_str);
-        return @ptrCast(ptr);
+        return @ptrCast(cacheEnv(if (std.ascii.eqlIgnoreCase(name, "TMP")) "TMP" else "TEMP", "."));
     }
 
     return null;
@@ -784,6 +837,10 @@ pub fn putenv(envstring_ptr: usize) callconv(.c) i32 {
     const key = envstring[0..idx];
     const val = envstring[idx + 1 ..];
     if (trace.enable_tracing) trace.print("MSVCRT: _putenv('{s}={s}')\n", .{ key, log.redactEnvValue(key, val) });
+
+    // The name may live only in the inherited block, whose cached copy this
+    // write must replace even though no override entry matches it yet.
+    invalidateEnvCache(key);
 
     const msvcrt_mod = msvcrt;
 
@@ -1049,9 +1106,14 @@ test "putenv empty value deletes; getenv sees deletion" {
     const saved_vars = msvcrt_mod.msvcrt_env_vars;
     const saved_env_init = msvcrt_mod.global_env_initialized;
     const saved_envp = msvcrt_mod.global_envp;
+    const saved_cache = env_cache;
+    const saved_cache_len = env_cache_len;
+    env_cache_len = 0;
     msvcrt_mod.msvcrt_env_vars = .empty;
     msvcrt_mod.global_env_initialized = false;
     defer {
+        env_cache = saved_cache;
+        env_cache_len = saved_cache_len;
         for (msvcrt_mod.msvcrt_env_vars.items) |v| {
             if (!v.deleted) {
                 std.heap.page_allocator.free(v.key);
@@ -1079,6 +1141,8 @@ test "putenv empty value deletes; getenv sees deletion" {
     // passes on the return code alone.
     const found = getenv(@intFromPtr(&name_buf)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("1", std.mem.span(@as([*:0]const u8, @ptrCast(@alignCast(found)))));
+    const again = getenv(@intFromPtr(&name_buf)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@intFromPtr(found), @intFromPtr(again));
 
     var del_buf: [8]u8 = undefined;
     @memcpy(del_buf[0..6], "MYVAR=");
@@ -1086,4 +1150,12 @@ test "putenv empty value deletes; getenv sees deletion" {
     try std.testing.expectEqual(@as(i32, 0), putenv(@intFromPtr(&del_buf)));
 
     try std.testing.expect(getenv(@intFromPtr(&name_buf)) == null);
+
+    var reset_buf: [16]u8 = undefined;
+    @memcpy(reset_buf[0..8], "MYVAR=2\x00");
+    reset_buf[8] = 0;
+    try std.testing.expectEqual(@as(i32, 0), putenv(@intFromPtr(&reset_buf)));
+    const replaced = getenv(@intFromPtr(&name_buf)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(@intFromPtr(replaced) != @intFromPtr(found));
+    try std.testing.expectEqualStrings("2", std.mem.span(@as([*:0]const u8, @ptrCast(@alignCast(replaced)))));
 }

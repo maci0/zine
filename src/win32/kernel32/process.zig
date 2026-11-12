@@ -602,6 +602,9 @@ pub fn GetCurrentThreadId() callconv(w32cc.WINAPI) u32 {
 pub fn SetEnvironmentVariableA(lpName: usize, lpValue: usize) callconv(w32cc.WINAPI) i32 {
     if (lpName == 0) return 0;
     const name = trace.c_span(lpName);
+    // The name may be cached from the inherited block; drop that copy before
+    // the override below replaces it.
+    @import("../msvcrt/process.zig").invalidateEnvCache(name);
     // Win32 contract: lpValue == NULL deletes the variable.
     if (lpValue != 0) {
         const value = trace.c_span(lpValue);
