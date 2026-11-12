@@ -572,7 +572,7 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
     while (true) {
         var req = server.receiveHead() catch |err| {
             if (err != error.EndOfStream and err != error.ConnectionResetByPeer) {
-                std.debug.print("HTTP receiveHead error: {}\n", .{err});
+                log.warn("WebUI: HTTP receiveHead error: {}", .{err});
             }
             break;
         };
@@ -617,7 +617,7 @@ fn handleClientInner(stream: std.Io.net.Stream) !void {
                         // either way; the client is told the limit first.
                         error.MessageOversize => sendError(&ws, "message exceeds the maximum frame size"),
                         error.ConnectionClose, error.EndOfStream => {},
-                        else => std.debug.print("WS read error: {}\n", .{err}),
+                        else => log.warn("WebUI: WebSocket read error: {}", .{err}),
                     }
                     break;
                 };
@@ -739,7 +739,9 @@ fn respondAssetFromDisk(
         } else {
             try respondStatus(req, .internal_server_error, "Internal server error", null);
         }
-        std.debug.print("WebUI: cannot open {s}: {s}, ending the connection\n", .{ full_path, @errorName(err) });
+        if (err != error.FileNotFound) {
+            log.err("WebUI: cannot open {s}: {s}, ending the connection", .{ full_path, @errorName(err) });
+        }
         return .close_connection;
     };
     defer file.close(runtime.io());
@@ -749,7 +751,7 @@ fn respondAssetFromDisk(
     // a status the client can act on. A directory is not an asset.
     const stat = file.stat(runtime.io()) catch |err| {
         try respondStatus(req, .internal_server_error, "Internal server error", null);
-        std.debug.print("WebUI: cannot stat {s}: {s}, ending the connection\n", .{ full_path, @errorName(err) });
+        log.err("WebUI: cannot stat {s}: {s}, ending the connection", .{ full_path, @errorName(err) });
         return .close_connection;
     };
     if (stat.kind != .file) {
@@ -770,7 +772,7 @@ fn respondAssetFromDisk(
     };
     const bytes_read = file.readPositionalAll(runtime.io(), content, 0) catch |err| {
         try respondStatus(req, .internal_server_error, "Internal server error", null);
-        std.debug.print("WebUI: cannot read {s}: {s}, ending the connection\n", .{ full_path, @errorName(err) });
+        log.err("WebUI: cannot read {s}: {s}, ending the connection", .{ full_path, @errorName(err) });
         return .close_connection;
     };
     try respondStaticContent(req, content[0..bytes_read], content_type);
