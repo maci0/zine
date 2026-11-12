@@ -519,6 +519,15 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         }
     }
 
+    // Everything from here is guest-supplied (the PE path and its argv). End
+    // host-option parsing first: the child is a fresh zine, and its parser
+    // treats every leading "--*" as its own flag (--trace, --jit, --output,
+    // ...). A spawned program whose path or argv begins with one of those
+    // would otherwise reconfigure or abort the emulator instead of receiving
+    // the argument. "--argv0" above stays before the separator because it is a
+    // host option.
+    args.append(alloc, "--") catch return -1;
+
     var resolved = false;
     var has_sep = false;
     for (cmdname) |c| {
@@ -630,6 +639,13 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         if (std.mem.indexOfScalar(u8, e_str, '=')) |eq_idx| {
             const key = e_str[0..eq_idx];
             const val = e_str[eq_idx + 1 ..];
+            // ZINE_* configures the emulator, not the guest: the child is a
+            // fresh zine that reads these at startup (ZINE_CWD relocates its
+            // filesystem root, ZINE_TRACE dumps guest memory to stderr). The
+            // guest can set them with putenv, so forwarding one would hand it
+            // the host's own settings. The child inherits the operator's
+            // environment from the process it was forked out of.
+            if (std.mem.startsWith(u8, key, "ZINE_")) continue;
             if (overrideShadows(msvcrt.msvcrt_env_vars, key)) continue;
             // Dropping the entry would hand the child an environment missing
             // a variable the parent set, with no error the caller can see.
@@ -640,6 +656,10 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
     for (msvcrt.msvcrt_env_vars.items) |v| {
         // Deleted variables must not reach spawned children.
         if (v.deleted) continue;
+        // See the inherited-environment loop: a guest-set ZINE_* variable
+        // configures the child emulator, so it is not an environment variable
+        // the child program may receive.
+        if (std.mem.startsWith(u8, v.key, "ZINE_")) continue;
         new_env_map.put(v.key, v.val) catch return -1;
     }
 
@@ -674,7 +694,7 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         return -1;
     }
 
-    var child = std.process.spawn(rt_io, .{ .argv = args.items }) catch return -1;
+    var child = std.process.spawn(rt_io, .{ .argv = args.items, .environ_map = &new_env_map }) catch return -1;
     const term = child.wait(rt_io) catch return -1;
     switch (term) {
         .exited => |code| return @intCast(code),
