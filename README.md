@@ -38,6 +38,8 @@ promise between versions, so a breaking change takes the next minor.
 
 ### Unreleased
 
+### 0.10.0 (2026-11-13)
+
 #### Fixed
 
 - The browser UI looks up a guest control by its id instead of scanning the document on every update, and paints only the newest frame per display refresh instead of blitting every frame the host pushes.

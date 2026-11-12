@@ -977,7 +977,7 @@ fn buildDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) !b
 /// by iterating the given path relative to cwd. false means a directory was
 /// opened and then could not be closed, so the caller must not send a
 /// message that was built while a handle leaked.
-fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) error{OutOfMemory}!bool {
+fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) !bool {
     // The path is a logical Win32 path (e.g. "Desktop", "Desktop/subfolder").
     // Map it to the host filesystem under drive_c/. Anything virtualPathToDriveC
     // refuses (absolute, drive-qualified, backslash, NUL, a "." or ".."

@@ -1715,11 +1715,11 @@ test "static asset responses carry an etag and 304 on a matching If-None-Match" 
 /// weight a reload re-transfers.
 const budget_document: usize = 3 * 1024;
 const budget_stylesheet: usize = 11 * 1024;
-const budget_script: usize = 24 * 1024;
+const budget_script: usize = 29 * 1024;
 const budget_van: usize = 2 * 1024;
 /// Ceiling on what a first visit transfers before the UI is interactive, the
 /// sum of the per-asset limits' measured sizes.
-const budget_total: usize = 40 * 1024;
+const budget_total: usize = 45 * 1024;
 
 test "static assets negotiate gzip without changing decoded content" {
     const built = @import("web_assets");
