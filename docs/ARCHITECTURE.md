@@ -540,7 +540,7 @@ zine/
 │   │   ├── van.LICENSE      # VanJS license, shipped alongside the vendored copy
 │   │   └── assets/          # SVGs used by the frontend
 │   ├── fuzz/                 # Fuzz harnesses for untrusted-input parsers
-│   │   ├── pe.zig, resource.zig, export.zig, menu.zig, dialog.zig, icon.zig, loadstring.zig, bat.zig, rc.zig
+│   │   ├── pe.zig, resource.zig, export.zig, menu.zig, dialog.zig, icon.zig, loadstring.zig, bat.zig, rc.zig, decode.zig
 │   │   └── mutation.zig, replay.zig, seed.zig
 │   └── dll/                 # Standalone DLL build sources (zig build -Ddll=all)
 │       ├── msvcrt_dll.zig, kernel32_dll.zig, user32_dll.zig, ...

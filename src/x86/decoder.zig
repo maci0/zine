@@ -83,6 +83,13 @@ const SIB = struct {
     base: u3,
 };
 
+/// Longest encoding one x86 instruction can have: four prefixes, an opcode
+/// of up to three bytes, ModR/M, SIB, a 4-byte displacement, and a 4-byte
+/// immediate. `Instruction.length` is a `u8`, and the JIT and the block scan
+/// add it to an offset that runs the whole of a guest section, so a prefix
+/// run longer than this must stop rather than wrap the length.
+pub const max_insn_len: u8 = 15;
+
 /// Decode one x86 instruction starting at `bytes`.
 /// Returns the decoded instruction with its length.
 pub fn decode(bytes: []const u8) Instruction {
@@ -90,7 +97,10 @@ pub fn decode(bytes: []const u8) Instruction {
     var pos: usize = 0;
 
     // --- Phase 1: Prefixes ---
-    while (pos < bytes.len) {
+    // A prefix that would push the instruction past `max_insn_len` is the
+    // opcode instead: a guest can place an arbitrary run of 0x66 bytes in a
+    // section, and consuming all of them overflows the `u8` length.
+    while (pos < bytes.len and pos < max_insn_len) {
         switch (bytes[pos]) {
             0xF0 => insn.lock = true,
             0xF2 => insn.repne = true,
@@ -1022,6 +1032,11 @@ pub fn decode(bytes: []const u8) Instruction {
         else => {},
     }
 
+    // The prefix walk stops at `max_insn_len`, but the opcode byte and its
+    // operands are consumed after that. A guest section of nothing but
+    // prefixes would otherwise report 16, which is not an encoding and which
+    // the `u8` length cannot keep once the run is longer still.
+    if (pos > max_insn_len) pos = max_insn_len;
     insn.length = @intCast(pos);
     return insn;
 }
@@ -1324,6 +1339,15 @@ test "decode: truncated instruction streams decode defensively" {
     const no_modrm = decode(&.{0x83});
     try testing.expectEqual(@as(u16, 0x83), no_modrm.opcode);
     try testing.expectEqual(@as(u8, 1), no_modrm.length);
+
+    // A prefix run longer than one instruction: the length stays inside the
+    // 15-byte encoding limit instead of walking the whole run. The JIT and
+    // the block scan add this length to a section offset.
+    var prefix_run: [300]u8 = undefined;
+    for (&prefix_run) |*byte| byte.* = 0x66;
+    const run = decode(&prefix_run);
+    try testing.expect(run.length <= max_insn_len);
+    try testing.expect(run.length > 0);
 }
 
 test "decode: MOV EAX, imm32 (B8 + dword)" {

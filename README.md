@@ -41,6 +41,7 @@ promise between versions, so a breaking change takes the next minor.
 #### Fixed
 
 - A progress bar, up-down, trackbar, or date control created after its table is full no longer shares state with the first control of that kind, and destroying a focused window returns keyboard focus to the main window.
+- Bound x86 prefix decoding at the 15-byte encoding limit, so a section of repeated prefix bytes no longer overflows the instruction length the block scan and the JIT add to their offset.
 
 ### 0.9.0 (2026-10-27)
 
@@ -988,8 +989,9 @@ zig build test-cli -Dhost       # also checks zine-host; requires Wasmer headers
 
 `zig build fuzz` mutates the seed corpora of the menu, dialog, icon, and PE
 header parsers, the string-table, resource-directory, and export-directory
-walks, the batch script interpreter, and the `.rc` resource compiler, and
-feeds every input to the parser under Zig's safety checks.
+walks, the batch script interpreter, the `.rc` resource compiler, and the x86
+instruction decoder, and feeds every input to the parser under Zig's safety
+checks.
 A failing input is written to `zig-out/fuzz/<target>-<n>.bin`; minimize it, fix
 the cause, and add its bytes to the `seeds` array of that target's harness in
 `src/fuzz/`.
@@ -1006,6 +1008,9 @@ resource or export lookup that resolves must hand back bytes the mapped image
 actually holds, the same way twice.
 A compiled `.rc` script must emit a `.res` image whose records all fit, and
 must emit the same one twice, since the `#define` table lives in the process.
+A decoded instruction's length must stay inside the bytes it was given and
+inside the 15-byte encoding limit, and the same bytes must decode the same
+way twice.
 `zig build test` replays the same seeds plus a fixed mutation sweep under
 `std.testing.allocator`, so a leak or a broken contract fails the normal gate.
 libFuzzer or AFL++ can drive the same harnesses by calling `harness` in

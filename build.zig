@@ -868,7 +868,7 @@ pub fn build(b: *std.Build) void {
     // `zig build test` (src/fuzz/replay.zig), which is where leaks and
     // assertion failures become hard failures.
     // -----------------------------------------------------------------------
-    const fuzz_step = b.step("fuzz", "Fuzz the PE header, menu, dialog, and icon parsers, the string-table, resource, and export walks, and the batch interpreter");
+    const fuzz_step = b.step("fuzz", "Fuzz the PE header, menu, dialog, and icon parsers, the string-table, resource, and export walks, the batch interpreter, and the x86 decoder");
     const fuzz_seconds = b.option(u32, "fuzz-seconds", "Seconds each fuzz target runs") orelse 10;
     const fuzz_exe = b.addExecutable(.{
         .name = "zine-fuzz",

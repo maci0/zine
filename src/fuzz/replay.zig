@@ -18,6 +18,7 @@ const pe_fuzz = @import("pe.zig");
 const export_fuzz = @import("export.zig");
 const resource_fuzz = @import("resource.zig");
 const rc_fuzz = @import("rc.zig");
+const decode_fuzz = @import("decode.zig");
 
 /// Mutations replayed per target in CI. Small enough to keep the unit-test
 /// gate fast, large enough to reach the truncation and boundary paths.
@@ -110,6 +111,16 @@ test "fuzz: bat seeds and mutations hold the interpreter contract" {
 
 test "fuzz: rc seeds and mutations hold the resource image contract" {
     try replay(&rc_fuzz.seeds, rc_fuzz.harness);
+}
+
+test "fuzz: decode seeds and mutations hold the length contract" {
+    try replay(&decode_fuzz.seeds, decode_fuzz.harness);
+
+    // The mutations only reach a long prefix run if the seed does, so pin the
+    // length a section of nothing but prefixes decodes to.
+    const decoder = @import("../x86/decoder.zig");
+    const insn = decoder.decode(&decode_fuzz.prefix_run);
+    try testing.expectEqual(decoder.max_insn_len, insn.length);
 }
 
 test "rc: a script with resource data compiles to a loadable image" {
