@@ -78,20 +78,11 @@ var timer_thread_started: std.atomic.Value(bool) = std.atomic.Value(bool).init(f
 /// Io-free millisecond timestamp (safe on the guest thread inside the signal
 /// dispatch context — runtime.milliTimestamp uses std.Io which reads TLS).
 /// Monotonic clock: timer bookkeeping diffs these values against readings in
-/// user32/message.zig, and neither side may step with the wall clock.
+/// user32/message.zig, and neither side may step with the wall clock. Both
+/// sides read `runtime.monoMilliTimestamp`, whose host fallback is itself
+/// Io-free, so the delta is elapsed time on one clock.
 fn safeMilliTs() i64 {
-    const rt = @import("../../runtime.zig");
-    // A virtual clock reads a spinlock-guarded field, so it is as safe here as
-    // a raw clock_gettime, and it keeps the timer bookkeeping on the same
-    // timeline as the guest-facing readings in user32/message.zig.
-    if (rt.useVirtualClock()) return rt.monoMilliTimestamp();
-    if (comptime @import("builtin").target.os.tag == .linux) {
-        const linux = std.os.linux;
-        var ts: linux.timespec = .{ .sec = 0, .nsec = 0 };
-        _ = linux.clock_gettime(linux.CLOCK.MONOTONIC, &ts);
-        return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
-    }
-    return rt.monoMilliTimestamp();
+    return @import("../../runtime.zig").monoMilliTimestamp();
 }
 
 /// Spawn the WM_TIMER dispatcher thread on first SetTimer. It wakes every

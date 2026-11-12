@@ -206,6 +206,22 @@ pub fn nanoTimestamp() i128 {
 /// the absolute value is meaningless across processes or boots.
 pub fn monoMilliTimestamp() i64 {
     if (virtualNow()) |ns| return @intCast(@divTrunc(ns, std.time.ns_per_ms));
+    return hostMonoMilliTimestamp();
+}
+
+/// Milliseconds on the host monotonic clock, without touching `std.Io`.
+/// `std.Io.Timestamp.now` reads per-thread TLS, which faults inside the
+/// compat-mode dispatch handler (FS points at the guest TEB). A raw
+/// `clock_gettime` does not, so the timer bookkeeping that runs there can
+/// share this clock with the message pump's `monoMilliTimestamp` readings:
+/// the two diff `last_fire`, and a split source makes that delta the host's
+/// boot offset instead of the elapsed time.
+pub fn hostMonoMilliTimestamp() i64 {
+    if (comptime @import("builtin").target.os.tag == .linux) {
+        var ts: std.os.linux.timespec = .{ .sec = 0, .nsec = 0 };
+        _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
+        return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    }
     const ts = std.Io.Timestamp.now(io(), .awake);
     return ts.toMilliseconds();
 }
