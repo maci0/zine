@@ -619,24 +619,26 @@ fn parseFilterString(comptime C: type, filter_ptr: u32) ?[]const u8 {
         _ = ptr[pat_start..pos];
         pos += 1;
 
-        if (!first) result.appendSlice(alloc, ",") catch {};
+        if (!first) result.appendSlice(alloc, ",") catch return null;
         first = false;
-        result.appendSlice(alloc, "\"") catch {};
-        // JSON-escape the description
+        result.appendSlice(alloc, "\"") catch return null;
+        // JSON-escape the description. A failed append used to leave the
+        // description half-written and still hand the dialog a filter list
+        // that parsed as valid JSON, so a name the guest set disappeared.
         for (desc) |wc| {
             const c = filterChar(C, wc);
             if (c == '"') {
-                result.appendSlice(alloc, "\\\"") catch {};
+                result.appendSlice(alloc, "\\\"") catch return null;
             } else if (c == '\\') {
-                result.appendSlice(alloc, "\\\\") catch {};
+                result.appendSlice(alloc, "\\\\") catch return null;
             } else {
-                result.append(alloc, c) catch {};
+                result.append(alloc, c) catch return null;
             }
         }
-        result.appendSlice(alloc, "\"") catch {};
+        result.appendSlice(alloc, "\"") catch return null;
     }
 
-    result.appendSlice(alloc, "]") catch {};
+    result.appendSlice(alloc, "]") catch return null;
     return result.items;
 }
 

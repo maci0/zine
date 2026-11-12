@@ -19,6 +19,8 @@ const ERROR_INVALID_ADDRESS = 487;
 const ERROR_INVALID_HANDLE = 6;
 const ERROR_DISK_FULL = 112;
 const ERROR_FILE_NOT_FOUND = 2;
+const ERROR_PATH_NOT_FOUND = 3;
+const ERROR_ACCESS_DENIED = 5;
 
 /// Narrow a guest wide string to the CP1252 bytes its `A` twin takes, leaving
 /// room for the terminator. Truncating each code unit to its low byte instead
@@ -1441,8 +1443,20 @@ fn fileExistsPosix(host_path: []const u8) bool {
 /// guest learns of it only from this return value, so it must not be FALSE.
 fn copyFailed(src_buf: []const u8, dst_buf: []const u8, op: []const u8, errno: ?std.posix.E, err: ?anyerror) i32 {
     log.err("CopyFile '{s}' -> '{s}': host {s} failed, errno {?}, error {?}", .{ src_buf, dst_buf, op, errno, err });
-    kernel32_error.SetLastError(if (std.mem.eql(u8, op, "read")) ERROR_READ_FAULT else ERROR_WRITE_FAULT);
+    kernel32_error.SetLastError(copyErrorCode(op, errno));
     return 0;
+}
+
+/// Map a host errno onto the Win32 code the failing step implies. A missing
+/// source is not a write fault, and a permission failure is not "not found".
+fn copyErrorCode(op: []const u8, errno: ?std.posix.E) u32 {
+    if (errno) |e| switch (e) {
+        .NOENT, .NOTDIR => return if (std.mem.eql(u8, op, "open")) ERROR_FILE_NOT_FOUND else ERROR_PATH_NOT_FOUND,
+        .ACCES, .PERM => return ERROR_ACCESS_DENIED,
+        else => {},
+    };
+    if (std.mem.eql(u8, op, "read")) return ERROR_READ_FAULT;
+    return ERROR_WRITE_FAULT;
 }
 
 /// Shared copy core given resolved POSIX paths.
@@ -1456,7 +1470,10 @@ fn copyFileHost(src_buf: []const u8, dst_buf: []const u8) i32 {
         src_nt[src_buf.len] = 0;
         const src_rc = std.os.linux.open(@ptrCast(&src_nt), .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
         const src_fd: isize = @bitCast(src_rc);
-        if (src_fd < 0) return 0;
+        // Open failures used to return 0 without a last error, so the guest
+        // saw a copy that "failed" with GetLastError still holding whatever
+        // the previous call set. Report the errno instead.
+        if (src_fd < 0) return copyFailed(src_buf, dst_buf, "open", std.posix.errno(src_rc), null);
         defer _ = std.os.linux.close(@intCast(src_fd));
 
         var dst_nt: [1025]u8 = undefined;
@@ -1464,7 +1481,7 @@ fn copyFileHost(src_buf: []const u8, dst_buf: []const u8) i32 {
         dst_nt[dst_buf.len] = 0;
         const dst_rc = std.os.linux.open(@ptrCast(&dst_nt), .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .CLOEXEC = true }, 0o666);
         const dst_fd: isize = @bitCast(dst_rc);
-        if (dst_fd < 0) return 0;
+        if (dst_fd < 0) return copyFailed(src_buf, dst_buf, "create", std.posix.errno(dst_rc), null);
         defer _ = std.os.linux.close(@intCast(dst_fd));
 
         var buf: [4096]u8 = undefined;
@@ -1766,6 +1783,32 @@ test "native map registry unmaps registered views" {
     // Unknown addresses are ignored without panicking.
     unregisterNativeMap(0xDEAD000);
     try std.testing.expect(native_map_addrs[0] == 0x1234000);
+}
+
+test "CopyFile of a missing source sets last error and writes nothing" {
+    if (comptime !platform.is_native) return error.SkipZigTest;
+    const path_utils_test = @import("../../path_utils.zig");
+    const saved_error = kernel32_error.GetLastError();
+    const saved_dir = path_utils_test.current_directory;
+    const saved_len = path_utils_test.current_directory_len;
+    defer {
+        kernel32_error.SetLastError(saved_error);
+        path_utils_test.current_directory = saved_dir;
+        path_utils_test.current_directory_len = saved_len;
+    }
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_len = try tmp.dir.realPath(runtime.io(), &dir_buf);
+    path_utils_test.setCurrentDirectory(dir_buf[0..dir_len]);
+
+    const src = "missing-src.bin";
+    const dst = "should-not-appear.bin";
+    kernel32_error.SetLastError(0);
+    try std.testing.expectEqual(@as(i32, 0), CopyFileA(@intFromPtr(src.ptr), @intFromPtr(dst.ptr), 0));
+    try std.testing.expectEqual(@as(u32, ERROR_FILE_NOT_FOUND), kernel32_error.GetLastError());
+    try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(runtime.io(), dst, .{}));
 }
 
 test "a failed WriteFile reports a byte count of zero and a last error" {

@@ -21,17 +21,17 @@ pub fn build(allocator: std.mem.Allocator) ![]const u8 {
 
     var first = true;
     var it = dir.iterate();
-    while (it.next(runtime.io()) catch null) |entry| {
+    while (it.next(runtime.io()) catch |e| return e) |entry| {
         // Skip hidden files
         if (entry.name.len > 0 and entry.name[0] == '.') continue;
 
-        if (!first) json.appendSlice(allocator, ",") catch {};
+        if (!first) try json.appendSlice(allocator, ",");
         first = false;
 
-        json.appendSlice(allocator, "{\"name\":\"") catch {};
-        renderer.jsonEscapeAppend(&json, entry.name);
-        json.appendSlice(allocator, "\",\"is_dir\":") catch {};
-        json.appendSlice(allocator, if (entry.kind == .directory) "true" else "false") catch {};
+        try json.appendSlice(allocator, "{\"name\":\"");
+        try renderer.jsonEscapeAppend(&json, entry.name);
+        try json.appendSlice(allocator, "\",\"is_dir\":");
+        try json.appendSlice(allocator, if (entry.kind == .directory) "true" else "false");
 
         // Extract extension
         const ext = blk: {
@@ -42,9 +42,9 @@ pub fn build(allocator: std.mem.Allocator) ![]const u8 {
             }
             break :blk "";
         };
-        json.appendSlice(allocator, ",\"ext\":\"") catch {};
-        renderer.jsonEscapeAppend(&json, ext);
-        json.appendSlice(allocator, "\"") catch {};
+        try json.appendSlice(allocator, ",\"ext\":\"");
+        try renderer.jsonEscapeAppend(&json, ext);
+        try json.appendSlice(allocator, "\"");
 
         // For .exe files, try to extract icon from PE resources
         if (entry.kind == .file and ext.len >= 3 and
@@ -53,17 +53,17 @@ pub fn build(allocator: std.mem.Allocator) ![]const u8 {
             (ext[2] == 'e' or ext[2] == 'E'))
         {
             if (extractExeIconBase64(allocator, entry.name)) |icon_b64| {
-                json.appendSlice(allocator, ",\"icon\":\"") catch {};
-                json.appendSlice(allocator, icon_b64) catch {};
-                json.appendSlice(allocator, "\"") catch {};
+                try json.appendSlice(allocator, ",\"icon\":\"");
+                try json.appendSlice(allocator, icon_b64);
+                try json.appendSlice(allocator, "\"");
                 allocator.free(icon_b64);
             }
         }
 
-        json.appendSlice(allocator, "}") catch {};
+        try json.appendSlice(allocator, "}");
     }
 
-    json.appendSlice(allocator, "]}") catch {};
+    try json.appendSlice(allocator, "]}");
 
     return json.items;
 }

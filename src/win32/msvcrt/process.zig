@@ -631,14 +631,16 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
             const key = e_str[0..eq_idx];
             const val = e_str[eq_idx + 1 ..];
             if (overrideShadows(msvcrt.msvcrt_env_vars, key)) continue;
-            new_env_map.put(key, val) catch {};
+            // Dropping the entry would hand the child an environment missing
+            // a variable the parent set, with no error the caller can see.
+            new_env_map.put(key, val) catch return -1;
         }
     }
 
     for (msvcrt.msvcrt_env_vars.items) |v| {
         // Deleted variables must not reach spawned children.
         if (v.deleted) continue;
-        new_env_map.put(v.key, v.val) catch {};
+        new_env_map.put(v.key, v.val) catch return -1;
     }
 
     if (comptime builtin.target.os.tag == .linux) {
@@ -649,8 +651,8 @@ pub fn spawnvp(mode: i32, cmdname_ptr: usize, argv_ptr: usize) callconv(.c) i32 
         defer envp_items.deinit(alloc);
         var env_it = new_env_map.iterator();
         while (env_it.next()) |entry| {
-            const kv = alloc.print("{s}={s}", .{ entry.key_ptr.*, entry.value_ptr.* }) catch continue;
-            envp_items.append(alloc, @as([*:0]const u8, @ptrCast(kv.ptr))) catch {};
+            const kv = alloc.print("{s}={s}", .{ entry.key_ptr.*, entry.value_ptr.* }) catch return -1;
+            envp_items.append(alloc, @as([*:0]const u8, @ptrCast(kv.ptr))) catch return -1;
         }
         envp_items.append(alloc, null) catch return -1;
         c_args.append(alloc, null) catch return -1;

@@ -10,6 +10,7 @@ const path_utils = @import("../path_utils.zig");
 const web_ui = @import("web_ui.zig");
 const fltk_ui = @import("fltk_ui.zig");
 const desktop_icons = @import("desktop_icons.zig");
+const log = @import("../log.zig");
 
 /// Available rendering backends.
 pub const Backend = enum {
@@ -912,22 +913,12 @@ pub fn openFileDialog(filters: ?[]const u8, is_save: bool) void {
             var files_json: std.ArrayListUnmanaged(u8) = .empty;
             defer files_json.deinit(g_allocator);
 
-            files_json.appendSlice(g_allocator, "{\"type\":\"open_file_dialog\"") catch {};
-            if (is_save) {
-                files_json.appendSlice(g_allocator, ",\"mode\":\"save\"") catch {};
+            if (buildFileDialog(&files_json, filters, is_save)) |ok| {
+                if (!ok) return;
+            } else |e| {
+                log.err("open file dialog: JSON build failed ({t}); dialog not sent", .{e});
+                return;
             }
-
-            // List both files and folders in the Desktop directory
-            appendDirectoryListing(&files_json, "Desktop");
-
-            if (filters) |f| {
-                files_json.appendSlice(g_allocator, ",\"filters\":") catch {};
-                files_json.appendSlice(g_allocator, f) catch {};
-            }
-
-            files_json.appendSlice(g_allocator, ",\"path\":\"Desktop\"") catch {};
-            files_json.appendSlice(g_allocator, "}") catch {};
-
             cacheReplace(&active_dialog, files_json.items);
             web_ui.pushMessage(files_json.items);
         },
@@ -944,18 +935,12 @@ pub fn listDirectory(path: []const u8) void {
             var json: std.ArrayListUnmanaged(u8) = .empty;
             defer json.deinit(g_allocator);
 
-            json.appendSlice(g_allocator, "{\"type\":\"directory_listing\"") catch {};
-
-            // Include the path in the response. The client controls this
-            // string, so it must be escaped: an unescaped quote or newline
-            // would let a request corrupt the JSON broadcast to every client.
-            json.appendSlice(g_allocator, ",\"path\":\"") catch {};
-            jsonEscapeAppend(&json, path);
-            json.appendSlice(g_allocator, "\"") catch {};
-
-            appendDirectoryListing(&json, path);
-
-            json.appendSlice(g_allocator, "}") catch {};
+            if (buildDirectoryListing(&json, path)) |ok| {
+                if (!ok) return;
+            } else |e| {
+                log.err("directory listing for '{s}': JSON build failed ({t}); listing not sent", .{ path, e });
+                return;
+            }
             web_ui.pushMessage(json.items);
         },
         .fltk => {},
@@ -963,9 +948,36 @@ pub fn listDirectory(path: []const u8) void {
     }
 }
 
+fn buildFileDialog(json: *std.ArrayListUnmanaged(u8), filters: ?[]const u8, is_save: bool) !bool {
+    try json.appendSlice(g_allocator, "{\"type\":\"open_file_dialog\"");
+    if (is_save) try json.appendSlice(g_allocator, ",\"mode\":\"save\"");
+    if (!try appendDirectoryListing(json, "Desktop")) return false;
+    if (filters) |f| {
+        try json.appendSlice(g_allocator, ",\"filters\":");
+        try json.appendSlice(g_allocator, f);
+    }
+    try json.appendSlice(g_allocator, ",\"path\":\"Desktop\"}");
+    return true;
+}
+
+fn buildDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) !bool {
+    try json.appendSlice(g_allocator, "{\"type\":\"directory_listing\"");
+    // The client controls this string, so it must be escaped: an unescaped
+    // quote or newline would let a request corrupt the JSON broadcast to
+    // every client.
+    try json.appendSlice(g_allocator, ",\"path\":\"");
+    try jsonEscapeAppend(json, path);
+    try json.appendSlice(g_allocator, "\"");
+    if (!try appendDirectoryListing(json, path)) return false;
+    try json.appendSlice(g_allocator, "}");
+    return true;
+}
+
 /// Helper: append ",\"folders\":[...],\"files\":[...]" to a JSON builder
-/// by iterating the given path relative to cwd.
-fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) void {
+/// by iterating the given path relative to cwd. false means a directory was
+/// opened and then could not be closed, so the caller must not send a
+/// message that was built while a handle leaked.
+fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) error{OutOfMemory}!bool {
     // The path is a logical Win32 path (e.g. "Desktop", "Desktop/subfolder").
     // Map it to the host filesystem under drive_c/. Anything virtualPathToDriveC
     // refuses (absolute, drive-qualified, backslash, NUL, a "." or ".."
@@ -979,66 +991,87 @@ fn appendDirectoryListing(json: *std.ArrayListUnmanaged(u8), path: []const u8) v
     var dir: ?std.Io.Dir = if (host_path_len == 0)
         null
     else
-        (std.Io.Dir.cwd().openDir(runtime.io(), host_path, .{ .iterate = true }) catch null);
+        (std.Io.Dir.cwd().openDir(runtime.io(), host_path, .{ .iterate = true }) catch |e| blk: {
+            log.err("directory listing for '{s}': open failed ({t}); sending an empty listing", .{ host_path, e });
+            break :blk null;
+        });
 
     // Folders
-    json.appendSlice(g_allocator, ",\"folders\":[") catch {};
+    try json.appendSlice(g_allocator, ",\"folders\":[");
     var first_folder = true;
     if (dir) |*d| {
+        defer d.close(runtime.io());
         var it = d.iterate();
-        while (it.next(runtime.io()) catch null) |entry| {
+        while (try nextEntry(&it, host_path)) |entry| {
             if (entry.kind == .directory) {
-                if (!first_folder) json.appendSlice(g_allocator, ",") catch {};
+                if (!first_folder) try json.appendSlice(g_allocator, ",");
                 first_folder = false;
-                json.appendSlice(g_allocator, "\"") catch {};
-                jsonEscapeAppend(json, entry.name);
-                json.appendSlice(g_allocator, "\"") catch {};
+                try json.appendSlice(g_allocator, "\"");
+                try jsonEscapeAppend(json, entry.name);
+                try json.appendSlice(g_allocator, "\"");
             }
         }
-        d.close(runtime.io());
     }
-    json.appendSlice(g_allocator, "]") catch {};
+    try json.appendSlice(g_allocator, "]");
 
     // Re-open for files (iterator is consumed)
     var dir2: ?std.Io.Dir = if (host_path_len == 0)
         null
     else
-        (std.Io.Dir.cwd().openDir(runtime.io(), host_path, .{ .iterate = true }) catch null);
+        (std.Io.Dir.cwd().openDir(runtime.io(), host_path, .{ .iterate = true }) catch |e| blk: {
+            log.err("directory listing for '{s}': reopen for files failed ({t}); files omitted", .{ host_path, e });
+            break :blk null;
+        });
 
     // Files
-    json.appendSlice(g_allocator, ",\"files\":[") catch {};
+    try json.appendSlice(g_allocator, ",\"files\":[");
     var first_file = true;
     if (dir2) |*d2| {
         defer d2.close(runtime.io());
         var it2 = d2.iterate();
-        while (it2.next(runtime.io()) catch null) |entry| {
+        while (try nextEntry(&it2, host_path)) |entry| {
             if (entry.kind == .file) {
-                if (!first_file) json.appendSlice(g_allocator, ",") catch {};
+                if (!first_file) try json.appendSlice(g_allocator, ",");
                 first_file = false;
-                json.appendSlice(g_allocator, "\"") catch {};
-                jsonEscapeAppend(json, entry.name);
-                json.appendSlice(g_allocator, "\"") catch {};
+                try json.appendSlice(g_allocator, "\"");
+                try jsonEscapeAppend(json, entry.name);
+                try json.appendSlice(g_allocator, "\"");
             }
         }
     }
-    json.appendSlice(g_allocator, "]") catch {};
+    try json.appendSlice(g_allocator, "]");
+    return true;
+}
+
+fn nextEntry(it: *std.Io.Dir.Iterator, host_path: []const u8) std.Io.Dir.Iterator.Error!?std.Io.Dir.Entry {
+    return it.next(runtime.io()) catch |e| {
+        log.err("directory listing for '{s}': reading an entry failed ({t}); listing stopped", .{ host_path, e });
+        return e;
+    };
 }
 
 /// Append a string to the JSON builder, escaping special JSON characters.
-pub fn jsonEscapeAppend(json: *std.ArrayListUnmanaged(u8), s: []const u8) void {
+pub fn jsonEscapeAppend(json: *std.ArrayListUnmanaged(u8), s: []const u8) error{OutOfMemory}!void {
+    // Same rules as jsonEscape: a listing built here and a frame built there
+    // must escape one string the same way, or a name the client can parse in
+    // one message breaks the other. CR is dropped so a Windows CRLF arrives
+    // as LF.
     for (s) |c| {
         switch (c) {
-            '"', '\\' => {
-                json.append(g_allocator, '\\') catch {};
-                json.append(g_allocator, c) catch {};
-            },
-            0x00...0x1f => {
+            '"' => try json.appendSlice(g_allocator, "\\\""),
+            '\\' => try json.appendSlice(g_allocator, "\\\\"),
+            '\n' => try json.appendSlice(g_allocator, "\\n"),
+            '\r' => {},
+            '\t' => try json.appendSlice(g_allocator, "\\t"),
+            0x08 => try json.appendSlice(g_allocator, "\\b"),
+            0x0C => try json.appendSlice(g_allocator, "\\f"),
+            0x00...0x07, 0x0B, 0x0E...0x1f => {
                 const hex = "0123456789abcdef";
-                json.appendSlice(g_allocator, "\\u00") catch {};
-                json.append(g_allocator, hex[c >> 4]) catch {};
-                json.append(g_allocator, hex[c & 0xf]) catch {};
+                try json.appendSlice(g_allocator, "\\u00");
+                try json.append(g_allocator, hex[c >> 4]);
+                try json.append(g_allocator, hex[c & 0xf]);
             },
-            else => json.append(g_allocator, c) catch {},
+            else => try json.append(g_allocator, c),
         }
     }
 }
@@ -1216,7 +1249,10 @@ pub var desktop_icons_json: ?[]const u8 = null;
 pub fn sendDesktopIcons() void {
     if (active_backend != .web_ui) return;
 
-    const json = desktop_icons.build(g_allocator) catch return;
+    const json = desktop_icons.build(g_allocator) catch |e| {
+        log.err("desktop icons: listing drive_c/Desktop failed ({t}); icons not sent", .{e});
+        return;
+    };
     defer g_allocator.free(json);
 
     cacheReplace(&desktop_icons_json, json);
@@ -1334,4 +1370,18 @@ test "jsonEscape never writes past the buffer or half an escape" {
         // it never ends mid-escape.
         try std.testing.expectEqualStrings(full[0..len], buf[0..len]);
     }
+}
+
+test "appendEscapesMatch" {
+    const sample = "line\none\ttab";
+    var out: [128]u8 = undefined;
+    const n = jsonEscape(sample, &out);
+    var list: std.ArrayListUnmanaged(u8) = .empty;
+    defer list.deinit(std.testing.allocator);
+    const saved = g_allocator;
+    defer g_allocator = saved;
+    g_allocator = std.testing.allocator;
+    try jsonEscapeAppend(&list, sample);
+    try std.testing.expectEqual(@as(usize, n), list.items.len);
+    try std.testing.expect(std.mem.eql(u8, list.items, out[0..n]));
 }
