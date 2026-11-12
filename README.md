@@ -38,6 +38,10 @@ promise between versions, so a breaking change takes the next minor.
 
 ### Unreleased
 
+#### Fixed
+
+- A progress bar, up-down, trackbar, or date control created after its table is full no longer shares state with the first control of that kind, and destroying a focused window returns keyboard focus to the main window.
+
 ### 0.9.0 (2026-10-27)
 
 #### Breaking changes

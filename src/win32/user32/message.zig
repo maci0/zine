@@ -1302,11 +1302,14 @@ const ProgressState = struct { hwnd: usize, min: i32, max: i32, pos: i32 };
 var progress_states: [32]ProgressState = @as([32]ProgressState, @splat(.{ .hwnd = 0, .min = 0, .max = 100, .pos = 0 }));
 var progress_state_count: usize = 0;
 
-fn progressStateOf(hwnd: usize) *ProgressState {
+/// Null once every slot is taken. Falling back to slot 0 would make the
+/// 33rd progress bar and the first one the same record: a range set on one
+/// would move the other's fill.
+fn progressStateOf(hwnd: usize) ?*ProgressState {
     for (progress_states[0..progress_state_count]) |*st| {
         if (st.hwnd == hwnd) return st;
     }
-    if (progress_state_count >= progress_states.len) return &progress_states[0];
+    if (progress_state_count >= progress_states.len) return null;
     const st = &progress_states[progress_state_count];
     progress_state_count += 1;
     st.* = .{ .hwnd = hwnd, .min = 0, .max = 100, .pos = 0 };
@@ -1348,7 +1351,9 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
     if (class != null and std.ascii.eqlIgnoreCase(class.?, "msctls_progress32")) {
         // Progress bar: PBM_* (WM_USER+1..15). Position/range updates are
         // forwarded to the renderer so the fill animates in the web/FLTK UI.
-        const st = progressStateOf(hWnd);
+        // A full table has no record for this hwnd, so the message is ignored
+        // rather than applied to another bar's state.
+        const st = progressStateOf(hWnd) orelse return 0;
         return switch (Msg) {
             0x0401 => { // PBM_SETRANGE: lParam = MAKELPARAM(min, max)
                 if (lParam != 0) {
@@ -1386,7 +1391,7 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
 
     // UpDown control (msctls_updown32): UDM_* = WM_USER+101..115.
     if (class != null and std.ascii.eqlIgnoreCase(class.?, "msctls_updown32")) {
-        const st = upDownStateOf(hWnd);
+        const st = upDownStateOf(hWnd) orelse return 0;
         return switch (Msg) {
             0x0465 => { // UDM_SETRANGE: lParam = MAKELPARAM(lo, hi)
                 const bits: u32 = @truncate(@as(u64, @bitCast(@as(i64, lParam))));
@@ -1423,7 +1428,7 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
 
     // Trackbar control (msctls_trackbar32): TBM_* = WM_USER+0..30.
     if (class != null and std.ascii.eqlIgnoreCase(class.?, "msctls_trackbar32")) {
-        const st = upDownStateOf(hWnd); // same {pos,min,max} shape
+        const st = upDownStateOf(hWnd) orelse return 0; // same {pos,min,max} shape
         return switch (Msg) {
             0x0400 => st.pos, // TBM_GETPOS
             0x0401 => st.min, // TBM_GETRANGEMIN
@@ -1452,7 +1457,7 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
             0x1001 => { // DTM_GETSYSTEMTIME: fill SYSTEMTIME at lParam
                 if (trace.enable_tracing) trace.print("USER32: DTM_GETSYSTEMTIME hwnd={x}\n", .{hWnd});
                 if (lParam != 0) {
-                    const st = dtpStateOf(hWnd);
+                    const st = dtpStateOf(hWnd) orelse return 1; // GDT_NONE: no state
                     const dst: [*]u8 = @ptrFromInt(trace.addr(@as(usize, @bitCast(lParam))));
                     @memcpy(dst[0..16], @as(*const [16]u8, @ptrCast(st)));
                 }
@@ -1463,7 +1468,7 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
                 if (trace.enable_tracing) trace.print("USER32: DTM_SETSYSTEMTIME hwnd={x} wParam={x}\n", .{ hWnd, wParam });
                 if (lParam != 0 and wParam == 0) {
                     const src: [*]const u8 = @ptrFromInt(trace.addr(@as(usize, @bitCast(lParam))));
-                    const st = dtpStateOf(hWnd);
+                    const st = dtpStateOf(hWnd) orelse return 0;
                     if (!dtpSetSystemTime(st, src[0..16])) return 0;
                     // render a date string for the widget
                     var buf: [64]u8 = undefined;
@@ -1482,7 +1487,7 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
         return switch (Msg) {
             0x1001 => { // MCM_GETCURSEL: fill SYSTEMTIME at lParam
                 if (lParam != 0) {
-                    const st = dtpStateOf(hWnd);
+                    const st = dtpStateOf(hWnd) orelse return 0;
                     const dst: [*]u8 = @ptrFromInt(trace.addr(@as(usize, @bitCast(lParam))));
                     @memcpy(dst[0..16], @as(*const [16]u8, @ptrCast(st)));
                 }
@@ -1491,7 +1496,7 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
             0x1002 => { // MCM_SETCURSEL: store SYSTEMTIME at lParam
                 if (lParam != 0) {
                     const src: [*]const u8 = @ptrFromInt(trace.addr(@as(usize, @bitCast(lParam))));
-                    const st = dtpStateOf(hWnd);
+                    const st = dtpStateOf(hWnd) orelse return 0;
                     if (!dtpSetSystemTime(st, src[0..16])) return 0;
                 }
                 return 1;
@@ -1499,14 +1504,14 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
             0x100C => { // MCM_SETTODAY
                 if (lParam != 0) {
                     const src: [*]const u8 = @ptrFromInt(trace.addr(@as(usize, @bitCast(lParam))));
-                    const st = dtpStateOf(hWnd);
+                    const st = dtpStateOf(hWnd) orelse return 0;
                     if (!dtpSetSystemTime(st, src[0..16])) return 0;
                 }
                 return 1;
             },
             0x100D => { // MCM_GETTODAY
                 if (lParam != 0) {
-                    const st = dtpStateOf(hWnd);
+                    const st = dtpStateOf(hWnd) orelse return 0;
                     const dst: [*]u8 = @ptrFromInt(trace.addr(@as(usize, @bitCast(lParam))));
                     @memcpy(dst[0..16], @as(*const [16]u8, @ptrCast(st)));
                 }
@@ -1619,6 +1624,21 @@ pub fn handleCommonControlMsg(hWnd: usize, Msg: u32, wParam: usize, lParam: isiz
 pub fn releaseControlState(hwnd: usize) void {
     {
         var i: usize = 0;
+        while (i < control_class_count) : (i += 1) {
+            if (control_classes[i].hwnd != hwnd) continue;
+            control_class_count -= 1;
+            if (i != control_class_count) control_classes[i] = control_classes[control_class_count];
+            break;
+        }
+    }
+    for (&button_states) |*bs| {
+        if (bs.hwnd == hwnd) {
+            bs.* = .{ .hwnd = 0, .checked = 0, .state = 0 };
+            break;
+        }
+    }
+    {
+        var i: usize = 0;
         while (i < listbox_state_count) : (i += 1) {
             if (listbox_states[i].hwnd != hwnd) continue;
             listbox_state_count -= 1;
@@ -1654,6 +1674,15 @@ pub fn releaseControlState(hwnd: usize) void {
         }
         break;
     }
+    {
+        var i: usize = 0;
+        while (i < tooltip_state_count) : (i += 1) {
+            if (tooltip_states[i].hwnd != hwnd) continue;
+            tooltip_state_count -= 1;
+            if (i != tooltip_state_count) tooltip_states[i] = tooltip_states[tooltip_state_count];
+            break;
+        }
+    }
 }
 
 const UpDownState = struct { hwnd: usize, pos: i32, min: i32, max: i32 };
@@ -1671,11 +1700,13 @@ fn l32val(v: isize) i32 {
     return @bitCast(@as(u32, @truncate(@as(u64, @bitCast(@as(i64, @intCast(v)))))));
 }
 
-fn upDownStateOf(hwnd: usize) *UpDownState {
+/// Null once every slot is taken, for the same reason as progressStateOf:
+/// the 33rd up-down or trackbar must not share the first one's position.
+fn upDownStateOf(hwnd: usize) ?*UpDownState {
     for (updown_states[0..updown_state_count]) |*st| {
         if (st.hwnd == hwnd) return st;
     }
-    if (updown_state_count >= updown_states.len) return &updown_states[0];
+    if (updown_state_count >= updown_states.len) return null;
     const st = &updown_states[updown_state_count];
     updown_state_count += 1;
     st.* = .{ .hwnd = hwnd, .pos = 0, .min = 0, .max = 100 };
@@ -1723,7 +1754,9 @@ fn dtpSetSystemTime(st: *DtpState, src: []const u8) bool {
     return true;
 }
 
-fn dtpStateOf(hwnd: usize) *DtpState {
+/// Null once every slot is taken. Reusing slot 0 would show one control's
+/// date in another.
+fn dtpStateOf(hwnd: usize) ?*DtpState {
     for (0..dtp_state_count) |i| {
         if (dtp_hwnds[i] == hwnd) return &dtp_states[i];
     }
@@ -1747,7 +1780,7 @@ fn dtpStateOf(hwnd: usize) *DtpState {
         };
         return st;
     }
-    return &dtp_states[0];
+    return null;
 }
 var dtp_hwnds: [16]usize = @as([16]usize, @splat(0));
 
@@ -1842,7 +1875,7 @@ test "fresh DateTimePicker state shows today's date, not a fixed epoch" {
     var now: w32.SYSTEMTIME = .{};
     kernel32_time.GetLocalTime(@intFromPtr(&now));
 
-    const first = dtpStateOf(0xd001);
+    const first = dtpStateOf(0xd001).?;
     // Seeded from the live UTC guest clock rather than hardcoded 2000-01-01.
     // A year may roll over between sampling and seeding.
     try testing.expect(first.year == now.wYear or first.year == now.wYear + 1);
@@ -1851,12 +1884,14 @@ test "fresh DateTimePicker state shows today's date, not a fixed epoch" {
     try testing.expect(first.milliseconds < 1000);
 
     // The same hwnd maps back to the same state slot.
-    const again = dtpStateOf(0xd001);
+    const again = dtpStateOf(0xd001).?;
     try testing.expectEqual(first.year, again.year);
 
     // A different hwnd gets its own state.
-    const other = dtpStateOf(0xd002);
+    const other = dtpStateOf(0xd002).?;
     try testing.expect(other != first);
+    releaseControlState(0xd001);
+    releaseControlState(0xd002);
 }
 
 test "every dispatched MSG carries the tick count GetMessageTime reports" {

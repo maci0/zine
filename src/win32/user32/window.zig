@@ -703,6 +703,11 @@ pub fn stub_DestroyWindow(hWnd: usize) callconv(w32cc.WINAPI) i32 {
     user32.removeWindowInfo(hWnd);
     user32.removeHwndText(hWnd);
     @import("message.zig").releaseControlState(hWnd);
+    // Keyboard input is delivered to focused_hwnd. Leaving it pointing at a
+    // window that no longer exists routes every later key to a dead hwnd.
+    if (user32.focused_hwnd == hWnd) user32.focused_hwnd = 0;
+    if (user32.edit_hwnd == hWnd) user32.edit_hwnd = 0;
+    if (user32.rich_edit_hwnd == hWnd) user32.rich_edit_hwnd = 0;
     return 1;
 }
 
@@ -1468,6 +1473,28 @@ test "window text: length and text APIs agree when there is no text" {
     try testing.expectEqual(@as(i32, 0), copied);
     try testing.expectEqual(@as(u8, 0), buf[0]);
     try testing.expectEqual(@as(i32, 0), stub_GetWindowTextLengthA(hWnd));
+}
+
+test "DestroyWindow drops focus held by the destroyed window" {
+    const saved_focus = user32.focused_hwnd;
+    const saved_edit = user32.edit_hwnd;
+    const saved_rich = user32.rich_edit_hwnd;
+    defer {
+        user32.focused_hwnd = saved_focus;
+        user32.edit_hwnd = saved_edit;
+        user32.rich_edit_hwnd = saved_rich;
+    }
+
+    user32.focused_hwnd = 0xABCD;
+    user32.edit_hwnd = 0xABCD;
+    try testing.expectEqual(@as(i32, 1), stub_DestroyWindow(0xABCD));
+    try testing.expectEqual(@as(usize, 0), user32.focused_hwnd);
+    try testing.expectEqual(@as(usize, 0), user32.edit_hwnd);
+
+    // A window that does not hold focus leaves the current focus alone.
+    user32.focused_hwnd = 0x1111;
+    try testing.expectEqual(@as(i32, 1), stub_DestroyWindow(0x2222));
+    try testing.expectEqual(@as(usize, 0x1111), user32.focused_hwnd);
 }
 
 pub fn stub_IsZoomed(hWnd: usize) callconv(w32cc.WINAPI) i32 {
